@@ -42,7 +42,7 @@ test('the land-ice file carries the pixels holding ice: their ice points and tho
 });
 
 test('with land ice a land cell is ice sheet where ice covers more than half its land, with the mean thickness of that ice', () => {
-  const mesh = gridMesh(new Grid(8)), rows = 90, cols = 180;
+  const mesh = gridMesh(new Grid(16)), rows = 90, cols = 180;
   const continent = syntheticTopography(rows, cols, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000));
   const iced = (share, depth) => sparse({ rows, cols, points: 225, count: Uint8Array.from(continent.data, (h) => (h > 0 ? share : 0)), thickness: Uint16Array.from(continent.data, (h, n) => (h > 0 ? depth(Math.floor(n / cols)) : 0)) });
   const options = { landBridges: {}, seaStraits: {} }, rule = createGeography(mesh, continent, options);
@@ -64,12 +64,12 @@ test('with land ice a land cell is ice sheet where ice covers more than half its
     assert.equal(least.iceThickness[i], 0);
     if (full.landFraction[i] < 0.9) coastal++;
   }
-  assert.ok(coastal > 10, `${coastal} coastal land cells`);
+  assert.ok(coastal > 20, `${coastal} coastal land cells`);
   assert.throws(() => createGeography(mesh, continent, { landIce: { ...iced(225, () => 1), rows: 45 } }), /land ice is 45/);
 });
 
 test('with the ice shelves at sea the floating ice is taken away: its points count at the bed beneath it, and it is no ice sheet', () => {
-  const mesh = gridMesh(new Grid(8)), rows = 90, cols = 180, freeboard = 50, H = Math.round(freeboard / (1 - ICE_DENSITY / SEAWATER_DENSITY)), bed = -800;
+  const mesh = gridMesh(new Grid(16)), rows = 90, cols = 180, freeboard = 50, H = Math.round(freeboard / (1 - ICE_DENSITY / SEAWATER_DENSITY)), bed = -800;
   const lonOf = (n) => -Math.PI + ((n % cols) + 0.5) * 2 * Math.PI / cols, grounded = (lon) => lon < 0 && lon > -Math.PI / 2, afloat = (lon) => lon >= 0 && lon < Math.PI / 2;
   const raster = syntheticTopography(rows, cols, (lat, lon) => (grounded(lon) ? 500 : afloat(lon) ? freeboard : bed));
   const where = (f, yes) => (h, n) => (f(lonOf(n)) ? yes : 0);
@@ -90,7 +90,7 @@ test('with the ice shelves at sea the floating ice is taken away: its points cou
       assert.deepEqual([atSea.land[i], atSea.iceSheet[i], atSea.iceThickness[i], atSea.elevation[i]], [1, 1, onLand.iceThickness[i], onLand.elevation[i]], `grounded cell ${i}`);
     }
   }
-  assert.ok(shelves > 20 && sheets > 20, `${shelves} shelf cells, ${sheets} grounded`);
+  assert.ok(shelves > mesh.nCells / 32 && sheets > mesh.nCells / 32, `${shelves} shelf cells, ${sheets} grounded`);
   assert.throws(() => createGeography(mesh, raster, { iceShelves: 'sea' }), /need the land ice/);
   assert.throws(() => createGeography(mesh, raster, { ...options, iceShelves: 'lid' }), /iceShelves is land or sea or cavity, not lid/);
 });
@@ -119,7 +119,7 @@ test('a state records its geography where it differs from ETOPO1 and the rule, f
   assert.deepEqual(savedGeography({ iceSheets: 'observed' }), { ...LEGACY_GEOGRAPHY, iceSheets: 'observed' });
   assert.deepEqual(geographyHeader(LEGACY_GEOGRAPHY), {});
   assert.deepEqual(geographyHeader(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed' });
-  assert.deepEqual(pickGeography({ N: 8, topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'land' }), { topography: 'etopo2022', iceSheets: 'observed' });
+  assert.deepEqual(pickGeography({ N: 16, topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'land' }), { topography: 'etopo2022', iceSheets: 'observed' });
   assert.throws(() => checkGeography({ topography: 'etopo5' }), /topography is etopo1 or etopo2022/);
   assert.throws(() => checkGeography({ iceSheets: 'bedrock' }), /iceSheets is rule or observed/);
   assert.throws(() => checkGeography({ iceSheets: 'rule', iceShelves: 'sea' }), /need the observed ice sheets/);
@@ -128,17 +128,17 @@ test('a state records its geography where it differs from ETOPO1 and the rule, f
   assert.equal(read.geography.landIce.index.length, landIce.index.length);
   assert.equal(read.geography.iceShelves, 'sea');
   assert.deepEqual(read.land, { iceSheetBalance: true });
-  const fresh = stateGeography(null), old = stateGeography({ N: 8 });
+  const fresh = stateGeography(null), old = stateGeography({ N: 16 });
   assert.deepEqual([fresh.topography.name, old.topography.name], ['etopo2022', 'etopo1']);
   assert.deepEqual([old.geography, old.land], [{}, {}]);
-  const recorded = { N: 8, grid: { relax: DEFAULT_RELAX }, topography: 'etopo2022', iceSheets: 'observed' };
+  const recorded = { N: 16, grid: { relax: DEFAULT_RELAX }, topography: 'etopo2022', iceSheets: 'observed' };
   assert.throws(() => stateGrid(recorded, etopo1), /on the etopo2022 topography, not etopo1/);
   assert.equal(stateGrid(recorded, topography).relax, DEFAULT_RELAX);
   assert.equal(stateGrid(recorded).relax, DEFAULT_RELAX);
 });
 
 test('with the ice-sheet balance an ice sheet starts full at the cap, sheds the snow above it as discharge and melts as bare ice at the melting point, every drop counted', () => {
-  const mesh = gridMesh(new Grid(8)), geography = createGeography(mesh, topography, observed.geography), C = mesh.nCells, a = mesh.areaCell;
+  const mesh = gridMesh(new Grid(16)), geography = createGeography(mesh, topography, observed.geography), C = mesh.nCells, a = mesh.areaCell;
   const land = createLandSurface(mesh, geography, observed.land), plain = createLandSurface(mesh, geography);
   land.initialize(); plain.initialize();
   let sheet = -1, ground = -1;
@@ -210,7 +210,7 @@ async function prepare(model, { moisten = false, bareIce = [] } = {}) {
 }
 
 test('in the CPU model the snow above a full ice sheet reaches the sea: the ocean takes every kilogram the land sheds, and the land\'s water balances its snowfall and evaporation', async () => {
-  const model = await prepare(createModel(new Grid(8), { topography, ...observed }), { moisten: true });
+  const model = await prepare(createModel(new Grid(16), { topography, ...observed }), { moisten: true });
   const { mesh, geography, land, ocean } = model, C = mesh.nCells, a = mesh.areaCell, dt = 900;
   const accumulate = ocean.accumulate;
   let delivered = 0, calved = 0;
@@ -227,18 +227,18 @@ test('in the CPU model the snow above a full ice sheet reaches the sea: the ocea
   model.phases.ocean(dt);
   let shed = 0, ran = 0;
   for (let i = 0; i < C; i++) if (geography.land[i]) { shed += a[i] * land.discharge[i]; ran += a[i] * land.runoff[i]; if (geography.iceSheet[i]) assert.ok(land.snow[i] <= 1000, `cell ${i}: ${land.snow[i]} kg/m²`); }
-  console.log(`N=8, twelve steps: the sheets shed ${(shed / 1e12).toFixed(3)} Gt of the ${(fallen / 1e12).toFixed(3)} Gt that fell on land; ${(ran / 1e12).toFixed(3)} Gt ran off`);
+  console.log(`N=16, twelve steps: the sheets shed ${(shed / 1e12).toFixed(3)} Gt of the ${(fallen / 1e12).toFixed(3)} Gt that fell on land; ${(ran / 1e12).toFixed(3)} Gt ran off`);
   assert.ok(shed > 0, 'snow fell on the full sheets');
   assert.ok(Math.abs(calved - shed) <= 1e-12 * shed && Math.abs(delivered - ran) <= 1e-12 * ran, `the ocean took ${calved} of ${shed} kg discharged and ${delivered} of ${ran} kg run off`);
   const imbalance = land.water() - before - (fallen - evaporated);
   assert.ok(Math.abs(imbalance) < 1e-9 * before, `the land's water is off by ${(imbalance / before).toExponential(2)} of the store`);
 });
 
-test('both engines take the observed ice sheets and their balance alike at N=8: land codes, full sheets, the snow they shed, the bare ice they melt and the sea their discharge reaches', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const options = { topography, ...observed }, geography = createGeography(gridMesh(new Grid(8)), topography, observed.geography);
+test('both engines take the observed ice sheets and their balance alike at N=16: land codes, full sheets, the snow they shed, the bare ice they melt and the sea their discharge reaches', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { topography, ...observed }, geography = createGeography(gridMesh(new Grid(16)), topography, observed.geography);
   const bareIce = [];
   for (let i = 0, n = 0; i < geography.land.length; i++) if (geography.iceSheet[i] && n++ % 3 === 0) bareIce.push(i);
-  const cpu = await prepare(createModel(new Grid(8), options), { moisten: true, bareIce }), gpu = await prepare(await createGpuModel(new Grid(8), options), { moisten: true, bareIce });
+  const cpu = await prepare(createModel(new Grid(16), options), { moisten: true, bareIce }), gpu = await prepare(await createGpuModel(new Grid(16), options), { moisten: true, bareIce });
   const { land, iceSheet } = cpu.geography, C = cpu.mesh.nCells, a = cpu.mesh.areaCell;
   const start = await gpu.gpu.downloadPhysics();
   let sheets = 0;
@@ -246,7 +246,7 @@ test('both engines take the observed ice sheets and their balance alike at N=8: 
     assert.equal(start.LAND[i], land[i] ? (iceSheet[i] ? 2 : 1) : 0, `cell ${i}`);
     if (iceSheet[i]) { sheets++; assert.equal(start.SNOW[i], bareIce.includes(i) ? 0 : 1000, `cell ${i}`); }
   }
-  assert.ok(sheets > 10 && bareIce.length > 3, `${sheets} ice-sheet cells, ${bareIce.length} bare`);
+  assert.ok(sheets > C / 64 && bareIce.length > sheets / 4, `${sheets} ice-sheet cells, ${bareIce.length} bare`);
   const injected = Float32Array.from({ length: C }, (_, i) => (iceSheet[i] ? 20 : 0));
   for (let i = 0; i < C; i++) { cpu.land.discharge[i] += injected[i]; cpu.land.runoff[i] += injected[i]; }
   for (const name of ['DISCHARGE', 'RUNOFF']) gpu.gpu.device.queue.writeBuffer(gpu.gpu.buffers.PH, 4 * gpu.gpu.layout.PH[name], injected);
@@ -265,7 +265,7 @@ test('both engines take the observed ice sheets and their balance alike at N=8: 
   const [ice, iceAt] = worst((i) => (outlets.includes(i) ? cpu.state[6][i] - gpu.state[6][i] : null));
   let grown = 0;
   for (const o of outlets) grown += cpu.state[6][o] / outlets.length;
-  console.log(`N=8, ${sheets} ice-sheet cells (${bareIce.length} bare), eight steps: skin ${skin.toExponential(1)} K, snow ${snow.toExponential(1)} kg/m², discharge ${shed.toExponential(1)} kg/m² (${(fell / 1e12).toFixed(3)} Gt from snowfall), ice melted ${lost.toExponential(1)} kg/m² (${(melted / 1e12).toFixed(3)} Gt); ${outlets.length} outlets: sea ${sea.toExponential(1)} K, sea ice ${ice.toExponential(1)} m (mean ${grown.toFixed(3)} m)`);
+  console.log(`N=16, ${sheets} ice-sheet cells (${bareIce.length} bare), eight steps: skin ${skin.toExponential(1)} K, snow ${snow.toExponential(1)} kg/m², discharge ${shed.toExponential(1)} kg/m² (${(fell / 1e12).toFixed(3)} Gt from snowfall), ice melted ${lost.toExponential(1)} kg/m² (${(melted / 1e12).toFixed(3)} Gt); ${outlets.length} outlets: sea ${sea.toExponential(1)} K, sea ice ${ice.toExponential(1)} m (mean ${grown.toFixed(3)} m)`);
   assert.ok(skin < 0.02, `skin ${skin} K at ${skinAt}`);
   assert.ok(snow < 0.05, `snow ${snow} kg/m² at ${snowAt}`);
   assert.ok(shed < 0.05, `discharge ${shed} kg/m² at ${shedAt}`);

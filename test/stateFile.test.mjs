@@ -4,6 +4,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { decodeState, encodeState, fetchState, runId, stateName, listedStates, stateDay, groupHeader, groupArrays } from '../js/stateFile.module.js';
+import { DEFAULT_RUNS } from '../js/defaultRun.module.js';
 
 const state = { N: 4, day: 12, pi: [1e5, 99999.5], theta: [[300, 301], [302, 303]] };
 const text = JSON.stringify(state);
@@ -103,6 +104,18 @@ test("the ocean's vertical and generator ride in the header of a binary state, t
   assert.deepEqual(groupHeader(saved.ocean), { vertical: 'hybrid', generator: 'zstar' });
   assert.deepEqual(Object.keys(groupArrays(saved.ocean)), ['h', 'eta']);
   assert.deepEqual(groupHeader(null), {});
+});
+
+test('the options a run was made with ride in the header of a binary state, and a state without them is written as before', async () => {
+  const options = { radiation: { cloudColumns: true, cloudSpread: 0.75 }, moist: { stratocumulusInversion: 7, cumulusAscent: 'kinetic' } };
+  const plain = encodeState(binarySample()), stamped = encodeState({ ...binarySample(), options });
+  const header = (bytes) => JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + new DataView(bytes.buffer).getUint32(4, true))));
+  assert.deepEqual(header(stamped).options, options);
+  assert.ok(!('options' in header(plain)));
+  for (const bytes of [stamped, new Uint8Array(gzipSync(stamped))]) assert.deepEqual((await decodeState(bytes)).options, options);
+  const decoded = await decodeState(stamped);
+  delete decoded.options;
+  assert.deepEqual(decoded, await decodeState(plain));
 });
 
 test("a binary state in the spin-up driver's layout, at a misaligned offset, or cut short", async () => {
@@ -223,7 +236,7 @@ test('fetchState rejects a missing part, a state cut short and one longer than i
   });
 });
 
-test("fetchState reads the page's default states in parts as decodeState reads the whole file, and eleven64's as one .bin.gz and as a .bin", async () => {
+test("fetchState reads the page's default states in parts as decodeState reads the whole file, and the N=64 default's as one .bin.gz and as a .bin", async () => {
   const runs = new URL('../runs/', import.meta.url);
   const manifests = readdirSync(runs).filter((file) => file.endsWith('.parts.json')).sort();
   assert.ok(manifests.length >= 2, `parts in runs/: ${manifests}`);
@@ -235,7 +248,7 @@ test("fetchState reads the page's default states in parts as decodeState reads t
     const expected = await decodeState(whole());
     assert.ok(expected.N >= 64 && expected.theta instanceof Float32Array);
     await withFetch(chunkedFetch(files, 1 << 20), async () => sameBits(await fetchState(`http://h/runs/${manifest}`), expected, manifest));
-    if (!manifest.startsWith('eleven64')) continue;
+    if (`runs/${manifest}` !== DEFAULT_RUNS[64]) continue;
     const name = manifest.replace('.parts.json', ''), gz = whole();
     const single = { [`http://h/runs/${name}.bin.gz`]: gz, [`http://h/runs/${name}.bin`]: new Uint8Array(gunzipSync(gz)) };
     await withFetch(chunkedFetch(single, 65536 + 3), async () => {

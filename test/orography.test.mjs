@@ -18,7 +18,7 @@ const close = (actual, expected, tolerance, what) => assert.ok(Math.abs(actual -
 const deg = Math.PI / 180, R = 6371220;
 
 function ridgeFields(elevationAt) {
-  const mesh = buildMesh(new Grid(8));
+  const mesh = buildMesh(new Grid(16));
   const topography = syntheticTopography(720, 1440, elevationAt);
   const geography = createGeography(mesh, topography, { landBridges: {}, seaStraits: {} });
   const phis = surfaceGeopotential(mesh, geography);
@@ -26,7 +26,7 @@ function ridgeFields(elevationAt) {
 }
 
 test('the subgrid fields of analytic ridges: standard deviation, slope, anisotropy and orientation', () => {
-  const amplitude = 400, wavelength = 4 * deg, k = 2 * Math.PI / wavelength, sampling = Math.sin(k * 0.25 * deg) / (k * 0.25 * deg);
+  const amplitude = 400, wavelength = 2 * deg, k = 2 * Math.PI / wavelength, sampling = Math.sin(k * 0.25 * deg) / (k * 0.25 * deg);
   const cases = [
     { name: 'east–west crests', h: (lat) => 1000 + amplitude * Math.cos(k * lat), band: 50, mu: amplitude / Math.SQRT2, slope: () => amplitude * k / R * sampling / Math.SQRT2, gamma: [0, 0.1], theta: Math.PI / 2 },
     { name: 'north–south crests', h: (lat, lon) => 1000 + amplitude * Math.cos(k * lon), band: 12, mu: amplitude / Math.SQRT2, slope: (lat) => amplitude * k / (R * Math.cos(lat)) * sampling / Math.SQRT2, gamma: [0, 0.1], theta: 0 },
@@ -46,7 +46,7 @@ test('the subgrid fields of analytic ridges: standard deviation, slope, anisotro
       assert.ok(fields.anisotropy[i] >= c.gamma[0] && fields.anisotropy[i] <= c.gamma[1], `${c.name} γ ${fields.anisotropy[i]}`);
       if (c.theta !== null) assert.ok(Math.abs(Math.sin(fields.orientation[i] - c.theta)) < 0.1, `${c.name} θ ${fields.orientation[i]} against ${c.theta}`);
     }
-    assert.ok(n > 20, `${c.name}: ${n} cells tested`);
+    assert.ok(n > 0.1 * mesh.nCells, `${c.name}: ${n} cells tested`);
   }
   const flat = ridgeFields(() => 700).fields;
   for (let i = 0; i < flat.deviation.length; i++) assert.ok(flat.deviation[i] < 1e-6 && flat.slope[i] < 1e-9, 'a plateau has no subgrid orography');
@@ -140,7 +140,7 @@ function prepare(model) {
 }
 
 test('the drag conserves momentum, hands it to the ground as a stress and returns its energy as heat', () => {
-  const levels = sigmaInterfaces('bl34'), model = prepare(createModel(new Grid(8), { topography, levels })), dt = 1800;
+  const levels = sigmaInterfaces('bl34'), model = prepare(createModel(new Grid(16), { topography, levels })), dt = 1350;
   for (let n = 0; n < 3; n++) model.step(dt);
   const { mesh, orography, state, core } = model, { K, C, E, dSigma, g } = core.diagnostics;
   let launched = 0, taken = 0;
@@ -175,17 +175,17 @@ test('the drag conserves momentum, hands it to the ground as a stress and return
 });
 
 test('the GMTED2010 fields take the IFS’s constants; a mesh without a file takes the 0.25° raster’s fields with Lott and Miller’s', () => {
-  const bundled = createModel(new Grid(16), { topography }).orography, fallback = createModel(new Grid(8), { topography }).orography;
+  const bundled = createModel(new Grid(16), { topography }).orography, fallback = createModel(new Grid(24), { topography }).orography;
   for (const key of Object.keys(OROGRAPHY_DEFAULTS)) {
     assert.equal(bundled.options[key], OROGRAPHY_DEFAULTS[key], `N=16 ${key}`);
-    assert.equal(fallback.options[key], LOTT_MILLER[key], `N=8 ${key}`);
+    assert.equal(fallback.options[key], LOTT_MILLER[key], `N=24 ${key}`);
   }
   assert.ok(bundled.fields.filtered && !bundled.fields.raster && fallback.fields.raster && !fallback.fields.filtered);
-  assert.equal(createModel(new Grid(8), { topography, orography: { waveDrag: 2 } }).orography.options.waveDrag, 2, 'options still override');
+  assert.equal(createModel(new Grid(24), { topography, orography: { waveDrag: 2 } }).orography.options.waveDrag, 2, 'options still override');
 });
 
 test('without the scheme the model has no orographic drag', () => {
-  const model = createModel(new Grid(4), { topography, orography: false });
+  const model = createModel(new Grid(16), { topography, orography: false });
   assert.equal(model.orography, null);
 });
 
@@ -201,6 +201,6 @@ test('both engines lay the same blocking, wave drag, stress and gusty wind', { s
   const report = { beta: apart(beta, o.beta), wave: apart(wave, o.wave), stress: apart(stress, o.stress), launch: apart(launch, o.launch), wind: apart(wind, cpu.exchange.wind), drag: apart(drag, cpu.exchange.drag) };
   console.log(`engines apart, largest difference over largest value: ${Object.entries(report).map(([k, v]) => `${k} ${v.toExponential(1)}`).join(', ')}`);
   for (const [k, v] of Object.entries(report)) assert.ok(v < 1e-3, `${k} ${v}`);
-  const off = await createGpuModel(new Grid(4), { topography, orography: false });
+  const off = await createGpuModel(new Grid(16), { topography, orography: false });
   assert.equal(off.gpu.kernels.orography, undefined);
 });

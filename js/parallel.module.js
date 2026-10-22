@@ -19,9 +19,10 @@ function blocks(kind, n, size, extra = {}) {
  * a time for the layer-partitioned phases, and for the rest blocks of
  * cells, vertices or array elements sized to give every worker several
  * units whatever the resolution; the ocean's tendency goes a layer at a
- * time over its L layers, momentum and tracers apart.
+ * time over its L layers, momentum and tracers apart. A coupledClosure
+ * (the hybrid divergence damping) closes the momentum as one unit.
  */
-export function phaseChunks({ K, C, E, V, L = 0 }, workers = 8) {
+export function phaseChunks({ K, C, E, V, L = 0, coupledClosure = false }, workers = 8) {
   const lengths = stateLengths({ K, C, E });
   const size = (n, floor) => Math.max(floor, Math.ceil(n / (4 * workers)));
   const arrays = STATE_NAMES.flatMap((name, a) => blocks('array', lengths[name], size(lengths[name], 4096), { a }));
@@ -32,7 +33,7 @@ export function phaseChunks({ K, C, E, V, L = 0 }, workers = 8) {
     [PHASE.PHYSICS]: blocks('cells', C, size(C, 32)),
     [PHASE.ADVANCE]: arrays,
     [PHASE.COMBINE]: arrays,
-    [PHASE.CLOSURE]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
+    [PHASE.CLOSURE]: [...blocks('momentum', K, coupledClosure ? K : 1), ...blocks('tracers', K, 1)],
     [PHASE.ADJUST]: blocks('cells', C, size(C, 16)),
     [PHASE.MIX]: blocks('edges', E, size(E, 64)),
     [PHASE.DISSIPATE]: blocks('cells', C, size(C, 32)),
@@ -73,7 +74,7 @@ export const TOTALS = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', '
  * The hybrid ocean's regrid and column passes go to the workers the same
  * way, in blocks of cells or edges (OCEAN_PASSES).
  */
-export async function createParallelModel(grid, options = {}, workers = null) {
+export async function createParallelModel(grid, options = {}, workers = null, probe = null) {
   workers ??= Math.max(1, await parallelism());
   if (options.ocean && options.ocean.climatology) options = { ...options, ocean: { ...options.ocean, climatology: await loadClimatology(options.ocean.climatology) } };
   const model = createModel(grid, options);
@@ -99,7 +100,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
   for (let index = 0; index < workers; index++) {
     let resolveReady, rejectReady;
     ready.push(new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; }));
-    threads.push(await spawn(new URL('./parallel.worker.js', import.meta.url), { index, workers, meshShared, buffers, options: workerOptions, control }, {
+    threads.push(await spawn(new URL('./parallel.worker.js', import.meta.url), { index, workers, meshShared, buffers, options: workerOptions, control, probe }, {
       onMessage(message) {
         if (message.type === 'ready') resolveReady();
         if (message.type === 'error') failures.push(`worker ${message.index} phase ${message.phase}: ${message.message}`);

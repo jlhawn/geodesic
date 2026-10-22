@@ -5,7 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { createSeaIce, openWaterAlbedo, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 
-const model = createModel(new Grid(2));
+const model = createModel(new Grid(16));
 const seaIce = createSeaIce(model.mesh);
 const energyOf = (sea, surfaceT, ice, i = 0) => sea.energy(surfaceT[i], ice[i], sea.snow[i], sea.cover(i, ice[i]));
 
@@ -54,17 +54,17 @@ test('albedo rises from open water to thick ice', () => {
 });
 
 test('the initial state has ice at the poles and the model steps with it', () => {
-  const m = createModel(new Grid(4));
+  const m = createModel(new Grid(16));
   const init = initializeState(m, {});
   for (let a = 0; a < init.length; a++) m.state[a].set(init[a]);
   const d0 = m.diagnostics();
   assert.ok(d0.iceFraction > 0.02 && d0.iceFraction < 0.3, `initial ice fraction ${d0.iceFraction}`);
-  for (let n = 0; n < 24; n++) m.step(1800);
+  for (let n = 0; n < 32; n++) m.step(1350);
   const d = m.diagnostics();
   assert.ok(Number.isFinite(d.maxWind) && d.maxWind < 80);
   assert.ok(d.planetaryAlbedo > 0.05 && d.planetaryAlbedo < 0.6, `planetary albedo ${d.planetaryAlbedo}`);
   assert.ok(d.iceFraction > 0);
-  console.log(`N=4 after 12 h: ice fraction ${d.iceFraction.toFixed(3)}, mean thickness ${d.iceThickness.toFixed(2)} m, surface albedo ${d.surfaceAlbedo.toFixed(3)}, planetary albedo ${d.planetaryAlbedo.toFixed(3)}, TCW ${(1000 * d.columnCloud).toFixed(0)} g/m²`);
+  console.log(`N=16 after 12 h: ice fraction ${d.iceFraction.toFixed(3)}, mean thickness ${d.iceThickness.toFixed(2)} m, surface albedo ${d.surfaceAlbedo.toFixed(3)}, planetary albedo ${d.planetaryAlbedo.toFixed(3)}, TCW ${(1000 * d.columnCloud).toFixed(0)} g/m²`);
 });
 
 test('snow on the ice brightens it, insulates it, melts before it, and goes into the water when the ice is gone', () => {

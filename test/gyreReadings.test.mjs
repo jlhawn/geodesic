@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { basinCase, runCase, caseMesh, meanSpacing, RHO } from '../explain/oceanCases.module.js';
+import { basinCase, caseMesh, meanSpacing, RHO } from '../explain/oceanCases.module.js';
 import { closureCoefficient } from '../js/ocean/layered.module.js';
 import { gyreReadings, westernCurrent, zonalExtremes, rowWidths, DEPTH } from '../explain/gyreReadings.module.js';
 import { EARTH_RADIUS } from '../js/mesh.module.js';
+import { runThreaded } from './helpers/oceanThreads.mjs';
 
 const DEG = Math.PI / 180, PER_DEGREE = EARTH_RADIUS * DEG * Math.cos(30 * DEG);
 const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
@@ -30,9 +31,9 @@ test('the zonal extremes are the strongest westward and eastward bands between 1
   assert.deepEqual(eastward, { speed: 231 / DEPTH, latitude: 37.5 });
 });
 
-test('after 20 days the readings agree with the ocean\'s own layers, a direct row integral and Sverdrup\'s formula', () => {
+test('after 20 days the readings agree with the ocean\'s own layers, a direct row integral and Sverdrup\'s formula', async () => {
   const sim = basinCase({ days: 20 });
-  const frame = runCase(sim), { mesh, ocean } = sim, reading = gyreReadings(frame);
+  const frame = await runThreaded(sim), { mesh, ocean } = sim, reading = gyreReadings(frame);
   const C = mesh.nCells, E = mesh.nEdges, L = ocean.layers;
   const row = sim.layout().parallel;
 
@@ -70,14 +71,14 @@ test('after 20 days the readings agree with the ocean\'s own layers, a direct ro
   assert.ok(current.width > 600e3 && current.width < 1300e3, `the western current is about two cells wide: ${current.width}`);
 });
 
-test('with no walls the water runs around the planet with the wind and no gyre forms, while the smoothing sets the width of the western current', () => {
-  const open = basinCase({ walls: false }), f = runCase(open, 100), r = gyreReadings(f);
+test('with no walls the water runs around the planet with the wind and no gyre forms, while the smoothing sets the width of the western current', async () => {
+  const open = basinCase({ walls: false }), f = await runThreaded(open, 100), r = gyreReadings(f);
   console.log(`no walls, day 100: ${f.northward.toFixed(2)} Sv north and ${f.southward.toFixed(2)} Sv south across 30°N; westward ${(100 * r.zonal.westward.speed).toFixed(2)} cm/s at ${r.zonal.westward.latitude}°, eastward ${(100 * r.zonal.eastward.speed).toFixed(2)} cm/s at ${r.zonal.eastward.latitude}°`);
   assert.equal(r.current, null);
   assert.ok(f.northward < 3 && -f.southward < 3, `${f.northward} Sv north and ${f.southward} Sv south`);
   assert.ok(r.zonal.westward.latitude === 17.5 && r.zonal.eastward.latitude === 37.5);
   assert.ok(r.zonal.westward.speed < -0.055 && r.zonal.westward.speed > -0.08 && r.zonal.eastward.speed > 0.05 && r.zonal.eastward.speed < 0.065);
-  const early = gyreReadings(runCase(basinCase({ walls: false }), 50));
+  const early = gyreReadings(await runThreaded(basinCase({ walls: false }), 50));
   assert.ok(-r.zonal.westward.speed > -early.zonal.westward.speed && r.zonal.eastward.speed > early.zonal.eastward.speed, 'still speeding up on day 100');
 
   const spacing = meanSpacing(caseMesh(16)), beta = 2 * caseMesh(16).omega * Math.cos(30 * DEG) / caseMesh(16).radius;
@@ -85,7 +86,7 @@ test('with no walls the water runs around the planet with the wind and no gyre f
   console.log(`ν₄ ${nu4.toExponential(3)} m⁴/s at N = 16 (cells ${(spacing / 1e3).toFixed(0)} km apart), natural width ${(natural / 1e3).toFixed(0)} km; at N = 128 ${(closureCoefficient(meanSpacing(caseMesh(128)), 12) / 1e0).toExponential(3)} m⁴/s, natural width ${((closureCoefficient(meanSpacing(caseMesh(128)), 12) / beta) ** 0.2 / 1e3).toFixed(0)} km`);
   assert.ok(Math.abs(nu4 / 1.27e16 - 1) < 0.01);
   assert.ok(Math.abs(natural / 1e3 - 230) < 5);
-  const weak = gyreReadings(runCase(basinCase({ days: 20, ocean: { closureHours: 48 } })));
+  const weak = gyreReadings(await runThreaded(basinCase({ days: 20, ocean: { closureHours: 48 } })));
   console.log(`smoothing four times weaker, day 20: western current ${(weak.current.width / 1e3).toFixed(0)} km wide, ${weak.current.transport.toFixed(1)} Sv`);
   assert.ok(Math.abs(closureCoefficient(spacing, 48) * 4 / nu4 - 1) < 1e-9);
   assert.ok(weak.current.width > 600e3 && weak.current.width < 780e3, `${weak.current.width}`);

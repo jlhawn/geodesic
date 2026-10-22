@@ -7,7 +7,7 @@ import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { R_VAPOR, saturationHumidity, cloudSaturation, iceVaporPressure, saturationVaporPressure, criticalHumidityAt, uniformCondensate, uniformCover, LATENT_HEAT, MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 
 const levels = sigmaInterfaces('bl34');
-const build = (moist = {}) => createModel(new Grid(2), { ocean: false, levels, moist });
+const build = (moist = {}) => createModel(new Grid(16), { ocean: false, levels, moist });
 
 /*
  * Column 0 of the model at 1000 hPa under a 6.5 K/km atmosphere from
@@ -164,7 +164,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 
 test('on the GPU the falling ice and the uniform condensation keep column water with the precipitation and moist enthalpy to single precision, and match the CPU column by column', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
-  const dt = 900, previous = { plumeEntrainmentLaw: 'gregory' }, model = createModel(new Grid(6), { ocean: false, levels, moist: previous }), { core, mesh } = model, C = mesh.nCells, { K, sigmaMid, exnerLayer, dSigma, g, cp } = core.diagnostics;
+  const dt = 900, previous = { plumeEntrainmentLaw: 'gregory' }, model = createModel(new Grid(16), { ocean: false, levels, moist: previous }), { core, mesh } = model, C = mesh.nCells, { K, sigmaMid, exnerLayer, dSigma, g, cp } = core.diagnostics;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   let seed = 4242;
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
@@ -213,7 +213,7 @@ test('on the GPU the falling ice and the uniform condensation keep column water 
 });
 
 function coverColumn(radiation = {}) {
-  const model = createModel(new Grid(2), { ocean: false, levels, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999], ...radiation } });
+  const model = createModel(new Grid(16), { ocean: false, levels, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999], ...radiation } });
   const k = layerAt(model, 4.5e4), { C, sigmaMid, exnerLayer } = model.core.diagnostics;
   const s = column(model, (j, T, p) => (j === k ? 1.02 * cloudSaturation(T, p, true, 273.15, 235.15, {}).qs : 0.5 * saturationHumidity(T, p)));
   model.moist.condenseColumn(0, s.pi, s.theta, s.q, s.qc);
@@ -236,7 +236,7 @@ test('under a strong inversion the stratiform blend of the uniform condensation 
   assert.ok(water > 5e-5 && T > 235.15 && T < 273.15, `${water} kg/kg at ${T} K`);
   assert.ok(Math.abs(model.radiation.layerCover[k] - expected) < 1e-12, `${model.radiation.layerCover[k]} against ${expected}`);
   assert.ok(expected > liquidAtT + 0.1, `${expected} against ${liquidAtT}`);
-  const plain = createModel(new Grid(2), { ocean: false, levels, moist: { condensation: 'saturation', iceSaturation: false }, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999] } });
+  const plain = createModel(new Grid(16), { ocean: false, levels, moist: { condensation: 'saturation', iceSaturation: false }, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999] } });
   plain.state.forEach((a, n) => a.set(model.state[n]));
   plain.core.diagnoseColumn(0, ...[0, 1, 4, 5].map((n) => plain.state[n]));
   plain.radiation.column(0, plain.state[0][0], plain.state[1], 290, 5, undefined, 0, plain.state[4][(model.core.diagnostics.K - 1) * C], plain.state[4], plain.state[5], 0.06, 0.06, 1, undefined, 0, 0, 0, 0);
@@ -246,7 +246,7 @@ test('under a strong inversion the stratiform blend of the uniform condensation 
 });
 
 test('a layer whose only cloud is plume cumulus is seen as its plume: its in-cloud path in the shortwave is the plume\'s own however small its cover, where the visibility of the grid-mean path made it 10⁵ kg/m² at a cover of 10⁻⁸', () => {
-  const model = createModel(new Grid(2), { ocean: false, levels });
+  const model = createModel(new Grid(16), { ocean: false, levels });
   const { K, C, sigmaMid, dSigma, g } = model.core.diagnostics;
   const k = layerAt(model, 9e4), s = column(model, (j, T, p) => 0.5 * saturationHumidity(T, p));
   const bottom = (K - 1) * C, mass = s.pi[0] * dSigma[k] / g;

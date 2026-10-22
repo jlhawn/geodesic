@@ -1,28 +1,32 @@
 // The per-cell fields of the four-panel ocean figure (oceanPanels.py)
-// from a saved state on the CPU: the sea surface temperature, WOA23's
-// monthly climatology on the state's date, the current averaged over the
-// top 15 m (east and north components) and the mixed-layer depth (where
-// the density first exceeds the surface layer's by 0.03 kg/m³), for a
-// slab or a hybrid ocean.
+// from a saved state on the CPU: the sea surface temperature at the
+// state's instant, the SST and WOA23's monthly climatology that
+// scripts/woaSstBias.mjs compares (the state's window mean over the
+// window's days when it carries one, as `sstMean` and `sstWindow`, else
+// the instant on the state's date), the current averaged over the top
+// 15 m (east and north components) and the mixed-layer depth (where the
+// density first exceeds the surface layer's by 0.03 kg/m³), for a slab
+// or a hybrid ocean.
 //   node scripts/figures/oceanPanels.mjs <state.bin> <out.json>
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createGeography } from '../../js/geography.module.js';
 import { cellVector } from '../../js/dynamics/operators.module.js';
 import { THIN } from '../../js/ocean/layered.module.js';
 import { layerDensities, mixedLayerDepth } from '../../js/ocean/column.module.js';
-import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../../js/ocean/climatology.module.js';
+import { decodeMonthlySst, climatologyAt, MONTHLY_SST_FILE } from '../../js/ocean/climatology.module.js';
+import { stateSst } from '../woaSstBias.mjs';
 import { readState, readGeography, figureHeader, DEG, eastNorth, rounded } from './figureState.mjs';
 import { stateGrid } from '../../js/stateGrid.module.js';
 
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/oceanPanels.mjs <state.bin> <out.json>'); process.exit(2); }
-const KELVIN = 273.15, EQUINOX_DAY_OF_YEAR = 78, SURFACE_DEPTH = 15;
+const KELVIN = 273.15, SURFACE_DEPTH = 15;
 const saved = await readState(file);
 const { topography, geography } = readGeography(saved);
 const mesh = stateGrid(saved, topography).mesh, C = mesh.nCells, E = mesh.nEdges;
 const geo = createGeography(mesh, topography, geography);
 const woa = decodeMonthlySst(readFileSync(new URL(`../../${MONTHLY_SST_FILE}`, import.meta.url)));
-const months = monthWeights(woa, (((saved.day + EQUINOX_DAY_OF_YEAR) % 365) + 365) % 365);
+const judged = stateSst(saved, woa), { months } = judged, mean = judged.kind === 'mean';
 const { ocean } = saved, hybrid = ocean.vertical === 'hybrid', L = ocean.densities.length, { h, u, T, S } = ocean;
 const at = (k, i) => k * C + i;
 const visible = (k, i) => hybrid || k === 0 || h[at(k, i)] > THIN;
@@ -49,7 +53,7 @@ const mixedDepth = (i) => {
   }
   return K ? mixedLayerDepth(hc, layerDensities(Tc, Sc, K, rhoc), K) : null;
 };
-const columns = { lat: [], lon: [], land: [], ice: [], sst: [], woa: [], ue: [], vn: [], mld: [] };
+const columns = { lat: [], lon: [], land: [], ice: [], sst: [], ...(mean ? { sstMean: [] } : {}), woa: [], ue: [], vn: [], mld: [] };
 for (let i = 0; i < C; i++) {
   let column = 0; for (let k = 0; k < L; k++) column += h[at(k, i)];
   const sea = !geo.land[i] && column > 1;
@@ -59,10 +63,12 @@ for (let i = 0; i < C; i++) {
   columns.ice.push(sea ? rounded(saved.ice[i], 2) : 0);
   const clim = sea ? climatologyAt(woa, months, mesh.latCell[i], mesh.lonCell[i]) : NaN;
   columns.sst.push(sea ? rounded(T[i] - KELVIN, 2) : null);
+  if (mean) columns.sstMean.push(sea ? rounded(judged.model[i] - KELVIN, 2) : null);
   columns.woa.push(rounded(clim - KELVIN, 2));
   const [ue, vn] = sea ? surfaceCurrent(i) : [null, null];
   columns.ue.push(rounded(ue, 3)); columns.vn.push(rounded(vn, 3));
   columns.mld.push(sea ? rounded(mixedDepth(i), 1) : null);
 }
-writeFileSync(out, JSON.stringify({ ...figureHeader(file, saved), vertical: hybrid ? 'hybrid' : 'slab', surfaceDepth: SURFACE_DEPTH, ...columns }));
-console.log(`${out}: ${C} cells, ${columns.sst.filter((v) => v !== null).length} at sea`);
+const sstWindow = mean ? { kind: 'mean', days: [judged.days[0], judged.days[judged.days.length - 1]], length: judged.days.length } : { kind: 'instant', day: judged.day };
+writeFileSync(out, JSON.stringify({ ...figureHeader(file, saved), vertical: hybrid ? 'hybrid' : 'slab', surfaceDepth: SURFACE_DEPTH, sstWindow, ...columns }));
+console.log(`${out}: ${C} cells, ${columns.sst.filter((v) => v !== null).length} at sea; ${mean ? `the ${sstWindow.length}-day mean SST of days ${sstWindow.days.join('–')}` : 'the instant SST'} against WOA23`);

@@ -11,7 +11,7 @@ import { createOcean as createLayeredOcean, depthFields } from '../js/ocean/laye
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
 
 test('the vertical velocity at a level rests on the same πσ̇ the core diagnoses, and vanishes at the top and the ground', () => {
-  const model = createModel(new Grid(6), { topography });
+  const model = createModel(new Grid(16), { topography });
   const { mesh, core, state } = model;
   const C = mesh.nCells, E = mesh.nEdges, K = core.K;
   const init = initializeState(model, {});
@@ -46,7 +46,7 @@ test('the vertical velocity at a level rests on the same πσ̇ the core diagnos
 });
 
 test('the fields at a depth pick the layer holding it, mask the sea floor, and integrate the transport above it to a divergence-free whole', () => {
-  const model = createModel(new Grid(5), { topography });
+  const model = createModel(new Grid(16), { topography });
   const { mesh } = model, C = mesh.nCells, E = mesh.nEdges;
   const ocean = createLayeredOcean(mesh, { geography: model.geography });
   const init = initializeState(model, {});

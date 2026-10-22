@@ -14,12 +14,12 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
 
-const N = 8, DT = 900, DAY = 86400, SPINUP_DAYS = 3, MEASURED_STEPS = 48;
+const N = 16, DT = 1350 * 16 / N, SPINUP_STEPS = 16, MEASURED_STEPS = 6;
 const cadence = withCadence({ ocean: false }, DT, N);
 const OPTIONS = { ocean: false, levels: sigmaInterfaces('bl36'), ...cadence };
 
 /*
- * An aquaplanet over a slab three days from initializeState, so that the
+ * An aquaplanet over a slab six hours from initializeState, so that the
  * boundary layer, the clouds and the convection are all under way.
  */
 let spun = null;
@@ -27,7 +27,7 @@ function spunUp() {
   if (spun) return spun;
   const model = createModel(new Grid(N), OPTIONS);
   initializeState(model).forEach((values, s) => model.state[s].set(values));
-  for (let n = 0; n < SPINUP_DAYS * DAY / DT; n++) model.step(DT);
+  for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
   spun = model;
   return model;
 }
@@ -131,7 +131,7 @@ for (const [label, build] of [['over a slab', spunUp], ['over a layered ocean', 
   }
   for (const [name, rows] of Object.entries(record)) console.log(`CPU ${label} ${name}: ${show(mean(rows))} W/m² on average, ${show(largest(rows))} at most`);
   for (const name of ['closure', 'boundaryLayer', 'adjust', 'momentum']) assert.ok(largest(record[name]) < 1e-6, `${name}: ${largest(record[name])} W/m²`);
-  assert.ok(Math.abs(mean(record.dynamics)) < 0.05, `dynamics: ${mean(record.dynamics)} W/m²`);
+  assert.ok(Math.abs(mean(record.dynamics)) < 0.02, `dynamics: ${mean(record.dynamics)} W/m²`);
 });
 
 /*

@@ -13,7 +13,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
 const DAY = 86400;
-const mesh = createModel(new Grid(8), { physics: false }).mesh;
+const mesh = createModel(new Grid(16), { physics: false }).mesh;
 const flat = () => createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
 const near = (a, b, tol = 1e-12) => Math.abs(a - b) < tol;
 
@@ -110,7 +110,7 @@ test('bare sea ice is 0.62 cold and darkens to 0.48 over the last kelvin below m
 
 test('the land shares its snow albedo with the sea ice, saves it and the standing cover, and an older state loads them fresh and at the cover (without the treeline)', async () => {
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), { landBridges: {}, seaStraits: {} });
-  const model = createModel(new Grid(8), { physics: true, topography: syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), geography: { landBridges: {}, seaStraits: {} } });
+  const model = createModel(new Grid(16), { physics: true, topography: syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), geography: { landBridges: {}, seaStraits: {} } });
   assert.equal(model.seaIce.snowAlbedo.buffer, model.land.snowAlbedo.buffer);
   const land = createLandSurface(mesh, geography, { treeline: false }), C = mesh.nCells;
   land.initialize();
@@ -123,7 +123,7 @@ test('the land shares its snow albedo with the sea ice, saves it and the standin
   }
   const snowAlbedo = Float64Array.from({ length: C }, (_, i) => 0.5 + 0.3 * ((i * 7) % 11) / 10), canopy = Float64Array.from({ length: C }, (_, i) => Math.min(1, vegetation[i] + 0.25));
   land.load({ soil: new Float64Array(C).fill(50), snow, vegetation, snowAlbedo, canopy }, ice);
-  const saved = await decodeState(encodeState({ N: 8, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
+  const saved = await decodeState(encodeState({ N: 16, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
   const back = createLandSurface(mesh, geography, { treeline: false });
   back.load(saved.land, ice);
   for (let i = 0; i < C; i++) {
@@ -137,7 +137,7 @@ test('the land shares its snow albedo with the sea ice, saves it and the standin
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
 test('both engines give land, ice and the snow on them the same albedo from random snow, snow albedo, standing cover and skin temperature', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = createModel(new Grid(6), { topography }), gpu = await createGpuModel(new Grid(6), { topography });
+  const cpu = createModel(new Grid(16), { topography }), gpu = await createGpuModel(new Grid(16), { topography });
   const C = cpu.mesh.nCells, landMask = cpu.geography.land;
   let s = 11;
   const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
@@ -159,15 +159,15 @@ test('both engines give land, ice and the snow on them the same albedo from rand
   const expected = Float64Array.from({ length: C }, (_, i) => (landMask[i] ? cpu.land.albedo(i) : cpu.seaIce.albedo(cpu.state[6][i], null, cpu.seaIce.snow[i], cpu.seaIce.cover(i, cpu.state[6][i]), cpu.state[3][i], cpu.seaIce.snowAlbedo[i])));
   await gpu.step(900);
   const ph = await gpu.gpu.downloadPhysics();
-  let landWorst = 0, iceWorst = 0, iced = 0, masked = 0, melting = 0;
+  let landWorst = 0, iceWorst = 0, iced = 0, masked = 0, melting = 0, lands = 0;
   for (let i = 0; i < C; i++) {
     const d = Math.abs(ph.ADIF[i] - expected[i]);
-    if (landMask[i]) { landWorst = Math.max(landWorst, d); if (snow[i] > 0 && canopy[i] > 0.1 && !(cpu.geography.iceSheet && cpu.geography.iceSheet[i])) masked++; }
+    if (landMask[i]) { lands++; landWorst = Math.max(landWorst, d); if (snow[i] > 0 && canopy[i] > 0.1 && !(cpu.geography.iceSheet && cpu.geography.iceSheet[i])) masked++; }
     else if (init[6][i] > 0) { iceWorst = Math.max(iceWorst, d); iced++; if (init[3][i] > MELTING_POINT - 1) melting++; }
   }
   gpu.destroy();
-  console.log(`N=6: land albedo engines apart by ${landWorst.toExponential(1)} (${masked} snow cells under a standing cover), ice by ${iceWorst.toExponential(1)} over ${iced} iced cells (${melting} within 1 K of melting)`);
-  assert.ok(masked > 20 && iced > 20 && melting > 5, `${masked} masked, ${iced} iced, ${melting} melting`);
+  console.log(`N=16: land albedo engines apart by ${landWorst.toExponential(1)} (${masked} snow cells under a standing cover), ice by ${iceWorst.toExponential(1)} over ${iced} iced cells (${melting} within 1 K of melting)`);
+  assert.ok(masked > lands / 4 && iced > (C - lands) / 4 && melting > iced / 8, `${masked} of ${lands} land cells masked, ${iced} of ${C - lands} sea cells iced, ${melting} melting`);
   assert.ok(landWorst < 1e-6 && iceWorst < 1e-5, `engines apart by ${landWorst} over land and ${iceWorst} over ice`);
 });
 
@@ -185,8 +185,8 @@ test('over 48 GPU steps the snow albedo and the standing cover evolve as on the 
     model.land.load({ soil: new Float64Array(C).fill(60), snow, vegetation: new Float64Array(C).fill(0.6), snowAlbedo: new Float64Array(C).fill(0.8) }, model.state[6]);
     return model;
   };
-  const cpu = prepare(createModel(new Grid(6), { topography, ...options }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, ...options }));
+  const cpu = prepare(createModel(new Grid(16), { topography, ...options }));
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, ...options }));
   const C = cpu.mesh.nCells, apart = new Float64Array(C);
   for (let n = 0; n < 48; n++) {
     cpu.step(900); await gpu.step(900);
@@ -209,20 +209,20 @@ test('over 48 GPU steps the snow albedo and the standing cover evolve as on the 
   }
   const rms = Math.sqrt(sum / n);
   gpu.destroy();
-  console.log(`N=6, 48 steps: ${n} snow cells (${unlike} more whose snowfall parted by over 5% in some step), ${moved} moved from 0.8 (${refreshed} snowed on, ${wet} wet), snow albedo engines rms ${rms.toExponential(1)}, max ${worst.toExponential(1)} at ${at}; standing cover above the cover on ${standing} cells, engines max ${canopyWorst.toExponential(1)}`);
-  assert.ok(moved > n / 2 && refreshed > 3 && standing > 5 && wet > 5 && n - wet > 5 && unlike < (n + unlike) / 4, `${moved} moved, ${refreshed} snowed on, ${wet} of ${n} wet, ${standing} standing, ${unlike} snowed on unlike`);
+  console.log(`N=16, 48 steps: ${n} snow cells (${unlike} more whose snowfall parted by over 5% in some step), ${moved} moved from 0.8 (${refreshed} snowed on, ${wet} wet), snow albedo engines rms ${rms.toExponential(1)}, max ${worst.toExponential(1)} at ${at}; standing cover above the cover on ${standing} cells, engines max ${canopyWorst.toExponential(1)}`);
+  assert.ok(moved > n / 2 && refreshed > n / 10 && standing > n / 10 && wet > n / 10 && n - wet > n / 10 && unlike < (n + unlike) / 4, `${moved} moved, ${refreshed} snowed on, ${wet} of ${n} wet, ${standing} standing, ${unlike} snowed on unlike`);
   assert.ok(rms < 1e-4 && worst < 1e-3, `snow albedo rms ${rms}, max ${worst}`);
   assert.ok(canopyWorst < 1e-4, `standing cover max ${canopyWorst}`);
 });
 
 test('the GPU, whose land and sea ice share one snow ageing, refuses an ageing option given to one of them alone or differently to each', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   for (const options of [{ land: { snowAgeing: false } }, { ice: { snowAgeing: false } }, { ice: { coldSnowAgeing: 0.01 } }, { land: { refreshSnowfall: 5 }, ice: { refreshSnowfall: 8 } }]) {
-    await assert.rejects(createGpuModel(new Grid(4), { topography, ...options }), /share/, JSON.stringify(options));
+    await assert.rejects(createGpuModel(new Grid(16), { topography, ...options }), /share/, JSON.stringify(options));
   }
-  const both = await createGpuModel(new Grid(4), { topography, land: { coldSnowAgeing: 0.01 }, ice: { coldSnowAgeing: 0.01 } });
+  const both = await createGpuModel(new Grid(16), { topography, land: { coldSnowAgeing: 0.01 }, ice: { coldSnowAgeing: 0.01 } });
   assert.equal(both.gpu.physics.coldSnowAgeing, 0.01);
   both.destroy();
-  const seaOnly = await createGpuModel(new Grid(4), { ice: { snowAgeing: false } });
+  const seaOnly = await createGpuModel(new Grid(16), { ice: { snowAgeing: false } });
   assert.equal(seaOnly.gpu.physics.snowAgeing, false, 'without land the sea ice sets it');
   seaOnly.destroy();
 });

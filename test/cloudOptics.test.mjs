@@ -31,7 +31,7 @@ test('the optics of a kilogram of condensate: liquid above 273.15 K with the dro
 });
 
 function singleLayer(radiation, T, path) {
-  const model = createModel(new Grid(4), { ocean: false, radiation: { cloudCover: 'overcast', window: 1, gasFraction: 0, ozoneAbsorption: 0, cloudSolarAbsorption: 0, ...UNSCATTERED, skylight: 0, ...radiation } });
+  const model = createModel(new Grid(16), { ocean: false, radiation: { cloudCover: 'overcast', window: 1, gasFraction: 0, ozoneAbsorption: 0, cloudSolarAbsorption: 0, ...UNSCATTERED, skylight: 0, ...radiation } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   const { core, radiation: rad, mesh } = model, { K } = core.diagnostics, C = mesh.nCells, [pi, theta] = model.state;
   const i = 0, k = Math.floor(K / 2), dry = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -56,7 +56,7 @@ test('an overcast layer over a black surface reflects (1 − g)τ / ((1 − g)τ
 });
 
 function cloudColumns() {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false, exchangeCoefficient: 1.5e-3 }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 } });
+  const model = createModel(new Grid(16), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false, exchangeCoefficient: 1.5e-3 }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
   for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += 10;
@@ -144,8 +144,8 @@ test('with warm, mixed-phase and cold cloud and the empirical deck in the column
   const size = (key) => { let d = 0; for (const r of runs) for (let i = 0; i < C; i++) d = Math.max(d, Math.abs(r.cpu[key][i])); return d; };
   const largest = (key) => { let d = 0; for (const i of lit) d = Math.max(d, Math.abs(phase.cpu[key][i] - gray.cpu[key][i])); return d; };
   const apart = { surface: worst('surface'), down: worst('down'), shortwaveEffect: worst('shortwaveEffect'), longwaveEffect: worst('longwaveEffect') };
-  console.log(`${C} columns at N=6 (${lit.length} lit) with ${counts[0]} warm, ${counts[1]} mixed-phase and ${counts[2]} cold cloudy layers (${phase.decks} empirical decks): the engines' layer heating differs by at most ${heating.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the phase optics move it from the gray by up to ${moved.toFixed(2)} K/day, alike to ${movedApart.toExponential(1)}; the net surface flux differs by ${apart.surface.toExponential(1)}, the surface sunlight by ${apart.down.toExponential(1)}, the shortwave and longwave cloud effects by ${apart.shortwaveEffect.toExponential(1)} and ${apart.longwaveEffect.toExponential(1)} W/m² (the largest of each ${['surface', 'down', 'shortwaveEffect', 'longwaveEffect'].map((key) => size(key).toFixed(0)).join(', ')} W/m²), which the phase optics move by up to ${largest('shortwaveEffect').toFixed(1)} and ${largest('longwaveEffect').toFixed(1)}`);
-  assert.ok(counts.every((n) => n > C / 4) && phase.decks > 10, `cloudy layers ${counts}, ${phase.decks} decks`);
+  console.log(`${C} columns at N=16 (${lit.length} lit) with ${counts[0]} warm, ${counts[1]} mixed-phase and ${counts[2]} cold cloudy layers (${phase.decks} empirical decks): the engines' layer heating differs by at most ${heating.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the phase optics move it from the gray by up to ${moved.toFixed(2)} K/day, alike to ${movedApart.toExponential(1)}; the net surface flux differs by ${apart.surface.toExponential(1)}, the surface sunlight by ${apart.down.toExponential(1)}, the shortwave and longwave cloud effects by ${apart.shortwaveEffect.toExponential(1)} and ${apart.longwaveEffect.toExponential(1)} W/m² (the largest of each ${['surface', 'down', 'shortwaveEffect', 'longwaveEffect'].map((key) => size(key).toFixed(0)).join(', ')} W/m²), which the phase optics move by up to ${largest('shortwaveEffect').toFixed(1)} and ${largest('longwaveEffect').toFixed(1)}`);
+  assert.ok(counts.every((n) => n > C / 4) && phase.decks > C / 2, `cloudy layers ${counts}, ${phase.decks} decks`);
   assert.ok(moved > 1 && largest('shortwaveEffect') > 10 && largest('longwaveEffect') > 5, 'the phase optics move the heating and both effects');
   assert.ok(heating < 1e-5 * scale && movedApart < 1e-5 * scale, `layer heating apart by ${heating} K/day, its change by ${movedApart}`);
   for (const [key, d] of Object.entries(apart)) assert.ok(d < 2e-5 * size(key), `${key} apart by ${d} W/m² of ${size(key)}`);
@@ -170,6 +170,6 @@ test('under the phase optics every sunlit column with warm, mixed-phase and cold
     layers = Math.max(layers, Math.abs(sum - b.atmosphereSolar) / beam);
   }
   console.log(`${lit} columns lit by more than 1 W/m²: absorbed + reflected equals the beam to ${closure.toExponential(1)} of it, the layers' shortwave heating the atmosphere's absorption to ${layers.toExponential(1)}; the cloud absorbs up to ${cloudHeat.toFixed(1)} W/m²`);
-  assert.ok(lit > 100 && cloudHeat > 1);
+  assert.ok(lit > C / 4 && cloudHeat > 1);
   assert.ok(closure < 1e-12 && layers < 1e-12, `closure ${closure}, layers ${layers}`);
 });

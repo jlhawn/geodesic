@@ -25,6 +25,46 @@ const CAM_L26_HYBI = [
   0.896215300000001, 0.953476100000003, 0.9851122, 1,
 ];
 
+export const DIVERGENCE_SURFACES = ['sigma', 'hybrid'];
+
+/*
+ * The models' `dynamics` options with their defaults: divergenceSurfaces,
+ * the surfaces the divergence damping acts along, 'sigma' or 'hybrid'.
+ */
+export function dynamicsOptions({ divergenceSurfaces = 'sigma', ...rest } = {}) {
+  const unknown = Object.keys(rest);
+  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, not ${unknown.join(', ')}`);
+  if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
+  return { divergenceSurfaces };
+}
+
+/*
+ * The weight w = 1 − B/η of the hybrid σ–p surface through each σ, with
+ * B(η) CAM L26's HYBI, linear in η = HYAI + HYBI (Collins et al. 2004),
+ * at η = σ: 1 where CAM's coordinate is pure pressure, 0 at the ground.
+ * Along such a surface d ln p = (B/η) d ln π, so d ln σ = −w d ln π.
+ */
+export function hybridWeights(sigma) {
+  const eta = CAM_L26_HYAI.map((a, k) => a + CAM_L26_HYBI[k]);
+  return Float64Array.from(sigma, (s) => {
+    if (s <= eta[0]) return 1;
+    let k = 0;
+    while (k < eta.length - 2 && eta[k + 1] < s) k++;
+    const t = (s - eta[k]) / (eta[k + 1] - eta[k]);
+    return 1 - (CAM_L26_HYBI[k] + t * (CAM_L26_HYBI[k + 1] - CAM_L26_HYBI[k])) / s;
+  });
+}
+
+/*
+ * 1/(ln σ_below − ln σ_above) for the derivative in ln σ at each layer's
+ * middle, centered over the layers on either side and one-sided at the
+ * top and bottom layers.
+ */
+export function logSigmaSteps(sigmaMid) {
+  const K = sigmaMid.length;
+  return Float64Array.from(sigmaMid, (_, k) => 1 / Math.log(sigmaMid[Math.min(k + 1, K - 1)] / sigmaMid[Math.max(k - 1, 0)]));
+}
+
 const BOUNDARY_LAYER_HEIGHTS = [1698, 1213, 882, 649, 482, 359, 265, 192, 133, 83, 40];
 
 /*
@@ -117,8 +157,9 @@ export function sigmaGridName(levels) {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null, spongeMeanRates = null,
+    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma', surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null, spongeMeanRates = null,
   } = options;
+  if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
     cellsOnEdge, verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, areaTriangle, dcEdge, dvEdge, fVertex,
@@ -180,6 +221,9 @@ export function createSigmaCore(mesh, options = {}) {
   spacing /= E;
   const divergenceStep = divergenceDamping * spacing * spacing;
   const gradDiv = new Float64Array(E);
+  const coupled = divergenceSurfaces === 'hybrid' && divergenceStep > 0;
+  const surfaceWeight = coupled ? hybridWeights(sigmaMid) : null, lnSigmaStep = coupled ? logSigmaSteps(sigmaMid) : null;
+  const hybridDivergence = coupled ? new Float64Array(K * C) : null, halfLnRatio = coupled ? new Float64Array(E) : null;
   const sponge = sponged ? spongeGeometry(mesh) : null, bandMeans = sponge ? new Float64Array(2 * sponge.bands) : null;
 
   function diagnoseColumn(i, pi, theta, q = null, qc = null) {
@@ -311,6 +355,43 @@ export function createSigmaCore(mesh, options = {}) {
   }
 
   /*
+   * Divergence damping of every layer over one step along the hybrid
+   * σ–p surfaces of hybridWeights (Simmons & Burridge 1981). The σ
+   * surfaces slope over terrain as much in the stratosphere as at the
+   * ground, and damping divergence along them mixes momentum vertically
+   * (Mellor & Blumberg 1985), K_z ≈ H² ν_d |∇ln π|². A cell's
+   * divergence is taken on the surface through its center, each edge's
+   * wind moved onto it by w (∂u/∂ln σ)(ln π_i − ln π_e), so
+   * D_η = D_σ − w (∂v/∂ln σ)·∇ln π, and its gradient along the surface
+   * through the edge, ∇_σ D_η − w (∂D_η/∂ln σ) ∇ln π. The derivatives
+   * couple the layers, so all of them are damped at once.
+   */
+  function hybridDivergenceClosure(pi, u) {
+    const { maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, areaCell } = mesh;
+    for (let e = 0; e < E; e++) halfLnRatio[e] = 0.5 * Math.log(pi[cellsOnEdge[2 * e + 1]] / pi[cellsOnEdge[2 * e]]);
+    for (let k = 0; k < K; k++) {
+      const off = k * E, above = Math.max(k - 1, 0) * E, below = Math.min(k + 1, K - 1) * E, tilt = surfaceWeight[k] * lnSigmaStep[k];
+      for (let i = 0; i < C; i++) {
+        let flow = 0, tilted = 0;
+        for (let m = 0; m < nEdgesOnCell[i]; m++) {
+          const slot = maxEdges * i + m, e = edgesOnCell[slot], side = edgeSignOnCell[slot] * dvEdge[e];
+          flow += side * u[off + e];
+          tilted += side * (cellsOnEdge[2 * e] === i ? -halfLnRatio[e] : halfLnRatio[e]) * (u[below + e] - u[above + e]);
+        }
+        hybridDivergence[k * C + i] = (flow + tilt * tilted) / areaCell[i];
+      }
+    }
+    for (let k = 0; k < K; k++) {
+      const off = k * E, here = k * C, above = Math.max(k - 1, 0) * C, below = Math.min(k + 1, K - 1) * C, w = surfaceWeight[k], step = lnSigmaStep[k];
+      for (let e = 0; e < E; e++) {
+        const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+        const slope = 0.5 * step * (hybridDivergence[below + a] - hybridDivergence[above + a] + hybridDivergence[below + b] - hybridDivergence[above + b]);
+        u[off + e] += divergenceStep * (hybridDivergence[here + b] - hybridDivergence[here + a] - w * slope * 2 * halfLnRatio[e]) / dcEdge[e];
+      }
+    }
+  }
+
+  /*
    * Flux-form transport of a layer scalar by the mass fluxes, with the
    * ∇⁴ closure as part of the tendency unless the closure is split off.
    */
@@ -355,11 +436,14 @@ export function createSigmaCore(mesh, options = {}) {
    * mean, 1/s per layer, see sponge.module.js) after the
    * momentum one, applied to the state itself over one time step, for
    * cores built with splitClosure: the model runs this once per step
-   * after the RK4 dynamics instead of inside every stage.
+   * after the RK4 dynamics instead of inside every stage. With
+   * divergenceSurfaces 'hybrid' its momentum part takes every layer at once.
    */
   function phaseClosure(state, kFrom, kTo, dt, part = 'all') {
     const [pi, theta, u] = state;
     const q = state[4] ?? null, qc = state[5] ?? null;
+    const together = coupled && part !== 'tracers';
+    if (together && (kFrom !== 0 || kTo !== K)) throw new Error('the hybrid divergence damping couples the layers: close all of them at once');
     for (let k = kFrom; k < kTo; k++) {
       if (part !== 'momentum' && nu4Theta > 0) {
         scalarClosure(k, pi, theta, theta, dt * nu4Theta, false, exnerLayer);
@@ -368,6 +452,11 @@ export function createSigmaCore(mesh, options = {}) {
       }
       if (part === 'tracers') continue;
       const off = k * E;
+      if (together) {
+        for (let e = 0; e < E; e++) dissipation[off + e] = u[off + e] * u[off + e];
+        if (nu4 > 0) momentumClosure(k, u, u, dt * nu4);
+        continue;
+      }
       const spongeRate = sponge && spongeRates ? spongeRates[k] : 0, meanRate = sponge && spongeMeanRates ? spongeMeanRates[k] : 0;
       if (nu4 > 0 || divergenceStep > 0 || spongeRate > 0 || meanRate > 0) {
         for (let e = 0; e < E; e++) uBefore[e] = u[off + e];
@@ -376,6 +465,14 @@ export function createSigmaCore(mesh, options = {}) {
         if (spongeRate > 0 || meanRate > 0) dampEddies(mesh, sponge, u.subarray(off, off + E), spongeRate, dt, bandMeans, meanRate);
         for (let e = 0; e < E; e++) dissipation[off + e] = uBefore[e] * uBefore[e] - u[off + e] * u[off + e];
       } else dissipation.fill(0, off, off + E);
+    }
+    if (!together) return;
+    hybridDivergenceClosure(pi, u);
+    for (let k = 0; k < K; k++) {
+      const off = k * E;
+      const spongeRate = sponge && spongeRates ? spongeRates[k] : 0, meanRate = sponge && spongeMeanRates ? spongeMeanRates[k] : 0;
+      if (spongeRate > 0 || meanRate > 0) dampEddies(mesh, sponge, u.subarray(off, off + E), spongeRate, dt, bandMeans, meanRate);
+      for (let e = 0; e < E; e++) dissipation[off + e] -= u[off + e] * u[off + e];
     }
   }
 
@@ -446,5 +543,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }

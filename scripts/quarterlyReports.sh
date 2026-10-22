@@ -9,22 +9,28 @@
 # the five figures of scripts/figures/snapshot.sh per resolution, which sit
 # beside it; the tools' raw outputs stay under <REPORTS>/dayDDDD/parts, and a
 # part that failed is marked <name>.failed there and not retried (delete the
-# marker to retry). The figure dumps use the GPU, so they wait while another
-# node script or a page server on port 8000 has it; a report is rewritten
-# whenever a part or figure lands. Loops every INTERVAL seconds until every
-# report up to UNTIL is complete; ONCE=1 makes a single pass.
+# marker to retry). The figure dumps use the GPU: with GPU_QUEUE each one
+# waits its turn in that queue (scripts/gpuQueue.mjs run) in the background,
+# one dump at a time, while the passes go on with the parts; without it they
+# wait while another node script or a page server on port 8000 has it. A
+# report is rewritten whenever a part or figure lands. Loops every INTERVAL
+# seconds until every report up to UNTIL is complete; ONCE=1 makes a single
+# pass.
 #
 #   OUT=runs/thirteen DIR_128=runs/verda-thirteen UNTIL=1825 scripts/quarterlyReports.sh
 #
 # Environment: OUT (the run directory; REPORTS defaults to OUT/reports),
 # DIR_<N> (the directory holding resolution N's states and log, OUT by
 # default), PREFIX (thirteen), NS ("64 128"), PER_YEAR (4), UNTIL (1825),
-# INTERVAL (300), NOTE (a line for each report's header), NODE, PYTHON.
+# INTERVAL (300), NOTE (a line for each report's header), GPU_QUEUE
+# (scripts/gpuQueue.mjs beside this script when it exists; empty for none),
+# NODE, PYTHON.
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/.." && pwd)
 OUT=${OUT:?OUT: the run directory}; PREFIX=${PREFIX:-thirteen}; NS=${NS:-"64 128"}; PER_YEAR=${PER_YEAR:-4}
 UNTIL=${UNTIL:-1825}; INTERVAL=${INTERVAL:-300}; NOTE=${NOTE:-}; NODE=${NODE:-node}; PYTHON=${PYTHON:-python3}
 REPORTS=${REPORTS:-$OUT/reports}; LOG=$REPORTS/reports.log
 SNAPSHOT=${SNAPSHOT:-$HERE/figures/snapshot.sh}; FIGURES="stateMaps oceanPanels eqsection eqpanels mlmdeck"
+GPU_QUEUE=${GPU_QUEUE-$([ -f "$HERE/gpuQueue.mjs" ] && echo "$HERE/gpuQueue.mjs")}; dumping=
 mkdir -p "$REPORTS" || exit 1
 cd "$REPO" || exit 1
 
@@ -106,24 +112,45 @@ figures_missing() { # <N> <day>: 0 when a figure is still to be dumped
   local F; for F in $FIGURES; do [ -s "$(figure_png "$1" "$F" "$2")" ] || return 0; done; return 1
 }
 
-make_figures() { # <day>: 1 when a dump waits for the GPU
-  local D=$1 parts=$(parts_of "$1") N F busy tmp start png aborts
+dump_figures() { # <N> <day>: one resolution's figures, through GPU_QUEUE when it is set
+  local N=$1 D=$2 parts=$(parts_of "$2") F tmp start png aborts
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/quarterly-figures.XXXXXX"); start=$(date +%s)
+  if [ -n "$GPU_QUEUE" ]; then
+    log "$(tag_of "$D"): figures N=$N queued"
+    rm -f "$parts/figures$N.log"
+    "$NODE" "$GPU_QUEUE" run "$parts/figures$N.log" bash "$SNAPSHOT" "$(state_of "$N" "$D")" "$tmp" "$PREFIX N=$N, day $D" 2>> "$parts/figures$N.queue.err"
+  else
+    log "$(tag_of "$D"): figures N=$N"
+    bash "$SNAPSHOT" "$(state_of "$N" "$D")" "$tmp" "$PREFIX N=$N, day $D" > "$parts/figures$N.log" 2>&1
+  fi
+  for F in $FIGURES; do
+    png=$(ls "$tmp"/*_"$F"_day*.png 2> /dev/null | head -n 1)
+    [ -n "$png" ] && mv "$png" "$(figure_png "$N" "$F" "$D")"
+    cat "$tmp"/*_"$F"_day*.log >> "$parts/figures$N.log" 2> /dev/null
+  done
+  rm -rf "$tmp"
+  if [ -n "$GPU_QUEUE" ]; then
+    aborts=$(grep -E '^aborted ' "$parts/figures$N.log" | tail -n 1 | cut -d' ' -f2)
+    log "$(tag_of "$D"): figures N=$N done $(( $(date +%s) - start )) s after queueing; GPU command-buffer aborts over the dump: ${aborts:-?}"
+  else
+    aborts=$(/usr/bin/log show --last "$(( ($(date +%s) - start) / 60 + 2 ))m" --predicate 'eventMessage CONTAINS "aborted"' --style compact 2> /dev/null | grep 'aborted' | grep -vc 'com.apple.log')
+    log "$(tag_of "$D"): figures N=$N done in $(( $(date +%s) - start )) s; 'aborted' lines in the system log over the dump: $aborts"
+  fi
+  figures_missing "$N" "$D" && { touch "$parts/figures$N.failed"; log "$(tag_of "$D"): figures N=$N incomplete: $(grep -E 'failed' "$parts/figures$N.log" | head -n 2 | tr '\n' ' ' | cut -c1-200)"; }
+}
+
+make_figures() { # <day>: 1 while a dump waits for the GPU or runs
+  local D=$1 parts=$(parts_of "$1") N busy
   for N in $NS; do
     figures_missing "$N" "$D" || continue
     [ -e "$parts/figures$N.failed" ] && continue
+    if [ -n "$GPU_QUEUE" ]; then
+      [ -n "$dumping" ] && kill -0 "$dumping" 2> /dev/null && return 1
+      dump_figures "$N" "$D" & dumping=$!
+      return 1
+    fi
     busy=$(gpu_user); [ -n "$busy" ] && { log "$(tag_of "$D"): figures N=$N wait for the GPU ($busy)"; return 1; }
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/quarterly-figures.XXXXXX"); start=$(date +%s)
-    log "$(tag_of "$D"): figures N=$N"
-    bash "$SNAPSHOT" "$(state_of "$N" "$D")" "$tmp" "$PREFIX N=$N, day $D" > "$parts/figures$N.log" 2>&1
-    for F in $FIGURES; do
-      png=$(ls "$tmp"/*_"$F"_day*.png 2> /dev/null | head -n 1)
-      [ -n "$png" ] && mv "$png" "$(figure_png "$N" "$F" "$D")"
-      cat "$tmp"/*_"$F"_day*.log >> "$parts/figures$N.log" 2> /dev/null
-    done
-    rm -rf "$tmp"
-    aborts=$(/usr/bin/log show --last "$(( ($(date +%s) - start) / 60 + 2 ))m" --predicate 'eventMessage CONTAINS "aborted"' --style compact 2> /dev/null | grep 'aborted' | grep -vc 'com.apple.log')
-    log "$(tag_of "$D"): figures N=$N done in $(( $(date +%s) - start )) s; 'aborted' lines in the system log over the dump: $aborts"
-    figures_missing "$N" "$D" && { touch "$parts/figures$N.failed"; log "$(tag_of "$D"): figures N=$N incomplete: $(grep -E 'failed' "$parts/figures$N.log" | head -n 2 | tr '\n' ' ' | cut -c1-200)"; }
+    dump_figures "$N" "$D"
   done
   return 0
 }
@@ -151,20 +178,26 @@ woa_table() { # <parts>
     }' "${args[@]}"
 }
 
+woa_dates() { # <parts>: what each resolution's table compares, over which days, and the notes on it
+  local N any=0
+  for N in $NS; do [ -s "$1/woa$N.md" ] && { sed -n "1s/^- [^:]*: /- N=$N: /p" "$1/woa$N.md"; any=1; }; done
+  [ "$any" = 1 ] || return 0
+  echo; for N in $NS; do [ -s "$1/woa$N.md" ] && sed -n '3s/^- //p' "$1/woa$N.md"; done | awk '!seen[$0]++'; echo
+}
+
 section() { if [ -s "$1" ]; then cat "$1"; else echo "_$(basename "$1") is missing; see reports.log._"; fi; echo; }
 code() { if [ -s "$1" ]; then echo '```text'; cat "$1"; echo '```'; else echo "_$(basename "$1") is missing; see reports.log._"; fi; echo; }
 
 assemble() { # <day> <k>
-  local D=$1 k=$2 parts=$(parts_of "$1") md=$(day_dir "$1")/$(tag_of "$1").md N F png first
+  local D=$1 k=$2 parts=$(parts_of "$1") md=$(day_dir "$1")/$(tag_of "$1").md N F png
   local year=$(( (k - 1) / PER_YEAR + 1 )) quarter=$(( (k - 1) % PER_YEAR + 1 )) prev=$(qday $((k - 1)))
-  first=${NS%% *}
   {
     echo "# $PREFIX, day $D: year $year, quarter $quarter ($(calendar "$D"))"; echo
     [ -n "$NOTE" ] && { echo "$NOTE"; echo; }
     echo "States:$(for N in $NS; do printf ' %s' "$(state_of "$N" "$D")"; done). The log means cover days $((prev + 1))–$D. Written $(date '+%F %H:%M')."; echo
     echo "## Side by side"; echo; section "$parts/compare.md"
     echo "## Sea surface temperature against WOA23"; echo
-    [ -s "$parts/woa$first.md" ] && { sed -n '1s/^- [^:]*: model day/Model day/p; 3s/^- //p' "$parts/woa$first.md"; echo; }
+    woa_dates "$parts"
     woa_table "$parts"; echo
     echo "## Cloud by regime"; echo
     for N in $NS; do echo "### N=$N"; echo; code "$parts/cloud$N.txt"; done
@@ -195,9 +228,9 @@ pass() { # 0 once every report up to UNTIL is complete
   [ "$complete" = 1 ]
 }
 
-log "reports of $PREFIX N=$NS under $REPORTS (states from$(for N in $NS; do printf ' %s' "$(dir_of "$N")"; done)), $PER_YEAR a year up to day $UNTIL"
+log "reports of $PREFIX N=$NS under $REPORTS (states from$(for N in $NS; do printf ' %s' "$(dir_of "$N")"; done)), $PER_YEAR a year up to day $UNTIL${GPU_QUEUE:+, figures through $GPU_QUEUE}"
 while :; do
   pass && { log "every report up to day $UNTIL is complete"; exit 0; }
-  [ -n "$ONCE" ] && exit 0
+  [ -n "$ONCE" ] && { wait; exit 0; }
   sleep "$INTERVAL"
 done

@@ -1,12 +1,18 @@
 // The sea surface temperature of saved states against WOA23's monthly
-// climatology (data/woa_sst_monthly_1deg.bin) on each state's date, in the
-// boxes of the thin mixed-layer judging.
+// climatology (data/woa_sst_monthly_1deg.bin), in the boxes of the thin
+// mixed-layer judging. A state that carries a whole window of daily means
+// (sstWindowOf in js/sstMeans.module.js) is judged by each cell's mean
+// over the window's days against the climatology averaged over the same
+// days, each day's mean dated to its middle; any other state, and every
+// state under --instant, by the top layer's temperature at the instant it
+// was saved against the climatology on its date.
 //
-//   node scripts/woaSstBias.mjs STATE.bin[@DAY] [STATE.bin[@DAY] ...] [--woa FILE] [--json OUT]
+//   node scripts/woaSstBias.mjs STATE.bin[@DAY] [STATE.bin[@DAY] ...] [--instant] [--woa FILE] [--json OUT]
 //
-// DAY is the model day (day 0 the March equinox, March 20), the state's own
-// by default; the climatology is interpolated linearly between the month
-// centers to that date. With several states each cell's model and
+// DAY is the model day (day 0 the March equinox, March 20) of an instant
+// comparison, the state's own by default; a state given a DAY is compared
+// at its instant. The climatology is interpolated linearly between the
+// month centers to each date. With several states each cell's model and
 // climatology values are averaged over them first. A sea cell holds more
 // than 1 m of water; "coastal" is within two cells of land; the open-water
 // box leaves out cells iced in any of the states.
@@ -16,9 +22,30 @@ import { decodeState } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { stateGeography } from '../js/geography.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
+import { sstWindowOf } from '../js/sstMeans.module.js';
 
 const EQUINOX_DAY_OF_YEAR = 78, KELVIN = 273.15, DEG = 180 / Math.PI;
 export const dayOfYear = (modelDay) => (((modelDay + EQUINOX_DAY_OF_YEAR) % 365) + 365) % 365;
+
+export function windowMonths(sst, days) {
+  const total = new Map();
+  for (const d of days) for (const [m, w] of monthWeights(sst, dayOfYear(d - 0.5))) total.set(m, (total.get(m) ?? 0) + w / days.length);
+  return [...total];
+}
+
+/*
+ * A state's SST as this table judges it: { kind: 'mean', days, model,
+ * months } over its window, or { kind: 'instant', day, model, months },
+ * `model` holding the cells' temperatures in K (for the instant the
+ * state's ocean.T, the top layer first) and `months` the climatology's
+ * month weights.
+ */
+export function stateSst(st, sst, { day, instant = false } = {}) {
+  const window = instant || day !== undefined ? null : sstWindowOf(st);
+  if (window) return { kind: 'mean', days: window.days, model: window.mean, months: windowMonths(sst, window.days) };
+  const d = day ?? st.day;
+  return { kind: 'instant', day: d, model: st.ocean.T, months: monthWeights(sst, dayOfYear(d)) };
+}
 
 const inLon = (lon, a, b) => (a <= b ? lon >= a && lon <= b : lon >= a || lon <= b);
 export const BOXES = [
@@ -53,7 +80,7 @@ function coastalCells(mesh, sea, rings = 2) {
   return near;
 }
 
-export async function biasTable(entries, sst) {
+export async function biasTable(entries, sst, { instant = false } = {}) {
   let mesh = null, C = 0, model = null, clim = null, iced = null, sea = null;
   const dates = [];
   for (const { path, day } of entries) {
@@ -61,13 +88,13 @@ export async function biasTable(entries, sst) {
     const grid = stateGrid(st, stateGeography(st).topography).mesh;
     if (!mesh) { mesh = grid; C = mesh.nCells; model = new Float64Array(C); clim = new Float64Array(C); iced = new Float64Array(C); sea = new Uint8Array(C).fill(1); }
     else if (grid.nCells !== C) throw new Error(`${path} is on another grid`);
-    const ocean = st.ocean, L = ocean.h.length / C, d = day ?? st.day, doy = dayOfYear(d), months = monthWeights(sst, doy);
-    dates.push({ path, day: d, doy, months });
+    const ocean = st.ocean, L = ocean.h.length / C, judged = stateSst(st, sst, { day, instant }), { months } = judged;
+    dates.push(judged.kind === 'mean' ? { path, kind: 'mean', days: [judged.days[0], judged.days[judged.days.length - 1]], length: judged.days.length, months } : { path, kind: 'instant', day: judged.day, doy: dayOfYear(judged.day), months });
     for (let i = 0; i < C; i++) {
       let column = 0;
       for (let k = 0; k < L; k++) column += ocean.h[k * C + i];
       if (!(column > 1)) { sea[i] = 0; continue; }
-      model[i] += ocean.T[i] - KELVIN;
+      model[i] += judged.model[i] - KELVIN;
       iced[i] += st.ice[i] > 0 ? 1 : 0;
       clim[i] += climatologyAt(sst, months, mesh.latCell[i], mesh.lonCell[i]) - KELVIN;
     }
@@ -102,10 +129,18 @@ function dateLabel(doy) {
 }
 
 export function markdown({ dates, rows, cells, spacing }) {
-  const out = [];
-  for (const { path, day, doy, months } of dates) out.push(`- ${path.split('/').pop()}: model day ${day}, ${dateLabel(doy)} (day of year ${doy.toFixed(1)}); WOA23 ${months.map(([m, w]) => `${MONTH_NAMES[m]} ×${w.toFixed(3)}`).join(' + ')}`);
+  const out = [], weights = (months) => months.map(([m, w]) => `${MONTH_NAMES[m]} ×${w.toFixed(3)}`).join(' + ');
+  for (const date of dates) {
+    const name = date.path.split('/').pop(), [first, last] = date.days ?? [];
+    out.push(date.kind === 'mean'
+      ? `- ${name}: model days ${first}–${last} (${dateLabel(dayOfYear(first - 1))} – ${dateLabel(dayOfYear(last))}), the ${date.length}-day mean SST against WOA23 over the same days, ${weights(date.months)}`
+      : `- ${name}: model day ${date.day}, ${dateLabel(date.doy)} (day of year ${date.doy.toFixed(1)}), the state's instant SST against WOA23 ${weights(date.months)}`);
+  }
   out.push(`- ${cells} cells, mean spacing ${(spacing / 1000).toFixed(0)} km; "coastal" is within two cells of land.`);
-  out.push('- The states are instantaneous at one UTC, so each longitude is sampled at one local time: read differences under 0.3 K between runs as noise.');
+  const kinds = new Set(dates.map((date) => date.kind)), notes = [];
+  if (kinds.has('mean')) notes.push('Each cell\'s mean SST averages its daily means, each over every ocean step of its day, which removes the day\'s cycle and averages down the passing eddies and waves.');
+  if (kinds.has('instant')) notes.push('An instant state is sampled at one UTC, so each longitude at one local time: read differences under 0.3 K between runs as noise.');
+  out.push(`- ${notes.join(' ')}`);
   out.push('');
   out.push('| Box | Cells | Model (°C) | WOA23 (°C) | Bias (K) | RMS (K) | Iced |');
   out.push('|---|---|---|---|---|---|---|');
@@ -119,15 +154,16 @@ export function markdown({ dates, rows, cells, spacing }) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const args = process.argv.slice(2), entries = [];
-  let woaPath = fileURLToPath(new URL(`../${MONTHLY_SST_FILE}`, import.meta.url)), jsonOut = null;
+  let woaPath = fileURLToPath(new URL(`../${MONTHLY_SST_FILE}`, import.meta.url)), jsonOut = null, instant = false;
   for (let a = 0; a < args.length; a++) {
-    if (args[a] === '--woa') woaPath = args[++a];
+    if (args[a] === '--instant') instant = true;
+    else if (args[a] === '--woa') woaPath = args[++a];
     else if (args[a] === '--json') jsonOut = args[++a];
     else { const [path, day] = args[a].split('@'); entries.push({ path, day: day === undefined ? undefined : Number(day) }); }
   }
-  if (!entries.length) { console.error('usage: node scripts/woaSstBias.mjs STATE.bin[@DAY] [STATE.bin[@DAY] ...] [--woa FILE] [--json OUT]'); process.exit(1); }
+  if (!entries.length) { console.error('usage: node scripts/woaSstBias.mjs STATE.bin[@DAY] [STATE.bin[@DAY] ...] [--instant] [--woa FILE] [--json OUT]'); process.exit(1); }
   const sst = decodeMonthlySst(readFileSync(woaPath));
-  const table = await biasTable(entries, sst);
+  const table = await biasTable(entries, sst, { instant });
   console.log(markdown(table));
   if (jsonOut) writeFileSync(jsonOut, JSON.stringify(table, null, 1));
 }

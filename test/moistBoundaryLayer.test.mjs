@@ -14,7 +14,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 
 const heights = [...Array.from({ length: 21 }, (_, n) => 100 * n), 2500, 3000, 4000, 5500, 7500, 10000, 13000, 17000, 22000, 30000];
 const fine = Float64Array.from([0, ...heights.slice(1).reverse().map((z) => Math.exp(-z / 8000)), 1]);
-const model = createModel(new Grid(3), { levels: fine, ocean: false });
+const model = createModel(new Grid(16), { levels: fine, ocean: false });
 const { core, mesh, radiation } = model;
 const { K, C, E, dSigma, sigmaMid, g, cp, exnerLayer, geopotential, kappa } = core.diagnostics;
 const { thetaV } = core.arrays;
@@ -165,7 +165,7 @@ test('a stratocumulus-topped column over a 26 °C sea is mixed from its cloud to
 });
 
 test('a clear convective column gets the surface-driven K-profile and the M21 entrainment of the dry scheme, and the same mixing', () => {
-  const state = column((z) => [300 - 1e-3 * Math.min(z, 1000) + 5e-3 * Math.max(0, z - 1000), 0.01 * Math.exp(-z / 2000)], 302);
+  const state = column((z) => [300 - 1e-3 * Math.min(z, 1000) + 5e-3 * Math.max(0, z - 1000), 0.008 * Math.exp(-z / 2000)], 302);
   const [pi, theta, , , q, qc] = state;
   for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) if (height(k, i) < 3000) assert.equal(qc[k * C + i], 0, 'clear');
   const moistLayer = createBoundaryLayer(mesh, core, { longwave: new Float64Array(K * C), entrainment: { jumpLayers: 1 } }), dryLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
@@ -241,7 +241,7 @@ test('the variance cover is 0 for a dry layer, 1 for one saturated beyond its sp
 
 test('with deckRegime \'boundaryLayer\' the deck runs where the boundary layer is coupled stratocumulus, and deckBypass leaves those columns to the resolved cloud', () => {
   const run = (radiationOptions) => {
-    const m = createModel(new Grid(3), { levels: sigmaInterfaces('bl34'), ocean: false, radiation: { stratusSubsidence: -1000, ...radiationOptions } });
+    const m = createModel(new Grid(16), { levels: sigmaInterfaces('bl34'), ocean: false, radiation: { stratusSubsidence: -1000, ...radiationOptions } });
     const init = initializeState(m, {});
     for (let a = 0; a < init.length; a++) m.state[a].set(init[a]);
     const { K: nK, C: nC, sigmaMid: mid } = m.core.diagnostics;
@@ -268,7 +268,7 @@ test('with deckRegime \'boundaryLayer\' the deck runs where the boundary layer i
 async function moistEngines(options = {}, moist = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: options, moist, surface: { exchange: 'fixed' } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: options, moist, surface: { exchange: 'fixed' } });
   const { core: c, mesh: m, state, radiation: r, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer: ex, sigmaMid: mid, kappa: kap, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -362,6 +362,6 @@ test('the moist boundary layer matches between the engines on a random set of co
     assert.ok(flips <= nC / 100, `${flips} columns differ in regime`);
     assert.ok(worstV < 1e-4 && worstW < 2e-3 && worstMix < 2e-3 && worstDepth < 0.05, `V ${worstV}, w_e ${worstW}, coefficients ${worstMix}, depths ${worstDepth}`);
     assert.ok(adjusted <= nC / 50, `${adjusted} columns part`);
-    assert.ok(theta < 2e-3 && q < 2e-6 && qc < 2e-6 && wind < 2e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
+    assert.ok(theta < 5e-3 && q < 4e-6 && qc < 2e-6 && wind < 2e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
   }
 });

@@ -15,7 +15,7 @@ const DEG = 180 / Math.PI;
 const C = (k) => k - 273.15;
 
 test('the starting sea is initializeState\'s, wherever the start leaves no ice', () => {
-  const model = createModel(buildMesh(new Grid(4)), { ocean: false });
+  const model = createModel(buildMesh(new Grid(16)), { ocean: false });
   const state = initializeState(model, { profile: new Float64Array(model.core.diagnostics.K).fill(300) });
   const surfaceT = state[3], ice = state[6];
   let checked = 0;
@@ -24,7 +24,7 @@ test('the starting sea is initializeState\'s, wherever the start leaves no ice',
     close(startingSea(model.mesh.latCell[i] * DEG).temperature, surfaceT[i], 1e-9, `sea temperature at ${(model.mesh.latCell[i] * DEG).toFixed(2)}°`);
     checked++;
   }
-  assert.ok(checked > 100, `${checked} cells checked`);
+  assert.ok(checked > 0.9 * model.mesh.nCells, `${checked} of ${model.mesh.nCells} cells checked`);
 });
 
 

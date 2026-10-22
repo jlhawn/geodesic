@@ -8,8 +8,9 @@ import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
-import { decodeForcing, forcingName } from '../js/forcing.module.js';
+import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
+import { SST_FIELDS } from '../js/sstMeans.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -17,7 +18,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const skip = !gpuAvailable && 'webgpu not installed';
 
 const root = new URL('..', import.meta.url).pathname;
-const N = 6, PER_DAY = 24;
+const N = 16, DT = 1350 * 16 / N, PER_DAY = 86400 / DT;
 let dir, fresh, forcing;
 
 function run(script, env) {
@@ -32,7 +33,16 @@ function driver(env) {
 }
 const load = async (file) => decodeState(new Uint8Array(readFileSync(file)));
 const text = (file) => readFileSync(file, 'utf8');
-async function waitFor(check, seconds = 60) {
+function apart(a, b, skip = []) {
+  const names = [];
+  for (const [name, x] of [...Object.entries(a), ...Object.entries(a.ocean).map(([k, v]) => [`ocean.${k}`, v]), ...Object.entries(a.land).map(([k, v]) => [`land.${k}`, v])]) {
+    if (!ArrayBuffer.isView(x) || skip.includes(name)) continue;
+    const y = name.startsWith('ocean.') ? b.ocean[name.slice(6)] : name.startsWith('land.') ? b.land[name.slice(5)] : b[name];
+    if (!x.every((v, n) => Object.is(v, y[n]))) names.push(name);
+  }
+  return names;
+}
+async function waitFor(check, seconds = 120) {
   const until = Date.now() + seconds * 1000;
   while (!check()) {
     if (Date.now() > until) throw new Error('timed out');
@@ -69,12 +79,13 @@ before(async () => {
 });
 after(() => rmSync(dir, { recursive: true, force: true }));
 
-test('the hand-off takes the sea surface, ice and ocean and keeps the atmosphere, the land and the clock', () => {
+test('the hand-off takes the sea surface, ice and ocean, keeps the atmosphere, the land and the clock, and leaves the SST ring behind', () => {
   const C = 5, land = Uint8Array.from([1, 0, 0, 1, 0]);
   const cells = (base) => Float32Array.from({ length: C }, (_, i) => base + i);
-  const coupled = { N: 1, day: 730, time: 730 * 86400, oceanYears: 100, levels: Float64Array.from([0, 0.5, 1]), pi: cells(1e5), surfaceT: cells(280), ice: cells(0), concentration: cells(0.1), mlmSubsidence: cells(0.01), mlmHeight: cells(800), mlmGate: cells(0.2), ocean: { h: cells(1), T: cells(275) }, land: { soil: cells(10), snow: cells(1) } };
-  const alone = { N: 1, day: 37230, time: 37230 * 86400, oceanYears: 100, levels: Float64Array.from([0, 0.4, 1]), pi: cells(9e4), surfaceT: cells(270), ice: cells(2), concentration: cells(0.5), mlmSubsidence: cells(0.02), mlmHeight: cells(900), mlmGate: cells(0.7), ocean: { h: cells(5), T: cells(271), Q: cells(7) }, land: { soil: cells(20), snow: cells(3) } };
-  const merged = withOceanOf(coupled, alone, land);
+  const coupled = { N: 16, day: 730, time: 730 * 86400, oceanYears: 100, levels: Float64Array.from([0, 0.5, 1]), pi: cells(1e5), surfaceT: cells(280), ice: cells(0), concentration: cells(0.1), mlmSubsidence: cells(0.01), mlmHeight: cells(800), mlmGate: cells(0.2), ocean: { h: cells(1), T: cells(275) }, land: { soil: cells(10), snow: cells(1) } };
+  const alone = { N: 16, day: 37230, time: 37230 * 86400, oceanYears: 100, levels: Float64Array.from([0, 0.4, 1]), pi: cells(9e4), surfaceT: cells(270), ice: cells(2), concentration: cells(0.5), mlmSubsidence: cells(0.02), mlmHeight: cells(900), mlmGate: cells(0.7), ocean: { h: cells(5), T: cells(271), Q: cells(7) }, land: { soil: cells(20), snow: cells(3) } };
+  const ring = { sstMeans: cells(290), sstMeanDays: Float64Array.of(730), sstSum: new Float64Array(C), sstSamples: 3 };
+  const merged = withOceanOf({ ...coupled, ...ring }, alone, land);
   for (let i = 0; i < C; i++) {
     const from = land[i] ? coupled : alone;
     assert.equal(merged.surfaceT[i], from.surfaceT[i]);
@@ -88,7 +99,8 @@ test('the hand-off takes the sea surface, ice and ocean and keeps the atmosphere
   for (const field of ['levels', 'mlmSubsidence', 'mlmHeight', 'mlmGate']) assert.equal(merged[field], coupled[field], field);
   assert.equal(merged.land.soil, coupled.land.soil);
   assert.deepEqual([merged.day, merged.time, merged.oceanYears], [730, 730 * 86400, 200]);
-  assert.throws(() => withOceanOf(coupled, { ...alone, N: 2 }, land), /N=2/);
+  for (const name of SST_FIELDS) assert.ok(!(name in merged), name);
+  assert.throws(() => withOceanOf(coupled, { ...alone, N: 32 }, land), /N=32/);
 });
 
 test('the driver leaves a lock held in this boot by another live driver alone and takes over one taken in an earlier boot or carrying its own pid', () => {
@@ -97,28 +109,28 @@ test('the driver leaves a lock held in this boot by another live driver alone an
   const locked = (name, owner) => {
     const out = outDir(name);
     writeFileSync(join(out, 'STOP_async'), '');
-    mkdirSync(join(out, 'async6_cycles.lock'));
-    writeFileSync(join(out, 'async6_cycles.lock', 'pid'), `${owner}\n`);
+    mkdirSync(join(out, 'async16_cycles.lock'));
+    writeFileSync(join(out, 'async16_cycles.lock', 'pid'), `${owner}\n`);
     return out;
   };
-  const log = (out) => text(join(out, 'async6_cycles.log'));
+  const log = (out) => text(join(out, 'async16_cycles.log'));
   try {
     let out = locked('lockLive', `${holder.pid} ${boot}`);
     assert.equal(driver({ OUT: out }), 0);
-    assert.match(log(out), new RegExp(`another driver \\(pid ${holder.pid}\\) holds .*async6_cycles\\.lock; not starting`));
-    assert.equal(text(join(out, 'async6_cycles.lock', 'pid')), `${holder.pid} ${boot}\n`, 'a live driver of this boot keeps its lock');
+    assert.match(log(out), new RegExp(`another driver \\(pid ${holder.pid}\\) holds .*async16_cycles\\.lock; not starting`));
+    assert.equal(text(join(out, 'async16_cycles.lock', 'pid')), `${holder.pid} ${boot}\n`, 'a live driver of this boot keeps its lock');
 
     out = locked('lockEarlierBoot', `${holder.pid} an-earlier-boot`);
     assert.equal(driver({ OUT: out }), 0);
-    assert.match(log(out), new RegExp(`taking over .*async6_cycles\\.lock from pid ${holder.pid}, which is gone`));
-    assert.match(log(out), /stopped at STOP_async or STOP_async6/);
-    assert.ok(!existsSync(join(out, 'async6_cycles.lock')), 'the lock goes with the driver');
+    assert.match(log(out), new RegExp(`taking over .*async16_cycles\\.lock from pid ${holder.pid}, which is gone`));
+    assert.match(log(out), /stopped at STOP_async or STOP_async16/);
+    assert.ok(!existsSync(join(out, 'async16_cycles.lock')), 'the lock goes with the driver');
 
     out = locked('lockOwnPid', '');
-    const self = spawnSync('bash', ['-c', `echo "$$ ${boot}" > "$OUT/async6_cycles.lock/pid"; exec bash scripts/asyncSpinup.sh`], { cwd: root, env: { ...process.env, N: String(N), OUT: out }, encoding: 'utf8' });
+    const self = spawnSync('bash', ['-c', `echo "$$ ${boot}" > "$OUT/async16_cycles.lock/pid"; exec bash scripts/asyncSpinup.sh`], { cwd: root, env: { ...process.env, N: String(N), OUT: out }, encoding: 'utf8' });
     assert.equal(self.status, 0, self.stderr);
     assert.doesNotMatch(log(out), /another driver/);
-    assert.match(log(out), /taking over .*async6_cycles\.lock from pid \d+, which is gone[\s\S]*stopped at STOP_async or STOP_async6/);
+    assert.match(log(out), /taking over .*async16_cycles\.lock from pid \d+, which is gone[\s\S]*stopped at STOP_async or STOP_async16/);
   } finally {
     holder.kill();
   }
@@ -140,7 +152,7 @@ test('an ocean-only run stopped inside a day and continued ends byte for byte wh
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['alone_year0002.bin', 'alone_year0003.bin']);
   assert.ok(readFileSync(join(whole, 'alone_year0003.bin')).equals(readFileSync(join(parts, 'alone_year0003.bin'))), 'the continued run ends where the uninterrupted one does');
   const log = text(join(parts, 'alone.log'));
-  assert.match(log, /stopped by STOP_AFTER_STEPS=28 after 0 years 1 days 4 of 24 steps alone/);
+  assert.match(log, new RegExp(`stopped by STOP_AFTER_STEPS=${PER_DAY + 4} after 0 years 1 days 4 of ${PER_DAY} steps alone`));
   assert.match(log, /year 3: .*global SST -?[0-9.]+ °C, drift -?[0-9.]+ K since the start, -?[0-9.]+ K over the last 3 years;/);
 });
 
@@ -162,28 +174,21 @@ test('SIGTERM makes an ocean-only run save and exit 0, and the run continues to 
   assert.ok(readFileSync(join(whole, 'alone_year0020.bin')).equals(readFileSync(join(parts, 'alone_year0020.bin'))));
 });
 
-test('a coupled segment stopped inside a day carries the recorded day across the interruption', { skip }, async () => {
+test('a coupled segment stopped inside a day records each day byte for byte as the uninterrupted run does and ends in its state, all but the energy record, which leaves the interrupted day out', { skip }, async () => {
   const whole = outDir('coupledWhole', 'c_day0000.bin'), parts = outDir('coupledParts', 'c_day0000.bin');
   const env = { TAG: 'c', DAYS: '3', MINUTES: '100' };
   assert.equal(run('spinup.mjs', { ...env, OUT: whole, RECORD: join(whole, 'forcing') }), 0);
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, RECORD: join(parts, 'forcing'), STOP_AFTER_STEPS: String(PER_DAY + 12) }), 0);
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['c_day0000.bin', 'c_day0001_step0012.bin']);
   const inside = await load(join(parts, 'c_day0001_step0012.bin'));
-  assert.deepEqual([inside.day, inside.step, inside.forcingSteps, inside.forcingOceanSteps, inside.forcingSeconds], [1, 12, 12, 3, 12 * 3600]);
+  assert.deepEqual([inside.day, inside.step, inside.forcingSteps, inside.forcingOceanSteps, inside.forcingSeconds], [1, 12, 12, 3, 12 * DT]);
   for (const field of ['mlmSubsidence', 'mlmHeight', 'mlmGate', 'boundaryDepth', 'mixingTop', 'boundaryRegime', 'boundaryBuoyancy']) assert.ok(inside[field], `the in-day checkpoint carries ${field}`);
-  assert.match(text(join(parts, 'c.log')), /stopped by STOP_AFTER_STEPS=36 at day 1 and 12 of 24 steps/);
+  assert.match(text(join(parts, 'c.log')), new RegExp(`stopped by STOP_AFTER_STEPS=${PER_DAY + 12} at day 1 and 12 of ${PER_DAY} steps`));
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, RECORD: join(parts, 'forcing') }), 0);
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['c_day0000.bin', 'c_day0003.bin']);
-  assert.ok(readFileSync(join(whole, 'forcing', forcingName(1))).equals(readFileSync(join(parts, 'forcing', forcingName(1)))));
-  for (const day of [2, 3]) {
-    const [a, b] = await Promise.all([whole, parts].map(async (out) => decodeForcing(new Uint8Array(readFileSync(join(out, 'forcing', forcingName(day)))))));
-    assert.deepEqual([b.seconds, b.steps, b.oceanSteps], [a.seconds, a.steps, a.oceanSteps]);
-    for (const name of ['stress', 'netFlux', 'shortwave', 'shortwaveDown', 'evaporation', 'rain']) {
-      let off = 0, size = 0;
-      for (let i = 0; i < a.fields[name].length; i++) { off += Math.abs(a.fields[name][i] - b.fields[name][i]); size += Math.abs(a.fields[name][i]); }
-      assert.ok(off < 0.05 * size, `day ${day} ${name}: the continued run's mean is ${(100 * off / size).toFixed(1)}% off the uninterrupted one's`);
-    }
-  }
+  for (const day of [1, 2, 3]) assert.ok(readFileSync(join(whole, 'forcing', forcingName(day))).equals(readFileSync(join(parts, 'forcing', forcingName(day)))), `day ${day}'s record`);
+  const [a, b] = await Promise.all([whole, parts].map((out) => load(join(out, 'c_day0003.bin'))));
+  assert.deepEqual(apart(a, b, ['energyRecord']), []);
 });
 
 test('a coupled run split at each day\'s end ends byte for byte where the uninterrupted run does', { skip }, async () => {
@@ -245,69 +250,63 @@ test('a coupled run split inside a day ends the day with the uninterrupted run\'
   assert.equal(run('spinup.mjs', { ...env, OUT: parts }), 0);
   const [a, b] = await Promise.all([whole, parts].map((out) => load(join(out, 'h_day0001.bin'))));
   const means = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'energyRecord'];
-  const apart = [];
-  for (const [name, x] of [...Object.entries(a), ...Object.entries(a.ocean).map(([k, v]) => [`ocean.${k}`, v]), ...Object.entries(a.land).map(([k, v]) => [`land.${k}`, v])]) {
-    if (!ArrayBuffer.isView(x) || means.includes(name)) continue;
-    const y = name.startsWith('ocean.') ? b.ocean[name.slice(6)] : name.startsWith('land.') ? b.land[name.slice(5)] : b[name];
-    if (!x.every((v, n) => Object.is(v, y[n]))) apart.push(name);
-  }
-  assert.deepEqual(apart, []);
+  assert.deepEqual(apart(a, b, means), []);
 });
 
 test('the asynchronous driver alternates coupled and ocean-only phases, hands the ocean over and picks up where it stands', { skip }, async () => {
-  const out = outDir('driver', 'async6_day0000.bin');
+  const out = outDir('driver', 'async16_day0000.bin');
   assert.equal(driver({ OUT: out, CYCLES: '2', OCEAN_YEARS: '2' }), 0);
-  assert.deepEqual(readdirSync(out).filter((f) => f.endsWith('.bin')).sort(), ['async6_c01_year0002.bin', 'async6_c02_year0002.bin', 'async6_day0000.bin', 'async6_day0002.bin', 'async6_day0004.bin']);
-  assert.ok(!existsSync(join(out, 'async6_c01_forcing')) && !existsSync(join(out, 'async6_c02_forcing')), 'the records are deleted once used');
-  assert.equal(text(join(out, 'async6_cycles.txt')), 'start=0\ndone=1\ndone=2\n');
-  const summaries = text(join(out, 'async6_cycles.log')).split('\n').filter((line) => / cycle \d+: /.test(line));
+  assert.deepEqual(readdirSync(out).filter((f) => f.endsWith('.bin')).sort(), ['async16_c01_year0002.bin', 'async16_c02_year0002.bin', 'async16_day0000.bin', 'async16_day0002.bin', 'async16_day0004.bin']);
+  assert.ok(!existsSync(join(out, 'async16_c01_forcing')) && !existsSync(join(out, 'async16_c02_forcing')), 'the records are deleted once used');
+  assert.equal(text(join(out, 'async16_cycles.txt')), 'start=0\ndone=1\ndone=2\n');
+  const summaries = text(join(out, 'async16_cycles.log')).split('\n').filter((line) => / cycle \d+: /.test(line));
   assert.equal(summaries.length, 2);
   assert.match(summaries[1], /cycle 2: 2 coupled years to day 4, 4 ocean-only years; warm pool .* °C, cold tongue .*; Southern Ocean 60–70S 0–60 m .*; global SST .* °C, drift .* K since the start, .* K over the last 2 years; ice extent N .* Mkm²/);
-  const [handed, alone, second] = await Promise.all(['async6_day0004.bin', 'async6_c01_year0002.bin', 'async6_c02_year0002.bin'].map((f) => load(join(out, f))));
-  assert.deepEqual([handed.day, handed.oceanFrom, handed.oceanYears], [4, 'async6_c01_year0002.bin', 2]);
+  const [handed, alone, second] = await Promise.all(['async16_day0004.bin', 'async16_c01_year0002.bin', 'async16_c02_year0002.bin'].map((f) => load(join(out, f))));
+  assert.deepEqual([handed.day, handed.oceanFrom, handed.oceanYears], [4, 'async16_c01_year0002.bin', 2]);
   assert.deepEqual([alone.day, alone.oceanYears, second.day], [6, 2, 8]);
-  assert.match(text(join(out, 'async6.log')), /ocean, sea ice and sea surface of async6_day0002\.bin replaced by those of .*async6_c01_year0002\.bin/);
+  assert.match(text(join(out, 'async16.log')), /ocean, sea ice and sea surface of async16_day0002\.bin replaced by those of .*async16_c01_year0002\.bin/);
 
   assert.equal(driver({ OUT: out, CYCLES: '2', OCEAN_YEARS: '2' }), 0);
   assert.equal(readdirSync(out).filter((f) => f.endsWith('.bin')).length, 5, 'a finished schedule runs nothing more');
-  assert.equal(run('spinup.mjs', { OUT: out, TAG: 'async6', DAYS: '5', MINUTES: '100', OCEAN_FROM: join(out, 'async6_c01_year0002.bin') }), 0);
-  assert.match(text(join(out, 'async6.log')), /async6_day0004\.bin already carries the ocean of .*async6_c01_year0002\.bin/);
+  assert.equal(run('spinup.mjs', { OUT: out, TAG: 'async16', DAYS: '5', MINUTES: '100', OCEAN_FROM: join(out, 'async16_c01_year0002.bin') }), 0);
+  assert.match(text(join(out, 'async16.log')), /async16_day0004\.bin already carries the ocean of .*async16_c01_year0002\.bin/);
 
   writeFileSync(join(out, 'STOP_async'), '');
   assert.equal(driver({ OUT: out, CYCLES: '3', OCEAN_YEARS: '2' }), 0);
-  assert.match(text(join(out, 'async6_cycles.log')), /stopped at STOP_async or STOP_async6 at coupled day 5/);
-  assert.ok(!existsSync(join(out, 'async6_c03_forcing')));
+  assert.match(text(join(out, 'async16_cycles.log')), /stopped at STOP_async or STOP_async16 at coupled day 5/);
+  assert.ok(!existsSync(join(out, 'async16_c03_forcing')));
 });
 
 test('SIGTERM to the driver reaches its running phase, and a second start finishes as an uninterrupted one does', { skip }, async () => {
   const env = { N: String(N), YEAR_DAYS: '2', COUPLED_YEARS: '1', PER_YEAR: '1', SNAPSHOT_DAYS: '0', RETRY_WAIT: '1', CYCLES: '1', OCEAN_YEARS: '20' };
-  const whole = outDir('driverWhole', 'async6_day0000.bin'), parts = outDir('driverParts', 'async6_day0000.bin');
+  const whole = outDir('driverWhole', 'async16_day0000.bin'), parts = outDir('driverParts', 'async16_day0000.bin');
   assert.equal(driver({ ...env, OUT: whole }), 0);
   const child = spawn('bash', [join(root, 'scripts/asyncSpinup.sh')], { cwd: root, env: { ...process.env, ...env, OUT: parts }, stdio: 'ignore' });
-  await waitFor(() => existsSync(join(parts, 'async6_c01.log')) && text(join(parts, 'async6_c01.log')).includes('saved async6_c01_year0002.bin'));
+  await waitFor(() => existsSync(join(parts, 'async16_c01.log')) && text(join(parts, 'async16_c01.log')).includes('saved async16_c01_year0002.bin'));
   assert.equal(driver({ ...env, OUT: parts }), 0);
-  assert.match(text(join(parts, 'async6_cycles.log')), new RegExp(`another driver \\(pid ${child.pid}\\) holds .*async6_cycles\\.lock; not starting`));
+  assert.match(text(join(parts, 'async16_cycles.log')), new RegExp(`another driver \\(pid ${child.pid}\\) holds .*async16_cycles\\.lock; not starting`));
   child.kill('SIGTERM');
   assert.equal(await exited(child), 0);
-  assert.match(text(join(parts, 'async6_cycles.log')), /stopped by a signal at coupled day 2/);
-  assert.match(text(join(parts, 'async6_c01.log')), /stopped by SIGTERM after \d+ years/);
-  assert.ok(!existsSync(join(parts, 'async6_c01_year0020.bin')));
+  assert.match(text(join(parts, 'async16_cycles.log')), /stopped by a signal at coupled day 2/);
+  assert.match(text(join(parts, 'async16_c01.log')), /stopped by SIGTERM after \d+ years/);
+  assert.ok(!existsSync(join(parts, 'async16_c01_year0020.bin')));
   assert.equal(driver({ ...env, OUT: parts }), 0);
-  assert.ok(readFileSync(join(whole, 'async6_c01_year0020.bin')).equals(readFileSync(join(parts, 'async6_c01_year0020.bin'))));
-  assert.equal(text(join(parts, 'async6_cycles.txt')), 'start=0\ndone=1\n');
-  assert.ok(!existsSync(join(parts, 'async6_cycles.lock')), 'the lock goes with the driver');
+  assert.ok(readFileSync(join(whole, 'async16_c01_year0020.bin')).equals(readFileSync(join(parts, 'async16_c01_year0020.bin'))));
+  assert.equal(text(join(parts, 'async16_cycles.txt')), 'start=0\ndone=1\n');
+  assert.ok(!existsSync(join(parts, 'async16_cycles.lock')), 'the lock goes with the driver');
 });
 
 test('SYNC_CMD receives every file the phases save, and RESTORE_CMD lets another machine carry the schedule on', { skip }, async () => {
-  const first = outDir('syncFirst', 'async6_day0000.bin'), second = outDir('syncSecond'), bucket = outDir('bucket');
+  const first = outDir('syncFirst', 'async16_day0000.bin'), second = outDir('syncSecond'), bucket = outDir('bucket');
   const env = { OCEAN_YEARS: '2', SNAPSHOT_DAYS: '1', BUCKET: bucket, SYNC_CMD: 'mkdir -p "$BUCKET/$(dirname "${1#$OUT/}")" && cp "$1" "$BUCKET/${1#$OUT/}"' };
   assert.equal(driver({ ...env, OUT: first, CYCLES: '1' }), 0);
   const held = spawnSync('find', [bucket, '-type', 'f'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).map((f) => f.slice(bucket.length + 1)).sort();
-  for (const name of ['async6_day0002.bin', 'async6_c01_forcing/forcing-0001.bin', 'async6_c01_forcing/forcing-0002.bin', 'async6_c01_year0000_day001.bin', 'async6_c01_year0002.bin', 'async6.log', 'async6_c01.log', 'async6_cycles.log', 'async6_cycles.txt']) assert.ok(held.includes(name), `${name} reached the bucket: ${held.join(', ')}`);
+  for (const name of ['async16_day0002.bin', 'async16_c01_forcing/forcing-0001.bin', 'async16_c01_forcing/forcing-0002.bin', 'async16_c01_year0000_day001.bin', 'async16_c01_year0002.bin', 'async16.log', 'async16_c01.log', 'async16_cycles.log', 'async16_cycles.txt']) assert.ok(held.includes(name), `${name} reached the bucket: ${held.join(', ')}`);
   assert.equal(driver({ ...env, OUT: second, CYCLES: '2', RESTORE_CMD: 'cp -R "$BUCKET/." "$OUT/"' }), 0);
-  for (const log of ['async6.log', 'async6_c01.log', 'async6_c02.log']) assert.doesNotMatch(text(join(second, log)), /SYNC_CMD failed/, log);
-  assert.equal(text(join(second, 'async6_cycles.txt')), 'start=0\ndone=1\ndone=2\n');
-  const handed = await load(join(second, 'async6_day0004.bin'));
-  assert.deepEqual([handed.oceanFrom, handed.oceanYears], ['async6_c01_year0002.bin', 2]);
-  assert.ok(existsSync(join(second, 'async6_c02_year0002.bin')));
+  for (const log of ['async16.log', 'async16_c01.log', 'async16_c02.log']) assert.doesNotMatch(text(join(second, log)), /SYNC_CMD failed/, log);
+  assert.equal(text(join(second, 'async16_cycles.txt')), 'start=0\ndone=1\ndone=2\n');
+  const handed = await load(join(second, 'async16_day0004.bin'));
+  assert.deepEqual([handed.oceanFrom, handed.oceanYears], ['async16_c01_year0002.bin', 2]);
+  assert.ok(existsSync(join(second, 'async16_c02_year0002.bin')));
 });

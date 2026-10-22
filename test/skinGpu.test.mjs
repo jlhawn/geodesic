@@ -5,11 +5,11 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { SKIN_DEFAULTS, surfaceShare } from '../js/physics/skin.module.js';
+import { SKIN_DEFAULTS, SEA_RHO_CP, surfaceShare } from '../js/physics/skin.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 
 /*
- * The sea's skin on both engines at N = 8. A GPU file: run it alone,
+ * The sea's skin on both engines at N = 16. A GPU file: run it alone,
  * with the GPU free.
  */
 let gpuAvailable = true;
@@ -17,7 +17,8 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 const { readRanges, readBuffer } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
-const N = 8, DT = 1350, STEPS = 20, ON = { warmLayer: true, coolSkin: true };
+const N = 16, DT = 1350, STEPS = 20, ON = { warmLayer: true, coolSkin: true };
+const WARM_BOUND = 2e-3, FLIP = WARM_BOUND * SKIN_DEFAULTS.warmLayerProfile * SKIN_DEFAULTS.warmLayerDepth * SEA_RHO_CP / ((SKIN_DEFAULTS.warmLayerProfile + 1) * DT);
 const OPTIONS = { ocean: false, levels: sigmaInterfaces('bl36'), radiation: { longwaveLines: 'scaled' } };
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const LAYERED = { levels: OPTIONS.levels, topography };
@@ -46,6 +47,7 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
   const C = cpu.mesh.nCells, PH = gpu.gpu.layout.PH, first = { warm: 0, cool: 0, ts: 0, net: 0, sensible: 0, bulk: 0 }, worst = { ...first };
   const capacityOf = (i) => (cpu.ocean ? cpu.ocean.capacity[i] : cpu.seaIce.slabHeatCapacity);
   let thin = 0;
+  const decided = new Uint8Array(C);
   for (let n = 0; n < STEPS; n++) {
     cpu.step(DT); await gpu.step(DT); await gpu.settle();
     const [warm, cool, net, sensible, capacity] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['WARM', 'COOL', 'SFLUX', 'SH', 'CAP'].map((name) => ({ offset: PH[name], length: C })));
@@ -53,8 +55,9 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
     for (let i = 0; i < C; i++) {
       if (cpu.state[6][i] > 0 || gpu.state[6][i] > 0) continue;
       if (n === 0 && capacityOf(i) < 3 * 1025 * 3985) thin++;
+      if (!(cpu.geography && cpu.geography.land[i]) && Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) > FLIP) decided[i] = 1;
       const cpuSurface = cpu.state[3][i] + cpu.skin.offset(i, capacityOf(i)), gpuSurface = gpu.state[3][i] + surfaceShare(capacity[i], SKIN_DEFAULTS) * warm[i] - cool[i];
-      worst.warm = Math.max(worst.warm, Math.abs(warm[i] - cpu.skin.warm[i]));
+      if (!decided[i]) worst.warm = Math.max(worst.warm, Math.abs(warm[i] - cpu.skin.warm[i]));
       worst.cool = Math.max(worst.cool, Math.abs(cool[i] - cpu.skin.cool[i]));
       worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
       worst.bulk = Math.max(worst.bulk, Math.abs(gpu.state[3][i] - cpu.state[3][i]));
@@ -65,11 +68,13 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
     if (n === 0) Object.assign(first, { warm: worst.warm, cool: worst.cool, ts: worst.ts, sensible: worst.sensible });
   }
   console.log(`${label}: skin parity after one step: ΔT_w ${first.warm.toExponential(1)} K, ΔT_c ${first.cool.toExponential(1)} K, T_s ${first.ts.toExponential(1)} K, net ${first.net.toExponential(1)} W/m² beyond 1e-5 relative, sensible ${first.sensible.toExponential(1)} relative`);
-  console.log(`${label}: ${thin} open cells under 3 m; skin parity over ${STEPS} steps, where the bulk temperatures drift ${worst.bulk.toExponential(1)} K apart: ΔT_w ${worst.warm.toExponential(1)} K, ΔT_c ${worst.cool.toExponential(1)} K, T_s ${worst.ts.toExponential(1)} K, net ${worst.net.toExponential(1)} and sensible ${worst.sensible.toExponential(1)} relative`);
+  const flipped = decided.reduce((sum, x) => sum + x, 0);
+  console.log(`${label}: ${thin} open cells under 3 m; skin parity over ${STEPS} steps, where the bulk temperatures drift ${worst.bulk.toExponential(1)} K apart: ΔT_w ${worst.warm.toExponential(1)} K (${flipped} cells whose flux the engines decided apart left out), ΔT_c ${worst.cool.toExponential(1)} K, T_s ${worst.ts.toExponential(1)} K, net ${worst.net.toExponential(1)} and sensible ${worst.sensible.toExponential(1)} relative`);
   assert.ok(cpu.skin.warm.some((x) => x > 1e-3), 'a warm layer grows');
   assert.ok(first.warm < 1e-4 && first.cool < 1e-4 && first.ts < 1e-4, 'the first step\'s skin to 1e-4 K');
   assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
-  assert.ok(worst.warm < 2e-3, 'the warm layer to 2e-3 K over every step');
+  assert.ok(flipped <= 0.02 * C, `${flipped} of ${C} cells have a flux the engines decided apart`);
+  assert.ok(worst.warm < WARM_BOUND, `the warm layer to ${WARM_BOUND} K over every step`);
   if (warmStart) return;
   assert.ok(worst.cool < 1e-2 && worst.ts < 1e-2, 'the surface to 1e-2 K over every step');
   assert.ok(worst.net < 0.1 && worst.sensible < 0.1, 'the fluxes to 0.1 relative over every step');

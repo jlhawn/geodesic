@@ -132,7 +132,7 @@ test('with the near infrared in bands the solar gases absorb what RRTMG gives wi
 });
 
 test('without scattering the solar gases take the CLIRAD absorptivities of their paths down, and of the path down plus 5/3 of the column from the light the surface reflects', () => {
-  const grid = new Grid(4), plain = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true, nearInfrared: 'clirad' };
+  const grid = new Grid(16), plain = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true, nearInfrared: 'clirad' };
   const make = (options) => { const m = createModel(grid, { ocean: false, radiation: { ...plain, ...options } }); initializeState(m, {}).forEach((v, a) => m.state[a].set(v)); return m; };
   const on = make({}), off = make({ upwardAbsorption: false });
   const { core, mesh } = on, { K, C, dSigma, sigmaMid, g, exnerLayer } = core.diagnostics, [pi, theta] = on.state, bottom = (K - 1) * C;
@@ -164,7 +164,7 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
 
 async function engines(radiation, levels = undefined) {
   const grid = levels ? { levels } : {};
-  const cpu = createModel(new Grid(6), { ocean: false, radiation, ...grid }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation, ...grid });
+  const cpu = createModel(new Grid(16), { ocean: false, radiation, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, ...grid });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();
@@ -177,7 +177,7 @@ function stats(cpu, gpu) {
   return { maxDiff, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 
-for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}, each with its table` : ''}: per-cell sums of absorbed and outgoing radiation, clear and all-sky, at N=6`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}, each with its table` : ''}: per-cell sums of absorbed and outgoing radiation, clear and all-sky, at N=16`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true }, grid ? sigmaInterfaces(grid) : undefined);
   const slots = { absorbedSolar: 'ABSSUM', atmosphereSolar: 'ATMSUM', outgoingLongwave: 'OLRSUM', clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
   const compare = async (names, limit) => {
@@ -199,6 +199,6 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   early.push(`the ${top.length} layers above 30 hPa' longwave heating rms ${top.join(', ')}`);
   for (let s = 4; s < 24; s++) { cpu.step(DT); await gpu.step(DT); }
   const later = await compare(['clearAbsorbedSolar', 'clearOutgoingLongwave'], 1e-4);
-  console.log(`spectral gases${grid ? ` on ${grid}` : ''}, CPU against GPU per-cell sums at N=6, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
+  console.log(`spectral gases${grid ? ` on ${grid}` : ''}, CPU against GPU per-cell sums at N=16, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
   gpu.destroy();
 });

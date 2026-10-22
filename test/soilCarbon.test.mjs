@@ -15,7 +15,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel, VEGETATION_OPTIONS } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
 const YEAR = 365 * 86400;
-const mesh = createModel(new Grid(8), { physics: false }).mesh;
+const mesh = createModel(new Grid(16), { physics: false }).mesh;
 const flat = () => createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
 const near = (a, b, tol = 1e-12) => Math.abs(a - b) <= tol * Math.max(1, Math.abs(b));
 const frozen = { growthTime: 1e30, declineTime: 1e30, snowDeclineTime: 1e30, treeGrowthTime: 1e30, treeDeclineTime: 1e30 };
@@ -129,7 +129,7 @@ test('a fresh start holds the neutral carbon, an older state starts at the equil
     assert.equal(land.soilCarbon[i], 2.6 * Math.LN2, `cell ${i}`);
     checked++;
   }
-  assert.ok(checked > 50);
+  assert.ok(checked > 0.3 * C, `${checked} land cells`);
   const e = seasonEstimate(0.7, 300), c = airCycle(0.7, 300);
   assert.deepEqual(e, sineSeason(c.mean, c.amplitude, 0.9), 'the season estimate reads the same year');
   const vegetation = Float64Array.from({ length: C }, (_, i) => (i % 5) / 5), soil = Float64Array.from({ length: C }, (_, i) => 30 * (i % 10));
@@ -143,18 +143,18 @@ test('a fresh start holds the neutral carbon, an older state starts at the equil
   }
   const soilCarbon = Float64Array.from({ length: C }, (_, i) => (i % 9) * 0.7);
   land.load({ ...older, soilCarbon });
-  const saved = await decodeState(encodeState({ N: 8, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
+  const saved = await decodeState(encodeState({ N: 16, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
   const back = createLandSurface(mesh, geography);
   back.load(saved.land);
   for (let i = 0; i < C; i++) assert.ok(near(back.soilCarbon[i], geography.land[i] && !geography.iceSheet[i] ? Math.fround(soilCarbon[i]) : 0, 1e-6), `cell ${i}: kept ${back.soilCarbon[i]}`);
-  const source = createModel(new Grid(8), { physics: false, topography }), target = createModel(new Grid(10), { topography });
+  const source = createModel(new Grid(16), { physics: false, topography }), target = createModel(new Grid(24), { topography });
   const carried = regridLand(source, target, { soil: new Float64Array(C).fill(150), snow: new Float64Array(C), vegetation: new Float64Array(C).fill(0.5), soilCarbon: new Float64Array(C).fill(4.2) }, null, { surfaceT: new Float64Array(C).fill(290) });
   let kept = 0, estimated = 0;
   for (let n = 0; n < target.mesh.nCells; n++) {
     if (!target.geography.land[n]) { assert.equal(carried.soilCarbon[n], 0); continue; }
     if (carried.soilCarbon[n] === 4.2) kept++; else { estimated++; assert.ok(carried.soilCarbon[n] >= 0); }
   }
-  assert.ok(kept > 50, `${kept} carried, ${estimated} estimated`);
+  assert.ok(kept > 0.9 * (kept + estimated) && kept > 0.3 * target.mesh.nCells, `${kept} carried, ${estimated} estimated`);
   assert.equal(regridLand(source, target, { soil: new Float64Array(C), snow: new Float64Array(C) }).soilCarbon, undefined);
 });
 
@@ -167,7 +167,7 @@ test('every option of the land surface reaches the GPU or is refused there', { s
   assert.deepEqual(names.filter((n) => !handled.has(n)), []);
   for (const key of Object.keys(SOIL_CARBON)) assert.ok(VEGETATION_OPTIONS.includes(key), key);
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 300 : -4000));
-  await assert.rejects(createGpuModel(new Grid(4), { topography, land: { latentHeatFusion: 3e5 } }), /latentHeatFusion/);
+  await assert.rejects(createGpuModel(new Grid(16), { topography, land: { latentHeatFusion: 3e5 } }), /latentHeatFusion/);
 });
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
@@ -189,8 +189,8 @@ test('both engines darken the bare soil alike with its carbon, wet and dry, and 
     model.land.load({ soil: Float64Array.from({ length: C }, () => 300 * rnd()), surface: Float64Array.from({ length: C }, () => 15 * rnd() * rnd()), snow, vegetation, canopy, soilCarbon }, model.state[6]);
     return model;
   };
-  const cpu = prepare(createModel(new Grid(6), { topography, land }), 11);
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }), 11);
+  const cpu = prepare(createModel(new Grid(16), { topography, land }), 11);
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land }), 11);
   const C = cpu.mesh.nCells, mask = cpu.geography.land, sheet = cpu.geography.iceSheet;
   const albedo = Float64Array.from({ length: C }, (_, i) => (mask[i] ? cpu.land.albedo(i) : NaN)), before = Float64Array.from(cpu.land.soilCarbon);
   const plain = createLandSurface(cpu.mesh, cpu.geography, { soilCarbon: false });
@@ -220,8 +220,8 @@ test('both engines darken the bare soil alike with its carbon, wet and dry, and 
     if (cpu.land.soilCarbon[i] < before[i] - 0.1) fell++;
   }
   gpu.destroy();
-  console.log(`N=6, ${cells} land cells: albedo engines apart by ${worstAlbedo.toExponential(1)} (the carbon moves it by up to ${moved.toFixed(3)}); after 24 steps at A = 3e5 the carbon rose on ${rose} and fell on ${fell}, by up to ${scale.toFixed(2)} kg/m², engines apart by ${worstCarbon.toExponential(1)} kg/m² outside the ${fired} land cells where the plume fired on one engine only at some step`);
+  console.log(`N=16, ${cells} land cells: albedo engines apart by ${worstAlbedo.toExponential(1)} (the carbon moves it by up to ${moved.toFixed(3)}); after 24 steps at A = 3e5 the carbon rose on ${rose} and fell on ${fell}, by up to ${scale.toFixed(2)} kg/m², engines apart by ${worstCarbon.toExponential(1)} kg/m² outside the ${fired} land cells where the plume fired on one engine only at some step`);
   assert.ok(worstAlbedo < 1e-6 && moved > 0.1, `albedo ${worstAlbedo}, moved ${moved}`);
-  assert.ok(rose > 10 && fell > 10 && worstCarbon < 1e-3 * scale, `rose ${rose}, fell ${fell}, carbon ${worstCarbon} of ${scale}`);
+  assert.ok(rose > cells / 4 && fell > cells / 10 && worstCarbon < 1e-3 * scale, `rose ${rose} and fell ${fell} of ${cells}, carbon ${worstCarbon} of ${scale}`);
   assert.ok(fired <= 0.05 * cells, `the plume fired on one engine only in ${fired} of ${cells} land cells`);
 });

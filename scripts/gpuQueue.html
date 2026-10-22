@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>GPU queue</title>
+<link id="icon" rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f4f5f7;
+  --card: #ffffff;
+  --text: #1b2230;
+  --muted: #5c6575;
+  --line: #e1e4ea;
+  --chip: #eceff3;
+  --run: #1a62d6;
+  --run-bg: #e6eefc;
+  --warn: #8a5300;
+  --warn-bg: #fcf0d9;
+  --ok: #1a7f37;
+  --ok-bg: #e3f2e7;
+  --bad: #c42b1c;
+  --bad-bg: #fde8e6;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --text: #e6edf3;
+    --muted: #98a2ae;
+    --line: #2b323c;
+    --chip: #222831;
+    --run: #79b8ff;
+    --run-bg: #10294a;
+    --warn: #e9b44c;
+    --warn-bg: #352708;
+    --ok: #56d364;
+    --ok-bg: #0f2d18;
+    --bad: #ff8a80;
+    --bad-bg: #421715;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+.wrap { max-width: 960px; margin: 0 auto; padding: 20px 16px 32px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 16px; }
+h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+.updated { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.pill, .badge { display: inline-block; padding: 5px 10px; border-radius: 999px; background: var(--chip); color: var(--muted); font-size: 12.5px; font-weight: 600; line-height: 1; white-space: nowrap; }
+.run { background: var(--run-bg); color: var(--run); }
+.warn { background: var(--warn-bg); color: var(--warn); }
+.ok { background: var(--ok-bg); color: var(--ok); }
+.bad { background: var(--bad-bg); color: var(--bad); }
+.alert { margin: 0 0 16px; padding: 12px 14px; border: 1px solid currentColor; border-radius: 10px; background: var(--bad-bg); color: var(--bad); font-weight: 600; }
+body.stale main { opacity: 0.55; }
+section { margin-bottom: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+section[hidden] { display: none; }
+h2 { margin: 0 0 10px; color: var(--muted); font-size: 12px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+p { margin: 0; }
+.none, .note { color: var(--muted); }
+.note { margin-bottom: 8px; }
+.title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.who { font-weight: 650; }
+.what { margin: 6px 0 2px; font-size: 17px; overflow-wrap: anywhere; }
+.line { color: var(--muted); font-variant-numeric: tabular-nums; }
+.line b { color: var(--text); font-weight: 600; }
+.blockers { margin-top: 4px; color: var(--warn); overflow-wrap: anywhere; }
+.mono { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+dl.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { min-width: 0; margin: 0; }
+.path { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.path .mono { min-width: 0; }
+button.copy { flex: none; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+button.copy:hover { border-color: var(--muted); }
+.list { margin: 0; padding: 0; list-style: none; }
+.list > li { display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.list > li:first-child { padding-top: 0; border-top: 0; }
+.list > li:last-child { padding-bottom: 0; }
+.list .body { flex: 1; min-width: 0; }
+.list .body > * + * { margin-top: 2px; }
+.pos { display: grid; flex: none; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--chip); color: var(--muted); font-size: 13px; font-weight: 650; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { padding: 0 12px 6px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 600; text-align: left; white-space: nowrap; }
+td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.who, td.when, td.num { white-space: nowrap; }
+td.what { overflow-wrap: anywhere; }
+tbody tr:last-child td { border-bottom: 0; }
+.fail { color: var(--bad); font-weight: 650; }
+footer { margin-top: 4px; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .what { font-size: 16px; }
+  thead { display: none; }
+  table, tbody, td { display: block; }
+  tbody tr { display: flex; flex-wrap: wrap; gap: 2px 14px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  tbody tr:first-child { padding-top: 0; }
+  tbody tr:last-child { padding-bottom: 0; border-bottom: 0; }
+  td { padding: 0; border: 0; }
+  td.who, td.what { flex-basis: 100%; }
+  td[data-label]::before { content: attr(data-label) " "; color: var(--muted); }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>GPU queue</h1>
+    <span id="pill" class="pill">Connecting</span>
+    <span id="updated" class="updated">not updated yet</span>
+  </header>
+  <div id="alert" class="alert" role="alert" hidden></div>
+  <main>
+    <section aria-labelledby="holder-title"><h2 id="holder-title">Holder</h2><div id="holder"></div></section>
+    <section aria-labelledby="queue-title"><h2 id="queue-title">Queue<span id="queue-count"></span></h2><div id="queue"></div></section>
+    <section aria-labelledby="outside-title"><h2 id="outside-title">GPU users outside the queue</h2><div id="outside"></div></section>
+    <section id="port-section" aria-labelledby="port-title" hidden><h2 id="port-title">Port</h2><div id="port"></div></section>
+    <section aria-labelledby="history-title"><h2 id="history-title">Recent history</h2><div id="history"></div></section>
+  </main>
+  <footer id="footer"></footer>
+</div>
+<script>
+'use strict';
+const POLL_MS = 2000, HIDDEN_POLL_MS = 15000, TIMEOUT_MS = 8000;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SIGNALS = { 129: 'SIGHUP', 130: 'SIGINT', 134: 'SIGABRT', 137: 'SIGKILL', 139: 'SIGSEGV', 143: 'SIGTERM' };
+const STATES = { running: ['run', 'Running'], waiting: ['warn', 'Waiting'], checking: ['warn', 'Checking'] };
+const DOTS = { run: '#2f74e0', warn: '#d39b1e', ok: '#2da44e', bad: '#d1242f', idle: '#8c959f' };
+const $ = (id) => document.getElementById(id);
+const painted = {};
+let last = null, failure = '', timer = 0, busy = false;
+
+const pad = (n) => String(n).padStart(2, '0');
+const clock = (ms) => {
+  const d = new Date(ms);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+const when = (ms) => {
+  const d = new Date(ms);
+  return d.toDateString() === new Date().toDateString() ? clock(ms) : `${MONTHS[d.getMonth()]} ${d.getDate()} ${clock(ms)}`;
+};
+function span(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60;
+  if (d) return `${d}d ${h}h ${pad(m)}m`;
+  if (h) return `${h}h ${pad(m)}m ${pad(s % 60)}s`;
+  if (m) return `${m}m ${pad(s % 60)}s`;
+  return `${s}s`;
+}
+
+function el(tag, attrs, ...kids) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === 'class') node.className = value;
+    else node.setAttribute(key, value);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid === null || kid === undefined || kid === false || kid === '') continue;
+    node.append(kid instanceof Node ? kid : String(kid));
+  }
+  return node;
+}
+const dot = ' · ';
+const elapsed = (ms) => el('span', { 'data-since': ms }, span(Date.now() - ms));
+const none = (text) => el('p', { class: 'none' }, text);
+const copyable = (text) => el('span', { class: 'path' },
+  el('span', { class: 'mono' }, text),
+  el('button', { class: 'copy', type: 'button', 'data-copy': text, title: 'Copy to the clipboard' }, 'Copy'));
+
+function holderView({ holder: h, lock, exited }) {
+  if (h) {
+    const [tone, label] = STATES[h.state] || STATES.checking;
+    const since = (h.state === 'running' ? h.started : h.stateSince) || h.acquired || h.since;
+    const doing = h.state === 'running' ? 'Running' : h.state === 'waiting' ? 'Waiting' : 'Checking for GPU users outside the queue';
+    return [
+      el('div', { class: 'title' }, el('span', { class: `badge ${tone}` }, label), el('span', { class: 'who' }, h.who)),
+      el('p', { class: 'what' }, h.what),
+      el('p', { class: 'line' }, `${doing} since `, el('b', null, when(since)), dot, elapsed(since)),
+      h.state === 'waiting' && h.blockers && el('p', { class: 'blockers' }, `for ${h.blockers}`),
+      el('dl', { class: 'facts' },
+        el('dt', null, 'pid'), el('dd', { class: 'mono' }, h.pid),
+        el('dt', null, 'Level'), el('dd', null, h.priority),
+        el('dt', null, 'Lock'), el('dd', null, h.acquired && `taken at ${when(h.acquired)}`, h.deviceReady && ', idle device open'),
+        h.since && [el('dt', null, 'Queued'), el('dd', null, when(h.since))],
+        el('dt', null, 'Log'), el('dd', null, copyable(h.log)),
+        el('dt', null, 'Command'), el('dd', { class: 'mono' }, h.command)),
+    ];
+  }
+  if (lock.length) {
+    return [
+      el('div', { class: 'title' }, el('span', { class: 'badge warn' }, 'No live agent'),
+        el('span', null, `The lock is held by ${lock.map((p) => `pid ${p.pid}`).join(', ')}; the queue moves on once they exit.`)),
+      el('ul', { class: 'list' }, lock.map((p) => el('li', null, el('div', { class: 'body' },
+        el('p', { class: 'mono', title: p.command }, `pid ${p.pid}: ${p.short}`))))),
+      exited && el('p', { class: 'line' }, `The recorded holder, pid ${exited.pid} (${exited.who}, ${exited.what}), has exited.`),
+    ];
+  }
+  return el('div', { class: 'title' }, el('span', { class: 'badge ok' }, 'Free'), el('span', null, 'Nobody holds the GPU.'));
+}
+
+function queueView(queue) {
+  if (!queue.length) return none('Nobody is waiting.');
+  return el('ol', { class: 'list' }, queue.map((t, i) => el('li', null,
+    el('span', { class: 'pos' }, i + 1),
+    el('div', { class: 'body' },
+      el('div', { class: 'title' }, el('span', { class: 'badge' }, `level ${t.priority}`), el('span', { class: 'who' }, t.who), el('span', { class: 'mono' }, `pid ${t.pid}`)),
+      el('p', null, t.what),
+      el('p', { class: 'line' }, 'queued since ', el('b', null, when(t.since)), dot, elapsed(t.since)),
+      copyable(t.log)))));
+}
+
+function outsideView(outside) {
+  if (!outside.length) return none('None.');
+  return [
+    el('p', { class: 'note' }, 'Node processes holding the GPU without the queue. A holder waits for them before its job starts.'),
+    el('ul', { class: 'list' }, outside.map((p) => el('li', null, el('div', { class: 'body' },
+      el('p', { class: 'line' }, el('b', null, `pid ${p.pid}`), dot, 'up since ', el('b', null, when(p.start)), dot, elapsed(p.start)),
+      el('p', { class: 'mono', title: p.command }, p.short))))),
+  ];
+}
+
+function portView(port) {
+  if (!port.listening.length) {
+    return el('div', { class: 'title' }, el('span', { class: 'badge ok' }, 'Free'), el('span', null, 'No server is listening.'));
+  }
+  return [
+    el('div', { class: 'title' }, el('span', { class: 'badge warn' }, 'Listening'), el('span', null, 'GPU jobs wait while a page server listens here.')),
+    el('ul', { class: 'list' }, port.listening.map((p) => el('li', null, el('div', { class: 'body' },
+      el('p', { class: 'mono', title: p.command }, `pid ${p.pid}`, p.short && `: ${p.short}`))))),
+  ];
+}
+
+function historyView(runs) {
+  if (!runs.length) return none('No finished runs recorded yet.');
+  const head = ['Who', 'What', 'Level', 'Start', 'End', 'Duration', 'Exit', 'Aborts'];
+  return el('table', null,
+    el('thead', null, el('tr', null, head.map((name) => el('th', { scope: 'col' }, name)))),
+    el('tbody', null, runs.map((r) => el('tr', null,
+      el('td', { class: 'who' }, r.who),
+      el('td', { class: 'what', title: r.log }, r.what),
+      el('td', { class: 'num', 'data-label': 'level' }, r.priority ?? 3),
+      el('td', { class: 'when', 'data-label': 'start', title: `queued at ${when(r.queued)}, waited ${span(r.started - r.queued)}` }, when(r.started)),
+      el('td', { class: 'when', 'data-label': 'end' }, when(r.ended)),
+      el('td', { class: 'num', 'data-label': 'took' }, span(r.ended - r.started)),
+      el('td', { class: r.rc === 0 ? 'num' : 'num fail', 'data-label': 'exit' }, r.rc, SIGNALS[r.rc] && ` ${SIGNALS[r.rc]}`),
+      el('td', { class: r.aborts > 0 ? 'num fail' : 'num', 'data-label': 'aborts', title: r.aborts === null ? 'no count: the abort scan did not finish' : null },
+        r.aborts ?? '—')))));
+}
+
+function paint(id, data, view) {
+  const key = JSON.stringify(data);
+  if (painted[id] === key) return;
+  painted[id] = key;
+  $(id).replaceChildren(...[view(data)].flat(Infinity).filter(Boolean));
+}
+
+function render(s) {
+  paint('holder', { holder: s.holder, lock: s.lock, exited: s.exited }, holderView);
+  paint('queue', s.queue, queueView);
+  $('queue-count').textContent = s.queue.length ? ` (${s.queue.length})` : '';
+  paint('outside', s.outside, outsideView);
+  $('port-section').hidden = !s.port;
+  if (s.port) {
+    $('port-title').textContent = `Port ${s.port.port}`;
+    paint('port', s.port, portView);
+  }
+  paint('history', s.history, historyView);
+  $('updated').textContent = `updated ${clock(s.now)}`;
+  $('footer').textContent = `Queue directory ${s.dir}. This page asks for the status every ${POLL_MS / 1000} s, every ${HIDDEN_POLL_MS / 1000} s while hidden.`;
+}
+
+function summary() {
+  if (failure) return ['bad', 'Offline'];
+  if (!last) return ['idle', 'Connecting'];
+  const waiting = last.queue.length ? ` · ${last.queue.length} waiting` : '';
+  if (last.holder) {
+    const [tone, label] = STATES[last.holder.state] || STATES.checking;
+    return [tone, label + waiting];
+  }
+  return last.lock.length ? ['warn', `Held, no agent${waiting}`] : ['ok', `Free${waiting}`];
+}
+
+function showState() {
+  const [tone, label] = summary();
+  $('pill').className = `pill ${tone}`;
+  $('pill').textContent = label;
+  document.title = `GPU queue · ${label}`;
+  const icon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="${DOTS[tone]}"/></svg>`;
+  $('icon').href = `data:image/svg+xml,${encodeURIComponent(icon)}`;
+  document.body.classList.toggle('stale', Boolean(failure));
+  $('alert').hidden = !failure;
+  if (failure) {
+    $('alert').textContent = `Can't reach the queue monitor: ${failure}. `
+      + (last ? `The page shows the queue as of ${clock(last.now)}, ${span(Date.now() - last.now)} ago. ` : '')
+      + `Retrying every ${(document.hidden ? HIDDEN_POLL_MS : POLL_MS) / 1000} s.`;
+  }
+}
+
+async function poll() {
+  if (busy) return;
+  busy = true;
+  clearTimeout(timer);
+  const controller = new AbortController();
+  const abort = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const response = await fetch('status.json', { cache: 'no-store', signal: controller.signal });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body || body.error) throw new Error(body?.error || `the server answered ${response.status}`);
+    last = body;
+    failure = '';
+    render(body);
+  } catch (error) {
+    failure = error.name === 'AbortError' ? `no answer in ${TIMEOUT_MS / 1000} s` : error.message || String(error);
+  } finally {
+    clearTimeout(abort);
+    busy = false;
+    showState();
+    timer = setTimeout(poll, document.hidden ? HIDDEN_POLL_MS : POLL_MS);
+  }
+}
+
+setInterval(() => {
+  for (const node of document.querySelectorAll('[data-since]')) node.textContent = span(Date.now() - Number(node.dataset.since));
+  if (failure) showState();
+}, 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-copy]');
+  if (!button) return;
+  try {
+    await navigator.clipboard.writeText(button.dataset.copy);
+    button.textContent = 'Copied';
+  } catch {
+    button.textContent = 'Copy failed';
+  }
+  setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+});
+showState();
+poll();
+</script>
+</body>
+</html>

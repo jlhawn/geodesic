@@ -5,6 +5,7 @@ import { STATE_NAMES } from './model.module.js';
 import { workerInit } from './threads.module.js';
 
 const { data, post } = await workerInit();
+const probe = data.probe ? (await import(data.probe.module)).default : null;
 try {
   main(data);
 } catch (error) {
@@ -15,6 +16,7 @@ try {
 function main({ index, workers, meshShared, buffers, options, control }) {
 const mesh = meshFromShared(meshShared);
 const model = createModel(mesh, { ...options, buffers });
+if (probe) probe(model, data.probe.data);
 const { K, C, E, V } = model.core.diagnostics;
 const ctrl = new Int32Array(control.ints);
 const params = new Float64Array(control.floats);
@@ -22,7 +24,7 @@ const totals = new Float64Array(control.totals), busy = new Float64Array(control
 const state = model.state;
 const trial = STATE_NAMES.map((name) => new Float64Array(buffers.trial[name]));
 const stages = buffers.stages.map((stage) => STATE_NAMES.map((name) => new Float64Array(stage[name])));
-const chunks = phaseChunks({ K, C, E, V, L: model.ocean ? model.ocean.layers : 0 }, workers);
+const chunks = phaseChunks({ K, C, E, V, L: model.ocean ? model.ocean.layers : 0, coupledClosure: model.core.coupledClosure }, workers);
 const sums = Object.fromEntries(TOTALS.map((name) => [name, 0]));
 const partial = Object.fromEntries(TOTALS.map((name) => [name, 0]));
 
@@ -88,7 +90,7 @@ function run(phase) {
 post({ type: 'ready', index });
 let generation = 0;
 for (;;) {
-  Atomics.wait(ctrl, 0, generation);
+  while (Atomics.load(ctrl, 0) === generation) Atomics.wait(ctrl, 0, generation);
   generation = Atomics.load(ctrl, 0);
   const phase = Atomics.load(ctrl, 1);
   if (phase === PHASE.EXIT) break;

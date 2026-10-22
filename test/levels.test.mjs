@@ -73,7 +73,7 @@ test('above 2.5 km bl34 is cam26 exactly, interfaces and layers, down to the 2.4
   assert.equal(shared, 22);
   assert.ok(Math.abs(standardHeight(cam[shared]) - 2421) < 1);
   assert.deepEqual(bl.subarray(0, shared + 1), cam.subarray(0, shared + 1));
-  const a = createModel(new Grid(2), { physics: false }), b = createModel(new Grid(2), { physics: false, levels: bl });
+  const a = createModel(new Grid(16), { physics: false }), b = createModel(new Grid(16), { physics: false, levels: bl });
   for (let k = 0; k < shared; k++) {
     assert.equal(b.core.sigmaMid[k], a.core.sigmaMid[k]);
     assert.equal(b.core.diagnostics.dSigma[k], a.core.diagnostics.dSigma[k]);
@@ -83,7 +83,7 @@ test('above 2.5 km bl34 is cam26 exactly, interfaces and layers, down to the 2.4
 });
 
 test('a state saved on bl34 reloads on bl34, with the deck\'s carried state, and steps as the run that saved it does; a state without levels loads on cam26', async () => {
-  const model = createModel(new Grid(4), { levels: bl, ocean: false });
+  const model = createModel(new Grid(16), { levels: bl, ocean: false });
   const init = initializeState(model, {});
   init.forEach((values, a) => model.state[a].set(values.map(Math.fround)));
   const { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
@@ -93,7 +93,7 @@ test('a state saved on bl34 reloads on bl34, with the deck\'s carried state, and
     mlmGate[i] = Math.fround(0.1 + 0.1 * (i % 9));
   }
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state;
-  const bytes = encodeState({ N: 4, K: model.core.K, day: 0, time: 0, terrain: false, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, mlmSubsidence, mlmHeight, mlmGate });
+  const bytes = encodeState({ N: 16, K: model.core.K, day: 0, time: 0, terrain: false, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, mlmSubsidence, mlmHeight, mlmGate });
   const saved = await decodeState(bytes);
   assert.ok(saved.levels instanceof Float64Array, 'the interfaces are kept in double precision');
   assert.deepEqual(savedLevels(saved), bl);
@@ -106,20 +106,20 @@ test('a state saved on bl34 reloads on bl34, with the deck\'s carried state, and
   }
   reloaded.seaIce.load(reloaded.state[6]);
   model.seaIce.load(model.state[6]);
-  for (let n = 0; n < 3; n++) { model.step(1350 * 4); reloaded.step(1350 * 4); }
+  for (let n = 0; n < 3; n++) { model.step(1350); reloaded.step(1350); }
   model.state.forEach((array, a) => assert.deepEqual(reloaded.state[a], array, `state array ${a} after three steps`));
   for (const name of Object.keys(DECK_FIELDS)) assert.deepEqual(reloaded.radiation[name], model.radiation[name], `${name} after three steps`);
 
-  const legacy = await decodeState(encodeState({ N: 4, K: 27, day: 0, time: 0, pi }));
+  const legacy = await decodeState(encodeState({ N: 16, K: 27, day: 0, time: 0, pi }));
   assert.equal(legacy.levels, undefined);
   assert.deepEqual(savedLevels(legacy), cam);
   assert.deepEqual(savedLevels({ levels: Array.from(bl, Math.fround) }), bl, 'single-precision interfaces load the exact grid they name');
   const custom = Float64Array.from(cam, (sigma, k) => (k === 20 ? sigma + 0.001 : sigma));
-  assert.deepEqual(savedLevels((await decodeState(encodeState({ N: 4, levels: custom })))), custom);
+  assert.deepEqual(savedLevels((await decodeState(encodeState({ N: 16, levels: custom })))), custom);
 });
 
 test('a bl34 state regrids across resolutions onto bl34 and not onto cam26', () => {
-  const coarse = createModel(new Grid(4), { levels: bl, physics: false }), fine = createModel(new Grid(6), { levels: bl, physics: false }), other = createModel(new Grid(6), { physics: false });
+  const coarse = createModel(new Grid(16), { levels: bl, physics: false }), fine = createModel(new Grid(24), { levels: bl, physics: false }), other = createModel(new Grid(24), { physics: false });
   const K = coarse.core.K, C = coarse.mesh.nCells, E = coarse.mesh.nEdges;
   const pi = new Float64Array(C).fill(1e5), theta = Float64Array.from({ length: K * C }, (_, x) => 280 + 100 * (1 - coarse.core.sigmaMid[Math.floor(x / C)]));
   const [fPi, fTheta, fU] = regridState(coarse, fine, [pi, theta, new Float64Array(K * E), new Float64Array(C).fill(288)]);
@@ -131,7 +131,7 @@ test('a bl34 state regrids across resolutions onto bl34 and not onto cam26', () 
 });
 
 test('remapLevels carries a state between sigma grids conservatively: each column keeps Σ dσ·value of q, qc and u and its enthalpy Σ dσ·Π·θ, a layer inside one source layer takes its value (θ its temperature, but where the target grid splits the layer), the layers the grids share copy through bit for bit, pi is untouched, q and qc are clipped at zero, and a grid onto itself is the identity', () => {
-  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges;
   let seed = 7;
   const draw = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const layered = (levels, count, f) => Float64Array.from({ length: (levels.length - 1) * count }, (_, x) => f(levels[Math.floor(x / count) + 1], draw()));
@@ -196,7 +196,7 @@ test('bl36 is bl34 with its top layer split at 0.3 and 1 hPa, and remapLevels ca
   assert.equal(sigmaGridName(Float32Array.from(top)), 'bl36');
   assert.deepEqual(Array.from(top.subarray(1, 3), (sigma) => +(sigma * P0 / 100).toFixed(6)), [0.3, 1]);
   assert.deepEqual(top.subarray(3), bl.subarray(1));
-  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges;
   const state = { pi: new Float64Array(C).fill(1e5), theta: Float64Array.from({ length: 34 * C }, (_, x) => 300 + x % 97), q: new Float64Array(34 * C).fill(1e-3), qc: null, u: Float64Array.from({ length: 34 * E }, (_, x) => (x % 13) - 6) };
   const up = remapLevels(bl, top, state, mesh);
   const kappa = R_DRY / CP_DRY, exner = (levels, k) => (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
@@ -226,7 +226,7 @@ test('bl42 is bl36 with its 1.2 to 4.7 km span cut into layers of 237 to 641 m: 
     if (k > 21) assert.ok(thick > 230 && thick < 650, `layer ${k} is ${thick} m thick`);
     assert.ok(thick <= 1.9 * below, `layer ${k} is ${thick} m over ${below} m`);
   }
-  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges;
   const state = { pi: new Float64Array(C).fill(1e5), theta: Float64Array.from({ length: 36 * C }, (_, x) => 300 + x % 97), q: Float64Array.from({ length: 36 * C }, (_, x) => 1e-3 * (1 + x % 7)), qc: null, u: Float64Array.from({ length: 36 * E }, (_, x) => (x % 13) - 6) };
   const up = remapLevels(top, fine, state, mesh);
   const kappa = R_DRY / CP_DRY, exner = (levels, k) => (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
@@ -250,7 +250,7 @@ test('bl60 is bl42 with its 1-93.6 hPa span cut into 27 layers equal in ln σ, 1
   assert.deepEqual(fine.subarray(29), coarse.subarray(11));
   const depth = (k) => 7 * Math.log(fine[k + 1] / fine[k]);
   for (let k = 2; k < 29; k++) assert.ok(Math.abs(depth(k) - depth(2)) < 1e-9 && depth(k) > 1.17 && depth(k) < 1.19, `layer ${k} is ${depth(k)} km`);
-  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges;
   const state = { pi: new Float64Array(C).fill(1e5), theta: Float64Array.from({ length: 42 * C }, (_, x) => 300 + x % 97), q: Float64Array.from({ length: 42 * C }, (_, x) => 1e-3 * (1 + x % 7)), qc: null, u: Float64Array.from({ length: 42 * E }, (_, x) => (x % 13) - 6) };
   const up = remapLevels(coarse, fine, state, mesh);
   const kappa = R_DRY / CP_DRY, exner = (levels, k) => (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
@@ -266,8 +266,8 @@ test('bl60 is bl42 with its 1-93.6 hPa span cut into 27 layers equal in ln σ, 1
 });
 
 test('the worker-thread engine on bl34 reproduces the single-thread step bit for bit', async () => {
-  const serial = createModel(new Grid(6), { levels: bl });
-  const parallel = await createParallelModel(new Grid(6), { levels: bl }, 2);
+  const serial = createModel(new Grid(16), { levels: bl });
+  const parallel = await createParallelModel(new Grid(16), { levels: bl }, 2);
   try {
     assert.equal(parallel.core.K, 34);
     const init = initializeState(serial, {});
@@ -281,8 +281,8 @@ test('the worker-thread engine on bl34 reproduces the single-thread step bit for
 
 test('the full model on bl34 steps alike on the CPU and the GPU, over a continent with its ocean, but for the odd column whose convection switches a step apart or whose cloud the radiation decides apart, and its neighbours', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const floorWind = { convectiveGust: false };
-  const cpu = prepare(createModel(new Grid(6), { topography, levels: bl, surface: floorWind, moist: { excessVelocity: 'convective' } }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, levels: bl, surface: floorWind, moist: { excessVelocity: 'convective' } }));
+  const cpu = prepare(createModel(new Grid(16), { topography, levels: bl, surface: floorWind, moist: { excessVelocity: 'convective' } }));
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, levels: bl, surface: floorWind, moist: { excessVelocity: 'convective' } }));
   assert.equal(gpu.gpu.K, 34);
   assert.equal(gpu.core.K, 34);
   const C = cpu.mesh.nCells, K = cpu.core.K, decided = new Set();
@@ -301,7 +301,7 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   const columns = (array) => Float64Array.from({ length: K * kept.length }, (_, x) => array[Math.floor(x / kept.length) * C + kept[x % kept.length]]);
   const columnWater = (model) => Float64Array.from({ length: C }, (_, i) => model.moist.columnWater(model.state[0], model.state[4], i));
   const surface = (array) => Float64Array.from(kept, (i) => array[i]), ts = stats(surface(cpu.state[3]), surface(gpu.state[3])), tsAll = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]), q = stats(columns(cpu.state[4]), columns(gpu.state[4])), water = stats(surface(columnWater(cpu)), surface(columnWater(gpu))), waterAll = stats(columnWater(cpu), columnWater(gpu)), u = stats(cpu.state[2], gpu.state[2]);
-  console.log(`eight steps on bl34 at N=6 over a continent: Ts max ${ts.maxDiff.toExponential(1)} K (${tsAll.maxDiff.toExponential(1)} with the switched columns and their neighbours), θ rms ${theta.rmsRel.toExponential(1)}, ${switched.length} columns with a layer's q apart by more than 1e-5, ${decided.size} whose OLR or absorbed sunlight parted by more than 1 W/m² at a step (a layer's cloud decided apart), away from them q rms ${q.rmsRel.toExponential(1)}, column water rms ${water.rmsRel.toExponential(1)} (${waterAll.rmsRel.toExponential(1)} with them), wind max ${u.maxDiff.toExponential(1)} m/s; mean Ts ${dc.meanSurfaceT.toFixed(3)} vs ${d.meanSurfaceT.toFixed(3)} K, OLR ${dc.outgoingLongwave.toFixed(2)} vs ${d.outgoingLongwave.toFixed(2)} W/m², ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)} m`);
+  console.log(`eight steps on bl34 at N=16 over a continent: Ts max ${ts.maxDiff.toExponential(1)} K (${tsAll.maxDiff.toExponential(1)} with the switched columns and their neighbours), θ rms ${theta.rmsRel.toExponential(1)}, ${switched.length} columns with a layer's q apart by more than 1e-5, ${decided.size} whose OLR or absorbed sunlight parted by more than 1 W/m² at a step (a layer's cloud decided apart), away from them q rms ${q.rmsRel.toExponential(1)}, column water rms ${water.rmsRel.toExponential(1)} (${waterAll.rmsRel.toExponential(1)} with them), wind max ${u.maxDiff.toExponential(1)} m/s; mean Ts ${dc.meanSurfaceT.toFixed(3)} vs ${d.meanSurfaceT.toFixed(3)} K, OLR ${dc.outgoingLongwave.toFixed(2)} vs ${d.outgoingLongwave.toFixed(2)} W/m², ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)} m`);
   for (const array of [...cpu.state, ...gpu.state]) assert.ok(array.every(Number.isFinite));
   assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${kept[ts.at]}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
@@ -314,8 +314,8 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   gpu.destroy();
 });
 
-test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0, carrying its atmosphere and deck (remapped onto bl34, or onto bl42 where LEVELS is unset) unless ATMOSPHERE=fresh, with fresh sea ice unless ICE_FROM, checkpoints it inside a day on bl34 and resumes it there alone, and refuses a state at another N', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
-  const root = new URL('..', import.meta.url).pathname, N = 6, dir = mkdtempSync(join(tmpdir(), 'levels-'));
+test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0, carrying its atmosphere and deck (remapped onto bl34, or onto bl60 where LEVELS is unset) unless ATMOSPHERE=fresh, with fresh sea ice unless ICE_FROM, checkpoints it inside a day on bl34 and resumes it there alone, and refuses a state at another N', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+  const root = new URL('..', import.meta.url).pathname, N = 16, dir = mkdtempSync(join(tmpdir(), 'levels-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const source = await createGpuModel(new Grid(N), { topography: topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer) });
   const { state, mesh } = source, C = mesh.nCells, land = source.geography.land;
@@ -338,7 +338,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   const read = async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))));
 
   const log = run({ TAG: 'fine', LEVELS: 'bl34' });
-  assert.match(log, /seeded from .*src_day0100\.bin \(N=6, day 100, cam26\).*with fresh sea ice; its atmosphere remapped from cam26 on bl34 \(34 layers\) and its deck; the clock at day 0/);
+  assert.match(log, /seeded from .*src_day0100\.bin \(N=16, day 100, cam26\).*with fresh sea ice; its atmosphere remapped from cam26 on bl34 \(34 layers\) and its deck; the clock at day 0/);
   const fine = await read('fine_day0001.bin');
   assert.equal(fine.day, 1);
   assert.equal(fine.time, 86400);
@@ -362,7 +362,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   assert.deepEqual(savedLevels(inside), bl, 'the in-day checkpoint is on bl34');
   for (const field of Object.keys(DECK_FIELDS)) assert.equal(inside[field]?.length, C, `the in-day checkpoint carries ${field}`);
   assert.throws(() => run({ TAG: 'fine', DAYS: '2', LEVELS: 'cam26' }), /fine_day0001_step0012\.bin is on bl34 \(34 layers\), not cam26/);
-  assert.match(run({ TAG: 'fine', DAYS: '2', LEVELS: 'bl34' }), /continuing from fine_day0001_step0012\.bin \(day 1, step 12 of 24\) on bl34 \(34 layers\)/);
+  assert.match(run({ TAG: 'fine', DAYS: '2', LEVELS: 'bl34' }), /continuing from fine_day0001_step0012\.bin \(day 1, step 12 of 64\) on bl34 \(34 layers\)/);
   const resumed = await read('fine_day0002.bin');
   assert.equal(resumed.K, 34);
   assert.deepEqual(savedLevels(resumed), bl);
@@ -381,19 +381,19 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   assert.throws(() => run({ TAG: 'warm', ATMOSPHERE: 'warm' }), /ATMOSPHERE is carry or fresh, not warm/);
   const carried = await read('carried_day0000_step0004.bin'), freshAir = await read('freshair_day0000_step0004.bin');
   const differences = [carried, freshAir].map((x) => ({ pi: areaMean(x.pi) - areaMean(origin.pi), theta: massMean(x, 'theta') - massMean(origin, 'theta'), water: massMean(x, 'q') / massMean(origin, 'q'), gate: seaMean(x.mlmGate) }));
-  console.log(`four hours on bl34 from the perturbed cam26 state (ps +0.5%, θ +4 K, q ×0.6, sea gate 0.9), carried vs fresh: mean ps ${differences.map((d) => d.pi.toFixed(1)).join(' vs ')} Pa from FROM's, mass-mean θ ${differences.map((d) => d.theta.toFixed(3)).join(' vs ')} K from FROM's, water ${differences.map((d) => d.water.toFixed(3)).join(' vs ')} of FROM's, sea gate ${differences.map((d) => d.gate.toFixed(2)).join(' vs ')}`);
+  console.log(`four steps (1.5 hours) on bl34 from the perturbed cam26 state (ps +0.5%, θ +4 K, q ×0.6, sea gate 0.9), carried vs fresh: mean ps ${differences.map((d) => d.pi.toFixed(1)).join(' vs ')} Pa from FROM's, mass-mean θ ${differences.map((d) => d.theta.toFixed(3)).join(' vs ')} K from FROM's, water ${differences.map((d) => d.water.toFixed(3)).join(' vs ')} of FROM's, sea gate ${differences.map((d) => d.gate.toFixed(2)).join(' vs ')}`);
   const [kept, started] = differences;
   assert.ok(Math.abs(kept.pi) < 50 && Math.abs(started.pi) > 300, `mean surface pressure ${kept.pi} and ${started.pi} Pa from FROM's`);
   assert.ok(Math.abs(kept.theta) < 0.5 && started.theta < -2, `mass-mean θ ${kept.theta} and ${started.theta} K from FROM's`);
   assert.ok(kept.water < 1.4 && started.water - kept.water > 0.4, `water ${kept.water} and ${started.water} of FROM's`);
   assert.ok(kept.gate > 0.7 && started.gate < 0.65, `sea gate ${kept.gate} and ${started.gate}`);
 
-  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere remapped from cam26 on bl42 \(42 layers\) and its deck; the clock at day 0/);
+  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere remapped from cam26 on bl60 \(60 layers\) and its deck; the clock at day 0/);
   const iced = await read('iced_day0001.bin');
-  assert.equal(iced.K, 42);
+  assert.equal(iced.K, 60);
   let covered = 0, thickest = 0;
   for (let i = 0; i < C; i++) if (iced.ice[i] > 0) { covered++; thickest = Math.max(thickest, iced.ice[i]); assert.ok(Math.abs(iced.concentration[i] - 0.6) < 0.2, `concentration ${iced.concentration[i]} at ${i}`); }
   assert.ok(covered > 0 && thickest < 0.4, `${covered} iced cells, the thickest ${thickest} m`);
 
-  assert.throws(() => run({ N: '8', TAG: 'coarse' }), /is N=6, not 8/);
+  assert.throws(() => run({ N: '32', TAG: 'coarse' }), /is N=16, not 32/);
 });

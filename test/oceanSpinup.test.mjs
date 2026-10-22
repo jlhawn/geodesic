@@ -22,7 +22,7 @@ const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js')
 
 const root = new URL('..', import.meta.url).pathname;
 const topography = topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer);
-const N = 6;
+const N = 16, DT = 1350 * 16 / N, PER_DAY = Math.round(86400 / DT);
 
 async function freshModel(options = {}) {
   const model = await createGpuModel(new Grid(N), { topography, ...options });
@@ -49,12 +49,12 @@ async function loadInto(model, saved) {
 test('the ocean takes each cell\'s own drag coefficient: with the sea\'s at zero the stress vanishes on every edge between two sea cells on either engine, and with the default it does not', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const stressOf = async (dragCoefficient) => {
     const model = await freshModel({ surface: { dragCoefficient } }), { mesh } = model, E = mesh.nEdges, ocean = model.oceanEngine;
-    for (let n = 0; n < ocean.everySteps; n++) await model.step(3600);
+    for (let n = 0; n < ocean.everySteps; n++) await model.step(DT);
     await model.settle();
     const [[stress], physics] = await Promise.all([readRanges(model.gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.STRESS, length: E }]), model.gpu.downloadPhysics()]);
     const cpu = createModel(new Grid(N), { topography, ocean: false, surface: { dragCoefficient } });
     initializeState(cpu, { geostrophic: !cpu.surfaceGeopotential }).forEach((values, a) => cpu.state[a].set(values));
-    cpu.step(3600);
+    cpu.step(DT);
     cpu.core.diagnose(cpu.state[0], cpu.state[1], cpu.state[4], cpu.state[5]);
     cpu.surface.lowestWindSpeed(cpu.state[2]);
     return { model, stress, drag: physics.DRAG, cpuStress: cpu.surface.stress(cpu.state) };
@@ -81,11 +81,10 @@ test('the recorded stress and fluxes are the means of what each step handed the 
   const { mesh, gpu, oceanEngine: ocean } = model, C = mesh.nCells, E = mesh.nEdges;
   await model.diagnostics();
   const recorder = await createForcingRecorder(model);
-  const dt = 1350 * 16 / N, perDay = Math.round(86400 / dt);
   const stress = new Float64Array(E), net = new Float64Array(C), evaporation = new Float64Array(C);
   let oceanSteps = 0;
-  for (let n = 1; n <= perDay; n++) {
-    await model.step(dt);
+  for (let n = 1; n <= PER_DAY; n++) {
+    await model.step(DT);
     recorder.step();
     const [[s], [f, e]] = await Promise.all([readRanges(gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.STRESS, length: E }]), readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.SFLUX, length: C }, { offset: gpu.layout.PH.EVAP, length: C }])]);
     if (n % ocean.everySteps === 0) { oceanSteps++; for (let x = 0; x < E; x++) stress[x] += s[x]; }
@@ -93,15 +92,15 @@ test('the recorded stress and fluxes are the means of what each step handed the 
   }
   await model.diagnostics();
   const day = await decodeForcing(await recorder.day(1));
-  assert.equal(day.steps, perDay);
+  assert.equal(day.steps, PER_DAY);
   assert.equal(day.oceanSteps, oceanSteps);
   let largest = 0;
   for (let x = 0; x < E; x++) largest = Math.max(largest, Math.abs(stress[x] / oceanSteps));
   assert.ok(largest > 1e-3, `the stress is ${largest} N/m² at most`);
   for (let x = 0; x < E; x++) assert.ok(Math.abs(day.fields.stress[x] - stress[x] / oceanSteps) <= 1e-6 * largest, `stress on edge ${x}: ${day.fields.stress[x]} recorded, ${stress[x] / oceanSteps} used`);
   for (let i = 0; i < C; i++) {
-    assert.ok(Math.abs(day.fields.netFlux[i] - net[i] / perDay) <= 1e-3, `net flux at ${i}`);
-    assert.ok(Math.abs(day.fields.evaporation[i] - evaporation[i] / perDay) <= 1e-9, `evaporation at ${i}`);
+    assert.ok(Math.abs(day.fields.netFlux[i] - net[i] / PER_DAY) <= 1e-3, `net flux at ${i}`);
+    assert.ok(Math.abs(day.fields.evaporation[i] - evaporation[i] / PER_DAY) <= 1e-9, `evaporation at ${i}`);
   }
   model.destroy();
 });
@@ -111,8 +110,7 @@ test('a recorded day\'s rain is the day\'s convective plus large-scale rain, cel
   const { mesh, gpu } = model, C = mesh.nCells;
   await model.diagnostics();
   const recorder = await createForcingRecorder(model);
-  const dt = 1350 * 16 / N, perDay = Math.round(86400 / dt);
-  for (let n = 0; n < perDay; n++) { await model.step(dt); recorder.step(); }
+  for (let n = 0; n < PER_DAY; n++) { await model.step(DT); recorder.step(); }
   const d = await model.diagnostics();
   const day = await decodeForcing(await recorder.day(1));
   const [convective, largeScale] = await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.CONVMEAN, length: C }, { offset: gpu.layout.PH.CONDMEAN, length: C }]);
@@ -122,7 +120,7 @@ test('a recorded day\'s rain is the day\'s convective plus large-scale rain, cel
     area += a; recorded += a * 86400 * day.fields.rain[i]; split += a * mean;
     largest = Math.max(largest, mean); apart = Math.max(apart, Math.abs(86400 * day.fields.rain[i] - mean));
   }
-  console.log(`one day at N=6: recorded rain ${(recorded / area).toFixed(4)} mm/d, convective plus large-scale ${(split / area).toFixed(4)}, precipitation ${(86400 * d.precipitation).toFixed(4)}; per cell apart by at most ${apart.toExponential(1)} of ${largest.toFixed(2)} mm/d`);
+  console.log(`one day at N=16: recorded rain ${(recorded / area).toFixed(4)} mm/d, convective plus large-scale ${(split / area).toFixed(4)}, precipitation ${(86400 * d.precipitation).toFixed(4)}; per cell apart by at most ${apart.toExponential(1)} of ${largest.toFixed(2)} mm/d`);
   assert.ok(split / area > 0.1, `${split / area} mm/d`);
   assert.ok(apart <= 1e-4 * largest, `per cell the recorded rain is ${apart} mm/d off the split`);
   assert.ok(Math.abs(recorded - split) <= 1e-5 * split, `recorded ${recorded / area} against ${split / area} mm/d`);
@@ -161,7 +159,7 @@ test('two recorded days replayed over the ocean alone keep its SST with the coup
   assert.ok(worst < 0.5, `SST up to ${worst} K from the coupled run`);
 
   await loadInto(model, alone);
-  await model.step(1350 * 16 / N);
+  await model.step(DT);
   await model.sync();
   const d = await model.diagnostics();
   for (const array of model.state) for (const x of array) assert.ok(Number.isFinite(x));
