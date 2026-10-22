@@ -318,3 +318,23 @@ test('at a six-hour ocean step, four times the coupled ocean\'s at N=16, the GPU
   assert.ok(fastest(cpu.u) < 1 && fastest(final.u) < 1, `currents reach ${fastest(cpu.u)} m/s on the CPU and ${fastest(final.u)} on the GPU`);
   gpuModel.destroy();
 });
+
+test('with rotationLimit rh18 the GPU hybrid ocean\'s boundary layer takes Reichl and Hallberg\'s rotational decay as the CPU\'s does and tracks it over sixteen steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, RH18 = { ...HYBRID, rotationLimit: 'rh18' };
+  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...RH18 }), algebraic = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID });
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: RH18 });
+  const gpu = gpuModel.oceanEngine, flux = new Float64Array(C);
+  for (const ocean of [cpu, algebraic, gpu]) ocean.initialize(Float64Array.from(surfaceT), ice);
+  for (let n = 0; n < 16; n++) {
+    cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT);
+    algebraic.advance(Float64Array.from(surfaceT), ice, flux, stress, DT);
+    await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
+  }
+  const final = await gpu.download(), { boundaryDepths } = await gpu.restartArrays(), wet = Array.from(cpu.h, (v) => v > 1);
+  compare('rh18, sixteen steps', cpuFields(cpu, C), final, wet, { h: 1e-2, u: 2e-2, T: 1e-3, S: 1e-4, eta: 1e-2 });
+  let engines = 0, limits = 0;
+  for (let i = 0; i < C; i++) if (wet[i]) { engines += Math.abs(boundaryDepths[i] - cpu.boundaryDepths[i]); limits += Math.abs(algebraic.boundaryDepths[i] - cpu.boundaryDepths[i]); }
+  console.log(`boundary depths: GPU against CPU ${engines.toFixed(2)} m summed, rh18 against algebraic on the CPU ${limits.toFixed(2)} m`);
+  assert.ok(engines < 0.1 * limits, `the engines part by ${engines} m, the two limits by ${limits} m`);
+  gpuModel.destroy();
+});

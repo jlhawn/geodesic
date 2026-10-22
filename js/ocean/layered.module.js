@@ -2,7 +2,7 @@ import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVecto
 import { FREEZING_POINT } from '../physics/ice.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
-import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
+import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
 import { basalMelt, baseFreezing, SHELF_MELT } from './iceShelfMelt.module.js';
 
 /*
@@ -381,7 +381,7 @@ export function createOcean(mesh, {
   momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
-  vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
+  vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'algebraic', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 0,
 } = {}) {
@@ -394,6 +394,7 @@ export function createOcean(mesh, {
   if (penetration !== null && !JERLOV[penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${penetration}`);
   if (vertical !== 'hybrid') throw new Error(`the ocean's vertical coordinate is 'hybrid'; a saved slab ocean is converted on load, not run (vertical ${vertical})`);
   if (langmuir !== 0 && !(langmuir >= 1)) throw new Error(`langmuir caps a factor of at least 1, so it is 0 or at least 1, not ${langmuir}`);
+  if (!ROTATION_LIMITS.includes(rotationLimit)) throw new Error(`rotationLimit is one of ${ROTATION_LIMITS.join(', ')}, not ${rotationLimit}`);
   const advection = tracerAdvection;
   if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
   if (!EDGE_TRANSPORTS.includes(edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${edgeTransport}`);
@@ -999,7 +1000,7 @@ export function createOcean(mesh, {
   }
   function columnCells(from, to) {
     const dt = params[1], { h: hCol, T: TCol, S: SCol, rho: rhoCol, shear, kappa, nu, vector } = cols, out = { kappa, nu };
-    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, nstar, langmuir, shearViscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
+    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, nstar, langmuir, shearViscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
     for (let i = from; i < to; i++) {
       if (!cellOcean[i]) { mixedDepths[i] = 0; boundaryDepths[i] = 0; continue; }
       cellColumn(i, hCol, TCol, SCol);

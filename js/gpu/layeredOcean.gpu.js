@@ -1,7 +1,7 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
 import { oceanCells, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
-import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
+import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 import { basalMeltWgsl, baseFreezing, SHELF_MELT } from '../ocean/iceShelfMelt.module.js';
@@ -42,7 +42,7 @@ export const OCEAN_DEFAULTS = {
   momentumDepth: 50, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, topDrag: 2.5e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB',
   gustiness: 3,
-  generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
+  generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'algebraic', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
   edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 0,
 };
@@ -145,7 +145,7 @@ ${arr('PVFLOORK', floors)}
 ${arr('BOUNDARY', boundaries.subarray(1, L))}
 const GEN: i32 = ${GENERATORS.indexOf(o.generator)};
 const LP1: i32 = ${L + 1};
-${constLine('HMIN', o.minimumLayer)} ${constLine('THINEDGE', 2 * o.minimumLayer)} ${constLine('MODEDEPTH', o.modeDepth)} ${constLine('MSTAR', o.mstar)} ${constLine('EKMANF', o.ekmanFactor)} ${constLine('NSTAR', o.nstar)}
+${constLine('HMIN', o.minimumLayer)} ${constLine('THINEDGE', 2 * o.minimumLayer)} ${constLine('MODEDEPTH', o.modeDepth)} ${constLine('MSTAR', o.mstar)} ${constLine('EKMANF', o.ekmanFactor)} ${constLine('RH18C2', RH18_NEUTRAL.c2)} ${constLine('RH18C3', RH18_NEUTRAL.c3)} ${constLine('NSTAR', o.nstar)}
 ${constLine('BACKKAPPA', o.backgroundDiffusivity)} ${constLine('CONVKAPPA', o.convectiveDiffusivity)} ${constLine('VONK', 0.4)} ${constLine('BLFLOOR', 0.1)} ${constLine('DZFLOOR', 1e-3)} ${constLine('HNEGLECT', 1e-6)} ${constLine('MLEXCESS', 0.03)}
 ${constLine('BLTOL', 1e-6)} const BLITER: i32 = 24;
 fn eosA(t: f32, s: f32) -> f32 { return eos(t + TREF, s + SREF); }
@@ -166,9 +166,11 @@ fn crossing(qL: f32, d: f32, c: f32, b: f32) -> f32 {
   return xi;
 }
 fn blEnergy(depth: f32, ustar: f32, f: f32, dt: f32, convective: f32, waves: bool) -> f32 {
-  let rotation = select(1.0e30, 1.0 + (depth * f / (EKMANF * ustar)) * (depth * f / (EKMANF * ustar)), ustar > 0.0);
+${o.rotationLimit === 'rh18' ? `  let decay = select(0.0, exp(RH18C3 * depth * abs(f) / max(ustar, 1.0e-12)), ustar > 0.0);
   let factor = ${o.langmuir > 0 ? 'select(1.0, langmuirFactor(ustar, max(depth, 1.0)), ustar > 0.0 && waves)' : '1.0'};
-  return RHO0 * dt * MSTAR * factor * ustar * ustar * ustar / rotation + NSTAR * convective;
+  return RHO0 * dt * MSTAR * factor * ustar * ustar * ustar * (1.0 + RH18C2) * decay / (1.0 + RH18C2 * decay) + NSTAR * convective;` : `  let rotation = select(1.0e30, 1.0 + (depth * f / (EKMANF * ustar)) * (depth * f / (EKMANF * ustar)), ustar > 0.0);
+  let factor = ${o.langmuir > 0 ? 'select(1.0, langmuirFactor(ustar, max(depth, 1.0)), ustar > 0.0 && waves)' : '1.0'};
+  return RHO0 * dt * MSTAR * factor * ustar * ustar * ustar / rotation + NSTAR * convective;`}
 }
 `;
 }
@@ -1240,6 +1242,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const table = o.layerTable ?? HYBRID_LAYERS;
   if (!TRACER_ADVECTIONS.includes(o.tracerAdvection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${o.tracerAdvection}`);
   if (!EDGE_TRANSPORTS.includes(o.edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${o.edgeTransport}`);
+  if (!ROTATION_LIMITS.includes(o.rotationLimit)) throw new Error(`rotationLimit is one of ${ROTATION_LIMITS.join(', ')}, not ${o.rotationLimit}`);
   const third = o.tracerAdvection === 'third';
   if (third && !(o.shearDiffusivity > 0)) throw new Error('tracerAdvection third needs shearDiffusivity above zero');
   if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
