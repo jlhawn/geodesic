@@ -3,13 +3,13 @@
 //   MOIST='{...}' node scripts/armMetrics.mjs <label> <state.bin>...
 import { readFileSync } from 'node:fs';
 const R = new URL('../', import.meta.url).pathname;
-const [{ topographyFromInt16 }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
+const [{ stateGeography }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
   import(R + 'js/geography.module.js'), import(R + 'js/model.module.js'), import(R + 'js/stateFile.module.js'), import(R + 'js/physics/regrid.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/physics/moist.module.js')]);
 const [LABEL, ...FILES] = process.argv.slice(2), LAT = Number(process.env.LAT ?? 3);
 const env = (n) => JSON.parse(process.env[n] ?? '{}');
 const first = await decodeState(new Uint8Array(readFileSync(FILES[0])));
-const topography = topographyFromInt16(readFileSync(R + 'data/topography_0p25.bin').buffer);
-const model = createModel(stateGrid(first, topography).mesh, { topography, levels: savedLevels(first), ocean: false, radiation: env('RADIATION'), moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
+const { topography, geography, land: landOptions } = stateGeography(first);
+const model = createModel(stateGrid(first, topography).mesh, { topography, geography, land: landOptions, levels: savedLevels(first), ocean: false, radiation: env('RADIATION'), moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
 const { mesh, core, state, radiation, seaIce, land, surface } = model;
 const { K, C, E, sigmaMid, R: Rd, g, exnerLayer, geopotential } = core.diagnostics;
 const { thetaV } = core.arrays;
