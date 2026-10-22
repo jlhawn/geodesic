@@ -89,6 +89,30 @@ test('on bl60 the g-points fitted on bl60 columns follow RRTMG over each of bl42
   for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
 });
 
+test('on bl48 the g-points fitted on bl48 columns follow RRTMG in each of its layers between 1 and 93.6 hPa that RRTMG\'s levels resolve, the fluxes and doubled CO2', () => {
+  const levels = sigmaInterfaces('bl48'), table = longwaveTableFor(levels), lines = [];
+  assert.notEqual(table, longwaveTableFor(sigmaInterfaces('bl60')));
+  const linearAt = (ref, p) => { const j = ref.findIndex((l, i) => i < ref.length - 1 && p <= l.p && p >= ref[i + 1].p); return j < 0 ? (p > ref[0].p ? ref[0].net : ref[ref.length - 1].net) : ref[j].net + (ref[j + 1].net - ref[j].net) * (ref[j].p - p) / (ref[j].p - ref[j + 1].p); };
+  for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
+    const column = modelColumn(BENCHMARK.atmospheres[a], levels), ref = BENCHMARK.rrtmgLongwave[a].levels, r = clearLongwave(column, { table }), K = column.T.length;
+    const olr = r.up[0] - ref[ref.length - 1].up, dlr = r.down[K] - ref[0].down, net = interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000);
+    for (const x of [olr, dlr, net]) assert.ok(Math.abs(x) < 3, `${a}: OLR, DLR and 200 hPa misses ${olr}, ${dlr}, ${net} W/m2`);
+    const heat = layerHeating(column, r.net), refHeat = referenceHeating(column, ref), linear = layerHeating(column, Array.from(column.levels, (s) => linearAt(ref, s * column.ps))), spans = [];
+    for (let k = 2; k < 16; k++) {
+      const resolved = Math.abs(refHeat[k] - linear[k]) < 0.25, top = levels[k] * column.ps;
+      spans.push(`${heat[k].toFixed(2)} (${refHeat[k].toFixed(2)})${resolved ? '' : '*'}`);
+      if (resolved) assert.ok(Math.abs(heat[k] - refHeat[k]) < (top < 1000 ? 0.45 : 0.2), `${a}: ${top} to ${levels[k + 1] * column.ps} Pa cools ${heat[k]} against ${refHeat[k]} K/day`);
+    }
+    lines.push(`${a} ${spans.join(' / ')}`);
+  }
+  const mls = modelColumn(BENCHMARK.atmospheres.MLS, levels), K = mls.T.length;
+  const withCo2 = (vmr) => ({ ...mls, co2: mls.co2.map((_, k) => vmr * MOLAR.co2 / MOLAR.air * (1 - mls.q[k])), ch4: mls.ch4.map((_, k) => 806e-9 * MOLAR.ch4 / MOLAR.air * (1 - mls.q[k])), n2o: mls.n2o.map((_, k) => 275e-9 * MOLAR.n2o / MOLAR.air * (1 - mls.q[k])) });
+  const one = clearLongwave(withCo2(287e-6), { table }), two = clearLongwave(withCo2(574e-6), { table }), ref = BENCHMARK.iacono.co2Doubling.longwave;
+  const forcing = { toa: one.net[0] - two.net[0], p20000: interfaceAt(mls, one.net, 20000) - interfaceAt(mls, two.net, 20000), surface: two.down[K] - one.down[K] };
+  console.log(`bl48, the cooling of its layers from 1 to 93.6 hPa (RRTMG; * where its levels do not resolve the layer): ${lines.join(', ')} K/day; doubled CO2 TOA ${forcing.toa.toFixed(2)} 200 hPa ${forcing.p20000.toFixed(2)} surface ${forcing.surface.toFixed(2)} W/m2`);
+  for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
+});
+
 test('the radiation column carries the g-points: a cloudless column at night has the clear-sky longwave of the same layers', () => {
   const column = modelColumn(BENCHMARK.atmospheres.MLW);
   for (const longwaveLines of ['scaled', 'voigt']) {
