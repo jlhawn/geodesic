@@ -5696,7 +5696,18 @@ The work, in order:
      layers. A known limit: over 1-2.2 hPa it misses MLS by 0.47 K/day
      (bl60 0.28), in its 1-1.37 hPa layer, which MLS's levels (none
      between 1.34 and 0.59 hPa) do not resolve, so the fit cannot see
-     it. Not a default; chosen on Oct 21 for spin-up sixteen.
+     it. Over days 12-30 of a fixed-SST pair against bl60 at N=64 from
+     fourteen64's June solstice (day 1551), it keeps bl60's tropospheric
+     temperatures to 0.6 K and its summer stratopause at 40-60N to 0.8 K
+     (colder at 1.5-2 hPa). Its cloud reflects 2.2 ± 0.35 W/m² more
+     sunlight, 85 percent of it between 30S and 30N (the four deck boxes
+     about a tenth, three of them 14-20 W/m² brighter with tops 90-180 m
+     higher). Its 50 hPa is 0.9 K warmer by day 12 and 1.3 K by day 30,
+     where its table cools 0.07-0.09 K/day less than bl60's (nearer RRTMG
+     in TROP and MLS, farther in MLW and SAW). The equatorial westerly at
+     10 hPa decays faster (18.0 against 22.1 m/s). It costs 0.80 times
+     bl60 (4.3 against 5.4 s a model day at N=64). Not a default; chosen
+     on Oct 21 for spin-up sixteen.
    - Final defaults: `topDragDays` 0 (was 5; `topSigma` 0.02 unused),
      `spongeSigma` 0.005 and `spongeDays` 1 (`SPONGE`, the sponge on the
      eddies; `surface` options), `gravityWaves` on with `flux` 4.3·10⁻³
