@@ -5679,6 +5679,24 @@ The work, in order:
      months at 3-20 hPa (ERA5 32) whose easterly phase never forms below
      about 20 hPa, so the 2-30 hPa mean is westerly, +9 to +16 m/s where
      ERA5's is easterly. It costs 1.4-1.5 times bl42.
+   - bl48 (`sigmaInterfaces('bl48')`, `LEVELS=bl48`): bl60's lid and
+     93.6 hPa interface, the rest laid out by `LADDER` in US Standard
+     Atmosphere 1976 heights (`standardSigma`, `standardHeight`): from a
+     40 m lowest layer, 25 layers each 2^(1/5) times as thick as the one
+     below to 8.34 km, 7 of 1.18 km to 93.6 hPa, 5 more growing on by
+     2^(1/5) to 25.7 km and 9 of 2.46 km to 1 hPa (48 layers; none below
+     1 hPa more than 1.15 times as thick as the one below it), with its
+     own longwave table (`js/physics/longwaveTableBl48.module.js`, fitted
+     as bl60's with `UPPER_WEIGHT` 100) and bl60's sponge and lid
+     friction. `remapLevels` carries bl60 states onto it
+     (`test/levels.test.mjs`). Against RRTMG in the four standard
+     atmospheres the table is within 0.40 K/day in every layer RRTMG's
+     levels resolve at 1-2.6 hPa (bl60's over the same spans 0.57),
+     0.16 at 2.6-93.6 hPa and 0.45 in the troposphere above the lowest
+     layers. A known limit: over 1-2.2 hPa it misses MLS by 0.47 K/day
+     (bl60 0.28), in its 1-1.37 hPa layer, which MLS's levels (none
+     between 1.34 and 0.59 hPa) do not resolve, so the fit cannot see
+     it. Not a default; chosen on Oct 21 for spin-up sixteen.
    - Final defaults: `topDragDays` 0 (was 5; `topSigma` 0.02 unused),
      `spongeSigma` 0.005 and `spongeDays` 1 (`SPONGE`, the sponge on the
      eddies; `surface` options), `gravityWaves` on with `flux` 4.3·10⁻³
