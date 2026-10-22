@@ -42,7 +42,8 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...optio
   const after = await gpu.downloadPhysics(), state = await gpu.download(), r = model.radiation, bl = model.boundaryLayer;
   const near = neighbourhood(model.mesh, parted, 2), kept = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i));
   const cells = (cpu, name) => stats(Float64Array.from(kept, (i) => cpu[i]), Float64Array.from(kept, (i) => after[name][i]));
-  const columns = (cpu, name) => stats(Float64Array.from({ length: K * kept.length }, (_, x) => cpu[Math.floor(x / kept.length) * C + kept[x % kept.length]]), Float64Array.from({ length: K * kept.length }, (_, x) => after[name][Math.floor(x / kept.length) * C + kept[x % kept.length]]));
+  const keptColumns = (cpu, gpu) => stats(Float64Array.from({ length: K * kept.length }, (_, x) => cpu[Math.floor(x / kept.length) * C + kept[x % kept.length]]), Float64Array.from({ length: K * kept.length }, (_, x) => gpu[Math.floor(x / kept.length) * C + kept[x % kept.length]]));
+  const columns = (cpu, name) => keptColumns(cpu, after[name]);
   let decked = 0, gpuDecked = 0, layerMiss = 0, homeMiss = 0, sealed = 0, moved = 0;
   for (let i = 0; i < C; i++) {
     if (r.mlmTop[i] > 0) decked++;
@@ -56,7 +57,7 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...optio
     C, K, ambiguous, decked, gpuDecked, layerMiss, homeMiss, sealed, moved, parted: parted.size, near: near.size,
     share: cells(r.mlmShare, 'MLMM'), top: cells(r.mlmTop, 'MLMTOP'), height: cells(r.mlmHeight, 'MLMH'), water: cells(r.mlmWater, 'MLMWATER'), entrainment: cells(r.mlmEntrainment, 'MLMENT'),
     deck: cells(r.stratus, 'DECK'), fraction: cells(r.stratusFraction, 'DECKF'), olr: cells(r.outgoing, 'OLR'), sw: cells(r.surfaceShortwave, 'SWDN'), blEntrainment: cells(bl.entrainment, 'ENTRAIN'),
-    mixing: columns(bl.mixing, 'MIX'), longwave: turbulence === 'moist' ? columns(r.longwave, 'LWH') : null, theta: stats(model.state[1], state[1]), q: stats(model.state[4], state[4]),
+    mixing: columns(bl.mixing, 'MIX'), longwave: turbulence === 'moist' ? columns(r.longwave, 'LWH') : null, theta: keptColumns(model.state[1], state[1]), q: keptColumns(model.state[4], state[4]),
   };
 }
 
@@ -68,7 +69,7 @@ function agree(label, run) {
   assert.ok(run.share.maxDiff < 1e-3 && run.top.rmsRel < 1e-5 && run.height.rmsRel < 1e-5, `${label}: share ${run.share.maxDiff}, top ${run.top.rmsRel}, height ${run.height.rmsRel}`);
   assert.ok(run.water.rmsRel < 1e-4 && run.entrainment.rmsRel < 1e-4 && run.deck.maxDiff < 5e-5 && run.fraction.maxDiff < 1e-3, `${label}: water ${run.water.rmsRel}, w_e ${run.entrainment.rmsRel}, deck ${run.deck.maxDiff}, fraction ${run.fraction.maxDiff}`);
   assert.ok(run.mixing.rmsRel < 1e-4 && run.blEntrainment.rmsRel < 1e-4, `${label}: mixing ${run.mixing.rmsRel}, boundary-layer w_e ${run.blEntrainment.rmsRel}`);
-  assert.ok(run.theta.rmsRel < 1e-5 && run.q.rmsRel < 5e-4, `${label}: θ ${run.theta.rmsRel}, q ${run.q.rmsRel}`);
+  assert.ok(run.theta.rmsRel < 1e-6 && run.q.rmsRel < 1e-5, `${label}: θ ${run.theta.rmsRel}, q ${run.q.rmsRel}`);
   assert.ok(run.olr.rmsRel < 3e-5 && run.sw.rmsRel < 3e-5 && (!run.longwave || run.longwave.rmsRel < 1e-4), `${label}: OLR ${run.olr.rmsRel}, surface shortwave ${run.sw.rmsRel}, longwave heating ${run.longwave?.rmsRel}`);
 }
 
