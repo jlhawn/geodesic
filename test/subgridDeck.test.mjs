@@ -142,7 +142,7 @@ test('with deckResolved \'above\' the deck replaces the resolved cloud of the la
 
 test('the deck options refuse other values and need the mixed-layer deck, in both engines', async () => {
   const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
-  for (const [options, message] of [[{ deckInversion: 'cell' }, /deckInversion must be/], [{ deckCloud: 'layer' }, /deckCloud must be/], [{ deckResolved: 'twice' }, /deckResolved must be/], [{ mixedLayer: { cloudLayer: 'stacked' } }, /cloudLayer must be/],[{ deckInversion: 'subgrid', prognosticHeight: false }, /needs the mixed-layer deck/], [{ deckCloud: 'top', mixedLayerDeck: false }, /needs the mixed-layer deck/], [{ deckResolved: 'above', prognosticHeight: false }, /needs the mixed-layer deck/]]) {
+  for (const [options, message] of [[{ deckInversion: 'cell' }, /deckInversion must be/], [{ deckCloud: 'layer' }, /deckCloud must be/], [{ deckResolved: 'twice' }, /deckResolved must be/], [{ deckInversion: 'subgrid', prognosticHeight: false }, /needs the mixed-layer deck/], [{ deckCloud: 'top', mixedLayerDeck: false }, /needs the mixed-layer deck/], [{ deckResolved: 'above', prognosticHeight: false }, /needs the mixed-layer deck/]]) {
     assert.throws(() => createModel(new Grid(N), { ocean: false, radiation: options }), message, `CPU: ${JSON.stringify(options)}`);
     assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), message, `GPU: ${JSON.stringify(options)}`);
   }

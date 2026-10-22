@@ -200,8 +200,6 @@ export function physicsConstants(o) {
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
-  if (m.cloudLayer !== 'mixed' && m.cloudLayer !== 'decoupled') throw new Error(`cloudLayer must be 'mixed' or 'decoupled', not ${m.cloudLayer}`);
-  if (!(m.cloudLayerDepth > 0 && m.cloudLayerExponent > 0 && m.cloudLayerHeat >= 0 && m.cloudLayerHeat <= 1)) throw new Error(`cloudLayerDepth and cloudLayerExponent must be above 0 and cloudLayerHeat from 0 to 1, not ${m.cloudLayerDepth}, ${m.cloudLayerExponent} and ${m.cloudLayerHeat}`);
   if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom' && o.cloudOverlap !== 'exponentialRandom') throw new Error(`cloudOverlap must be 'maximum', 'maximumRandom' or 'exponentialRandom', not ${o.cloudOverlap}`);
   const darkening = o.soilDarkening === true ? 'surface' : o.soilDarkening;
   if (darkening !== false && !DARKENING_WETNESS[darkening]) throw new Error(`soilDarkening is 'surface', 'rootZone' or false, not ${o.soilDarkening}`);
@@ -339,8 +337,7 @@ const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; co
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
-const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover};
-const MLM_DECOUPLED: bool = ${m.cloudLayer === 'decoupled'}; const MLM_DSCALE: f32 = ${m.cloudLayerDepth}; const MLM_DEXP: f32 = ${m.cloudLayerExponent}; const MLM_DTHETA: f32 = ${m.cloudLayerHeat}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
+const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
 const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_FRACTION: bool = ${o.deckSlab === 'fraction'}; const MLM_INTERPOLATE: bool = ${o.deckReference === 'interpolate'}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling}; const MLM_SUBGRID: bool = ${deckInversion === 'subgrid'}; const DECK_TOP: bool = ${deckCloud === 'top'}; const DECK_ABOVE: bool = ${deckResolved === 'above'};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const ICE_BALANCE: bool = ${!!o.iceSheetBalance}; const SNOWCAP: f32 = ${o.snowCap}; const ALB_BAREICE: f32 = ${o.bareIceAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMasking && !!o.vegetation}; const ALB_FOREST: f32 = ${o.forestSnowAlbedo}; const CLOSED_CANOPY: f32 = ${o.closedCanopy}; const CANOPY_MEM: f32 = ${o.canopyMemory};
@@ -820,27 +817,19 @@ fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove
   let thetaVDry = thetaL * (1.0 + MLM_DELTA * qt);
   var zb = 0.0; var piB = piS;
   if (!(qt >= qsat(thetaL * piS, ps))) { piB = mlmCloudBase(thetaL, qt, piS); zb = CP * thetaVDry * (piS - piB) / GRAV; }
-  var cloudThetaL = thetaL; var cloudQt = qt;
-  if (MLM_DECOUPLED && zb < h) {
-    let mixing = min(1.0, pow((h - zb) / MLM_DSCALE, MLM_DEXP));
-    cloudThetaL = thetaL + MLM_DTHETA * mixing * (thetaAbove - thetaL);
-    cloudQt = qt + mixing * (qtAbove - qt);
-    zb = 0.0; piB = piS;
-    if (!(cloudQt >= qsat(cloudThetaL * piS, ps))) { piB = mlmCloudBase(cloudThetaL, cloudQt, piS); zb = CP * thetaVDry * (piS - piB) / GRAV; }
-  }
   let cloudy = zb < h;
   let dz = (h - zb) / f32(MLM_LEVELS);
   var lwp = 0.0; var piH = 0.0; var thetaVTop = 0.0; var qlTop = 0.0; var topA = 0.0; var topB = 0.0; var topGamma = 0.0; var topSlope = 0.0;
   if (cloudy) {
     var x = piB;
-    var air = mlmSaturate(cloudThetaL, cloudQt, x);
+    var air = mlmSaturate(thetaL, qt, x);
     var tv = mlmVirtual(air, x);
     for (var j = 0; j <= MLM_LEVELS; j++) {
       if (j > 0) {
         let predicted = x - GRAV * dz / (CP * tv);
-        let tvPredicted = mlmVirtual(mlmSaturate(cloudThetaL, cloudQt, predicted), predicted);
+        let tvPredicted = mlmVirtual(mlmSaturate(thetaL, qt, predicted), predicted);
         x -= 0.5 * GRAV * dz / CP * (1.0 / tv + 1.0 / tvPredicted);
-        air = mlmSaturate(cloudThetaL, cloudQt, x);
+        air = mlmSaturate(thetaL, qt, x);
         tv = mlmVirtual(air, x);
       }
       let p = mlmPressure(x); let gamma = MLM_LC * air.dqs; let theta = air.T / x;
@@ -868,9 +857,8 @@ fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove
   let netDivergence = divergence - absorbed;
   var efficiency = MLM_A1;
   if (cloudy && qlTop > 0.0 && capped) {
-    let topJumpTheta = thetaAbove - cloudThetaL; let topJumpQ = qtAbove - cloudQt;
-    let saturatedJump = topA * topJumpTheta + topB * topJumpQ;
-    let demand = topSlope * piH * topJumpTheta - topJumpQ;
+    let saturatedJump = topA * jumpTheta + topB * jumpQ;
+    let demand = topSlope * piH * jumpTheta - jumpQ;
     var chi = 1.0;
     if (demand > 0.0) { chi = min(1.0, qlTop * (1.0 + topGamma) / demand); }
     efficiency = min(MLM_AMAX, MLM_A1 * (1.0 + MLM_A2 * max(0.0, chi * (1.0 - saturatedJump / jump))));

@@ -114,10 +114,10 @@ test('on bl60, and bl48 where it is built, the deck\'s cloud at its own top, on 
   }
 });
 
-test('on bl48 the deck that replaces the resolved cloud at and below its top inside its fraction, and the deck on a decoupled cloud layer, match between the engines, on the grid ceiling and the sub-grid inversion, with the radiation every step and held', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const subgrid = { deckCloud: 'top', deckInversion: 'subgrid' }, decoupled = { mixedLayer: { cloudLayer: 'decoupled' } };
-  for (const options of [{ deckResolved: 'above' }, { deckResolved: 'above', ...subgrid }, { deckResolved: 'above', ...subgrid, radiationEvery: 2 }, decoupled, { deckResolved: 'above', ...subgrid, ...decoupled }]) {
-    const label = Object.entries(options).map(([key, value]) => `${key} ${typeof value === 'object' ? JSON.stringify(value) : value}`).join(', ');
+test('on bl48 the deck that replaces the resolved cloud at and below its top inside its fraction matches between the engines, on the grid ceiling and the sub-grid inversion, with the radiation every step and held', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const subgrid = { deckCloud: 'top', deckInversion: 'subgrid' };
+  for (const options of [{ deckResolved: 'above' }, { deckResolved: 'above', ...subgrid }, { deckResolved: 'above', ...subgrid, radiationEvery: 2 }]) {
+    const label = Object.entries(options).map(([key, value]) => `${key} ${value}`).join(', ');
     const run = await deckPair(3, { levels: 'bl48', cloudColumns: true, cloudSpread: 0.75, ...options });
     show(label, run);
     agree(label, run);

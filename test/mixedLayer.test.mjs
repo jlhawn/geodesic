@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 import { adiabaticWaterLapse, sunDirection, DAY } from '../js/physics/radiation.module.js';
-import { saturationHumidity } from '../js/physics/moist.module.js';
 
 const CONSTANTS = { cp: 1015, R: 287, latentHeat: 2.47e6 };
 const G = 9.806;
@@ -142,35 +141,6 @@ test('the cover is 1 while the layer is coupled and falls to the trade-cumulus 0
   assert.ok(clear.liquidWaterPath === 0 && clear.cover === 0 && clear.entrainment === 0 && clear.cloudBase === 500);
   const uncapped = mlm.diagnose(INITIAL, rf01(mlm, { thetaLAbove: 289 }));
   assert.ok(uncapped.virtualJump < 0 && uncapped.cover === 0 && uncapped.entrainment === 0);
-});
-
-test('with cloudLayer \'decoupled\' the cloud\'s air is mixed toward the free troposphere by α_q = (Δz/2750 m)^1.2 and α_θ = 0.8 α_q, Δz the layer\'s depth above its own condensation level: the deeper the layer the higher its cloud base, its cloud thinner and its buoyancy integral ratio no lower; a clear layer is untouched and the column keeps its water and heat', () => {
-  const mixed = createMixedLayer(CONSTANTS), decoupled = createMixedLayer({ ...CONSTANTS, cloudLayer: 'decoupled' });
-  const forcing = rf01(mixed), kappa = CONSTANTS.R / CONSTANTS.cp;
-  let lastRise = 0;
-  for (const h of [700, 840, 1100, 1400]) {
-    const state = { ...INITIAL, h }, a = mixed.diagnose(state, forcing), b = decoupled.diagnose(state, forcing);
-    const alpha = Math.min(1, ((h - a.cloudBase) / 2750) ** 1.2), rise = b.cloudBase - a.cloudBase;
-    const thetaL = INITIAL.thetaL + 0.8 * alpha * (b.thetaLAbove - INITIAL.thetaL), qt = INITIAL.qt + alpha * (b.qtAbove - INITIAL.qt);
-    const base = saturationHumidity(thetaL * b.cloudBaseExner, 1e5 * b.cloudBaseExner ** (1 / kappa));
-    console.log(`h ${h} m: α_q ${b.cloudMixing.toFixed(3)}, cloud base ${a.cloudBase.toFixed(0)} → ${b.cloudBase.toFixed(0)} m, LWP ${(1000 * a.liquidWaterPath).toFixed(1)} → ${(1000 * b.liquidWaterPath).toFixed(1)} g/m², BIR ${a.buoyancyIntegralRatio.toFixed(3)} → ${b.buoyancyIntegralRatio.toFixed(3)}, cover ${a.cover.toFixed(2)} → ${b.cover.toFixed(2)}, w_e ${(1000 * a.entrainment).toFixed(2)} → ${(1000 * b.entrainment).toFixed(2)} mm/s`);
-    assert.ok(Math.abs(b.cloudMixing - alpha) < 1e-12 && Math.abs(base / qt - 1) < 1e-9, `h ${h}: α ${b.cloudMixing} against ${alpha}, saturation at the base ${base} against ${qt}`);
-    assert.ok(rise > lastRise && b.liquidWaterPath < a.liquidWaterPath && b.buoyancyIntegralRatio >= a.buoyancyIntegralRatio && b.cover <= a.cover, `h ${h}: base up ${rise} after ${lastRise}`);
-    assert.ok(b.thetaL === a.thetaL && b.qt === a.qt && b.thetaLJump === a.thetaLJump && b.qtJump === a.qtJump);
-    lastRise = rise;
-  }
-  const clear = { ...INITIAL, h: 500 };
-  assert.deepEqual(decoupled.diagnose(clear, forcing), mixed.diagnose(clear, forcing));
-  const rho = forcing.density, cp = CONSTANTS.cp;
-  let water = 0, heat = 0, gross = 0;
-  const { state, final } = run(decoupled, forcing, (s, d) => {
-    const w = rho * d.entrainment * d.qtAbove + rho * d.subsidence * s.qt + d.evaporation, e = rho * cp * d.entrainment * d.thetaLAbove + rho * cp * d.subsidence * s.thetaL + d.sensibleHeat - d.radiativeDivergence;
-    water += DT * w; heat += DT * e; gross += DT * Math.abs(e);
-  });
-  console.log(`decoupled RF01 after 4 h: ${row(final, 4)}`);
-  assert.ok(Math.abs(rho * (state.h * state.qt - INITIAL.h * INITIAL.qt) - water) < 1e-9 * Math.abs(water) && Math.abs(rho * cp * (state.h * state.thetaL - INITIAL.h * INITIAL.thetaL) - heat) < 1e-9 * gross);
-  assert.throws(() => createMixedLayer({ cloudLayer: 'stacked' }), /cloudLayer must be/);
-  assert.throws(() => createMixedLayer({ cloudLayer: 'decoupled', cloudLayerHeat: 1.5 }), /cloudLayerHeat from 0 to 1/);
 });
 
 test('under a weakening inversion the efficiency stops at 1 and the entrainment at 20 mm/s, in either closure', () => {
