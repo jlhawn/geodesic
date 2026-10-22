@@ -74,7 +74,7 @@ export const TOTALS = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', '
  * The hybrid ocean's regrid and column passes go to the workers the same
  * way, in blocks of cells or edges (OCEAN_PASSES).
  */
-export async function createParallelModel(grid, options = {}, workers = null) {
+export async function createParallelModel(grid, options = {}, workers = null, probe = null) {
   workers ??= Math.max(1, await parallelism());
   if (options.ocean && options.ocean.climatology) options = { ...options, ocean: { ...options.ocean, climatology: await loadClimatology(options.ocean.climatology) } };
   const model = createModel(grid, options);
@@ -100,7 +100,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
   for (let index = 0; index < workers; index++) {
     let resolveReady, rejectReady;
     ready.push(new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; }));
-    threads.push(await spawn(new URL('./parallel.worker.js', import.meta.url), { index, workers, meshShared, buffers, options: workerOptions, control }, {
+    threads.push(await spawn(new URL('./parallel.worker.js', import.meta.url), { index, workers, meshShared, buffers, options: workerOptions, control, probe }, {
       onMessage(message) {
         if (message.type === 'ready') resolveReady();
         if (message.type === 'error') failures.push(`worker ${message.index} phase ${message.phase}: ${message.message}`);
