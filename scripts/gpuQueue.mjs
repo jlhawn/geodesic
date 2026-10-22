@@ -15,8 +15,9 @@
 // Metal driver or a page server listens on port 8000. From before CMD starts
 // until the next holder has one of its own, it holds an idle WebGPU device,
 // so the polling gates of older scripts see the GPU busy throughout, gaps
-// and handoffs included. CPU-only jobs do not use the queue and never wait
-// for it.
+// and handoffs included. The holder and CMD run with GPU_QUEUE_HELD=1 in
+// their environment, without which js/gpu/device.module.js opens no GPU on
+// this Mac. CPU-only jobs do not use the queue and never wait for it.
 // GPU_PRIORITY (1-5, default 3) sets a run's level, 1 the highest. A waiter
 // tries the lock only when no live ticket is ahead of it in (level, seq, ms,
 // pid) order: a level waits until every higher one is empty, runs in order
@@ -562,6 +563,7 @@ export async function run(cfg, logArg, argv) {
       await sleep(cfg.tick);
     }
   }
+  process.env.GPU_QUEUE_HELD = '1';
   if (above) {
     if (ticket) { dequeue(ticket); refresh(cfg); }
     phase = 'running';

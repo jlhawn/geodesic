@@ -28,7 +28,7 @@ const DEVICE = `import fs from 'node:fs';
 export async function getDevice() {
   await new Promise((resolve) => setTimeout(resolve, 50));
   fs.writeFileSync(\`\${process.env.FAKE_GPU}/\${process.pid}\`, '');
-  fs.appendFileSync(process.env.TRACE, \`device \${process.pid} \${Date.now()}\\n\`);
+  fs.appendFileSync(process.env.TRACE, \`device \${process.pid} \${Date.now()} \${process.env.GPU_QUEUE_HELD}\\n\`);
   return { device: { destroy() {
     fs.rmSync(\`\${process.env.FAKE_GPU}/\${process.pid}\`, { force: true });
     fs.appendFileSync(process.env.TRACE, \`destroy \${process.pid} \${Date.now()}\\n\`);
@@ -127,7 +127,7 @@ function bench(t, extra = {}) {
   const env = {
     ...process.env, GPU_QUEUE_DIR: path.join(dir, 'queue'), GPU_QUEUE_TICK_MS: '20', GPU_QUEUE_PORT: '0',
     GPU_QUEUE_PROBE: `ls '${gpu}'`, GPU_QUEUE_DEVICE: path.join(dir, 'device.mjs'), GPU_QUEUE_ABORTS: 'off',
-    GPU_QUEUE_NODE: process.execPath, GPU_QUEUE_COURTESY_MS: '', GPU_WHO: '', GPU_JOB: '', GPU_PRIORITY: '',
+    GPU_QUEUE_NODE: process.execPath, GPU_QUEUE_COURTESY_MS: '', GPU_QUEUE_HELD: '', GPU_WHO: '', GPU_JOB: '', GPU_PRIORITY: '',
     FAKE_GPU: gpu, TRACE: path.join(dir, 'trace'), ...extra,
   };
   const spawned = [];
@@ -420,6 +420,22 @@ test('signals end a waiter cleanly and reach a running job', { skip }, async (t)
   assert.equal(end.hold, undefined);
   assert.equal(start.never, undefined);
   assert.ok(start.last > start.hold);
+});
+
+test('the holder opens its idle device and runs its command with GPU_QUEUE_HELD set', { skip }, async (t) => {
+  const b = bench(t);
+  const command = [process.execPath, '-e', 'require("node:fs").appendFileSync(process.env.TRACE, `command ${process.env.GPU_QUEUE_HELD}\\n`)'];
+  assert.equal(await b.run('held.log', command).exited, 0);
+  assert.match(b.read('trace'), /^device \d+ \d+ 1$/m);
+  assert.match(b.read('trace'), /^command 1$/m);
+});
+
+test('on this Mac getDevice opens no GPU for a node process without GPU_QUEUE_HELD', { skip }, () => {
+  const device = new URL('../js/gpu/device.module.js', import.meta.url).href;
+  const { stdout } = spawnSync(process.execPath, ['--input-type=module', '-e', `import { getDevice } from '${device}'; console.log(await getDevice().then(() => 'opened', (error) => error.message));`], {
+    env: { ...process.env, GPU_QUEUE_HELD: '' }, encoding: 'utf8',
+  });
+  assert.match(stdout, /^on this Mac a node process opens the GPU only under gpu_run/);
 });
 
 test('a log that already holds exit 0 is skipped', { skip }, async (t) => {
