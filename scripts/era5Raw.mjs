@@ -1,9 +1,11 @@
-// Range reads of ARCO-ERA5's raw pressure-level netCDF3 files
-// (gs://gcp-public-data-arco-era5/raw/date-variable-pressure_level/Y/M/D/<var>/<hPa>.nc,
-// one variable, one level, 24 hours of 721x1440 int16 each, public).
-// fieldRows(date, variable, level, hour, rowFrom, rowTo) -> Float32Array of
+// Range reads of ARCO-ERA5's raw netCDF3 files, pressure-level
+// (gs://gcp-public-data-arco-era5/raw/date-variable-pressure_level/Y/M/D/<var>/<hPa>.nc)
+// and single-level (.../raw/date-variable-single_level/Y/M/D/<var>/surface.nc),
+// one variable, one level, 24 hours of 721x1440 int16 each, public.
+// fieldRows(date, variable, level, hour, rowFrom, rowTo) and
+// surfaceRows(date, variable, hour, rowFrom, rowTo) -> Float32Array of
 // (rowTo - rowFrom) * 1440 values, rows from 90N southward in 0.25 deg.
-const BASE = 'https://storage.googleapis.com/gcp-public-data-arco-era5/raw/date-variable-pressure_level';
+const BASE = 'https://storage.googleapis.com/gcp-public-data-arco-era5/raw';
 const NX = 1440, NY = 721;
 
 async function get(url, from, to, tries = 10) {
@@ -16,7 +18,7 @@ async function get(url, from, to, tries = 10) {
   }
 }
 
-function parseHeader(v) {
+export function parseHeader(v) {
   let o = 0;
   const u32 = () => { const x = v.getUint32(o); o += 4; return x; };
   const name = () => { const n = u32(); const s = new TextDecoder().decode(new Uint8Array(v.buffer, v.byteOffset + o, n)); o += Math.ceil(n / 4) * 4; return s; };
@@ -59,8 +61,7 @@ function parseHeader(v) {
 }
 
 const headers = new Map();
-export async function fieldRows(date, variable, level, hour, rowFrom = 0, rowTo = NY) {
-  const url = `${BASE}/${date}/${variable}/${level}.nc`;
+async function rows(url, hour, rowFrom, rowTo) {
   let h = headers.get(url);
   if (!h) { h = parseHeader(await get(url, 0, 16383)); headers.set(url, h); }
   const name = Object.keys(h.vars).find((k) => h.vars[k].dims.length === 3);
@@ -70,6 +71,9 @@ export async function fieldRows(date, variable, level, hour, rowFrom = 0, rowTo 
   for (let m = 0; m < out.length; m++) { const raw = d.getInt16(2 * m); out[m] = raw === fill || raw === missing ? NaN : raw * scale + offset; }
   return out;
 }
+
+export const fieldRows = (date, variable, level, hour, rowFrom = 0, rowTo = NY) => rows(`${BASE}/date-variable-pressure_level/${date}/${variable}/${level}.nc`, hour, rowFrom, rowTo);
+export const surfaceRows = (date, variable, hour, rowFrom = 0, rowTo = NY) => rows(`${BASE}/date-variable-single_level/${date}/${variable}/surface.nc`, hour, rowFrom, rowTo);
 
 export async function pool(tasks, width = 8) {
   const results = new Array(tasks.length);

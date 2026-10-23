@@ -120,11 +120,14 @@
 // state on the run's grid. The sea ice starts fresh and the clock at day
 // 0; ICE_FROM=1 takes FROM's sea ice (thickness, concentration, snow, skin
 // temperature) too; LAND_FROM, a state at any N, then gives the land.
+// Fresh sea ice is SEA_ICE (a file in js/physics/seaIceStart.module.js's
+// format; data/seaice_march.bin when it exists: ERA5's March concentration
+// with GIOMAS's thickness and snow); SEA_ICE=rule lays it by latitude.
 // Without FROM, the ocean starts from the climatology CLIMATOLOGY (a file
-// in js/ocean/climatology.module.js's format; data/woa_annual_1deg.bin
-// when it exists, the World Ocean Atlas) and the sea surface from its
-// mixed layer; CLIMATOLOGY=none starts it from the analytic climatology
-// under the atmosphere's initial sea surface.
+// in js/ocean/climatology.module.js's format; data/woa_march_1deg.bin
+// when it exists, the World Ocean Atlas's March) and the sea surface from
+// its mixed layer; CLIMATOLOGY=none starts it from the analytic
+// climatology under the atmosphere's initial sea surface.
 // OCEAN_START=climatology with FROM keeps FROM's atmosphere, land and
 // (with ICE_FROM) sea ice but starts the ocean and the open sea's surface
 // from the climatology, as a run without FROM does.
@@ -154,7 +157,8 @@ import { createGpuSstRecorder } from '../js/gpu/sstMeans.gpu.js';
 import { createSstRing, SST_WINDOW } from '../js/sstMeans.module.js';
 import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
-import { CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
+import { START_CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
+import { SEA_ICE_START_FILE, loadSeaIceStart } from '../js/physics/seaIceStart.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { withCadence } from '../js/cadence.module.js';
 import { freshJumpDue } from '../js/physics/land.module.js';
@@ -202,7 +206,8 @@ if (saved && PERTURB) {
 const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?? 'bl60');
 const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} layers)`;
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
-const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
+const fallback = new URL(`../${START_CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
+const iceFallback = new URL(`../${SEA_ICE_START_FILE}`, import.meta.url).pathname, iceStart = process.env.SEA_ICE ?? (existsSync(iceFallback) ? iceFallback : 'rule');
 const OCEAN_START = process.env.OCEAN_START ?? 'from';
 if (OCEAN_START !== 'from' && OCEAN_START !== 'climatology') throw new Error(`OCEAN_START is from or climatology, not ${OCEAN_START}`);
 const oceanFromAtlas = !saved && !!process.env.FROM && OCEAN_START === 'climatology';
@@ -260,9 +265,10 @@ if (saved) {
   log(`--- ${new Date().toISOString()} continuing from ${file} (day ${saved.day}${startStep ? `, step ${startStep} of ${perDay}` : ''}) on ${grid}, mesh of ${meshNote}, ${geographyNote}, after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 } else {
   if (OCEAN_FROM) throw new Error(`OCEAN_FROM needs a ${TAG}_dayDDDD.bin in ${OUT} to hand the ocean to`);
-  initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
+  initializeState(model, { geostrophic: !model.surfaceGeopotential, seaIce: iceStart === 'rule' ? null : await loadSeaIceStart(iceStart) }).forEach((values, a) => state[a].set(values));
   for (let i = 0; i < C; i++) if (model.geography.land[i]) state[6][i] = 0;
   const from = fromState, iceFrom = !!from && process.env.ICE_FROM === '1';
+  if (!iceFrom) log(`sea ice ${iceStart === 'rule' ? 'laid by latitude' : `from ${iceStart}`}`);
   const fromLevels = from ? savedLevels(from) : null, fromGrid = from ? sigmaGridName(fromLevels) ?? 'a saved grid' : null;
   let atmosphere = `a fresh atmosphere on ${grid}`;
   if (from) {

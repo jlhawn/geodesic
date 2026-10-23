@@ -137,3 +137,35 @@ test('the column physics the prose gives: the boundary layer is where the work o
   close(mixedLayerDepth(hh, rho, 6), 30, 1e-9, 'the mixed layer, midway between the centers of the layers that straddle the excess');
   assert.equal(JERLOV.IB.join(' '), '0.67 1 17');
 });
+
+test('with rotationLimit rh18 the wind\'s energy decays in x = h|f|/u* as Reichl and Hallberg\'s (2018) neutral m*: as the algebraic limit in the tropics, and a tenth of it over a 100 m winter mixed layer at 63°, where it barely erodes the halocline below', () => {
+  const K = 60, h = new Float64Array(K).fill(5), T = new Float64Array(K).fill(272), S = Float64Array.from({ length: K }, (_, k) => 34 + (k < 20 ? 0 : 0.02 * (k - 19))), kappa = new Float64Array(K), scratch = columnScratch(K);
+  const ustar = 0.0098, dt = 2700, rho0 = 1026, shape = (x) => 9 * Math.exp(-5 * x) / (1 + 8 * Math.exp(-5 * x));
+  const layers = {};
+  for (const f of [1e-5, 1.3e-4]) {
+    const algebraic = boundaryLayer({ h, T, S, K, ustar, f, dt, langmuir: 0 }, kappa, scratch);
+    const rh18 = boundaryLayer({ h, T, S, K, ustar, f, dt, langmuir: 0, rotationLimit: 'rh18' }, kappa, scratch);
+    const x = rh18.depth * f / ustar;
+    console.log(`f ${f}: algebraic ${algebraic.depth.toFixed(2)} m, ${algebraic.energy.toFixed(4)} J/m²; rh18 ${rh18.depth.toFixed(2)} m (x ${x.toFixed(2)}), ${rh18.energy.toFixed(4)} J/m²`);
+    close(rh18.energy, rho0 * dt * 1.25 * ustar ** 3 * shape(x), 1e-9 * rh18.energy, `energy from the wind at f ${f}`);
+    close(rh18.work, rh18.energy, 1e-4 * rh18.energy, `the work of mixing equals the energy at f ${f}`);
+    layers[f] = { algebraic, rh18 };
+  }
+  close(layers[1e-5].rh18.depth / layers[1e-5].algebraic.depth, 1, 0.01, 'the two limits agree in the tropics');
+  const { algebraic, rh18 } = layers[1.3e-4];
+  assert.ok(rh18.depth > 100 && rh18.depth * 1.3e-4 / ustar > 1, 'the layer spans the mixed layer, past x = 1');
+  assert.ok(rh18.energy < 0.15 * algebraic.energy, `rh18 leaves ${rh18.energy} J/m² against ${algebraic.energy}`);
+  assert.ok(rh18.depth - 100 < 0.5 * (algebraic.depth - 100), `rh18 erodes ${rh18.depth - 100} m of the halocline against ${algebraic.depth - 100}`);
+  assert.throws(() => createOcean(buildMesh(new Grid(16)), { everySteps: 1, rotationLimit: 'ekman' }), /rotationLimit is one of algebraic, rh18/);
+});
+
+test('the waves weight scales the Langmuir factor\'s excess over 1, as sea ice damps the waves: the whole factor at 1, none at 0, part of it between', () => {
+  const K = 60, h = new Float64Array(K).fill(5), T = new Float64Array(K).fill(272), S = Float64Array.from({ length: K }, (_, k) => 34 + 0.005 * k), kappa = new Float64Array(K), scratch = columnScratch(K);
+  const depth = (options) => boundaryLayer({ h, T, S, K, ustar: 0.0098, f: 1e-4, dt: 2700, ...options }, kappa, scratch).depth;
+  const full = depth({}), still = depth({ langmuir: 0 }), half = depth({ waves: 0.5 });
+  console.log(`Langmuir factor whole ${full.toFixed(2)} m, half ${half.toFixed(2)} m, none ${still.toFixed(2)} m`);
+  assert.equal(depth({ waves: 1 }), full);
+  assert.equal(depth({ waves: 0 }), still);
+  assert.ok(still + 1 < half && half + 1 < full, `${still} < ${half} < ${full} m`);
+  assert.throws(() => createOcean(buildMesh(new Grid(16)), { everySteps: 1, langmuirIce: 'linear' }), /langmuirIce is one of none, tanh/);
+});

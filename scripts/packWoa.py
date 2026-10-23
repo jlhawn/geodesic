@@ -18,6 +18,11 @@ Usage (numpy and netCDF4 in a virtual environment):
   python3 -m venv venv && venv/bin/pip install numpy netCDF4
   venv/bin/python scripts/packWoa.py woa23_decav_t00_01.nc woa23_decav_s00_01.nc [out.bin]
 
+A month's fields (t03 and s03 for March) stop at 1500 m, so a packed file
+on the same grid fills the DEPTHS below that:
+
+  venv/bin/python scripts/packWoa.py woa23_decav_t03_01.nc woa23_decav_s03_01.nc woa_march_1deg.bin data/woa_annual_1deg.bin
+
 The file keeps the atlas's 360 x 180 grid at the DEPTHS below, all of them
 WOA standard levels. Temperature is potential temperature referenced to
 the surface, from the atlas's in-situ ITS-90 temperature by the UNESCO
@@ -40,6 +45,7 @@ Layout, little-endian:
         value = offset + scale * stored, rows south to north, columns
         west to east from lon0.
 """
+import calendar
 import struct
 import sys
 from pathlib import Path
@@ -93,22 +99,52 @@ def encode(values, offset, scale):
     return np.where(np.isnan(stored), MISSING, stored).astype('<i2')
 
 
-def main(t_path, s_path, out_path):
+def read_packed(path):
+    data = Path(path).read_bytes()
+    magic, offset, n_lon, n_lat, n_depth, missing = struct.unpack_from('<4sIHHHh', data, 0)
+    if magic != b'WOA1':
+        raise ValueError(f'{path} is not a packed climatology')
+    lon0, d_lon, lat0, d_lat, t_offset, t_scale, s_offset, s_scale = struct.unpack_from('<8f', data, 16)
+    depths = list(struct.unpack_from(f'<{n_depth}f', data, 48))
+    stored = np.frombuffer(data, '<i2', 2 * n_depth * n_lat * n_lon, offset).reshape(2, n_depth, n_lat, n_lon)
+    decode = lambda values, at, scale: np.where(values == missing, np.nan, at + scale * values.astype(float))
+    return (lon0, d_lon, lat0, d_lat), depths, decode(stored[0], t_offset, t_scale), decode(stored[1], s_offset, s_scale)
+
+
+def main(t_path, s_path, out_path, deep_path=None):
     t_file, s_file = Dataset(t_path), Dataset(s_path)
     depth = t_file.variables['depth'][:].data
     if not np.array_equal(depth, s_file.variables['depth'][:].data):
         raise ValueError('temperature and salinity depths differ')
-    levels = [int(np.flatnonzero(depth == d)[0]) for d in DEPTHS]
+    present = [d for d in DEPTHS if np.any(depth == d)]
+    absent = [d for d in DEPTHS if d not in present]
+    if absent and not deep_path:
+        raise ValueError(f'{t_path} has no level at {absent} m: give a packed file to fill them')
+    levels = [int(np.flatnonzero(depth == d)[0]) for d in present]
     lat = t_file.variables['lat'][:].data.astype(float)
     lon = t_file.variables['lon'][:].data.astype(float)
     t = np.ma.filled(t_file.variables['t_an'][0, levels, :, :].astype(float), np.nan)
     s = np.ma.filled(s_file.variables['s_an'][0, levels, :, :].astype(float), np.nan)
-    missing = np.isnan(t) | np.isnan(s)
-    t[missing] = np.nan
+    p = pressure(np.array(present, float)[:, None, None], lat[None, :, None])
+    theta = np.full((len(DEPTHS), len(lat), len(lon)), np.nan)
+    salinity = np.full_like(theta, np.nan)
+    rows = [DEPTHS.index(d) for d in present]
+    theta[rows] = potential_temperature(s, t, p)
+    salinity[rows] = s
+    if absent:
+        grid, deep_depths, deep_theta, deep_salinity = read_packed(deep_path)
+        if not np.allclose(grid, (lon[0], lon[1] - lon[0], lat[0], lat[1] - lat[0]), atol=1e-4):
+            raise ValueError(f'{deep_path} is on another grid')
+        for d in absent:
+            theta[DEPTHS.index(d)] = deep_theta[deep_depths.index(d)]
+            salinity[DEPTHS.index(d)] = deep_salinity[deep_depths.index(d)]
+    s = salinity
+    missing = np.isnan(theta) | np.isnan(s)
+    theta[missing] = np.nan
     s[missing] = np.nan
-    p = pressure(np.array(DEPTHS, float)[:, None, None], lat[None, :, None])
-    theta = potential_temperature(s, t, p)
-    source = (f'WOA23 decav annual 1.00 degree t_an and s_an (NOAA NCEI, public domain); '
+    period = {0: 'annual', **dict(enumerate(calendar.month_name[1:], 1)), 13: 'January-March', 14: 'April-June', 15: 'July-September', 16: 'October-December'}[int(Path(t_path).name.split('_')[2][1:])]
+    filled = f'; {absent[0]}-{absent[-1]} m from {Path(deep_path).name}' if absent else ''
+    source = (f'WOA23 decav {period} 1.00 degree t_an and s_an (NOAA NCEI, public domain){filled}; '
               f'potential temperature (UNESCO 1983) degC, practical salinity').encode('ascii')
     head = struct.pack('<4sIHHHh', b'WOA1', 0, len(lon), len(lat), len(DEPTHS), MISSING)
     head += struct.pack('<8f', lon[0], lon[1] - lon[0], lat[0], lat[1] - lat[0], T_OFFSET, T_SCALE, S_OFFSET, S_SCALE)
@@ -129,4 +165,5 @@ def main(t_path, s_path, out_path):
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else str(Path(__file__).resolve().parent.parent / 'data' / 'woa_annual_1deg.bin'))
+    main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else str(Path(__file__).resolve().parent.parent / 'data' / 'woa_annual_1deg.bin'),
+         sys.argv[4] if len(sys.argv) > 4 else None)

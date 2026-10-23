@@ -14,8 +14,11 @@
  * lon, depth)` gives the nearest grid point's column, whole, among those
  * holding every level down to the deepest standard depth no deeper than
  * `depth`, within `deepReach` degrees; null when there is none.
+ * START_CLIMATOLOGY_FILE holds the atlas's March, the ocean a fresh start
+ * takes at the March equinox.
  */
 export const CLIMATOLOGY_FILE = 'data/woa_annual_1deg.bin';
+export const START_CLIMATOLOGY_FILE = 'data/woa_march_1deg.bin';
 const MAGIC = 'WOA1', KELVIN = 273.15;
 
 export function decodeClimatology(bytes, { reach = 5, deepReach = 30 } = {}) {

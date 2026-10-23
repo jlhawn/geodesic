@@ -1,8 +1,10 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../dynamics/operators.module.js';
+import { createIceDrift, coverOf } from './iceDrift.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
-import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
+import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
+import { basalMelt, baseFreezing, SHELF_MELT } from './iceShelfMelt.module.js';
 
 /*
  * The ocean on the C-grid: the ALE hybrid vertical coordinate of
@@ -333,17 +335,57 @@ export function edgeSills(mesh, D, edgeOcean, edgeSill, floor) {
   return out;
 }
 
+/*
+ * The ocean's cells: wet where the water's geography (`ocean` of a
+ * geography with ice-shelf cavities, ./geography.module.js) is sea, and
+ * open to the air only where the atmosphere's is; `shelf` marks the
+ * cavities between, and `draft` the depth of their shelves' base.
+ */
+export function oceanCells(C, geography) {
+  const water = geography ? geography.ocean ?? geography : null;
+  const cellOcean = water ? Uint8Array.from(water.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
+  const shelf = geography && geography.cavity ? Uint8Array.from(geography.cavity) : new Uint8Array(C);
+  const cellOpen = Uint8Array.from(cellOcean, (wet, i) => (wet && !shelf[i] ? 1 : 0));
+  const draft = Float64Array.from(shelf, (s, i) => (s ? geography.iceDraft[i] : 0));
+  return { water, cellOcean, shelf, cellOpen, draft };
+}
+
+/*
+ * A column under a shelf rests between the shelf's draft and the bed: its
+ * resting thickness D is the bed's depth less the draft, and an edge
+ * passes water from the deeper of its two drafts down to its sill, or
+ * through the sill floor where that is less: across a cell the shelf's
+ * base slopes, and the water beneath it follows.
+ */
+export function restingColumns(mesh, bed, draft, edgeOcean, edgeSill, floor) {
+  const D = Float64Array.from(bed, (d, i) => d - draft[i]), sillEdge = edgeSills(mesh, bed, edgeOcean, edgeSill, floor);
+  for (let e = 0; e < mesh.nEdges; e++) { const top = Math.max(draft[mesh.cellsOnEdge[2 * e]], draft[mesh.cellsOnEdge[2 * e + 1]]); if (top > 0) sillEdge[e] = Math.max(edgeOcean[e] ? floor : 0, sillEdge[e] - top); }
+  return { D, sillEdge };
+}
+
+/*
+ * The weight per unit area (kg/m²) of the water from the surface down to a
+ * shelf's draft in the profile sample(z) → [T, S] under the equation of
+ * state density(T, S): the shelf's load when it floats in that water.
+ */
+export function displacedWeight(draft, sample, density = seawaterDensity, n = 64) {
+  let sum = 0;
+  for (let m = 0; m < n; m++) { const [t, s] = sample((m + 0.5) * draft / n); sum += density(t, s); }
+  return sum * draft / n;
+}
+
 export function createOcean(mesh, {
   minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
-  vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2,
-  momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
+  vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2, langmuirIce = 'none',
+  momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
-  vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
+  vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'algebraic', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
-  edgeTransport = 'kept',
+  edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 0,
+  iceDrift = false,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -354,6 +396,8 @@ export function createOcean(mesh, {
   if (penetration !== null && !JERLOV[penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${penetration}`);
   if (vertical !== 'hybrid') throw new Error(`the ocean's vertical coordinate is 'hybrid'; a saved slab ocean is converted on load, not run (vertical ${vertical})`);
   if (langmuir !== 0 && !(langmuir >= 1)) throw new Error(`langmuir caps a factor of at least 1, so it is 0 or at least 1, not ${langmuir}`);
+  if (!ROTATION_LIMITS.includes(rotationLimit)) throw new Error(`rotationLimit is one of ${ROTATION_LIMITS.join(', ')}, not ${rotationLimit}`);
+  if (!LANGMUIR_ICE.includes(langmuirIce)) throw new Error(`langmuirIce is one of ${LANGMUIR_ICE.join(', ')}, not ${langmuirIce}`);
   const advection = tracerAdvection;
   if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
   if (!EDGE_TRANSPORTS.includes(edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${edgeTransport}`);
@@ -376,11 +420,12 @@ export function createOcean(mesh, {
   const eddyKappa = eddyDiffusivities(mesh, eddyDiffusivity), eddyLimit = eddyDiffusivity > 0 ? eddyDiffusionLimit(mesh) : 0;
   let eddy = null;
 
-  const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
-  const cellOcean = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
+  const { water, cellOcean, shelf, cellOpen, draft } = oceanCells(C, geography);
+  const edgeOcean = water ? water.edgeOcean : new Uint8Array(E).fill(1);
   const outlet = runoffOutlets(mesh, geography);
-  const D = bathymetry ? Float64Array.from(bathymetry, (d, i) => (cellOcean[i] ? d : 0)) : bathymetryFrom(mesh, geography, { minimumDepth, flatDepth });
-  const sillEdge = edgeSills(mesh, D, edgeOcean, edgeSill === undefined ? (geography ? geography.edgeSill ?? null : null) : edgeSill, sillFloor);
+  const bed = bathymetry ? Float64Array.from(bathymetry, (d, i) => (cellOcean[i] ? d : 0)) : bathymetryFrom(mesh, water, { minimumDepth, flatDepth });
+  const { D, sillEdge } = restingColumns(mesh, bed, draft, edgeOcean, edgeSill === undefined ? (water ? water.edgeSill ?? null : null) : edgeSill, sillFloor);
+  const shelfEdge = Float64Array.from({ length: E }, (_, e) => 0.5 * (shelf[mesh.cellsOnEdge[2 * e]] + shelf[mesh.cellsOnEdge[2 * e + 1]])), hasShelves = shelf.some((s) => s);
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(g * Math.max(deepest, 1));
@@ -393,9 +438,12 @@ export function createOcean(mesh, {
   const eta = shared('eta', C);
   const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = shared('rhoMl', C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), iceVolume = new Float64Array(C), previousVolume = new Float64Array(C);
   let seaCover = null;
+  const drift = iceDrift ? createIceDrift(mesh, iceDrift, { cellOpen, edgeOcean, waterDensity: rho0, iceDensity, gravity: g, previousVolume, beyond, limited: limitedEdgeValue }) : null;
   const capacity = shared('capacity', C);
   if (!adopting) capacity.fill(rhoCp * table.depths[1]);
   const transmission = shared('transmission', C), penetrated = shared('penetrated', C), shares = new Float64Array(L);
+  const waves = shared('waves', C);
+  if (!(buffers && buffers.waves)) waves.fill(1);
   const stress = shared('stress', E), fresh = new Float64Array(C), calved = new Float64Array(C);
   const iced = new Uint8Array(C);
   const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E), edgeS = new Float64Array(E);
@@ -412,6 +460,10 @@ export function createOcean(mesh, {
   const buoyancyLoss = new Float64Array(C);
   let counter = 0, limited = 0, initialised = false, layerRunner = null, columnRunner = null, dried = 0;
   const relaxRate = () => params[0];
+  const shelfLoad = shared('shelfLoad', C);
+  const melted = shared('melted', C), meltBase = shared('meltBase', C), shelfMelted = shared('shelfMelted', C), shelfDraw = shared('shelfDraw', C);
+  const meltOn = shelfMelt && shelf.some((s) => s), meltPool = (i) => (fCell[i] < 0 ? 0 : 1), meltConstants = { rho0, rhoCp, latentHeat: latentHeatFusion, heatTransfer: shelfHeatTransfer, saltTransfer: shelfSaltTransfer };
+  const shelfBudget = { discharge: [0, 0], melt: [0, 0], moved: [0, 0], drawn: [0, 0], keep: [1, 1], share: [0, 0] };
   const layerRho = shared('layerRho', L * C), columnAbove = shared('columnAbove', L * C), targetZ = shared('targetZ', (L + 1) * C), viscosity = shared('viscosity', L * C), edgeBottom = shared('edgeBottom', E);
   const mixedDepths = shared('mixedDepths', C), boundaryDepths = shared('boundaryDepths', C);
   const edgeAbove = shared('edgeAbove', L * E), eddyFlux = shared('eddyFlux', L * E), eddyVolume = shared('eddyVolume', L * C), eddyHeat = shared('eddyHeat', L * C), eddySalt = shared('eddySalt', L * C);
@@ -487,7 +539,7 @@ export function createOcean(mesh, {
   function prepareCells(from, to, input) {
     const [hIn, , QIn, WIn] = input;
     for (let i = from; i < to; i++) {
-      let weighted = 0, total = 0;
+      let weighted = shelfLoad[i], total = draft[i];
       for (let k = 0; k < L; k++) {
         const n = at(k, i), hv = hIn[n];
         layerRho[n] = hv > 1e-6 ? eos(QIn[n] / hv, WIn[n] / hv) : rho[k];
@@ -538,7 +590,8 @@ export function createOcean(mesh, {
    * on both sides. The edge thickness of a layer is the smaller of its
    * two cells', so a layer that has vanished on either side carries next
    * to nothing, and a layer no thicker than twice minimumLayer at an edge,
-   * or one that occupies no depth in common between its two cells while
+   * or one that occupies no depth in common between its two cells, each
+   * measured down from its column's top, while
    * no thicker than tokenEdge (twice its minimum, at most twice the
    * thermocline spacing: a class held at its floor on one side against
    * water of that class elsewhere in the other column), follows the
@@ -621,8 +674,9 @@ export function createOcean(mesh, {
         const layerForce = pressure[nb] + layerRho[nb] * (zR - Hb) - pressure[na] - layerRho[na] * (zR - Ha);
         du[oe + e] = sum / dcEdge[e] - gradPhi[e] - g * gradEta[e] - g / rho0 * layerForce / dcEdge[e];
         const he = hEdge[oe + e];
-        pinned[e] = he <= thinEdge || (he <= tokenEdge[k] && !(bottom > top)) ? 1 : 0;
-        if (k === 0) du[e] += stress[e] / rho0 / Math.max(he, minimumLayer);
+        const ra = Ha - draft[a], rb = Hb - draft[b];
+        pinned[e] = he <= thinEdge || (he <= tokenEdge[k] && !(Math.min(ra + hIn[na], rb + hIn[nb]) > Math.max(ra, rb))) ? 1 : 0;
+        if (k === 0) du[e] += stress[e] / rho0 / Math.max(he, minimumLayer) - topDrag * shelfEdge[e] * Math.abs(uIn[e]) * uIn[e] / Math.max(he, minimumLayer);
         const layerTop = edgeAbove[oe + e], floor = edgeBottom[e];
         const overlap = Math.min(layerTop + he, floor) - Math.max(layerTop, floor - momentumDepth);
         if (overlap > 0) du[oe + e] -= bottomDrag * Math.abs(uIn[oe + e]) * uIn[oe + e] * (overlap / momentumDepth) / Math.max(he, minimumLayer);
@@ -952,14 +1006,37 @@ export function createOcean(mesh, {
   }
   function columnCells(from, to) {
     const dt = params[1], { h: hCol, T: TCol, S: SCol, rho: rhoCol, shear, kappa, nu, vector } = cols, out = { kappa, nu };
-    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, nstar, langmuir, shearViscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
+    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, nstar, langmuir, shearViscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
     for (let i = from; i < to; i++) {
       if (!cellOcean[i]) { mixedDepths[i] = 0; boundaryDepths[i] = 0; continue; }
       cellColumn(i, hCol, TCol, SCol);
       for (let k = 0; k < L; k++) cellVectorAt(k, i, vector, 3 * k);
       for (let k = 0; k < L - 1; k++) shear[k] = (vector[3 * k] - vector[3 * k + 3]) ** 2 + (vector[3 * k + 1] - vector[3 * k + 4]) ** 2 + (vector[3 * k + 2] - vector[3 * k + 5]) ** 2;
-      options.guess = boundaryDepths[i];
-      const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, options }, out, cs);
+      options.guess = boundaryDepths[i]; options.langmuir = shelf[i] ? 0 : langmuir; options.waves = waves[i];
+      let meltHeat = 0, meltSalt = 0;
+      if (shelf[i] && meltOn) {
+        const speed2 = vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+        let Tw = TCol[0], Sw = SCol[0], slab = 0;
+        if (shelfMeltLayer > 0) {
+          let sumT = 0, sumS = 0;
+          for (let k = 0; k < L && slab < shelfMeltLayer; k++) { const part = Math.min(hCol[k], shelfMeltLayer - slab); sumT += part * TCol[k]; sumS += part * SCol[k]; slab += part; }
+          Tw = sumT / slab; Sw = sumS / slab;
+        }
+        const { melt, Tb } = basalMelt(Tw, Sw, baseFreezing(g * shelfLoad[i]), Math.sqrt(topDrag * (speed2 + tidalSpeed * tidalSpeed)), meltConstants);
+        const mass = melt * dt, water = mass / SHELF_MELT.freshDensity;
+        meltHeat = -(latentHeatFusion * mass / rhoCp + water * (Tw - Tb)); meltSalt = -Sw * water;
+        if (shelfMeltLayer > 0) {
+          let given = 0;
+          for (let k = 0; k < L && given < slab; k++) {
+            const part = Math.min(hCol[k], slab - given);
+            if (part > 0) { TCol[k] += meltHeat * part / slab / hCol[k]; SCol[k] += meltSalt * part / slab / hCol[k]; }
+            given += part;
+          }
+          meltHeat = 0; meltSalt = 0;
+        }
+        melted[i] = mass; meltBase[i] = Tb; shelfMelted[i] += mass;
+      }
+      const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: shelf[i] ? Math.sqrt(topDrag) * Math.hypot(vector[0], vector[1], vector[2]) : Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, heat: meltHeat, salt: meltSalt, capped: shelf[i] === 1 && !(meltOn && melted[i] < 0), options }, out, cs);
       for (let k = 0; k < L; k++) { const n = at(k, i); Q[n] = hCol[k] * TCol[k]; W[n] = hCol[k] * SCol[k]; viscosity[n] = nu[k]; }
       layerDensities(TCol, SCol, L, rhoCol);
       mixedDepths[i] = mixedLayerDepth(hCol, rhoCol, L);
@@ -985,18 +1062,24 @@ export function createOcean(mesh, {
     columnEdges(0, E);
   }
 
-  const coverOf = (ice, concentration, i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
   function setStress(total, ice, concentration = null) {
-    const cover = (i) => coverOf(ice, concentration, i);
-    for (let e = 0; e < E; e++) stress[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(cellsOnEdge[2 * e]) + cover(cellsOnEdge[2 * e + 1])) * (1 - iceStressTransmission)) : 0;
+    const cover = (i) => (shelf[i] ? 0 : coverOf(ice, concentration, i));
+    if (langmuirIce === 'tanh') for (let i = 0; i < C; i++) waves[i] = 1 - Math.tanh(ICE_WAVE_DAMPING * cover(i));
+    if (drift) {
+      for (let e = 0; e < E; e++) {
+        const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], area = 0.5 * (cover(a) + cover(b));
+        stress[e] = edgeOcean[e] ? (drift.valid[e] ? (1 - area) * total[e] + area * drift.iceStress[e] : total[e] * (1 - area * (1 - iceStressTransmission))) * (1 - 0.5 * (shelf[a] + shelf[b])) : 0;
+      }
+    } else for (let e = 0; e < E; e++) stress[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(cellsOnEdge[2 * e]) + cover(cellsOnEdge[2 * e + 1])) * (1 - iceStressTransmission)) * (1 - 0.5 * (shelf[cellsOnEdge[2 * e]] + shelf[cellsOnEdge[2 * e + 1]])) : 0;
   }
   function measureIce(ice, concentration, out) {
     for (let i = 0; i < C; i++) out[i] = coverOf(ice, concentration, i) * ice[i];
   }
   function readSurface(surfaceT, ice, concentration = seaCover) {
     for (let i = 0; i < C; i++) {
+      if (shelf[i]) { iced[i] = 0; continue; }
       iced[i] = ice[i] > 0 ? 1 : 0;
-      T0[i] = iced[i] ? FREEZING_POINT : surfaceT[i];
+      T0[i] = iced[i] ? (drift && drift.arrived[i] ? drift.waterT[i] : FREEZING_POINT) : surfaceT[i];
       surfaceIn[i] = T0[i];
       Q[i] = h[i] * T0[i];
       if (penetrated[i] !== 0) depositLight(i);
@@ -1016,16 +1099,16 @@ export function createOcean(mesh, {
   }
   function publishTransmission() {
     transmission.fill(0);
-    if (penetration) for (let i = 0; i < C; i++) if (cellOcean[i]) transmission[i] = transmissionAt(i);
+    if (penetration) for (let i = 0; i < C; i++) if (cellOpen[i]) transmission[i] = transmissionAt(i);
   }
   /*
    * `discharge`, the part of `runoff` that leaves the land as ice, is
    * melted at the next ocean step by the top layer of its outlet.
    */
   function accumulate(evaporation, rain, dt, runoff = null, discharge = null) {
-    for (let i = 0; i < C; i++) if (cellOcean[i]) fresh[i] += (evaporation ? evaporation[i] * dt : 0) - (rain ? rain[i] : 0);
-    if (runoff) for (let j = 0; j < C; j++) if (!cellOcean[j] && runoff[j] > 0 && outlet[j] >= 0) fresh[outlet[j]] -= runoff[j] * areaCell[j] / areaCell[outlet[j]];
-    if (discharge) for (let j = 0; j < C; j++) if (!cellOcean[j] && discharge[j] > 0 && outlet[j] >= 0) calved[outlet[j]] += discharge[j] * areaCell[j] / areaCell[outlet[j]];
+    for (let i = 0; i < C; i++) if (cellOpen[i]) fresh[i] += (evaporation ? evaporation[i] * dt : 0) - (rain ? rain[i] : 0);
+    if (runoff) for (let j = 0; j < C; j++) if (!cellOpen[j] && runoff[j] > 0 && outlet[j] >= 0) fresh[outlet[j]] -= runoff[j] * areaCell[j] / areaCell[outlet[j]];
+    if (discharge) for (let j = 0; j < C; j++) if (!cellOpen[j] && discharge[j] > 0 && outlet[j] >= 0) calved[outlet[j]] += discharge[j] * areaCell[j] / areaCell[outlet[j]];
   }
   function meltCalved() {
     for (let i = 0; i < C; i++) {
@@ -1033,9 +1116,37 @@ export function createOcean(mesh, {
       calved[i] = 0;
     }
   }
-  function salt() {
+  /*
+   * The shelves stay as they are, so what melts from them is ice the
+   * sheets discharge: each sheet's calving at its outlets is its discharge
+   * less its shelves' melt, and the outlets give up that much of their
+   * fresh water and latent heat. Melt beyond the discharge comes out of
+   * the sheet's store, kept per cell in shelfDraw; freezing beyond it
+   * goes into the store. Antarctica's shelves draw on the southern
+   * discharge, the rest on the northern.
+   */
+  function budgetShelves() {
+    const { discharge, melt, moved, drawn, keep, share } = shelfBudget;
+    discharge.fill(0); melt.fill(0); keep.fill(1); share.fill(0);
     for (let i = 0; i < C; i++) {
-      if (!cellOcean[i]) continue;
+      if (shelf[i]) melt[meltPool(i)] += melted[i] * areaCell[i];
+      else if (cellOpen[i] && calved[i] !== 0) discharge[meltPool(i)] += calved[i] * areaCell[i];
+    }
+    for (let p = 0; p < 2; p++) {
+      moved[p] = discharge[p] > 0 ? Math.min(melt[p], discharge[p]) : 0;
+      drawn[p] = melt[p] - moved[p];
+      if (discharge[p] > 0) keep[p] = (discharge[p] - moved[p]) / discharge[p];
+      if (melt[p] !== 0) share[p] = drawn[p] / melt[p];
+    }
+    for (let i = 0; i < C; i++) {
+      if (shelf[i]) shelfDraw[i] += share[meltPool(i)] * melted[i];
+      else if (cellOpen[i] && calved[i] !== 0) { const p = meltPool(i); fresh[i] += (1 - keep[p]) * calved[i]; calved[i] *= keep[p]; }
+    }
+  }
+  function salt() {
+    if (meltOn) budgetShelves();
+    for (let i = 0; i < C; i++) {
+      if (!cellOpen[i]) continue;
       const s = W[i] / h[i];
       W[i] += s * fresh[i] / 1000;
       const grown = (iceVolume[i] - previousVolume[i]) * iceDensity / 1000;
@@ -1048,6 +1159,7 @@ export function createOcean(mesh, {
   function writeSurface(surfaceT, oceanFlux, dt) {
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) { oceanFlux[i] = 0; continue; }
+      if (shelf[i]) { oceanFlux[i] = 0; S0[i] = W[i] / h[i]; T0[i] = Q[i] / h[i]; previousT0[i] = T0[i]; continue; }
       capacity[i] = rhoCp * Math.max(h[i], 1);
       if (penetration) transmission[i] = transmissionAt(i);
       S0[i] = W[i] / h[i];
@@ -1068,6 +1180,10 @@ export function createOcean(mesh, {
     if (++counter % everySteps !== 0) return false;
     if (!initialised) initialize(surfaceT, ice, { concentration });
     const dtOcean = everySteps * dt;
+    if (drift) {
+      totalStress = typeof totalStress === 'function' ? totalStress() : totalStress;
+      drift.advance({ surfaceT, ice, concentration, stress: totalStress, waterU: u, eta, dt: dtOcean });
+    }
     readSurface(surfaceT, ice, concentration);
     measureIce(ice, concentration, iceVolume);
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
@@ -1083,7 +1199,9 @@ export function createOcean(mesh, {
    * its floor (the z grid of a column held at its minima), with the
    * atlas's layer means of temperature and salinity where the atlas
    * (`climatology`, decoded by ./climatology.module.js) covers the cell,
-   * the nearest covered column's where it does not, and without an atlas
+   * the nearest covered column's where it does not, under a shelf the
+   * nearest open column's at the same depth (its bottom water below its
+   * floor, no colder than the in-situ freezing point), and without an atlas
    * the analytic profile T = T_d + (T₀ − T_d) e^(−z/λ), T_d 2 °C, λ 400 m
    * stretched by the thermocline tilt, the salinity from salinityProfile
    * to 34.7 the same way; the steric free surface; then one regrid, so
@@ -1110,6 +1228,7 @@ export function createOcean(mesh, {
   }
   function build(surfaceT, ice, atlas, concentration = seaCover) {
     u.fill(0); eta.fill(0); fresh.fill(0); calved.fill(0); buoyancyLoss.fill(0);
+    if (drift) drift.reset();
     measureIce(ice, concentration, previousVolume);
     const filled = new Uint8Array(C), { z: zCol } = cols, zs = [], ts = [], ss = [];
     const integral = (v, a, b) => {
@@ -1123,14 +1242,15 @@ export function createOcean(mesh, {
     };
     const pending = [];
     for (let i = 0; i < C; i++) {
-      iced[i] = ice[i] > 0 ? 1 : 0;
+      iced[i] = ice[i] > 0 || shelf[i] ? 1 : 0;
       if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } T0[i] = iced[i] ? FREEZING_POINT : surfaceT[i]; S0[i] = referenceS; continue; }
       hybridGrid(i, zCol);
-      let column = atlas ? atlas.columnAt(latCell[i], mesh.lonCell[i]) : null;
+      const lid = draft[i], bed = lid + D[i];
+      let column = atlas && !shelf[i] ? atlas.columnAt(latCell[i], mesh.lonCell[i]) : null;
       if (column) {
         const reached = column.depths.length;
-        if (atlas.columnReaching && atlas.depths && reached < atlas.depths.length && atlas.depths[reached] <= D[i]) {
-          const deep = atlas.columnReaching(latCell[i], mesh.lonCell[i], D[i]);
+        if (atlas.columnReaching && atlas.depths && reached < atlas.depths.length && atlas.depths[reached] <= bed) {
+          const deep = atlas.columnReaching(latCell[i], mesh.lonCell[i], bed);
           if (deep && deep.depths.length > reached) {
             const Td = Float64Array.from(deep.T), Sd = Float64Array.from(deep.S);
             Td.set(column.T); Sd.set(column.S);
@@ -1139,18 +1259,20 @@ export function createOcean(mesh, {
         }
         filled[i] = 1;
         zs.length = ts.length = ss.length = 0;
-        for (let j = 0; j < column.depths.length && column.depths[j] < D[i]; j++) { zs.push(column.depths[j]); ts.push(column.T[j]); ss.push(column.S[j]); }
-        const [tb, sb] = profileAt(column, D[i]);
-        zs.push(D[i]); ts.push(tb); ss.push(sb);
-        for (let k = 0; k < L; k++) { const n = at(k, i), hk = zCol[k + 1] - zCol[k]; h[n] = hk; Q[n] = integral(ts, zCol[k], zCol[k + 1]); W[n] = integral(ss, zCol[k], zCol[k + 1]); }
+        for (let j = 0; j < column.depths.length && column.depths[j] < bed; j++) { zs.push(column.depths[j]); ts.push(column.T[j]); ss.push(column.S[j]); }
+        const [tb, sb] = profileAt(column, bed);
+        zs.push(bed); ts.push(tb); ss.push(sb);
+        for (let k = 0; k < L; k++) { const n = at(k, i), hk = zCol[k + 1] - zCol[k]; h[n] = hk; Q[n] = integral(ts, lid + zCol[k], lid + zCol[k + 1]); W[n] = integral(ss, lid + zCol[k], lid + zCol[k + 1]); }
+        if (lid > 0) shelfLoad[i] = displacedWeight(lid, (z) => profileAt(column, z), eos);
       } else if (atlas) {
         pending.push(i);
         for (let k = 0; k < L; k++) h[at(k, i)] = zCol[k + 1] - zCol[k];
       } else {
         const lat = latCell[i], s0 = salinityProfile(lat), t0 = iced[i] ? FREEZING_POINT : surfaceT[i], scale = 400 * (1 - thermoclineTilt + 2 * thermoclineTilt * Math.cos(lat) ** 2);
         const tDeep = 275.15, sDeep = 34.7, decay = (a, b) => scale * (Math.exp(-a / scale) - Math.exp(-b / scale)) / (b - a);
+        if (lid > 0) shelfLoad[i] = displacedWeight(lid, (z) => [tDeep + (t0 - tDeep) * Math.exp(-z / scale), sDeep + (s0 - sDeep) * Math.exp(-z / scale)], eos);
         for (let k = 0; k < L; k++) {
-          const n = at(k, i), hk = zCol[k + 1] - zCol[k], f = decay(zCol[k], zCol[k + 1]);
+          const n = at(k, i), hk = zCol[k + 1] - zCol[k], f = decay(lid + zCol[k], lid + zCol[k + 1]);
           h[n] = hk; Q[n] = hk * (tDeep + (t0 - tDeep) * f); W[n] = hk * (sDeep + (s0 - sDeep) * f);
         }
       }
@@ -1169,24 +1291,29 @@ export function createOcean(mesh, {
         }
         ring = next;
       }
-      let z = 0;
+      const sourceAt = (y) => {
+        let top = draft[source], j = 0, last = at(0, source);
+        while (j < L - 1 && top + h[at(j, source)] < y) { if (h[at(j, source)] > 1e-9) last = at(j, source); top += h[at(j, source)]; j++; }
+        return shelf[i] && !(h[at(j, source)] > 1e-9) ? last : at(j, source);
+      };
+      if (draft[i] > 0) shelfLoad[i] = displacedWeight(draft[i], (y) => { const m = source >= 0 ? sourceAt(y) : -1; return m >= 0 && h[m] > 1e-9 ? [Q[m] / h[m], W[m] / h[m]] : [FREEZING_POINT, referenceS]; }, eos);
+      let z = draft[i];
       for (let k = 0; k < L; k++) {
         const n = at(k, i), hk = h[n], center = z + 0.5 * hk;
         z += hk;
         let t = iced[i] ? FREEZING_POINT : surfaceT[i], s = referenceS;
         if (source >= 0) {
-          let top = 0, j = 0;
-          while (j < L - 1 && top + h[at(j, source)] < center) { top += h[at(j, source)]; j++; }
-          const m = at(j, source);
+          const m = sourceAt(center);
           if (h[m] > 1e-9) { t = Q[m] / h[m]; s = W[m] / h[m]; }
         }
+        if (shelf[i]) t = Math.max(t, SHELF_MELT.liquidusSlope * s + baseFreezing(g * (shelfLoad[i] + rho0 * (center - draft[i]))));
         Q[n] = hk * t; W[n] = hk * s;
       }
     }
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
-      T0[i] = iced[i] ? FREEZING_POINT : Math.max(FREEZING_POINT, Q[i] / h[i]);
-      Q[i] = h[i] * T0[i];
+      T0[i] = shelf[i] ? Q[i] / h[i] : iced[i] ? FREEZING_POINT : Math.max(FREEZING_POINT, Q[i] / h[i]);
+      if (!shelf[i]) Q[i] = h[i] * T0[i];
       S0[i] = W[i] / h[i];
       previousT0[i] = T0[i];
       capacity[i] = rhoCp * Math.max(h[i], 1);
@@ -1334,10 +1461,13 @@ export function createOcean(mesh, {
       if (Math.abs(sum - H) > 1e-9) { const scale = H / sum; for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; } }
     }
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
+    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * eos(saved.T[i], saved.S[i]);
+    for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     if (!own) regrid(Infinity);
     measureIce(ice, concentration, previousVolume);
     for (let i = 0; i < C; i++) { iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = cellOcean[i] ? Q[i] / h[i] : surfaceTAt(i); S0[i] = cellOcean[i] ? W[i] / h[i] : referenceS; previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
     fresh.fill(0); calved.fill(0); buoyancyLoss.fill(0); penetrated.fill(0);
+    if (drift) drift.reset();
     layerDensitiesAll();
     mixedDepthsAll();
     publishTransmission();
@@ -1346,6 +1476,7 @@ export function createOcean(mesh, {
       if (saved.penetrated && saved.penetrated.length === C) penetrated.set(saved.penetrated);
       if (saved.calved && saved.calved.length === C) calved.set(saved.calved);
       if (saved.boundaryDepths && saved.boundaryDepths.length === C) boundaryDepths.set(saved.boundaryDepths);
+      if (drift && saved.iceVelocity) drift.reset(saved.iceVelocity);
     }
     counter = 0;
     initialised = true;
@@ -1355,13 +1486,14 @@ export function createOcean(mesh, {
     return {
       Q: copy(Q), W: copy(W), previousT0: copy(previousT0), previousIceVolume: copy(previousVolume), fresh: copy(fresh), calved: copy(calved), buoyancy: copy(buoyancyLoss), capacity: copy(capacity), penetrated: copy(penetrated), boundaryDepths: copy(boundaryDepths),
       ...(penetration ? { transmission: copy(transmission) } : {}),
+      ...(drift ? { iceVelocity: copy(drift.velocity) } : {}),
     };
   }
 
   function serialize() {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
-    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator };
+    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
   }
 
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;
@@ -1398,15 +1530,15 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) t += hEdge[ae(k, e)] * u[ae(k, e)];
       transport = Math.max(transport, Math.abs(t) * dvEdge[e]);
     }
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried };
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried, ...(drift ? drift.diagnostics() : {}) };
   }
 
   if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);
   initialised = false;
-  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
+  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, waves: waves.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   Object.assign(sharedBuffers, { baroSlow: slow.buffer, baroU: U.buffer, baroDepth: depthEdge.buffer, baroEta: etaB.buffer, baroAvgU: avgU.buffer, baroAvgEta: avgEta.buffer, baroTrialEtaA: bTrial[0].buffer, baroTrialUA: bTrial[1].buffer, baroTrialEtaB: bTrialB[0].buffer, baroTrialUB: bTrialB[1].buffer, counts: countBuffer });
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
-  Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer });
+  Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells };
+  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells };
 }

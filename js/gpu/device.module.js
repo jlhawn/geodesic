@@ -12,6 +12,7 @@ export async function getDevice() {
   let gpu = globalThis.navigator && globalThis.navigator.gpu;
   if (!gpu) {
     if (!globalThis.process?.getBuiltinModule) throw new Error(`Node 22 or newer is required: this is ${globalThis.process?.version}, whose process.getBuiltinModule is missing, so the state-grid and geography loaders would read no files`);
+    if (globalThis.process.platform === 'darwin' && !globalThis.process.env.GPU_QUEUE_HELD) throw new Error('on this Mac a node process opens the GPU only under gpu_run, which runs the GPU jobs of every session one at a time: source scripts/gpuQueue.zsh, then gpu_run LOG command…');
     const { create, globals } = await import('webgpu');
     Object.assign(globalThis, globals);
     gpu = create([]);

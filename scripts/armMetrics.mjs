@@ -1,7 +1,11 @@
 // Time-mean equatorial Pacific metrics of an arm over several saved states,
-// on the CPU with the ocean off:
+// on the CPU with the ocean off, ending with the stress and sea-level
+// pressure in the sections of equatorialSections.mjs against ERA5's in the
+// saves' months, as day means and at the saves' UTC hours
+// (data/era5_equatorial_stress.json):
 //   MOIST='{...}' node scripts/armMetrics.mjs <label> <state.bin>...
 import { readFileSync } from 'node:fs';
+import { SECTIONS, sectionName as binName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable } from './equatorialSections.mjs';
 const R = new URL('../', import.meta.url).pathname;
 const [{ stateGeography }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
   import(R + 'js/geography.module.js'), import(R + 'js/model.module.js'), import(R + 'js/stateFile.module.js'), import(R + 'js/physics/regrid.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/physics/moist.module.js')]);
@@ -15,19 +19,24 @@ const { K, C, E, sigmaMid, R: Rd, g, exnerLayer, geopotential } = core.diagnosti
 const { thetaV } = core.arrays;
 const deg = 180 / Math.PI, { latCell, lonCell, areaCell, dcEdge, dvEdge } = mesh, landMask = model.geography.land;
 const BINS = [[140, 160], [160, 180], [180, 200], [200, 220], [220, 240], [240, 260], [260, 280]], NB = BINS.length, REF = 5;
-const binName = ([a, b]) => `${a <= 180 ? a + 'E' : 360 - a + 'W'}-${b <= 180 ? b + 'E' : 360 - b + 'W'}`.replace('180E', '180').replace('180W', '180');
-const binOf = new Int8Array(C).fill(-1);
+const binOf = new Int8Array(C).fill(-1), sectionOfCell = new Int8Array(C).fill(-1);
 for (let i = 0; i < C; i++) {
   if (landMask[i] || first.ice[i] > 0 || Math.abs(latCell[i] * deg) > LAT) continue;
   const lon = ((lonCell[i] * deg) % 360 + 360) % 360;
   binOf[i] = BINS.findIndex(([a, b]) => lon >= a && lon < b);
+  sectionOfCell[i] = sectionOf(lon);
 }
-const cells = []; for (let i = 0; i < C; i++) if (binOf[i] >= 0) cells.push(i);
-const binMean = (fn) => { const s = new Float64Array(NB), a = new Float64Array(NB); for (const i of cells) { const v = fn(i); if (!Number.isFinite(v)) continue; s[binOf[i]] += areaCell[i] * v; a[binOf[i]] += areaCell[i]; } return Array.from(s, (x, b) => x / a[b]); };
+const cells = [], sectionCells = []; for (let i = 0; i < C; i++) { if (binOf[i] >= 0) cells.push(i); if (sectionOfCell[i] >= 0) sectionCells.push(i); }
+const meanBy = (list, of, n) => (fn) => { const s = new Float64Array(n), a = new Float64Array(n); for (const i of list) { const v = fn(i); if (!Number.isFinite(v)) continue; s[of[i]] += areaCell[i] * v; a[of[i]] += areaCell[i]; } return Array.from(s, (x, b) => x / a[b]); };
+const binMean = meanBy(cells, binOf, NB), sectionMean = meanBy(sectionCells, sectionOfCell, SECTIONS.length);
+const era5 = JSON.parse(readFileSync(R + 'data/era5_equatorial_stress.json', 'utf8')), months = new Set(), hours = new Set();
+const sectionSums = Object.fromEntries(['tau', 'slp', 'era5Tau', 'era5Slp', 'era5TauAt', 'era5SlpAt'].map((k) => [k, new Float64Array(SECTIONS.length)]));
+const addSections = (key, vals) => vals.forEach((v, k) => sectionSums[key][k] += v);
 const vec = new Float64Array(3 * C);
 const east = (i) => -Math.sin(lonCell[i]) * vec[3 * i] + Math.cos(lonCell[i]) * vec[3 * i + 1];
+const vectorCells = [...new Set([...cells, ...sectionCells])];
 function eastAt(edgeField, out) {
-  for (const i of cells) {
+  for (const i of vectorCells) {
     let x = 0, y = 0, z = 0;
     for (let m = 0; m < mesh.nEdgesOnCell[i]; m++) {
       const e = mesh.edgesOnCell[mesh.maxEdges * i + m], w = 0.5 * dcEdge[e] * dvEdge[e] * edgeField[e];
@@ -60,7 +69,8 @@ for (const file of FILES) {
   eastAt(u.subarray((K - 1) * E, K * E), uE); eastAt(stressEdge, tauE);
   const tv = new Float64Array(K * C); for (let k = 0; k < K; k++) for (const i of cells) tv[k * C + i] = thv[k * C + i] * exL[k * C + i];
   const T = (k, i) => theta[k * C + i] * exL[k * C + i];
-  add('sea-level pressure (hPa)', binMean((i) => pi[i] * Math.exp(g * zs[i] / (Rd * T(K - 1, i))) / 100));
+  const slpOf = (i) => pi[i] * Math.exp(g * zs[i] / (Rd * T(K - 1, i))) / 100;
+  add('sea-level pressure (hPa)', binMean(slpOf));
   add('u lowest layer (m/s)', binMean((i) => uE[i]));
   add('|V| lowest layer (m/s)', binMean((i) => speed[i]));
   add('stress tau_x (mN/m2)', binMean((i) => 1000 * tauE[i]));
@@ -84,6 +94,10 @@ for (const file of FILES) {
     }
   }
   for (let b = 0; b < BANDS.length - 1; b++) { const v = binMean((i) => bandOf[b * C + i]); add(`SLP weight ${BANDS[b] / 1000}-${BANDS[b + 1] / 1000} km less ${binName(BINS[REF])}'s (hPa)`, v.map((x) => x - v[REF])); }
+  const day = saved.time / 86400;
+  months.add(monthOfDay(day)); hours.add(utcHourOfDay(day));
+  addSections('tau', sectionMean((i) => 1000 * tauE[i])); addSections('slp', sectionMean(slpOf));
+  for (const [key, vals] of Object.entries(era5Sections(era5, day))) addSections(key, vals);
   files++;
 }
 const f = (x, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : '—');
@@ -96,3 +110,5 @@ console.log(`summary ${LABEL}: SLP 180-160W less 120W-100W ${f(slp[2] - slp[5])}
 
 console.log('profile (bin means): layer, then for 180-160W and 120W-100W: z m, T C, RH, q g/kg');
 for (let k = K - 1; k >= 18; k--) { const cols = []; for (const b of [2, 5]) { const name = binName(BINS[b]); const v = (what) => sums[`profile k=${k} ${name} ${what}`][b] / files; cols.push(`${f(v('z (m)'), 0).padStart(5)} ${f(v('T (C)'), 1).padStart(5)} ${f(v('RH'), 2)} ${f(v('q (g/kg)'), 1).padStart(4)}`); } console.log(`k=${String(k).padStart(2)}  ${cols.join('   |   ')}`); }
+console.log(`sections, sea cells within ${LAT} deg, mean of ${files} states; ERA5 ${era5.years.join('-')} in ${[...months].map((m) => MONTHS[m]).join(', ')}, its sea points within ${era5.latitude} deg`);
+console.log(sectionTable(Object.fromEntries(Object.entries(sectionSums).map(([key, sum]) => [key, Array.from(sum, (x) => x / files)])), `${[...hours].join(', ')} UTC`));

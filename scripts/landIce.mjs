@@ -8,9 +8,14 @@
  * under the Greenland and Antarctic ice sheets is BedMachine's). Each
  * 0.25° pixel is a block of 15 × 15 points of 60″. A point's ice
  * thickness is s − b, the surface less the bed, where the ice rests on
- * the bed and s/(1 − ρi/ρw), the thickness that floats with freeboard s,
- * where the bed lies deeper than that ice would reach (an ice shelf,
- * whose s − b would count the sea beneath it). A point holds ice where
+ * the bed and (s − a)/(1 − ρi/ρw), the ice-equivalent thickness that
+ * floats with freeboard s, where the bed lies deeper than that ice would
+ * reach (an ice shelf, whose s − b would count the sea beneath it). The
+ * surface includes the air in the firn, a = FIRN_AIR, which BedMachine
+ * takes from a firn model point by point; a uniform 15 m puts 1.58
+ * million km² of Antarctic ice afloat, against the 1.56 of Rignot et al.
+ * (2013), where none puts 1.16. On thin floating ice the firn is
+ * thinner: a is at most half the freeboard. A point holds ice where
  * that thickness is at least MINIMUM_THICKNESS: on ice-free land the
  * surface (the Copernicus DEM) and the bed (BedMachine's) disagree by up
  * to tens of meters either way, and 10 m keeps that noise from flipping
@@ -20,7 +25,8 @@
  * is grounded, and the floating ice's top where it floats. The land ice
  * (encodeLandIce in js/geography.module.js) holds the pixels with ice:
  * their counts of ice points and of those afloat, the mean thickness of
- * each, and the mean bed under the floating points. The pixel means of
+ * each, and the mean surface of the floating points and the bed under
+ * them. The pixel means of
  * the bed go to CACHE as an int16 raster on the same grid.
  *
  *   node scripts/landIce.mjs [CACHE]
@@ -32,7 +38,7 @@ import { encodeLandIce, landIceUrl, topographyUrl, ICE_DENSITY, SEAWATER_DENSITY
 const ROWS = 720, COLS = 1440, BLOCK = 15, SOURCE_ROWS = ROWS * BLOCK, SOURCE_COLS = COLS * BLOCK;
 const FILES = { surface: 'ETOPO_2022_v1_60s_N90W180_surface.tif', bed: 'ETOPO_2022_v1_60s_N90W180_bed.tif' };
 const SOURCE = 'https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2022/data/60s';
-const FLOATING = 1 / (1 - ICE_DENSITY / SEAWATER_DENSITY), MINIMUM_THICKNESS = 10;
+const FLOATING = 1 / (1 - ICE_DENSITY / SEAWATER_DENSITY), MINIMUM_THICKNESS = 10, FIRN_AIR = 15;
 
 export function openTiff(path) {
   const fd = openSync(path, 'r');
@@ -92,12 +98,12 @@ export function openTiff(path) {
 /*
  * The 0.25° pixel sums of the two rasters: per pixel the points read,
  * the points above sea level, the ice points, those afloat, and the sums
- * of the surface, the bed, the ice points' thickness, and the thickness
- * and the bed of those afloat.
+ * of the surface, the bed, the ice points' thickness, and the thickness,
+ * the surface and the bed of those afloat.
  */
-export function accumulate(surface, bed, minimum = MINIMUM_THICKNESS) {
+export function accumulate(surface, bed, minimum = MINIMUM_THICKNESS, firnAir = FIRN_AIR) {
   const P = ROWS * COLS;
-  const sums = { points: new Int32Array(P), land: new Int32Array(P), ice: new Int32Array(P), floating: new Int32Array(P), surface: new Float64Array(P), bed: new Float64Array(P), thickness: new Float64Array(P), floatThickness: new Float64Array(P), floatBed: new Float64Array(P), missing: 0 };
+  const sums = { points: new Int32Array(P), land: new Int32Array(P), ice: new Int32Array(P), floating: new Int32Array(P), surface: new Float64Array(P), bed: new Float64Array(P), thickness: new Float64Array(P), floatThickness: new Float64Array(P), floatSurface: new Float64Array(P), floatBed: new Float64Array(P), missing: 0 };
   const { tileWidth: tw, tileLength: th, across } = surface;
   for (let ty = 0; ty * th < SOURCE_ROWS; ty++) {
     const top = Array.from({ length: across }, (_, tx) => surface.readTile(tx, ty)), under = Array.from({ length: across }, (_, tx) => bed.readTile(tx, ty));
@@ -110,10 +116,10 @@ export function accumulate(surface, bed, minimum = MINIMUM_THICKNESS) {
         sums.points[p]++; sums.surface[p] += s; sums.bed[p] += b;
         if (s > 0) sums.land[p]++;
         if (!(s > 0 && s > b)) continue;
-        const afloat = s * FLOATING, thickness = Math.min(s - b, afloat);
+        const afloat = (s - Math.min(firnAir, s / 2)) * FLOATING, thickness = Math.min(s - b, afloat);
         if (thickness < minimum) continue;
         sums.ice[p]++; sums.thickness[p] += thickness;
-        if (s - b > afloat) { sums.floating[p]++; sums.floatThickness[p] += thickness; sums.floatBed[p] += b; }
+        if (s - b > afloat) { sums.floating[p]++; sums.floatThickness[p] += thickness; sums.floatSurface[p] += s; sums.floatBed[p] += b; }
       }
     }
   }
@@ -148,9 +154,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   const mean = (sum, n) => (n ? Math.round(sum / n) : 0);
   const bytes = encodeLandIce({
-    rows: ROWS, cols: COLS, points: BLOCK * BLOCK, index: Uint32Array.from(held), count: Uint8Array.from(held, (p) => sums.ice[p]), floating: Uint8Array.from(held, (p) => sums.floating[p]),
+    rows: ROWS, cols: COLS, points: BLOCK * BLOCK, firnAir: FIRN_AIR, index: Uint32Array.from(held), count: Uint8Array.from(held, (p) => sums.ice[p]), floating: Uint8Array.from(held, (p) => sums.floating[p]),
     thickness: Uint16Array.from(held, (p) => Math.min(65535, mean(sums.thickness[p], sums.ice[p]))), floatThickness: Uint16Array.from(held, (p) => Math.min(65535, mean(sums.floatThickness[p], sums.floating[p]))),
-    floatBed: Int16Array.from(held, (p) => mean(sums.floatBed[p], sums.floating[p])),
+    floatSurface: Uint16Array.from(held, (p) => mean(sums.floatSurface[p], sums.floating[p])), floatBed: Int16Array.from(held, (p) => mean(sums.floatBed[p], sums.floating[p])),
   });
   writeFileSync(landIceUrl, new Uint8Array(bytes));
   const raster = (name) => new Uint8Array(Int16Array.from({ length: P }, (_, p) => mean(sums[name][p], sums.points[p])).buffer);

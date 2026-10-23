@@ -43,6 +43,9 @@ test(`a fresh start on the default geography at N=${N} on ${LEVELS} stays finite
     assert.equal(st.day, GPU_DAYS);
     assert.deepEqual(nonFinite({ pi: st.pi, theta: st.theta, u: st.u, surfaceT: st.surfaceT, q: st.q, qc: st.qc }), [], 'atmosphere');
     assert.deepEqual(nonFinite({ h: st.ocean.h, u: st.ocean.u, T: st.ocean.T, S: st.ocean.S, eta: st.ocean.eta }), [], 'ocean');
+    const iced = [...st.ice.keys()].filter((i) => st.ice[i] > 0);
+    assert.ok(iced.some((i) => st.concentration[i] < 0.95), 'the observed March ice keeps cells partly covered');
+    assert.ok(iced.filter((i) => st.land.snow[i] > 0).length > 0.8 * iced.length, 'the observed March ice keeps its snow');
   } finally {
     rmSync(out, { recursive: true, force: true });
   }

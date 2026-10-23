@@ -530,7 +530,8 @@ export function createLandSurface(mesh, geography, {
    * A fresh land surface has half-full buckets, no snow (snowCap on an
    * ice sheet with iceSheetBalance), an empty record of age 0 and the
    * start's cover, trees and topsoil carbon (startPlaceholders), held
-   * until jump().
+   * until jump(). The sea's cells of `snow`, the snow on the sea ice, are
+   * the sea-ice start's (initializeState).
    */
   function initialize() {
     const code = START_CODES[start], placed = held[code];
@@ -542,7 +543,8 @@ export function createLandSurface(mesh, geography, {
       seasonLength[i] = 0; seasonWarmth[i] = 0; rainMean[i] = 0; demandMean[i] = 0; litterMean[i] = 0; decayMean[i] = 0;
       canopy[i] = !grown ? 0 : treed ? (placed.share === null ? 0 : placed.share * vegetation[i]) : vegetation[i];
       soilCarbon[i] = grown && humic ? placed.carbon : 0;
-      snow[i] = glacier(i) ? snowCap : 0; runoff[i] = 0; discharge[i] = 0; iceLoss[i] = 0; surface[i] = 0; snowAlbedoField[i] = freshSnowAlbedo;
+      if (land[i]) snow[i] = glacier(i) ? snowCap : 0;
+      runoff[i] = 0; discharge[i] = 0; iceLoss[i] = 0; surface[i] = 0; snowAlbedoField[i] = freshSnowAlbedo;
     }
     record[0] = 0; record[1] = vegetated ? code : 0; record[2] = code;
   }

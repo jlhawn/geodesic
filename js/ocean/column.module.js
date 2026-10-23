@@ -70,7 +70,14 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * κ v* z (1 − z/h)², v*³ = u*³ + E_c/(ρ₀ dt), equals the energy
  * ρ₀ m* u*³ dt + n* E_c, E_c the energy the surface slab's convection
  * released, m* = mstar Λ / (1 + (h |f| / (ekman u*))²) with Λ the
- * Langmuir factor of the wind over the depth h. The work is the potential
+ * Langmuir factor of the wind over the depth h, or with rotationLimit
+ * 'rh18' m* = mstar Λ (1 + c₂) e^(c₃x) / (1 + c₂ e^(c₃x)), x = h |f| / u*,
+ * the rotational decay of Reichl and Hallberg's (2018) neutral m* fit to
+ * large-eddy simulations (c₂ 8, c₃ −5, MOM6's RH18_MSTAR_CN2 and CN3)
+ * scaled to mstar at x = 0. Λ − 1 is scaled by waves, the share of the
+ * wave field the sea ice leaves: 1 − tanh(10 A) under cover A with the
+ * ocean's langmuirIce 'tanh' (NEMO's nn_eice = 1; the POP and MOM6
+ * couplers of CESM drop Λ above 5 % cover), else 1. The work is the potential
  * energy the implicit mixing raises, interface by interface from the heat
  * and salt it moves and the thermal expansion and haline contraction
  * there (Reichl and Hallberg 2018 in its budget, Kraus and Turner in its
@@ -101,6 +108,8 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * than `cap`. erfc is Abramowitz and Stegun's 7.1.26, as on the GPU.
  */
 export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3, RETREAT_EKMAN = 0.7;
+export const ROTATION_LIMITS = ['algebraic', 'rh18'], RH18_NEUTRAL = { c2: 8, c3: -5 };
+export const LANGMUIR_ICE = ['none', 'tanh'], ICE_WAVE_DAMPING = 10;
 export function erfc(x) {
   const t = 1 / (1 + 0.3275911 * x);
   return t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * Math.exp(-x * x);
@@ -457,7 +466,7 @@ export function convectiveAdjustment(h, T, S, K, scratch, { gravity = GRAVITY } 
   return { released, interior, depth };
 }
 
-export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, nstar = 0.2, langmuir = 2, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
+export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, rotationLimit = 'algebraic', nstar = 0.2, langmuir = 2, waves = 1, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
   const { alpha, beta, trialT, trialS, gain } = scratch;
   let H = 0;
   for (let k = 0; k < K; k++) H += h[k];
@@ -469,8 +478,12 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, guess = 
   for (let k = 0; k < K; k++) kappa[k] = 0;
   if (!(vstar > 0)) return { depth: 0, energy: 0, work: 0, velocity: 0 };
   const energy = (depth) => {
+    const factor = ustar > 0 && langmuir > 0 ? 1 + (langmuirFactor(ustar, Math.max(depth, 1), langmuir) - 1) * waves : 1;
+    if (rotationLimit === 'rh18') {
+      const decay = ustar > 0 ? Math.exp(RH18_NEUTRAL.c3 * depth * Math.abs(f) / ustar) : 0;
+      return rho0 * dt * mstar * factor * ustar * ustar * ustar * (1 + RH18_NEUTRAL.c2) * decay / (1 + RH18_NEUTRAL.c2 * decay) + nstar * convective;
+    }
     const rotation = ustar > 0 ? 1 + (depth * Math.abs(f) / (ekman * ustar)) ** 2 : Infinity;
-    const factor = ustar > 0 && langmuir > 0 ? langmuirFactor(ustar, Math.max(depth, 1), langmuir) : 1;
     return rho0 * dt * mstar * factor * ustar * ustar * ustar / rotation + nstar * convective;
   };
   /*
@@ -569,7 +582,7 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
   nu[K - 1] = 0;
 }
 
-export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, type = 'IB', ustar, f, dt, options = {} }, { kappa, nu }, scratch) {
+export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, type = 'IB', ustar, f, dt, capped = false, options = {} }, { kappa, nu }, scratch) {
   const { interfaces, shares, boundaryKappa, interiorKappa, interiorNu } = scratch;
   interfacesOf(h, K, interfaces);
   if (light !== 0) {
@@ -579,7 +592,7 @@ export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat =
   T[0] += heat / h[0];
   S[0] += salt / h[0];
   const convection = convectiveAdjustment(h, T, S, K, scratch, options);
-  const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: convection.released, ...options }, boundaryKappa, scratch);
+  const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: capped ? 0 : convection.released, ...options }, boundaryKappa, scratch);
   interiorMixing({ h, T, S, u, v, shear, K, ...options }, interiorKappa, interiorNu, scratch);
   for (let k = 0; k < K; k++) { kappa[k] = boundaryKappa[k] + interiorKappa[k]; nu[k] = boundaryKappa[k] + interiorNu[k]; }
   if (anyMixing(kappa, K)) solveLayers(h, K, kappa, dt, scratch.gain, T, T, S, S);

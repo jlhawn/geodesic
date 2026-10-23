@@ -5679,6 +5679,35 @@ The work, in order:
      months at 3-20 hPa (ERA5 32) whose easterly phase never forms below
      about 20 hPa, so the 2-30 hPa mean is westerly, +9 to +16 m/s where
      ERA5's is easterly. It costs 1.4-1.5 times bl42.
+   - bl48 (`sigmaInterfaces('bl48')`, `LEVELS=bl48`): bl60's lid and
+     93.6 hPa interface, the rest laid out by `LADDER` in US Standard
+     Atmosphere 1976 heights (`standardSigma`, `standardHeight`): from a
+     40 m lowest layer, 25 layers each 2^(1/5) times as thick as the one
+     below to 8.34 km, 7 of 1.18 km to 93.6 hPa, 5 more growing on by
+     2^(1/5) to 25.7 km and 9 of 2.46 km to 1 hPa (48 layers; none below
+     1 hPa more than 1.15 times as thick as the one below it), with its
+     own longwave table (`js/physics/longwaveTableBl48.module.js`, fitted
+     as bl60's with `UPPER_WEIGHT` 100) and bl60's sponge and lid
+     friction. `remapLevels` carries bl60 states onto it
+     (`test/levels.test.mjs`). Against RRTMG in the four standard
+     atmospheres the table is within 0.40 K/day in every layer RRTMG's
+     levels resolve at 1-2.6 hPa (bl60's over the same spans 0.57),
+     0.16 at 2.6-93.6 hPa and 0.45 in the troposphere above the lowest
+     layers. A known limit: over 1-2.2 hPa it misses MLS by 0.47 K/day
+     (bl60 0.28), in its 1-1.37 hPa layer, which MLS's levels (none
+     between 1.34 and 0.59 hPa) do not resolve, so the fit cannot see
+     it. Over days 12-30 of a fixed-SST pair against bl60 at N=64 from
+     fourteen64's June solstice (day 1551), it keeps bl60's tropospheric
+     temperatures to 0.6 K and its summer stratopause at 40-60N to 0.8 K
+     (colder at 1.5-2 hPa). Its cloud reflects 2.2 ± 0.35 W/m² more
+     sunlight, 85 percent of it between 30S and 30N (the four deck boxes
+     about a tenth, three of them 14-20 W/m² brighter with tops 90-180 m
+     higher). Its 50 hPa is 0.9 K warmer by day 12 and 1.3 K by day 30,
+     where its table cools 0.07-0.09 K/day less than bl60's (nearer RRTMG
+     in TROP and MLS, farther in MLW and SAW). The equatorial westerly at
+     10 hPa decays faster (18.0 against 22.1 m/s). It costs 0.80 times
+     bl60 (4.3 against 5.4 s a model day at N=64). Not a default; chosen
+     on Oct 21 for spin-up sixteen.
    - Final defaults: `topDragDays` 0 (was 5; `topSigma` 0.02 unused),
      `spongeSigma` 0.005 and `spongeDays` 1 (`SPONGE`, the sponge on the
      eddies; `surface` options), `gravityWaves` on with `flux` 4.3·10⁻³
