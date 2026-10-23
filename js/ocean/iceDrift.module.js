@@ -115,6 +115,12 @@ export function iceDriftOptions(options) {
   return o;
 }
 
+export function iceDriftPasses(o, dt, iceDensity, spacing) {
+  const stable = Math.sqrt(3 * o.strength * dt / (iceDensity * o.minimumDeformation * spacing * spacing));
+  const alpha = o.alpha ?? Math.max(4, Math.ceil(1.5 * stable)), cavitating = o.rheology === 'cavitating';
+  return { alpha, beta: cavitating ? (o.beta ?? alpha) : 0, passes: cavitating ? (o.iterations ?? Math.ceil(3 * alpha)) : o.freePasses };
+}
+
 export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensity, iceDensity, gravity, previousVolume, beyond = null, limited = null }) {
   const o = iceDriftOptions(options);
   const {
@@ -194,8 +200,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
       if (Ae[e] < o.dynamicConcentration) velocity[e] = uw[e]; else { upd[nUpd++] = e; start[e] = velocity[e]; }
     }
     spare.set(velocity);
-    const stable = Math.sqrt(3 * o.strength * dt / (iceDensity * o.minimumDeformation * spacing * spacing));
-    const alpha = o.alpha ?? Math.max(4, Math.ceil(1.5 * stable)), betaBase = cavitating ? (o.beta ?? alpha) : 0, passes = cavitating ? (o.iterations ?? Math.ceil(3 * alpha)) : o.freePasses;
+    const { alpha, beta: betaBase, passes } = iceDriftPasses(o, dt, iceDensity, spacing);
     const Dmin = o.minimumDeformation, limit = o.speedLimit, floor = o.minimumRelativeSpeed;
     count.alpha = alpha; count.beta = betaBase; count.passes = passes;
     if (cavitating) for (let n = 0; n < nCellsActive; n++) { const i = cellList[n]; pressure[i] = o.strength * V[i] * Math.exp(-o.strengthDecay * (1 - A[i])); }
