@@ -155,6 +155,23 @@ export function createSeaIce(mesh, {
     return ice > 0 ? area * (skinHeatCapacity * (surfaceT - FREEZING_POINT) - latent * ice - latentHeatFusion * snowCover) : slabHeatCapacity * (surfaceT - FREEZING_POINT);
   }
 
+  /*
+   * Ice that melts away, whether by the thermodynamics or because transport
+   * left too little of it: the cell is open water again, its temperature
+   * `base` (freezing for a cell that held ice) plus `energyLeft`, the skin
+   * heat less the latent heat of the ice and snow, over the water's heat
+   * capacity; `volume` and `snowMass` (m³ and kg) go to the budget.
+   */
+  function meltAway(surfaceT, ice, i, energyLeft, volume, snowMass, base = FREEZING_POINT) {
+    budget.melted += volume;
+    budget.snowMelted += snowMass;
+    surfaceT[i] = base + energyLeft / (heatCapacity ? heatCapacity[i] : slabHeatCapacity);
+    ice[i] = 0;
+    snow[i] = 0;
+    snowAlbedo[i] = freshSnowAlbedo;
+    concentration[i] = 0;
+  }
+
   function deposit(i, amount, airTemperature, ice, surfaceT) {
     if (airTemperature >= MELTING_POINT || amount <= 0) return false;
     budget.snowfall += mesh.areaCell[i] * amount;
@@ -219,13 +236,7 @@ export function createSeaIce(mesh, {
     if (area < A) volume += (A - area) * (s / iceDensity - skinHeatCapacity * (T - FREEZING_POINT) / latent);
     else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; }
     if (area < MINIMUM_CONCENTRATION || volume < MINIMUM_VOLUME) {
-      budget.melted += cellArea * A * h;
-      budget.snowMelted += cellArea * A * s;
-      surfaceT[i] = FREEZING_POINT + energyLeft / capacity;
-      ice[i] = 0;
-      snow[i] = 0;
-      snowAlbedo[i] = freshSnowAlbedo;
-      concentration[i] = 0;
+      meltAway(surfaceT, ice, i, energyLeft, cellArea * A * h, cellArea * A * s);
       return;
     }
     if (area < A) budget.snowMelted += cellArea * (A - area) * s;
@@ -241,7 +252,7 @@ export function createSeaIce(mesh, {
   }
 
   return {
-    albedo, albedoContrast, cover, load, energy, update, deposit, budget, slabHeatCapacity, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration,
+    albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration,
     shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, snowAlbedo: snowAlbedo.buffer, concentration: concentration.buffer },
   };
 }
