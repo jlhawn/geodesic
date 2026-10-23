@@ -18,7 +18,7 @@ async function get(url, from, to, tries = 10) {
   }
 }
 
-function parseHeader(v) {
+export function parseHeader(v) {
   let o = 0;
   const u32 = () => { const x = v.getUint32(o); o += 4; return x; };
   const name = () => { const n = u32(); const s = new TextDecoder().decode(new Uint8Array(v.buffer, v.byteOffset + o, n)); o += Math.ceil(n / 4) * 4; return s; };

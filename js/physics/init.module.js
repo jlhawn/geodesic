@@ -68,7 +68,11 @@ function geopotentialHeightAt(core, i, pi, pressure) {
  * the Arctic Ocean poleward of 72°N and 0.7 m around Antarctica
  * poleward of 68°S over water at the freezing point, as in March,
  * covering its cells completely: the model's sea-ice concentration is
- * set to match.
+ * set to match. Given `seaIce` (js/physics/seaIceStart.module.js) the ice
+ * is instead the observed March ice, its concentration, the thickness of
+ * its covered part and the snow on it, at the freezing point. Either way
+ * the sea's cells of the snow array (the land's, which holds the snow on
+ * the sea ice, or the sea ice's own without land) take the start's snow.
  */
 /*
  * Initial humidity: a relative humidity that falls from
@@ -92,7 +96,7 @@ export function initialHumidity(model, pi, theta, { surfaceHumidity = 0.7 } = {}
 
 export function initializeState(model, {
   p0 = 101325, seedAmplitude = 2, seedWavenumber = 5, seedLatitude = 45, seedWidth = 15,
-  geostrophic = true, referencePressure = 50000, taperLatitude = 15, profile = null, surfaceHumidity = 0.7,
+  geostrophic = true, referencePressure = 50000, taperLatitude = 15, profile = null, surfaceHumidity = 0.7, seaIce = null,
 } = {}) {
   const { mesh, core } = model;
   const { K, C, E, sigmaMid, cp, R, exnerLayer, dExnerDpi, geopotential } = core.diagnostics;
@@ -104,14 +108,18 @@ export function initializeState(model, {
   const u = new Float64Array(K * E);
   const surfaceT = Float64Array.from(latCell, surfaceTemperature);
   const land = model.geography ? model.geography.land : null;
-  const ice = new Float64Array(C);
+  const ice = new Float64Array(C), cover = seaIce ? new Float64Array(C) : null;
+  const snow = model.land ? model.land.snow : model.seaIce ? model.seaIce.snow : null;
   for (let i = 0; i < C; i++) {
     if (land && land[i]) continue;
     const lat = latCell[i] / deg, polar = Math.max(0, Math.min(1, (Math.abs(lat) - 50) / 20));
-    ice[i] = lat > 72 ? 1.5 : lat < -68 ? 0.7 : 0;
+    const observed = seaIce ? seaIce.at(latCell[i], lonCell[i]) : null;
+    ice[i] = observed ? observed.thickness : lat > 72 ? 1.5 : lat < -68 ? 0.7 : 0;
+    if (observed) cover[i] = observed.concentration;
+    if (snow) snow[i] = observed ? observed.snow : 0;
     surfaceT[i] = ice[i] > 0 ? FREEZING_POINT : Math.max(FREEZING_POINT + 0.3, 273.15 + 30 * Math.cos(latCell[i]) ** 2 - 2 - 4 * polar);
   }
-  if (model.seaIce) model.seaIce.load(ice);
+  if (model.seaIce) model.seaIce.load(ice, cover);
 
   for (let i = 0; i < C; i++) {
     const offset = surfaceT[i] - REFERENCE_SURFACE_T;
