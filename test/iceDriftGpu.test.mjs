@@ -160,6 +160,30 @@ test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the 
   s.gpuModel.destroy();
 });
 
+test('inside the model\'s own step every rheology takes the atmosphere\'s stress, validates on the device and keeps the ice finite and below the speed limit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createModel } = await import('../js/model.module.js'), { initializeState } = await import('../js/physics/init.module.js');
+  const cpuModel = createModel(new Grid(N), { topography }), init = initializeState(cpuModel, {});
+  for (const rheology of ['frozen', 'free', 'cavitating']) {
+    const model = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: { rheology } } });
+    for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+    model.load();
+    const dev = model.gpu.device, C = model.mesh.nCells;
+    let iced = 0; for (let i = 0; i < C; i++) if (model.oceanEngine.cellOcean[i] && init[6][i] > 0) iced++;
+    dev.pushErrorScope('validation');
+    for (let n = 0; n < 4; n++) await model.step(DT);
+    await model.settle();
+    const failure = await dev.popErrorScope();
+    assert.equal(failure, null, failure && failure.message);
+    const { iceVelocity } = await model.oceanEngine.restartArrays();
+    let top = 0; for (const u of iceVelocity) { assert.ok(Number.isFinite(u)); top = Math.max(top, Math.abs(u)); }
+    const g = await readRanges(dev, model.gpu.buffers.S, [{ offset: model.gpu.layout.S.ICE, length: C }]);
+    for (const h of g[0]) assert.ok(Number.isFinite(h) && h >= 0);
+    console.log(`${rheology} in the model's step: ${iced} iced cells, top ice speed ${top.toFixed(4)} m/s`);
+    assert.ok(top <= 2.0001 && (rheology === 'frozen' ? top === 0 : iced === 0 || top > 1e-4), `${rheology}: ${top} m/s over ${iced} iced cells`);
+    model.destroy();
+  }
+});
+
 test('over a hundred calls the GPU conserves the ice volume and snow mass to single precision, and stored ice volume follows the transport', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh;
   const whole = streamOn(pm, 40 / pm.radius), velocity = Float64Array.from(whole, (u, e) => (pm.latCell[pm.cellsOnEdge[2 * e]] < -71 * DEG && pm.latCell[pm.cellsOnEdge[2 * e + 1]] < -71 * DEG ? u : 0));
