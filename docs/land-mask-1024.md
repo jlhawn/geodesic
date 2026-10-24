@@ -251,7 +251,7 @@ Natural Earth lists neither the Caspian nor Maracaibo. The dataset has no interm
 | 128 | 69 | 5 | 2 | 2 | 0 | 51 |
 | 192 | 159 | 11 | 0 | 1 | 1 (lake to land) | 84 |
 
-"Elsewhere" means single coastal cells, plus the Australian pans and the depressions that GSHHG land now fills (Salton, Melrhir, part of Qattara). The Fens change no cell at any N. The derived files (data/geography1024.bin, data/geography_n1024_N*.bin and the n1024 subgrid files) carry GSHHG's coastline and are distributed under GSHHG's LGPL; docs/n1024-geography-notice.md gives their sources, licenses and citations.
+"Elsewhere" means single coastal cells, plus the Australian pans and the depressions that GSHHG land now fills (Salton, Melrhir, part of Qattara). The Fens change no cell at any N. The derived files (data/geography1024.bin, data/geography_n1024_N*.bin and the n1024 subgrid files) carry GSHHG's coastline and are distributed under GSHHG's LGPL (docs/COPYING.LESSERv3.gshhg, with the GPL v3 it supplements in docs/COPYINGv3.gshhg); docs/n1024-geography-notice.md gives their sources, licenses and citations.
 
 **Depressions and cut-off seawater.** Every sea component but the largest is a closed basin.
 - A closed basin deeper than 500 m below sea level at its deepest point stays a closed sea: the Black Sea, the Caspian, Marmara.

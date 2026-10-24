@@ -13,7 +13,7 @@ Global Self-consistent Hierarchical High-resolution Geography, version 2.3.7 (Ju
 
 Wessel, P., and W. H. F. Smith (1996), A global, self-consistent, hierarchical, high-resolution shoreline database, J. Geophys. Res., 101(B4), 8741–8743.
 
-The files above carry GSHHG's coastline (its land at 60″, `scripts/landWater.mjs`). As derived data they are distributed under GSHHG's license: the GNU Lesser General Public License, version 3 or later (`docs/COPYING.LESSERv3.gshhg`). GSHHG's permission notice, from its LICENSE.TXT:
+The files above carry GSHHG's coastline (its land at 60″, `scripts/landWater.mjs`). As derived data they are distributed under GSHHG's license: the GNU Lesser General Public License, version 3 or later (`docs/COPYING.LESSERv3.gshhg`), which supplements the GNU General Public License, version 3 (`docs/COPYINGv3.gshhg`). GSHHG's permission notice, from its LICENSE.TXT:
 
 > Permission to use, copy, modify, and distribute (with no more than a
 > reasonable redistribution fee) this data and its documentation for
