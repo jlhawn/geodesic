@@ -37,7 +37,7 @@ At N = 1024 the object Grid would need about 25 GB of heap. The typed-array mesh
   - bed and deepest point;
   - ice fraction and thickness;
   - floating fraction, thickness, surface and bed, by `scripts/landIce.mjs`'s rules (60″ points, 10 m minimum, 15 m firn).
-- Per edge: the sill, the depth at which the deepest 60″ points of the two cells join through their own points (eight-connected).
+- Per edge: the sill, the depth at which the deepest 60″ points of the two cells join through their own points, four-connected. A diagonal step slips past a crest one point wide (see Strait depths against the literature).
 
 Every fine cell holds at least one point; no point lacks data. The total land area is 148.36 million km².
 
@@ -49,8 +49,9 @@ Every fine cell holds at least one point; no point lacks data. The total land ar
    - Each model cell's water is represented by one fine cell: the one whose water stays joined to the world ocean deepest (`oceanDepth`, a widest path from the deepest fine cell). Lakes have no such join, so for them the deepest fine cell is used.
    - A model edge's `edgeSill` is the depth to which the representatives of its two cells stay joined through fine edges.
      - The search covers the fine cells of the two cells and of the two cells at the edge's ends, so a channel that leaves through a third cell counts.
+  - It widens to every neighbor of the two cells where the edge comes out shallower than both representatives' depth to the ocean, and the cells are joined at all or fine water crosses straight between them. Without the direct-crossing case, the Danish straits at N = 64 were cut: the water crosses the Darss sill straight between two cells, but the small region misses the representatives' path.
      - Where land parts them at the fine scale, the edge is 0.
-   - Where the edge comes out shallower than both representatives' depth to the ocean, the search widens to every neighbor of the two cells. This can only deepen the edge.
+   - Widening can only deepen an edge.
    - Since every edge equals a fine bottleneck between representatives, no model path can be deeper than the fine water between its ends (the ultrametric inequality). Over-reading is ruled out by construction.
    - An ocean edge is open where `edgeSill` > 0.
 
@@ -65,7 +66,7 @@ Every fine cell holds at least one point; no point lacks data. The total land ar
 
 5. **Bridges.** These keep no minimum size.
    - Where resolved fine land (fine cells > 0.5 land that touch) joins model land components kept apart by sea cells, the sea cells on the paths through the most land turn to land.
-   - A cell that a strait needs stays sea. There are no conflicts at any N now.
+   - A cell that a strait needs stays sea, and so does any cell whose flip would split an ocean component. There are no conflicts at any N.
 
 The rule replaces LAND_BRIDGES and SEA_STRAITS. `test/fineGeography.test.mjs` checks it at N = 16 and 64 on synthetic geographies:
 - a two-cell estuary that a channel joins to the ocean turns to land;
@@ -88,10 +89,10 @@ Column notes:
 | N | land cells, today / area / rule | land, million km² | today→area: to sea, to land | rule: to sea, to land | small components to land (cells) | isolated components | sea cells with mean z > 0, today / area / rule | Darién | Cuba | SF |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 16 | 735 / 726 / 731 | 146.30 / 144.48 / 145.49 | 10, 1 | 3, 8 | 2 (2) | 2 | 23 / 26 / 24 | 1/0/1 of 1 | 0/0/0 of 2 | – |
-| 32 | 2939 / 2942 / 2953 | 146.39 / 146.54 / 147.08 | 14, 17 | 4, 15 | 4 (5) | 1 | 75 / 78 / 75 | 2/1/2 of 3 | 1/2/3 of 9 | – |
-| 64 | 11849 / 11841 / 11861 | 147.56 / 147.46 / 147.71 | 71, 63 | 2, 22 | 6 (7) | 4 | 185 / 220 / 214 | 5/5/5 of 12 | 7/8/8 of 35 | – |
-| 128 | 47258 / 47489 / 47518 | 147.13 / 147.84 / 147.94 | 237, 468 | 7, 36 | 11 (14) | 18 | 656 / 553 / 537 | 14/16/16 of 41 | 25/34/34 of 144 | 2/2/2 of 3 |
-| 192 | 106056 / 107074 / 107126 | 146.74 / 148.15 / 148.23 | 489, 1507 | 5, 57 | 26 (30) | 25 | 1430 / 866 / 841 | 31/34/34 of 91 | 59/79/79 of 318 | 6/6/6 of 7 |
+| 32 | 2939 / 2942 / 2950 | 146.39 / 146.54 / 146.93 | 14, 17 | 5, 13 | 3 (3) | 1 | 75 / 78 / 75 | 2/1/2 of 3 | 1/2/3 of 9 | – |
+| 64 | 11849 / 11841 / 11860 | 147.56 / 147.46 / 147.70 | 71, 63 | 3, 22 | 6 (7) | 4 | 185 / 220 / 214 | 5/5/5 of 12 | 7/8/8 of 35 | – |
+| 128 | 47258 / 47489 / 47516 | 147.13 / 147.84 / 147.93 | 237, 468 | 7, 34 | 9 (12) | 18 | 656 / 553 / 538 | 14/16/16 of 41 | 25/34/34 of 144 | 2/2/2 of 3 |
+| 192 | 106056 / 107074 / 107124 | 146.74 / 148.15 / 148.22 | 489, 1507 | 5, 55 | 24 (28) | 25 | 1430 / 866 / 841 | 31/34/34 of 91 | 59/79/79 of 318 | 6/6/6 of 7 |
 
 The 60″ land total is 148.36 million km². Today's rule falls 1.6 million km² short of it at N = 192, because a cell at exactly half its points counts as sea.
 
@@ -114,22 +115,49 @@ The table compares the model's controlling depth with the fine one, in meters.
 
 | passage (N = 1024) | N = 16 | N = 32 | N = 64 | N = 128 | N = 192 |
 |---|---|---|---|---|---|
-| Gibraltar (341) | 0/0/341 [341] | 0/0/341 [341] | 300/341/341 [341] | 300/341/341 [341] | 300/341/341 [341] |
-| Bab-el-Mandeb (137) | 0/0/137 [0] | 150/0/137 [137] | 150/0/137 [137] | 104/137/137 [137] | 99/137/137 [137] |
-| Hormuz (83) | 1c | 90/86/86 [86] | 90/83/83 [83] | 69/83/83 [83] | 47/83/83 [83] |
+| Gibraltar (283) | 0/0/283 [283] | 0/0/283 [283] | 300/283/283 [283] | 300/283/283 [283] | 300/283/283 [283] |
+| Bab-el-Mandeb (134) | 0/0/134 [0] | 150/0/134 [134] | 150/0/134 [134] | 104/134/134 [134] | 99/134/134 [134] |
+| Hormuz (83) | 1c | 90/85/85 [85] | 90/83/83 [83] | 69/83/83 [83] | 47/83/83 [83] |
 | Bering (44) | 0/44/44 [44] | 44/44/44 [44] | 44/44/44 [44] | 44/44/44 [44] | 44/44/44 [44] |
-| Lombok (216) | 1c | 1c | 336/216/216 [216] | 336/216/216 [216] | 298/216/216 [216] |
-| Danish straits (18, Darss sill) | 1c | 1/24/24 [24] | 0/18/18 [18] | 0/0/18 [18] | 8/18/18 [18] |
+| Lombok (215) | 1c | 1c | 336/215/215 [215] | 336/215/215 [215] | 298/215/215 [215] |
+| Danish straits (17) | 1c | 1/24/24 [24] | 0/17/17 [17] | 0/0/17 [17] | 8/17/17 [17] |
 | Bosporus (0) | 0/0/0 [0] | 1c/1c/0 [0] | 1983/0/1982 [1982] | 0/0/0 [0] | 0/0/0 [0] |
 | Hudson Strait (163) | 0/0/195 [195] | 195/195/195 [195] | 176/176/176 [176] | 143/165/165 [165] | 148/163/163 [163] |
-| Tsushima (122) | 109/122/122 [0] | 109/122/122 [0] | 103/122/122 [122] | 109/122/122 [122] | 109/122/122 [122] |
-| Tatar Strait (5) | 943/1311/1311 [0] | 0/0/0 [5] | 0/0/0 [5] | 0/5/5 [5] | 0/0/0 [5] |
-| Florida Straits (737) | 576/737/737 [737] | 827/737/737 [660] | 632/737/737 [737] | 641/737/737 [737] | 634/737/737 [737] |
+| Tsushima (116) | 109/116/116 [0] | 109/116/116 [0] | 103/116/116 [116] | 109/116/116 [116] | 109/116/116 [116] |
+| Tatar Strait (4) | 943/1310/1310 [0] | 0/0/0 [4] | 0/0/0 [4] | 0/4/4 [4] | 0/0/0 [4] |
+| Florida Straits (735) | 576/735/735 [735] | 827/735/735 [660] | 632/735/735 [735] | 641/735/735 [735] | 634/735/735 [735] |
 | Denmark Strait (609) | 563/609/609 [609] | 563/609/609 [609] | 563/609/609 [609] | 563/609/609 [609] | 516/609/609 [609] |
-| Faroe Bank Channel (832) | 922/832/832 [832] | 922/832/832 [832] | 899/832/832 [832] | 922/832/832 [832] | 922/832/832 [832] |
+| Faroe Bank Channel (827) | 922/827/827 [827] | 922/827/827 [827] | 899/827/827 [827] | 922/827/827 [827] | 922/827/827 [827] |
 | Panama (0) | 0/1c/0 [0] | 0/0/0 [0] | 0/0/0 [0] | 0/0/0 [0] | 0/0/0 [0] |
 
-At N ≥ 64 the rule's value matches the fine value between the same cells everywhere except Tatar. The N = 1024 sills agree with the literature: Hanish 137 m, Darss 18 m, Denmark Strait ~620 m, Faroe Bank Channel ~840 m, Bering ~50 m. Gibraltar reads 341 m against the Camarinal sill's ~290 m, because the 60″ raster is coarser than the sill.
+At N ≥ 64 the rule's value matches the fine value between the same cells everywhere except Tatar.
+
+## Strait depths against the literature
+
+`scripts/straitSills.mjs` reads each passage's controlling depth straight from the 60″ surface: the widest path between the basins' deepest nearby points through the points of the passage's box. It steps either to a point's eight neighbors or to its four.
+
+| passage | 60″ points, 8-connected | 60″ points, 4-connected | N = 1024 mesh, 4-connected | published | source |
+|---|---|---|---|---|---|
+| Gibraltar | 341 | 283 | 283 | ~284 (Camarinal Sill) | Armi & Farmer 1988 |
+| Bab-el-Mandeb | 137 | 134 | 134 | ~137 (Hanish Sill) | Werner & Lange 1975 |
+| Hormuz | 83 | 83 | 83 | ~70–100 | approximate, source not checked |
+| Bering | 44 | 44 | 44 | ~50 | Woodgate et al. 2005 |
+| Lombok | 216 | 215 | 215 | ~300 | Murray & Arief 1988; Sprintall et al. 2009 |
+| Danish straits | 18 | 18 | 17 | 18 (Darss Sill) | approximate, source not checked |
+| Bosporus | 0 | 0 | 0 | ~35, 0.7 km wide | Gregg & Özsoy 2002 |
+| Hudson Strait | 164 | 164 | 163 | – | not checked |
+| Tsushima | 122 | 118 | 116 | ~130 | approximate, source not checked |
+| Tatar Strait | 5 | 5 | 4 | ~7–10 | approximate, source not checked |
+| Florida Straits | 737 | 735 | 735 | ~750–800 | approximate, source not checked |
+| Denmark Strait | 609 | 609 | 609 | ~620 | approximate, source not checked |
+| Faroe Bank Channel | 832 | 829 | 827 | ~840 | Hansen & Østerhus 2000 |
+
+- **Gibraltar.** The eight-connected step slips diagonally past the Camarinal crest. Four-connected reads 283 m, the published sill. The fine edges are four-connected.
+- **Lombok.** 215–216 m in either connectivity, so the shallow reading is in ETOPO 2022's 60″ data. It is left as it is, under the ruling against hand-made depths.
+- **Bosporus.** Closed at 60″ in either connectivity: the strait is narrower than the grid.
+- **Other passages.** Within 0–6 m between the two connectivities. Open or closed changes nowhere.
+
+The N = 1024 column comes from each fine edge's sill, the join of the deepest points of two ~7 km cells. It can read a few meters shallower than the point-level path (Tsushima 116 against 118).
 
 What remains:
 - **Coarse cells straddling a passage.** At N ≤ 64 one cell can hold both basins; its representative then sits on the ocean side. Hudson at N = 16–64 reads 176–195 between the representatives, and the rule matches that. The bracketed 0s at N = 16–32 and the 1311/1982 readings come from the box: at those N the nearest model sea cell to a point lies outside the passage. They are not readings of the passage.
@@ -142,13 +170,13 @@ These are the small ocean components that turn to land, and the strait flips the
 
 **Small components to land:**
 - N = 16: the Baltic and the Persian Gulf, one cell each.
-- N = 32: the White Sea, the Sea of Marmara, a Gulf of Boothia pocket, the Gulf of California head.
+- N = 32: the White Sea, the Sea of Marmara, the Gulf of California head.
 - N = 64: Bothnian Bay, the Gulf of Finland, Marmara, a Volga pocket by the Caspian, two Canadian Arctic inlets.
-- N = 128 (11, 14 cells):
+- N = 128 (9, 12 cells):
   - Alaska: Cook Inlet, Chatham Strait.
   - The Canadian Arctic: Eureka Sound, Prince Regent Inlet, Roes Welcome, Frobisher Bay, Kennedy Channel.
-  - Elsewhere: Chesapeake Bay, a Scoresby Sund pocket, Río de la Plata, Lagoa dos Patos.
-- N = 192 (26, 30 cells): Svalbard's Isfjorden; the Gulf of Corinth; the Volga delta; the Gulf of Aqaba; the Mangyshlak gulf; the Ob and Yenisei pockets; the Seto Inland Sea; Kolyuchin Bay; Alaska's inside passage (3); Eureka Sound; Queen Charlotte Strait; Long Island Sound; the St. Lawrence estuary (2); Greenland fjords (2); the Amazon mouth; the Banc d'Arguin; the Gulf of Khambhat; Halmahera; Shark Bay; Chiloé; Lagoa dos Patos.
+  - Elsewhere: Río de la Plata, Lagoa dos Patos.
+- N = 192 (24, 28 cells): Svalbard's Isfjorden; the Gulf of Corinth; the Volga delta; the Gulf of Aqaba; the Mangyshlak gulf; the Ob and Yenisei pockets; the Seto Inland Sea; Kolyuchin Bay; Alaska's inside passage (3); Eureka Sound; Queen Charlotte Strait; the St. Lawrence estuary (2); Greenland fjords (2); the Amazon mouth; the Banc d'Arguin; the Gulf of Khambhat; Halmahera; Shark Bay; Chiloé.
 
 **Strait flips no longer made:**
 - N = 128: Cook Inlet; Chatham Strait (2); the Canadian Arctic channels (4); Hudson and Frobisher (3, one cell at 0.91 land); Río de la Plata.

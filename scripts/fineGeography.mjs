@@ -5,7 +5,10 @@
  * surface and bed (CACHE, as for scripts/landIce.mjs) on it. Every 60″
  * point goes to its nearest cell, weighted by its area; its ice follows
  * scripts/landIce.mjs. A fine edge's sill is found from the points of its
- * two cells as createGeography finds a model edge's from the 0.25° raster.
+ * two cells as createGeography finds a model edge's from the 0.25° raster,
+ * but stepping only to a point's four neighbors: a diagonal step slips past
+ * a crest one point wide (Gibraltar's Camarinal Sill reads 341 m that way,
+ * 283 m four-connected).
  * The file is generated and not committed.
  *
  *   node --max-old-space-size=16000 scripts/fineGeography.mjs [CACHE] [N] [OUT]
@@ -87,7 +90,7 @@ stamp('point lists');
 const { nEdges: E, cellsOnEdge } = fineEdges(mesh), edgeSill = new Uint16Array(E);
 let keys = new Float64Array(4096), parent = new Int32Array(4096), members = new Int32Array(4096);
 const find = (p) => { while (parent[p] !== p) { parent[p] = parent[parent[p]]; p = parent[p]; } return p; };
-const SHIFT = 2 ** 28;
+const SHIFT = 2 ** 28, FOUR = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 for (let e = 0; e < E; e++) {
   const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
   if (maxDepth[a] <= 0 || maxDepth[b] <= 0) continue;
@@ -101,15 +104,13 @@ for (let e = 0; e < E; e++) {
   for (let q = n - 1, added = 0; q >= 0; q--, added++) {
     const point = members[order[q] % SHIFT], r = Math.floor(point / COLS), c = point - r * COLS;
     local[point] = added; parent[added] = added;
-    for (let dr = -1; dr <= 1; dr++) {
+    for (const [dr, dc] of FOUR) {
       const rr = r + dr;
       if (rr < 0 || rr >= ROWS) continue;
-      for (let dc = -1; dc <= 1; dc++) {
-        const k = rr * COLS + ((c + dc + COLS) % COLS);
-        if (k === point || local[k] < 0) continue;
-        const x = find(added), y = find(local[k]);
-        if (x !== y) parent[x] = y;
-      }
+      const k = rr * COLS + ((c + dc + COLS) % COLS);
+      if (local[k] < 0) continue;
+      const x = find(added), y = find(local[k]);
+      if (x !== y) parent[x] = y;
     }
     if (local[da] >= 0 && local[db] >= 0 && find(local[da]) === find(local[db])) { sill = depth[point]; break; }
   }
