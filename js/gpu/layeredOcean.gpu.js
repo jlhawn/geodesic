@@ -1343,7 +1343,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   OUT[${OF.H1} + i] = OD[O_MIXED + i];
   OUT[${OF.THD} + i] = thermoclineDepthOf(i);
   OUT[${OF.ETA} + i] = OD[O_ETA + i];
-  let depth = P[4];
+  let depth = P[4]; let upwellingDepth = P[5];
   var layer = -1; var top = 0.0;
   for (var k = 0; k < L; k++) { let hk = IN[hOff(k) + i]; if (layer < 0 && depth < top + hk) { layer = k; } if (layer < 0) { top += hk; } }
   if (layer < 0) {
@@ -1359,9 +1359,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
     var above = 0.0; var transport = 0.0;
     for (var k = 0; k < L; k++) {
-      if (above >= depth) { break; }
+      if (above >= upwellingDepth) { break; }
       let he = 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b]);
-      transport += IN[uOff(k) + e] * min(he, depth - above);
+      transport += IN[uOff(k) + e] * min(he, upwellingDepth - above);
       above += he;
     }
     upwelling += s * MF[F_DV + e] * transport;
@@ -2025,16 +2025,17 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
 
   /*
    * Queues the fields the page asked for, those that vary with depth at
-   * `depth` metres (0 for the top layer), and, when asked, the
+   * `depth` metres (0 for the top layer), the vertical velocity at
+   * `upwellingDepth` (`depth` by default), and, when asked, the
    * diagnostics reduction, and reads back only those; fields over land
    * or below the sea floor are NaN and current vectors zero there.
    */
   const FIELDS = { sst: ['SST', 1], sss: ['SSS', 1], layerDepth: ['H1', 1], thermocline: ['THD', 1], ssh: ['ETA', 1], currents: ['CUR', 3], current: ['CSPD', 1], upwelling: ['UPW', 1] };
-  function frame({ fields = [], diagnostics: summarize = false, depth = 0 } = {}) {
+  function frame({ fields = [], diagnostics: summarize = false, depth = 0, upwellingDepth = depth } = {}) {
     const wanted = fields.filter((name) => name in FIELDS);
     if (!wanted.length && !summarize) return Promise.resolve({ fields: {}, diagnostics: null });
     const g = group(ob.S, ob.OF);
-    setParams([0, 0, 0, 0, depth]);
+    setParams([0, 0, 0, 0, depth, upwellingDepth]);
     const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
     if (wanted.length) dispatch(pass, 'oFrame', g, C);
     if (summarize) dispatch(pass, 'oReduce', g, C);

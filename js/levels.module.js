@@ -1,5 +1,6 @@
 import { DAY, YEAR } from './physics/radiation.module.js';
 import { saturationHumidity } from './physics/moist.module.js';
+import { SURFACE_VERTICAL_SIGMA } from './frames.module.js';
 
 export const LEVELS = ['surface', 1000, 850, 700, 500, 250, 70, 10];
 
@@ -49,14 +50,16 @@ export function levelFields(core, pi, theta, layerWind, level, q = null) {
  * state alone, as the core diagnoses its vertical motion: each layer's
  * mass-flux divergence ∇·(π v), with π on an edge the mean of its two
  * cells, gives dπ/dt and πσ̇ telescoping from zero at the top; ω = πσ̇
- * at the level plus σ (∂π/∂t + v·∇π), and w = −ω/(ρg) with the level's
- * temperature. A level under the ground shows the lowest layer.
- * piSigmaDot, when given, receives the (K + 1) × C interface values.
+ * at the level plus σ (∂π/∂t + v·∇π), and w = −ω/(ρg) with the
+ * temperature interpolated from θ there as levelFields does. 'surface' is
+ * σ = SURFACE_VERTICAL_SIGMA, the top of the boundary layer, where ω no
+ * longer vanishes with the ground. A level under the ground shows the
+ * lowest layer. piSigmaDot, when given, receives the (K + 1) × C
+ * interface values.
  */
-export function verticalVelocity(mesh, core, pi, u, level, temperature, out = new Float32Array(mesh.nCells), piSigmaDot = null) {
-  const { K, C, E, sigmaMid, sigmaLower, sigmaUpper, dSigma, R, g } = core.diagnostics;
+export function verticalVelocity(mesh, core, pi, u, level, theta, out = new Float32Array(mesh.nCells), piSigmaDot = null) {
+  const { K, C, E, sigmaMid, sigmaLower, sigmaUpper, dSigma, R, g, exnerLayer } = core.diagnostics;
   const { maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dvEdge, areaCell } = mesh;
-  const pressure = level === 'surface' ? Infinity : 100 * level;
   const massDivergence = new Float64Array(K), divergence = new Float64Array(K);
   for (let i = 0; i < C; i++) {
     massDivergence.fill(0); divergence.fill(0);
@@ -67,11 +70,14 @@ export function verticalVelocity(mesh, core, pi, u, level, temperature, out = ne
     }
     let dPi = 0;
     for (let k = 0; k < K; k++) { massDivergence[k] /= areaCell[i]; divergence[k] /= areaCell[i]; dPi -= massDivergence[k] * dSigma[k]; }
-    const lowest = pi[i] * sigmaMid[K - 1], here = pressure === Infinity ? lowest : Math.min(pressure, lowest), sigma = here / pi[i];
+    const pressure = level === 'surface' ? SURFACE_VERTICAL_SIGMA * pi[i] : 100 * level;
+    const lowest = pi[i] * sigmaMid[K - 1], here = Math.min(pressure, lowest), sigma = here / pi[i];
     let k = 0;
     while (k < K - 2 && pi[i] * sigmaMid[k + 1] < pressure) k++;
-    const t = pressure === Infinity ? 1 : (Math.log(pressure) - Math.log(pi[i] * sigmaMid[k])) / (Math.log(pi[i] * sigmaMid[k + 1]) - Math.log(pi[i] * sigmaMid[k]));
+    const t = (Math.log(pressure) - Math.log(pi[i] * sigmaMid[k])) / (Math.log(pi[i] * sigmaMid[k + 1]) - Math.log(pi[i] * sigmaMid[k]));
     const tw = Math.min(1, Math.max(0, t));
+    const tk = theta[k * C + i] * exnerLayer[k * C + i], tk1 = theta[(k + 1) * C + i] * exnerLayer[(k + 1) * C + i];
+    const temperature = tk + tw * (tk1 - tk);
     const advection = (j) => massDivergence[j] - pi[i] * divergence[j];
     const piAdvection = advection(k) + tw * (advection(k + 1) - advection(k));
     let layer = 0;
@@ -87,7 +93,7 @@ export function verticalVelocity(mesh, core, pi, u, level, temperature, out = ne
       upper = lower;
     }
     const omega = flow + sigma * (dPi + piAdvection);
-    out[i] = -omega * R * temperature[i] / (here * g);
+    out[i] = -omega * R * temperature / (here * g);
   }
   return out;
 }

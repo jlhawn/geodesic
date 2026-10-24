@@ -4,7 +4,7 @@ import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_B
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, PHYSICS_PASSES, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
-import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN } from '../frames.module.js';
+import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, SURFACE_VERTICAL_SIGMA } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { SNOW_AGEING } from '../physics/ice.module.js';
 import { FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
@@ -145,7 +145,8 @@ const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
  * registers, derives the comfort measures there as levels.module.js
  * does, adds the column water, cloud and sea-level pressure, and when
  * P[3] asks for it the vertical velocity at the level as
- * levels.module.js derives it from the layers' mass-flux divergences;
+ * levels.module.js derives it from the layers' mass-flux divergences,
+ * at σ = SURFACE_SIGMA when the level is the surface;
  * frameVertical then averages it with the neighbours' and folds it into
  * its memory, WM ← WM·P[4] + smoothed·(1 − P[4]).
  * frameRain folds the step accumulators into the three-hour rain,
@@ -199,7 +200,7 @@ fn miseryC(t: f32, rh: f32, v: f32) -> f32 {
 const FRAME_KERNELS = {
   frameFields: `${COMFORT_WGSL}
 const CLOUD_LOW_P: f32 = ${CLOUD_LOW_PRESSURE.toFixed(1)}; const CLOUD_HIGH_P: f32 = ${CLOUD_HIGH_PRESSURE.toFixed(1)};
-const CLOUD_PATH: f32 = ${CLOUD_OPACITY_PATH}; const CLOUD_SEEN_OPACITY: f32 = ${CLOUD_SEEN};
+const CLOUD_PATH: f32 = ${CLOUD_OPACITY_PATH}; const CLOUD_SEEN_OPACITY: f32 = ${CLOUD_SEEN}; const SURFACE_SIGMA: f32 = ${SURFACE_VERTICAL_SIGMA.toFixed(3)};
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i];
@@ -303,9 +304,20 @@ const CLOUD_PATH: f32 = ${CLOUD_OPACITY_PATH}; const CLOUD_SEEN_OPACITY: f32 = $
     }
     var dPi = 0.0;
     for (var j = 0; j < K; j++) { massDivergence[j] /= MF[F_AREA + i]; divergence[j] /= MF[F_AREA + i]; dPi -= massDivergence[j] * LV[L_DS + j]; }
-    let sigma = here / pi;
-    let advectionK = massDivergence[k] - pi * divergence[k]; let advectionK1 = massDivergence[k + 1] - pi * divergence[k + 1];
-    let piAdvection = advectionK + tw * (advectionK1 - advectionK);
+    var kv = k; var twv = tw; var hereV = here; var temperatureV = temperature;
+    if (pressure <= 0.0) {
+      let pv = SURFACE_SIGMA * pi;
+      kv = 0;
+      while (kv < K - 2 && pi * LV[L_SM + kv + 1] < pv) { kv++; }
+      let pkv = pi * LV[L_SM + kv]; let pkv1 = pi * LV[L_SM + kv + 1];
+      twv = clamp((log(pv) - log(pkv)) / (log(pkv1) - log(pkv)), 0.0, 1.0);
+      hereV = min(pv, lowest);
+      let tv = IN[S_TH + kv * C + i] * exner0 * LV[L_CM + kv]; let tv1 = IN[S_TH + (kv + 1) * C + i] * exner0 * LV[L_CM + kv + 1];
+      temperatureV = tv + twv * (tv1 - tv);
+    }
+    let sigma = hereV / pi;
+    let advectionK = massDivergence[kv] - pi * divergence[kv]; let advectionK1 = massDivergence[kv + 1] - pi * divergence[kv + 1];
+    let piAdvection = advectionK + twv * (advectionK1 - advectionK);
     var layer = 0;
     while (layer < K - 1 && LV[L_SL + layer] < sigma) { layer++; }
     let s = clamp((sigma - LV[L_SU + layer]) / LV[L_DS + layer], 0.0, 1.0);
@@ -318,7 +330,7 @@ const CLOUD_PATH: f32 = ${CLOUD_OPACITY_PATH}; const CLOUD_SEEN_OPACITY: f32 = $
       upper = lower;
     }
     let omega = flow + sigma * (dPi + piAdvection);
-    OUT[FR_W + i] = -omega * RGAS * temperature / (here * GRAV);
+    OUT[FR_W + i] = -omega * RGAS * temperatureV / (hereV * GRAV);
   }
 }`,
   frameVertical: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {

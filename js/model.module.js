@@ -290,7 +290,7 @@ export function createModel(gridOrMesh, {
     shared: { skin: seaSkin ? seaSkin.shared : null, core: core.shared, surface: surface.shared, exchange: exchange ? exchange.shared : null, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, gravityWaves: gravityWaves ? gravityWaves.shared : null, orography: orography ? orography.shared : null, drags: dragBuffer, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
-  model.oceanFields = (depth = 0) => (ocean ? ocean.fields(depth) : null);
+  model.oceanFields = (depth = 0, upwellingDepth = depth) => (ocean ? ocean.fields(depth, upwellingDepth) : null);
   model.dragsDue = () => dragStep.fill(-1);
   model.cloudWater = (i) => moistPhysics.columnWater(state[0], state[5], i) + moistPhysics.cumulusCloudPath(state[0], i) + radiation.stratusFraction[i] * radiation.stratus[i];
   model.cloudParts = (i) => {

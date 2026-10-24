@@ -71,9 +71,10 @@ export const THERMOCLINE_DENSITY = 1024.0;
  * depth with the free surface held: h and u are the L layers'
  * thicknesses and edge velocities, temperature(k, i) the layer
  * temperature. Cells that are land or whose water column ends above the
- * depth are NaN, their current vector zero.
+ * depth are NaN, their current vector zero. The vertical velocity is
+ * taken at `upwellingDepth`, the depth itself by default.
  */
-export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth, { thin = 0 } = {}) {
+export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth, { thin = 0, upwellingDepth = depth } = {}) {
   const { nCells: C, nEdges: E, maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dcEdge, dvEdge, nEdge, areaCell } = mesh;
   const out = { temperature: new Float32Array(C), current: new Float32Array(3 * C), speed: new Float32Array(C), upwelling: new Float32Array(C) };
   for (let i = 0; i < C; i++) {
@@ -88,10 +89,10 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth, { 
       x += f * nEdge[3 * e]; y += f * nEdge[3 * e + 1]; z += f * nEdge[3 * e + 2];
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
       let above = 0, transport = 0;
-      for (let k = 0; k < L && above < depth; k++) {
+      for (let k = 0; k < L && above < upwellingDepth; k++) {
         const he = 0.5 * (h[k * C + a] + h[k * C + b]);
         if (k > 0 && he <= thin) continue;
-        transport += u[k * E + e] * Math.min(he, depth - above);
+        transport += u[k * E + e] * Math.min(he, upwellingDepth - above);
         above += he;
       }
       w += s * dvEdge[e] * transport;
@@ -1506,11 +1507,11 @@ export function createOcean(mesh, {
     }
     return z;
   }
-  function fields(depth = 0) {
+  function fields(depth = 0, upwellingDepth = depth) {
     layerDensitiesAll();
     for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN;
     const layerT = (k, i) => (k === 0 ? T0[i] : Q[at(k, i)] / h[at(k, i)]);
-    return { h1: mixedDepths, T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0 }) };
+    return { h1: mixedDepths, T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0, upwellingDepth }) };
   }
 
   function diagnostics() {

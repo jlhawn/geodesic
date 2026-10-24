@@ -127,6 +127,8 @@ export function visibleCloudHeights(K, z, ground, path, deck, deckTop, out) {
 export const RAIN_MEMORY = 3 * 3600;
 export const VERTICAL_MEMORY = 2 * 3600;
 export const UPWELLING_MEMORY = 5 * 86400;
+export const SURFACE_UPWELLING_DEPTH = 50;
+export const SURFACE_VERTICAL_SIGMA = 0.9;
 
 /*
  * Folds a frame's field into a memory kept over frames, memory ←

@@ -15,7 +15,7 @@ import { fetchState, stateName, savedLevels, groupHeader, groupArrays } from './
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
-import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, UPWELLING_MEMORY, foldMemory, frameIsFinite } from './frames.module.js';
+import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, UPWELLING_MEMORY, SURFACE_UPWELLING_DEPTH, foldMemory, frameIsFinite } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
@@ -67,7 +67,7 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
     if (want.has('wetBulb')) out.wetBulb = comfort(wetBulb);
     if (want.has('misery')) out.misery = comfort(miseryIndex);
     if (want.has('vertical')) {
-      const smoothed = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, f.temperature));
+      const smoothed = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, theta));
       const keep = vertical.values && vertical.level === level ? Math.exp(-Math.max(0, time - vertical.time) / VERTICAL_MEMORY) : 0;
       if (!vertical.values || vertical.values.length !== C) vertical.values = new Float32Array(C);
       for (let i = 0; i < C; i++) vertical.values[i] = keep * vertical.values[i] + (1 - keep) * smoothed[i];
@@ -103,7 +103,7 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil);
   if (model.land && want.has('snow')) out.snow = Float32Array.from(model.land.snow);
   if (model.land && want.has('vegetation')) out.vegetation = Float32Array.from(model.land.vegetation);
-  const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields(depth === 'surface' ? 0 : Number(depth)) : null;
+  const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields(depth === 'surface' ? 0 : Number(depth), depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth)) : null;
   if (ocean) {
     for (const [name, values] of Object.entries({ sst: ocean.temperature, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta, current: ocean.speed, upwelling: ocean.upwelling })) if (want.has(name)) out[name] = sea(values);
     if (want.has('currents')) {
