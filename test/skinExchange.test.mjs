@@ -9,6 +9,7 @@ import { withCadence } from '../js/cadence.module.js';
 import { transfer } from '../js/physics/exchange.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { SEA_RHO_CP, warmLayerStep } from '../js/physics/skin.module.js';
+import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_OCEAN } from './helpers/previousDefaults.mjs';
 import { skinRecords, SEEN, STEP } from './helpers/skinProbe.mjs';
 
 /*
@@ -31,7 +32,7 @@ const N = 16, DT = 1350, DAYS = Number(process.env.SKIN_EXCHANGE_DAYS ?? 12), NE
 test(`over ${DAYS} days at N = 16 every cell-step the skin turns unstable is open, sunlit water below the cap, on the warm-layer equation, without a limit cycle or the Oct 6 runaway`, async (t) => {
   const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
   const grid = new Grid(N), records = skinRecords(grid.size);
-  const model = await createParallelModel(grid, { topography, levels: sigmaInterfaces('bl36'), ...withCadence({ ocean: { penetration: 'IB' } }, DT, N), surface: { warmLayer: true, coolSkin: true } }, Math.min(8, availableParallelism()), { module: new URL('./helpers/skinProbe.mjs', import.meta.url).href, data: records.data });
+  const model = await createParallelModel(grid, { topography, levels: sigmaInterfaces('bl36'), ...withCadence({ ocean: { ...PREVIOUS_OCEAN, penetration: 'IB' } }, DT, N), radiation: PREVIOUS_RADIATION, moist: PREVIOUS_MOIST, surface: { warmLayer: true, coolSkin: true } }, Math.min(8, availableParallelism()), { module: new URL('./helpers/skinProbe.mjs', import.meta.url).href, data: records.data });
   t.after(() => model.close());
   initializeState(model, {}).forEach((values, s) => model.state[s].set(values));
   const concentration = new Float64Array(model.mesh.nCells);

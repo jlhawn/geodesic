@@ -89,6 +89,7 @@ import { FREEZING_POINT, MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physic
  * sea: not land, not an ice-shelf cavity.
  */
 export const ICE_RHEOLOGIES = ['frozen', 'free', 'cavitating'], ICE_HEMISPHERES = ['both', 'south', 'north'];
+export const COUPLED_ICE_DRIFT = { rheology: 'cavitating', hemisphere: 'both' };
 export const ICE_DRIFT = {
   rheology: 'cavitating', hemisphere: 'both',
   strength: 27.5e3, strengthDecay: 20, waterDrag: 5.5e-3, waterTurn: 0,

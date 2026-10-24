@@ -162,7 +162,7 @@ export function sunDirection(t, out = new Float64Array(3)) {
  *
  * With `cloudColumns` the shortwave's cloudy column is split into the
  * independent columns of that overlap (the 'pdf' cover under
- * 'exponentialRandom' only): a column is cloudy in a layer or not as a
+ * 'exponentialRandom' only, where it is the default): a column is cloudy in a layer or not as a
  * Markov chain down the layers whose pair covers are those of
  * `overlapped`, so that its total cover is f̄ and each layer's cloud holds
  * its path in its own seen cover. The chain carries the mean and mean
@@ -177,8 +177,8 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * 10⁻⁶ keeps the two-column blend and the relative variance is held to at
  * most 10⁴, so that the GPU's f32 moments of a trace of cloud stay
  * finite. `cloudSpread`, the fractional standard deviation of the water
- * inside each layer's cloud (0, uniform, by default; 0.75 ± 0.18
- * observed, Shonk et al. 2010; 0.6 for ice in CloudSat, Hill et al.
+ * inside each layer's cloud (0.75 by default with cloudColumns, else 0,
+ * uniform; 0.75 ± 0.18 observed, Shonk et al. 2010; 0.6 for ice in CloudSat, Hill et al.
  * 2012), adds its variance to each layer's τ' and the deck's, and in the
  * longwave makes each cloud's transmission the mean of exp(−κ W x / f)
  * over a lognormal x of mean 1 and that spread, at the same four values.
@@ -213,14 +213,14 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * layer is half covered at s = 0 and overcast once s exceeds 2–3 σ_s,
  * and blends on the overcast ramp of the estimated inversion strength
  * into the bounded cover above as the humidity PDF does. With
- * `varianceCover` 'water' ('deficit', the default, is the cover above)
+ * `varianceCover` 'water' (the default; 'deficit' is the cover above)
  * the same Gaussian is placed to hold the layer's cloud water instead of
  * its mean deficit: f = ½ [1 + erf(Q/√2)] with σ_s G(Q) = q_c, G(Q) =
  * Q Φ(Q) + φ(Q) the Gaussian's condensate over σ_s (Sommeria and
  * Deardorff 1977; Bougeault 1981), solved by eight Newton steps from Q =
  * q_c/σ_s (G is convex, so they descend onto the root), as the layers
  * above cover the uniform distribution's water by sqrt(q_c/b). With
- * `buoyancyLength` c (null: none) the length in a layer whose θ_v rises to
+ * `buoyancyLength` c (0.53 by default; null: none) the length in a layer whose θ_v rises to
  * its neighbors (the same ones) under a buoyant surface is at most
  * c w_* / N, w_* = (B₀ h)^⅓ from the boundary layer's surface buoyancy flux
  * and depth and N the layer's buoyancy frequency, the stable limit of
@@ -337,11 +337,12 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * mixed layer's turbulent heating, so it takes none of its radiative
  * heating either. With deckCloud 'top' the deck's water sits in the
  * layer that holds its top (Wood 2012) instead of at stratusSigma.
- * With deckResolved 'above' the boundary layer's cloud counts once: inside
+ * With deckResolved 'above' (the default with the prognostic mixed-layer
+ * deck) the boundary layer's cloud counts once: inside
  * the deck's fraction the resolved and cumulus cloud of the layer that
  * holds the deck's top and of every layer below it gives way to the
  * deck's water, in the longwave, the shortwave, the cloud heating and
- * lowWater, while 'added' (the default) lays the deck over that cloud.
+ * lowWater, while 'added' lays the deck over that cloud.
  * The deck's own absorbed sunlight still sees the whole resolved column.
  * With `deckRegime` 'boundaryLayer' the regime test is instead the moist
  * boundary layer's diagnosis of the step before: a coupled
@@ -632,8 +633,8 @@ function coreDepth(row, paths, k) {
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
-  prognosticHeight = true, deckRest = 'regime', deckSlab = 'fraction', deckReference = 'layer', deckInversion = 'grid', deckCloud = 'sigma', deckResolved = 'added', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'exponentialRandom', decorrelationLength = DECORRELATION_LENGTH, decorrelationSlope = DECORRELATION_SLOPE, cloudColumns = false, cloudSpread = 0,
-  boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, varianceCover: varianceRule = 'deficit', buoyancyLength = null, deckRegime = 'inversion', deckBypass = false,
+  prognosticHeight = true, deckRest = 'regime', deckSlab = 'fraction', deckReference = 'layer', deckInversion = 'grid', deckCloud = 'sigma', deckResolved = mixedLayerDeck && prognosticHeight ? 'above' : 'added', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'exponentialRandom', decorrelationLength = DECORRELATION_LENGTH, decorrelationSlope = DECORRELATION_SLOPE, cloudColumns = cloudCover === 'pdf' && cloudOverlap === 'exponentialRandom', cloudSpread = cloudColumns ? 0.75 : 0,
+  boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, varianceCover: varianceRule = 'water', buoyancyLength = 0.53, deckRegime = 'inversion', deckBypass = false,
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, referenceCoefficients = null, surfaceLayer = false, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,

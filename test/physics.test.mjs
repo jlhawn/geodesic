@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY, R_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { curl, divergence } from '../js/dynamics/operators.module.js';
-import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean, VISIBLE_PATH, STABILITY_SIGMA, DECORRELATION_LENGTH, DECORRELATION_SLOPE, overlapped } from '../js/physics/radiation.module.js';
+import { createRadiation as radiationModule, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean, VISIBLE_PATH, STABILITY_SIGMA, DECORRELATION_LENGTH, DECORRELATION_SLOPE, overlapped } from '../js/physics/radiation.module.js';
 import { smoothCells } from '../js/levels.module.js';
 import { LATENT_HEAT, saturationHumidity, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
@@ -12,14 +12,17 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
+import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
 
 const N = +(process.env.PHYSICS_TEST_N ?? 16);
 const grid = new Grid(N);
 const mesh = buildMesh(grid);
-const core = createSigmaCore(mesh);
+const core = createSigmaCore(mesh, { levels: PREVIOUS_LEVELS });
 const { K, C, E } = core.diagnostics;
 const EPS = 1e-12;
 const OVERCAST = { cloudCover: 'overcast' };
+const createRadiation = (m, c, options = {}) => radiationModule(m, c, { ...PREVIOUS_RADIATION, ...options });
+const PREVIOUS = { levels: PREVIOUS_LEVELS, radiation: PREVIOUS_RADIATION, moist: PREVIOUS_MOIST };
 
 function random(seed) {
   let s = seed >>> 0;
@@ -147,7 +150,7 @@ test('the heat the drags return equals the kinetic energy they remove', () => {
 });
 
 test('the closure and the boundary-layer mixing return the kinetic energy they remove as heat', () => {
-  const model = createModel(new Grid(16), { ocean: false });
+  const model = createModel(new Grid(16), { ...PREVIOUS, ocean: false });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { state, mesh: m, core: c } = model;
@@ -177,7 +180,7 @@ test('the closure and the boundary-layer mixing return the kinetic energy they r
 });
 
 test('divergence damping takes kinetic energy from the divergent flow alone and the model returns it as heat: mass, vorticity and total energy are unchanged', () => {
-  const model = createModel(new Grid(16), { ocean: false, nu4Hours: Infinity, divergenceDamping: 0.05, surface: { spongeDays: 0 } });
+  const model = createModel(new Grid(16), { ...PREVIOUS, ocean: false, nu4Hours: Infinity, divergenceDamping: 0.05, surface: { spongeDays: 0 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { state, mesh: m, core: c } = model;
@@ -224,7 +227,7 @@ test('divergence damping takes kinetic energy from the divergent flow alone and 
 });
 
 test('the assembled model steps a uniform atmosphere without blowing up', () => {
-  const model = createModel(new Grid(16));
+  const model = createModel(new Grid(16), PREVIOUS);
   const init = initializeState(model, { seedAmplitude: 0, geostrophic: false });
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   model.state[0].fill(P0);

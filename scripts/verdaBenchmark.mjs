@@ -1,6 +1,6 @@
 // What a paired spin-up will cost on this machine, measured: for each
 // N:DAYS of CASES ('128:2 64:5') a fresh atlas start of scripts/spinup.mjs
-// on LEVELS (bl60) with the run's OCEAN ('{"everySteps":8}') and
+// on LEVELS (bl48) with the run's OCEAN ('{"everySteps":8}') and
 // STRATOSPHERE (1), as TAG bench<N> in OUT (its earlier bench<N> states and
 // log are removed first, so every case starts fresh, and MINUTES (20)
 // bounds it), timed from the arrival of the segment's own log lines: setup
@@ -83,7 +83,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const root = new URL('..', import.meta.url).pathname;
   const OUT = process.env.OUT ?? join(root, 'runs/bench'), REPORT = process.env.REPORT ?? join(OUT, 'benchmark.txt');
   const CASES = (process.env.CASES ?? '128:2 64:5').trim().split(/\s+/).map((c) => c.split(':').map(Number));
-  const LEVELS = process.env.LEVELS ?? 'bl60', OCEAN = process.env.OCEAN ?? '{"everySteps":8}', STRATOSPHERE = process.env.STRATOSPHERE ?? '1';
+  const LEVELS = process.env.LEVELS ?? 'bl48', OCEAN = process.env.OCEAN ?? '{"everySteps":8}', STRATOSPHERE = process.env.STRATOSPHERE ?? '1';
   const PRICE = Number(process.env.PRICE ?? 1.85), PER_YEAR = Number(process.env.PER_YEAR ?? 36), YEARS = Number(process.env.YEARS ?? 3);
   const UNTIL = Number(process.env.UNTIL ?? 365 * YEARS), MINUTES = process.env.MINUTES ?? '20';
   if (CASES.some(([n, d]) => !(n > 0 && d >= 1))) throw new Error(`CASES is N:DAYS pairs such as '128:2 64:5', not ${process.env.CASES}`);

@@ -22,6 +22,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector, gradient, tangential } from '../js/dynamics/operators.module.js';
 import { createOcean, depthFields } from '../js/ocean/layered.module.js';
+import { PUBLISHED_OCEAN } from './published.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
 
@@ -75,7 +76,7 @@ export function meanSpacing(mesh) {
   return sum / mesh.nEdges;
 }
 
-const START = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 35 };
+const START = { ...PUBLISHED_OCEAN, everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 35 };
 const recipe = (extra = {}) => ({ ...START, ...extra });
 
 function layoutOf(kind, N, mesh, ocean, extra = {}) {

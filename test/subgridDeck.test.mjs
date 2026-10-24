@@ -105,7 +105,7 @@ test('the inversion\'s layer hands its heating down inside its column: each colu
 test('with deckResolved \'above\' the deck replaces the resolved cloud of the layer holding its top and every layer below it inside its fraction: columns without a deck are untouched, each column keeps its energy, and the decked columns carry less water and pass more sunlight', () => {
   const options = { deckInversion: 'subgrid', deckCloud: 'top', cloudColumns: true, cloudSpread: 0.75 };
   for (const radiationEvery of [1, 2]) {
-    const added = deckRun('bl48', { ...options, radiationEvery }, 'moist'), above = deckRun('bl48', { ...options, radiationEvery, deckResolved: 'above' }, 'moist');
+    const added = deckRun('bl48', { ...options, radiationEvery, deckResolved: 'added' }, 'moist'), above = deckRun('bl48', { ...options, radiationEvery, deckResolved: 'above' }, 'moist');
     if (radiationEvery > 1) for (const { model, saved } of [added, above]) { model.state.forEach((a, n) => a.set(saved[n])); model.step(900); }
     const a = added.model.radiation, r = above.model.radiation, C = above.C, K = above.model.core.K;
     let bare = 0, decked = 0, affected = 0, wetter = 0, darker = 0, lighter = 0, gain = 0, worst = 0, fromMiss = 0;
