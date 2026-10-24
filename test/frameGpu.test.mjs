@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { levelFields, verticalVelocity, smoothCells, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
-import { VERTICAL_MEMORY } from '../js/frames.module.js';
+import { VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH } from '../js/frames.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
@@ -57,7 +57,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     const layerWind = (k) => cellVector(mesh, u.subarray(k * E, (k + 1) * E));
     const reference = levelFields(core, pi, theta, layerWind, level, q);
     const comfort = (fn) => Float64Array.from(reference.temperature, (t, i) => fn(t - 273.15, reference.humidity[i], reference.speed[i]) + 273.15);
-    const vertical = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, reference.temperature));
+    const vertical = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, theta));
     const checks = {
       temperature: [reference.temperature, 2e-3], height: [reference.height, 0.1], humidity: [reference.humidity, 5e-5], speed: [reference.speed, 5e-4], wind: [reference.vector, 5e-4],
       dewPoint: [comfort(dewPoint), 5e-3], wetBulb: [comfort(wetBulb), 5e-3], misery: [comfort(miseryIndex), 5e-3], vertical: [vertical, 2e-3],
@@ -158,10 +158,11 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
 
   const column = await model.oceanEngine.serialize();
   const L = model.oceanEngine.layers, cellOcean = model.oceanEngine.cellOcean;
-  for (const depth of [137, 903]) {
+  for (const depth of ['surface', 137, 903]) {
     const at = await model.beginFrame({ depth, fields: ['sst', 'current', 'currents', 'upwelling'] });
     assert.equal(at.depth, depth);
-    const expected = depthFields(mesh, L, { h: column.h, u: column.u, temperature: (k, i) => column.T[k * C + i], cellOcean }, depth);
+    const top = depth === 'surface';
+    const expected = depthFields(mesh, L, { h: column.h, u: column.u, temperature: (k, i) => column.T[k * C + i], cellOcean }, top ? 0 : depth, { upwellingDepth: top ? SURFACE_UPWELLING_DEPTH : depth });
     const speed = expected.speed;
     let magnitude = 0;
     for (let i = 0; i < C; i++) if (!Number.isNaN(expected.upwelling[i])) magnitude = Math.max(magnitude, Math.abs(expected.upwelling[i]));
@@ -192,7 +193,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   const later = await model.beginFrame({ level: 250, fields: ['vertical'] });
   await model.sync();
   core.diagnose(pi, theta, q, qc);
-  const fresh = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, 250, levelFields(core, pi, theta, (k) => cellVector(mesh, u.subarray(k * E, (k + 1) * E)), 250, q).temperature));
+  const fresh = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, 250, theta));
   const keep = Math.exp(-dt / VERTICAL_MEMORY);
   const blend = Float64Array.from(fresh, (w, i) => keep * held.fields.vertical[i] + (1 - keep) * w);
   { const { max, at } = worst(blend, later.fields.vertical); assert.ok(max < 2e-3, `the two-hour memory blends the new frame in: ${max} at ${at}`); }

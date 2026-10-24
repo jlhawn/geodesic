@@ -12,7 +12,7 @@ import { createGpuCore } from './core.gpu.js';
 import { createLayeredOcean, oceanStateLength, OCEAN_DEFAULTS } from './layeredOcean.gpu.js';
 import { createGeography, surfaceGeopotential, geographyRecordOf } from '../geography.module.js';
 import { readRanges } from './device.module.js';
-import { RAIN_MEMORY, VERTICAL_MEMORY } from '../frames.module.js';
+import { RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH } from '../frames.module.js';
 import { createLandSurface, SOIL_CARBON } from '../physics/land.module.js';
 import { loadClimatology } from '../ocean/climatology.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from '../physics/exchange.module.js';
@@ -258,7 +258,7 @@ export async function createGpuModel(gridOrMesh, {
     if (rainScale || meanScale) changes++;
     const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize, rainScale, meanScale });
     if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
-    const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth) }) : null;
+    const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth), upwellingDepth: depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth) }) : null;
     return Promise.all([atmosphere, ocean]).then(([a, o]) => {
       const out = { time, level, depth, fields: { ...a.fields, ...(o ? o.fields : {}) }, diagnostics: null };
       if (!a.sums) return out;

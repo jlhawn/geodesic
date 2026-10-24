@@ -157,7 +157,7 @@ export function createTopBudget(mesh, levels, { layers = 6, surface = {} } = {})
   const shape = Float64Array.from({ length: K }, (_, k) => (levels[k + 1] ** (1 + KAPPA) - levels[k] ** (1 + KAPPA)) / ((1 + KAPPA) * (levels[k + 1] - levels[k])));
   const names = ['waves', 'sponge', 'friction', 'coriolis', 'eddy', 'vertical', 'eddyVertical', 'radiation', 'verticalT', 'meridionalT', 'eddyT', 'eddyVerticalT'];
   const sums = Object.fromEntries(names.map((n) => [n, new Float64Array(L * bands)])), counts = Object.fromEntries(names.map((n) => [n, 0]));
-  const vector = new Float64Array(3 * C), east = new Float64Array(C), north = new Float64Array(C), unit = new Float32Array(C).fill(1), flows = new Float64Array((K + 1) * C);
+  const vector = new Float64Array(3 * C), east = new Float64Array(C), north = new Float64Array(C), flows = new Float64Array((K + 1) * C);
   const bandMean = (values) => { const out = new Float64Array(bands); for (let i = 0; i < C; i++) out[band[i]] += mesh.areaCell[i] * values[i]; return out.map((x, b) => x / area[b]); };
   const slope = (x, b) => { const lo = Math.max(0, b - 1), hi = Math.min(bands - 1, b + 1); return (x[hi] - x[lo]) / (lat[hi] - lat[lo]); };
   const temperature = (theta, pi, k) => Float64Array.from({ length: C }, (_, i) => theta[k * C + i] * (pi[i] / P0) ** KAPPA * shape[k]);
@@ -188,7 +188,7 @@ export function createTopBudget(mesh, levels, { layers = 6, surface = {} } = {})
     },
     sample(state) {
       const [pi, theta, u] = state, piBar = bandMean(pi);
-      verticalVelocity(mesh, core, pi, u, 'surface', unit, new Float32Array(C), flows);
+      verticalVelocity(mesh, core, pi, u, 'surface', theta, new Float32Array(C), flows);
       const uBar = [], vBar = [], tBar = [], uv = [], vt = [], sdot = [], uCell = [], tCell = [];
       for (let k = 0; k <= L; k++) {
         winds(u, k);

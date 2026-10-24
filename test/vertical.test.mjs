@@ -5,7 +5,8 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { levelFields, verticalVelocity, smoothCells } from '../js/levels.module.js';
+import { verticalVelocity, smoothCells } from '../js/levels.module.js';
+import { SURFACE_VERTICAL_SIGMA, SURFACE_UPWELLING_DEPTH } from '../js/frames.module.js';
 import { createOcean as createLayeredOcean, depthFields } from '../js/ocean/layered.module.js';
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
@@ -21,10 +22,8 @@ test('the vertical velocity at a level rests on the same πσ̇ the core diagnos
   core.diagnose(pi, theta, q, state[5]);
   core.tendency(state, state.map((x) => new Float64Array(x.length)));
   const own = core.arrays.piSigmaDot;
-  const layerWind = (k) => cellVector(mesh, u.subarray(k * E, (k + 1) * E));
   const piSigmaDot = new Float64Array((K + 1) * C);
-  const { temperature } = levelFields(core, pi, theta, layerWind, 500, q);
-  const w = verticalVelocity(mesh, core, pi, u, 500, temperature, new Float32Array(C), piSigmaDot);
+  const w = verticalVelocity(mesh, core, pi, u, 500, theta, new Float32Array(C), piSigmaDot);
   let worst = 0, scale = 0;
   for (let n = 0; n < piSigmaDot.length; n++) { worst = Math.max(worst, Math.abs(piSigmaDot[n] - own[n])); scale = Math.max(scale, Math.abs(own[n])); }
   assert.ok(scale > 1e-4, `the flow has vertical motion: ${scale}`);
@@ -40,9 +39,32 @@ test('the vertical velocity at a level rests on the same πσ̇ the core diagnos
   assert.ok(Math.sqrt(rmsSmooth / C) < rms, 'averaging with the neighbours takes energy out of the field');
   const flat = smoothCells(mesh, new Float32Array(C).fill(0.25));
   for (let i = 0; i < C; i++) assert.ok(Math.abs(flat[i] - 0.25) < 1e-6);
-  const lowest = verticalVelocity(mesh, core, pi, u, 'surface', levelFields(core, pi, theta, layerWind, 'surface', q).temperature);
-  const underground = verticalVelocity(mesh, core, pi, u, 1000, levelFields(core, pi, theta, layerWind, 1000, q).temperature);
-  for (let i = 0; i < C; i++) if (pi[i] < 1000e2) assert.ok(Math.abs(underground[i] - lowest[i]) < 1e-12, `a level under the ground shows the lowest layer at ${i}`);
+  const deeper = verticalVelocity(mesh, core, pi, u, 1050, theta);
+  const underground = verticalVelocity(mesh, core, pi, u, 1000, theta);
+  for (let i = 0; i < C; i++) if (pi[i] < 1000e2) assert.ok(Math.abs(underground[i] - deeper[i]) < 1e-12, `a level under the ground shows the lowest layer at ${i}`);
+});
+
+test('the vertical velocity at the surface is taken at σ = 0.9, as the pressure level 0.9π of each cell gives it', () => {
+  const model = createModel(new Grid(16), { topography });
+  const { mesh, core, state } = model;
+  const C = mesh.nCells;
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) state[a].set(init[a]);
+  for (let n = 0; n < 6; n++) model.step(900);
+  const [pi, theta, u, , q] = state;
+  core.diagnose(pi, theta, q, state[5]);
+  const surface = verticalVelocity(mesh, core, pi, u, 'surface', theta);
+  let checked = 0, flat = 0, high = 0, scale = 0;
+  for (let i = 0; i < C; i++) scale = Math.max(scale, Math.abs(surface[i]));
+  assert.ok(scale > 1e-4, `the flow moves vertically at σ = 0.9: ${scale} m/s`);
+  for (let i = 0; i < C; i += 7) {
+    const level = SURFACE_VERTICAL_SIGMA * pi[i] / 100;
+    const at = verticalVelocity(mesh, core, pi, u, level, theta);
+    assert.ok(Math.abs(at[i] - surface[i]) <= 1e-6 * scale, `cell ${i}: ${surface[i]} against ${at[i]} at ${level.toFixed(1)} hPa`);
+    checked++;
+    if (model.geography.land[i]) high++; else flat++;
+  }
+  assert.ok(flat > 5 && high > 5, `cells over the sea and the mountain: ${flat}, ${high} of ${checked}`);
 });
 
 test('the fields at a depth pick the layer holding it, mask the sea floor, and integrate the transport above it to a divergence-free whole', () => {
@@ -64,6 +86,17 @@ test('the fields at a depth pick the layer holding it, mask the sea floor, and i
     assert.equal(surface.upwelling[i], 0, 'nothing lies above the surface');
     for (let c = 0; c < 3; c++) assert.ok(Math.abs(surface.current[3 * i + c] - top[3 * i + c]) < 1e-6);
   }
+  const shown = depthFields(mesh, L, { h, u, temperature, cellOcean }, 0, { upwellingDepth: SURFACE_UPWELLING_DEPTH });
+  const fifty = depthFields(mesh, L, { h, u, temperature, cellOcean }, SURFACE_UPWELLING_DEPTH);
+  let moving = 0;
+  for (let i = 0; i < C; i++) {
+    if (!cellOcean[i]) continue;
+    assert.equal(shown.temperature[i], surface.temperature[i]);
+    assert.equal(shown.speed[i], surface.speed[i]);
+    assert.equal(shown.upwelling[i], fifty.upwelling[i], `the surface's upwelling is the flow through 50 m at ${i}`);
+    if (shown.upwelling[i] !== 0) moving++;
+  }
+  assert.ok(moving > 0);
   const deep = depthFields(mesh, L, { h, u, temperature, cellOcean }, 250);
   let wet = 0, dry = 0, sum = 0, magnitude = 0;
   for (let i = 0; i < C; i++) {
