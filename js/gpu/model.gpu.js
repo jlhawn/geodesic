@@ -337,7 +337,7 @@ export async function createGpuModel(gridOrMesh, {
     },
   } : null;
 
-  function pushLake() { gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH.LAKE, lakeUpload(lakeCpu, C)); }
+  function pushLake() { gpu.uploadLake(lakeUpload(lakeCpu, C)); }
   model.lake = lakeCpu ? {
     cells: lakeCpu.cells, depth: lakeCpu.depth, isLake: lakeCpu.isLake,
     ...Object.fromEntries(LAKE_SLOTS.filter((name) => name !== 'pending' && name !== 'depth' && name !== 'coriolis').map((name) => [name, lakeCpu[name]])),

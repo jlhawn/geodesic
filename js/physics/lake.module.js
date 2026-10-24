@@ -201,12 +201,14 @@ export function lakeStep(c, D, absorbed, flux, ustar, f, dt, closed = true) {
  * (T_f − T_I)) with C_I(h) linear in h, the root of the quadratic that
  * goes to the latent-heat thickness as T_I nears T_f. With less ice than
  * iceMin the rest warms or cools the whole water; at iceMax the ice's
- * temperature takes it.
+ * temperature takes it. Open water does not freeze on a deficit within
+ * SETTLE_SLACK kelvin of the whole water, the round-off of f32's enthalpy.
  */
+export const SETTLE_SLACK = 1e-4;
 export function lakeSettle(c, D, target) {
   const k = FLAKE, rc = k.rhoWater * k.cWater;
   const left = target - rc * D * (c.mean - k.freezing), need = -left / k.rhoIce;
-  if (need <= k.fusion * k.iceMin) {
+  if (need <= k.fusion * k.iceMin + (c.ice > 0 ? 0 : rc * D * SETTLE_SLACK / k.rhoIce)) {
     const shift = left / rc / D;
     c.mixed += shift; c.mean += shift; c.bottom += shift; c.ice = 0; c.iceT = k.freezing;
     return;
@@ -263,7 +265,7 @@ export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, fresh
   const read = (i) => { for (const name of LAKE_FIELDS) column[name] = fields[name][i]; return column; };
   const write = (i) => { for (const name of LAKE_FIELDS) fields[name][i] = column[name]; };
   return {
-    cells, depth, ...fields, passed,
+    cells, depth, coriolis, ...fields, passed,
     isLake: geography.lake,
     initialize(surfaceT) {
       for (const i of cells) { Object.assign(column, lakeColumn(surfaceT[i], depth[i])); write(i); surfaceT[i] = column.mixed; }

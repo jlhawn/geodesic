@@ -1,5 +1,5 @@
 /* FLake (http://www.flake.igb-berlin.de/source/src_flake_sfcflx.tar.gz) is distributed under the MIT license; see the notice in js/physics/lake.module.js. */
-import { FLAKE, LAKE_FIELDS } from '../physics/lake.module.js';
+import { FLAKE, LAKE_FIELDS, SETTLE_SLACK } from '../physics/lake.module.js';
 import { SEA_SURFACE_WGSL } from './physics.gpu.js';
 
 export const LAKE_SLOTS = ['depth', 'coriolis', ...LAKE_FIELDS, 'passed', 'pending'];
@@ -16,17 +16,17 @@ const LK_ISHAPE: f32 = ${literal(k.iceShape)}; const LK_ISLOPE: f32 = ${literal(
 const LK_IMIN: f32 = ${literal(k.iceMin)}; const LK_HMIN: f32 = ${literal(k.mixedMin)}; const LK_HMAX: f32 = ${literal(k.mixedMax)}; const LK_USMIN: f32 = ${literal(k.ustarMin)}; const LK_SMALL: f32 = ${literal(k.small)};
 const LK_G: f32 = ${literal(k.g)}; const LK_TR: f32 = ${literal(k.maximumDensityT)}; const LK_TF: f32 = ${literal(k.freezing)}; const LK_AT: f32 = ${literal(k.expansion)}; const LK_RHOW: f32 = ${literal(k.rhoWater)}; const LK_RHOI: f32 = ${literal(k.rhoIce)};
 const LK_LF: f32 = ${literal(k.fusion)}; const LK_CW: f32 = ${literal(k.cWater)}; const LK_CI: f32 = ${literal(k.cIce)}; const LK_KW: f32 = ${literal(k.kWater)}; const LK_KI: f32 = ${literal(k.kIce)}; const LK_EXT: f32 = ${literal(k.extinction)};
-const LK_SNOW_FUSION: f32 = ${literal(SNOW_FUSION)};
+const LK_SNOW_FUSION: f32 = ${literal(SNOW_FUSION)}; const LK_SLACK: f32 = ${literal(SETTLE_SLACK)};
 fn lkAt(n: i32, i: i32) -> i32 { return PH_LAKE + n * C + i; }
 fn lkBuoyancy(T: f32) -> f32 { return LK_G * LK_AT * (T - LK_TR); }
 fn lkEnthalpy(D: f32, mean: f32, ice: f32, iceT: f32) -> f32 {
   let CI = LK_ISHAPE - LK_IMR * (1.0 + LK_IAST) * min(1.0, ice / LK_IMAX);
   return LK_RHOW * LK_CW * D * (mean - LK_TF) - LK_RHOI * ice * (LK_LF + LK_CI * CI * (LK_TF - iceT));
 }
-fn lakeSettle(i: i32, D: f32, target: f32) {
+fn lakeSettle(i: i32, D: f32, goal: f32) {
   let rc = LK_RHOW * LK_CW;
-  let left = target - rc * D * (PH[lkAt(${slot('mean')}, i)] - LK_TF); let need = -left / LK_RHOI;
-  if (need <= LK_LF * LK_IMIN) {
+  let left = goal - rc * D * (PH[lkAt(${slot('mean')}, i)] - LK_TF); let need = -left / LK_RHOI;
+  if (need <= LK_LF * LK_IMIN + select(rc * D * LK_SLACK / LK_RHOI, 0.0, PH[lkAt(${slot('ice')}, i)] > 0.0)) {
     let shift = left / rc / D;
     PH[lkAt(${slot('mixed')}, i)] += shift; PH[lkAt(${slot('mean')}, i)] += shift; PH[lkAt(${slot('bottom')}, i)] += shift; PH[lkAt(${slot('ice')}, i)] = 0.0; PH[lkAt(${slot('iceT')}, i)] = LK_TF;
     return;
@@ -54,7 +54,7 @@ const LAKE_STEP_WGSL = `fn lakeStep(i: i32, absorbed: f32, flux: f32, ustar: f32
   }
   let Tml = PH[lkAt(${slot('mixed')}, i)]; let Tmn = PH[lkAt(${slot('mean')}, i)]; let Tb = PH[lkAt(${slot('bottom')}, i)]; let CT = PH[lkAt(${slot('shape')}, i)];
   let h = PH[lkAt(${slot('mixedDepth')}, i)]; let hi = PH[lkAt(${slot('ice')}, i)]; let Ti = PH[lkAt(${slot('iceT')}, i)];
-  let target = lkEnthalpy(D, Tmn, hi, Ti) + (absorbed + flux) * dt;
+  let goal = lkEnthalpy(D, Tmn, hi, Ti) + (absorbed + flux) * dt;
   let rc = LK_RHOW * LK_CW;
   let iced = hi >= LK_IMIN;
   let Iw = select(absorbed, 0.0, iced); let Iice = select(0.0, absorbed, iced);
@@ -169,7 +169,7 @@ const LAKE_STEP_WGSL = `fn lakeStep(i: i32, absorbed: f32, flux: f32, ustar: f32
   if ((TmlN - TbN) * lkBuoyancy(TmnN) < 0.0) { hN = D; TmlN = TmnN; TbN = TmnN; CTN = LK_CTMIN; }
   PH[lkAt(${slot('mixed')}, i)] = TmlN; PH[lkAt(${slot('mean')}, i)] = TmnN; PH[lkAt(${slot('bottom')}, i)] = TbN; PH[lkAt(${slot('shape')}, i)] = CTN;
   PH[lkAt(${slot('mixedDepth')}, i)] = hN; PH[lkAt(${slot('ice')}, i)] = hiN; PH[lkAt(${slot('iceT')}, i)] = TiN;
-  lakeSettle(i, D, target);
+  lakeSettle(i, D, goal);
   let iceN = PH[lkAt(${slot('ice')}, i)];
   return vec2<f32>(select(PH[lkAt(${slot('mixed')}, i)], PH[lkAt(${slot('iceT')}, i)], iceN > 0.0), iceN);
 }

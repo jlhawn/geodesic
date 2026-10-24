@@ -1203,6 +1203,7 @@ export async function createGpuCore(mesh, {
     if (retained.subcloudVirtual) ph.set(retained.subcloudVirtual, L.PH.SUBTV);
     if (L.PH.WARM !== undefined && retained.warmLayer) ph.set(retained.warmLayer, L.PH.WARM);
     if (L.PH.COOL !== undefined && retained.coolSkin) ph.set(retained.coolSkin, L.PH.COOL);
+    if (L.PH.LAKE !== undefined && retained.lake) ph.set(retained.lake, L.PH.LAKE);
     submitNow((encoder) => encoder.clearBuffer(buffers.PH, 0, 4 * L.PH.total));
     const words = new Uint32Array(ph.buffer), block = WRITE_PIECE / 4;
     for (let start = 0; start < words.length; start += block) {
@@ -1331,7 +1332,8 @@ export async function createGpuCore(mesh, {
     });
   }
   function clearFrame() { submitNow((encoder) => encoder.clearBuffer(buffers.FR, 0, 4 * L.FR.total)); }
+  function uploadLake(values) { retained.lake = values; device.queue.writeBuffer(buffers.PH, 4 * L.PH.LAKE, values); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
+  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, uploadLake, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
 }
