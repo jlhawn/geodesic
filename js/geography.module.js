@@ -60,7 +60,7 @@ export function topographyFromInt16(buffer, rows = 720, cols = 1440, name = 'eto
 export const TOPOGRAPHIES = { etopo1: 'topography_0p25.bin', etopo2022: 'topography2022_0p25.bin' };
 export const ICE_SHEETS = ['rule', 'observed'], ICE_SHELVES = ['land', 'sea', 'cavity'], MASKS = ['raster', 'n1024'];
 export const LEGACY_GEOGRAPHY = { topography: 'etopo1', iceSheets: 'rule', iceShelves: 'land', mask: 'raster' };
-export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity' };
+export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity', mask: 'raster' };
 export const topographyUrl = (name = 'etopo1') => new URL(`../data/${TOPOGRAPHIES[name]}`, import.meta.url);
 
 export function checkGeography(record) {
@@ -70,8 +70,7 @@ export function checkGeography(record) {
   if (!ICE_SHELVES.includes(iceShelves)) throw new Error(`iceShelves is ${ICE_SHELVES.join(' or ')}, not ${iceShelves}`);
   if (iceShelves !== 'land' && iceSheets !== 'observed') throw new Error(`ice shelves at ${iceShelves} need the observed ice sheets`);
   if (!MASKS.includes(mask)) throw new Error(`mask is ${MASKS.join(' or ')}, not ${mask}`);
-  if (mask === 'raster') return { topography, iceSheets, iceShelves };
-  if (topography !== 'etopo2022' || iceSheets !== 'observed' || iceShelves === 'sea') throw new Error('the n1024 mask is ETOPO 2022\'s with the observed ice sheets, its shelves land or cavities');
+  if (mask !== 'raster' && (topography !== 'etopo2022' || iceSheets !== 'observed' || iceShelves === 'sea')) throw new Error('the n1024 mask is ETOPO 2022\'s with the observed ice sheets, its shelves land or cavities');
   return { topography, iceSheets, iceShelves, mask };
 }
 

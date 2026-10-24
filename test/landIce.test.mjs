@@ -118,7 +118,7 @@ test('a state records its geography where it differs from ETOPO1 and the rule, f
   assert.deepEqual(savedGeography({}), LEGACY_GEOGRAPHY);
   assert.deepEqual(savedGeography({ iceSheets: 'observed' }), { ...LEGACY_GEOGRAPHY, iceSheets: 'observed' });
   assert.deepEqual(geographyHeader(LEGACY_GEOGRAPHY), {});
-  assert.deepEqual(geographyHeader(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed' });
+  assert.deepEqual(geographyHeader(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity' });
   assert.deepEqual(pickGeography({ N: 16, topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'land' }), { topography: 'etopo2022', iceSheets: 'observed' });
   assert.throws(() => checkGeography({ topography: 'etopo5' }), /topography is etopo1 or etopo2022/);
   assert.throws(() => checkGeography({ iceSheets: 'bedrock' }), /iceSheets is rule or observed/);
