@@ -6,7 +6,7 @@ import { withCadence } from './cadence.module.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
-import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, decodeLandIce, landIceUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
+import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, decodeMask, decodeLandIce, landIceUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
@@ -19,6 +19,7 @@ import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, 
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
+import { LAKE_FIELDS } from './physics/lake.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
@@ -347,6 +348,17 @@ function placeDeck(model, saved, N) {
   if (model.skin) model.skin.load(saved && saved.N === N ? saved : null);
 }
 
+const lakeName = (name) => `lake${name[0].toUpperCase()}${name.slice(1)}`;
+
+/*
+ * A lake's columns come with a saved run at the same resolution; otherwise
+ * each starts mixed at its surface temperature on its first step.
+ */
+function placeLake(model, saved, N) {
+  if (!model.lake || !saved || saved.N !== N || !saved.lakeMean) return;
+  model.lake.load(Object.fromEntries([...LAKE_FIELDS, 'passed'].map((name) => [name, saved[lakeName(name)]]).filter(([, values]) => values)));
+}
+
 /*
  * The cumulus cloud's cover and water are saved in the GPU's layout, the
  * plume layers from cumulusK0 down, (K − K0) × C; the CPU keeps K × C.
@@ -415,13 +427,19 @@ async function loadTopography(url, name = 'etopo1') {
 }
 
 const subgrids = new Map();
-async function loadSubgrid(N, topography = 'etopo1') {
-  const key = `${topography} ${N}`;
+async function loadSubgrid(N, topography = 'etopo1', mask = 'raster') {
+  const key = `${topography} ${mask} ${N}`;
   if (subgrids.has(key)) return subgrids.get(key);
-  const response = await fetch(subgridUrl(N, topography)).catch(() => null);
+  const response = await fetch(subgridUrl(N, topography, mask)).catch(() => null);
   const fields = response && response.ok ? await response.arrayBuffer().then(decodeSubgrid).catch(() => null) : null;
   subgrids.set(key, fields);
   return fields;
+}
+
+async function loadMask(N, mask) {
+  const response = await fetch(maskUrl(N, mask));
+  if (!response.ok) throw new Error(`the ${mask} land mask for N=${N}: ${response.status}`);
+  return decodeMask(await response.arrayBuffer());
 }
 
 let landIce = null;
@@ -637,6 +655,7 @@ async function snapshot() {
   for (const name of Object.keys(RADIATION_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   arrays.levels = Float64Array.from(model.core.levels).buffer;
   if (model.skin) for (const [name, values] of Object.entries(model.skin.serialize())) arrays[name] = values.buffer;
+  if (model.lake) for (const [name, values] of Object.entries(await model.lake.serialize())) arrays[lakeName(name)] = Float64Array.from(values).buffer;
   let ocean = null, land = null;
   if (model.ocean) {
     const o = await model.ocean.serialize();
@@ -672,6 +691,7 @@ async function restore(snapshot) {
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   placeIce(model, saved, currentN);
   placeDeck(model, saved, currentN);
+  placeLake(model, saved, currentN);
   if (model.load) model.load({ ocean: false });
   await model.settle?.();
   if (model.dragsDue) model.dragsDue();
@@ -702,9 +722,9 @@ async function start(message) {
   if (message.land !== false) {
     status('loading the topography…', 0.52);
     options.topography = await loadTopography(message.topography ?? topographyUrl(geography.topography).href, geography.topography);
-    options.subgrid = await loadSubgrid(N, geography.topography);
+    options.subgrid = await loadSubgrid(N, geography.topography, geography.mask);
     const sheets = geographyOptions(geography, geography.iceSheets === 'rule' ? null : await loadLandIce());
-    options.geography = { ...(options.geography ?? {}), ...sheets.geography };
+    options.geography = { ...(options.geography ?? {}), ...sheets.geography, ...(geography.mask ? { maskData: await loadMask(N, geography.mask) } : {}) };
     options.land = { ...sheets.land, ...(options.land ?? {}) };
   }
   if (!saved && message.land !== false && message.climatology !== false) {
@@ -739,6 +759,7 @@ async function start(message) {
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   placeIce(model, saved, N);
   placeDeck(model, saved, N);
+  placeLake(model, saved, N);
   status('uploading the state…', 0.92);
   if (model.load) model.load({ ocean: false });
   await model.settle?.();

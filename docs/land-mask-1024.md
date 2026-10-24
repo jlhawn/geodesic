@@ -1,4 +1,4 @@
-# Land mask from an N = 1024 resampling: phase 1
+# Land mask from an N = 1024 resampling: phases 1 and 2
 
 Oct 24, 2026. Branch `claude/land-mask-1024`. Model defaults, sub-grid files, saved states and page defaults are untouched.
 
@@ -199,9 +199,75 @@ That covers:
 
 At N = 128, 18 such components; at N = 192, 25. Nearly all of their cells are sea in today's geography too: 405 of 414 at N = 128.
 
+## Phase 2: the `n1024` geography option
+
+Geography records gain a `mask` key: `'raster'` or `'n1024'`. A raster record has no key, so every existing record, state and digest is unchanged. An n1024 record:
+- needs `topography: 'etopo2022'`, observed ice sheets, and ice shelves `'land'` or `'cavity'`;
+- reads `data/geography_n1024_N<N>.bin` (`maskUrl`, `encodeMask`, `decodeMask`) and `data/subgrid_etopo2022_n1024_N<N>.bin`.
+
+Build:
+```
+LAKES=~/.cache/webgcm-lakes/ne_10m_lakes.geojson LAKE_REPORT=lakes.json node --max-old-space-size=20000 scripts/fineGeography.mjs
+LAKE_REPORT=lakes.json REPORT=mask.json node --max-old-space-size=16000 scripts/geographyMask.mjs
+MASK=n1024 TOPOGRAPHY=etopo2022 node scripts/subgridTerrain.mjs CACHE 16 32 64 128 192
+```
+The fine build takes 5.4 min (18.5 GB peak); the five masks take 5.4 min (5.7 GB).
+
+| N | land cells | land, 10⁶ km² | lakes | lake cells | depressions (cells) | seawater lakes (cells) | closed seas | file |
+|---|---|---|---|---|---|---|---|---|
+| 16 | 731 | 145.49 | 0 | 0 | 0 | 0 | Black Sea, Caspian | 35 KB |
+| 32 | 2948 | 146.83 | 2 | 2 | 0 | 0 | Black Sea, Caspian | 137 KB |
+| 64 | 11832 | 147.35 | 14 | 33 | 2 (3) | 1 (1) | Black Sea, Caspian | 544 KB |
+| 128 | 47359 | 147.44 | 47 | 196 | 6 (15) | 3 (7) | + Marmara, a Magellan fjord | 2.1 MB |
+| 192 | 106670 | 147.59 | 106 | 556 | 11 (39) | 6 (17) | + Marmara | 4.8 MB |
+
+**Ice.** The fine dataset also carries a sea mode, in which floating ice is water to its bed. Each mask file stores the shelf mode in full and the cells and edges where the sea mode differs. `'cavity'` builds on the sea mode.
+
+**Lakes.** The lakes come from Natural Earth `ne_10m_lakes` (1355 features), rasterized at each 60″ point.
+- A coarse cell is a lake where lakes cover more than half of its area. It takes the id of the lake that covers most of it.
+- Level: the mode of ETOPO's surface over the lake when at least 30 % of its points share it (the raster holds the water); otherwise the 10th percentile of the shore ring.
+- Depth: level − bed, averaged over the cell.
+- A lake cell is water at elevation −depth with its own surface (`surface`, used by `surfaceGeopotential`). Its edges open only to cells of the same lake.
+- Natural Earth's "Alkaline Lake" class marks a lake as saline.
+
+Natural Earth lists neither the Caspian nor Maracaibo. The dataset has no intermittent class: salt pans such as Eyre, Frome and Torrens are "Alkaline Lake", as are the Dead Sea and the Great Salt Lake. They first take cells at N = 128 (10 lakes).
+
+**Depressions and cut-off seawater.** Every sea component but the largest is a closed basin.
+- A closed basin deeper than 500 m below sea level at its deepest point stays a closed sea: the Black Sea, the Caspian, Marmara.
+- A shallower one the lakes don't mark is seawater the mesh cuts off if its fine water (60″ points below 0 m outside lakes) joins the world ocean's through neighboring fine cells that both hold some. It becomes saline lake cells at level 0 (`seawater`).
+- Otherwise it is a dry depression and becomes land at its own elevation (`depression`).
+
+The dry depressions:
+- N = 64: Qattara, Eyre.
+- N = 128 adds: the Chott Melrhir, Danakil, Turpan, Salton.
+- N = 192 adds: the Dead Sea, a Libyan sabkha (30.2° N 21.1° E), more of Eyre, and one Skyring cell.
+
+The seawater lakes:
+- N = 64: Maracaibo.
+- N = 128 adds: Lake Melville, Chesterfield Inlet.
+- N = 192 adds: Lagoa dos Patos, Skyring and Otway, and the Sacramento delta.
+
+The delta is wrong. ETOPO counts every point at or below 0 m as water, so its subsided islands (to −7 m) are water. The same holds for the polders and for the Caspian lowland between −28 and 0 m: the model's Caspian is 605,000–751,000 km² against about 371,000. An elevation-independent land–water source would fix these.
+
+**Lake model.** `lake: { model: 'flake' }` (off by default; `js/physics/lake.module.js`) runs FLake (Mironov 2008; Mironov et al. 2010) on lake cells. It follows the IFS's choices (Balsamo et al. 2012; Choulga et al. 2019):
+- depth bounded to 2–50 m;
+- no snow layer and no bottom sediments;
+- one shortwave band at 3 m⁻¹, with the ice opaque.
+
+Where ETOPO holds no bed below a lake's level (Victoria, Tanganyika, Malawi, Great Bear), the depth is GLDB v3's default: 10 m fresh, 5 m saline.
+
+Coupling:
+- The atmosphere sees open sea water; the ice has FLake's albedo.
+- Snow's heat of fusion is taken from the lake.
+- FLake's own ice does not conserve heat: the residual is 3.7 % of the flux under the ice in the 20 m column test, −87 MJ/m² over three years. The model takes the ice thickness from the energy instead (`lakeSettle`): FLake's equations set the water and the ice's temperature, and the ice is as thick as the remaining heat requires.
+  - The 20 m column then drifts 4e-4 J/m² in three years.
+  - Against FLake's own ice: peak 1.04 vs 1.07 m, break-up day 122 vs 123, freeze-up day 345 for both.
+- The shortwave that reaches the bottom stays in the water (no sediments).
+- Snowfall's heat of fusion is taken from the lake at once, through the same closure.
+- A lake passes its whole water gain (P − E plus inflowing runoff) to the sea cell its outlet reaches, negative where evaporation wins. Its depth stays fixed, and global water is conserved.
+
 ## Open points
 
 1. **Porous barriers.** Adcroft (2013) open widths wait. The fine edges give the data for them.
-2. **Phase 2 is not started, by Joshua's choice.** Not done: ice and cavity pass-through; sub-grid files and sills for the model; an option. Nothing in the model reads this code.
-3. **Lakes and depressions** stay sea, as today. Turning them to land, or giving lakes their own surface level, is a separate decision.
-4. **Passages between joined basins** (Tatar) are not cut. Cutting them would mean a second pass that matches every pair of basins, not only separate components.
+2. **Salt pans** count as lakes where Natural Earth's polygons cover most of a cell: Eyre, Frome, Torrens and Mackay at N = 128. Natural Earth's playas file could separate them.
+3. **Passages between joined basins** (Tatar) are not cut. Cutting them would mean a second pass that matches every pair of basins, not only separate components.

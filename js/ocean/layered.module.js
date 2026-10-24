@@ -262,7 +262,7 @@ export function runoffOutlets(mesh, geography) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
   const outlet = new Int32Array(C).fill(-1);
   if (!geography) return outlet;
-  const { land, elevation } = geography;
+  const land = geography.runoffLand ?? geography.land, elevation = geography.runoffElevation ?? geography.elevation;
   const next = new Int32Array(C).fill(-1);
   const seen = new Int32Array(C).fill(-1);
   let ring = [], following = [];
@@ -1108,7 +1108,7 @@ export function createOcean(mesh, {
    */
   function accumulate(evaporation, rain, dt, runoff = null, discharge = null) {
     for (let i = 0; i < C; i++) if (cellOpen[i]) fresh[i] += (evaporation ? evaporation[i] * dt : 0) - (rain ? rain[i] : 0);
-    if (runoff) for (let j = 0; j < C; j++) if (!cellOpen[j] && runoff[j] > 0 && outlet[j] >= 0) fresh[outlet[j]] -= runoff[j] * areaCell[j] / areaCell[outlet[j]];
+    if (runoff) for (let j = 0; j < C; j++) if (!cellOpen[j] && runoff[j] !== 0 && outlet[j] >= 0) fresh[outlet[j]] -= runoff[j] * areaCell[j] / areaCell[outlet[j]];
     if (discharge) for (let j = 0; j < C; j++) if (!cellOpen[j] && discharge[j] > 0 && outlet[j] >= 0) calved[outlet[j]] += discharge[j] * areaCell[j] / areaCell[outlet[j]];
   }
   function meltCalved() {

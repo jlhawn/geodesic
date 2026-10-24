@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
-import { relaxedMesh, nearestCell, fineEdges, encodeFineGeography, decodeFineGeography, coarseGeography, connectedGeography, FIELDS } from '../js/fineGeography.module.js';
+import { relaxedMesh, nearestCell, fineEdges, encodeFineGeography, decodeFineGeography, coarseGeography, connectedGeography, maskGeography, FIELDS } from '../js/fineGeography.module.js';
+import { encodeMask, decodeMask, createGeography } from '../js/geography.module.js';
+import { lakeFeatures, rasterizeLakes, lakeLevels } from '../scripts/lakes.mjs';
 
 test('relaxedMesh reproduces Grid bit for bit at N=16', () => {
   const grid = new Grid(16, { relax: 30 }), mesh = relaxedMesh(16, 30);
@@ -47,8 +49,29 @@ test('a fine geography survives its file, and a coarse mesh takes its land by ar
   assert.equal(rule.flipped.filter(Boolean).length, 0);
 });
 
+test('lakes fill the raster points whose centers lie inside an odd number of their rings, intermittent ones are left out, and a lake\'s level is its flat surface or else its shore\'s low quantile', () => {
+  const square = (w, s, e, n) => [[w, s], [e, s], [e, n], [w, n], [w, s]];
+  const geojson = { features: [
+    { properties: { featurecla: 'Lake', name: 'ring' }, geometry: { type: 'Polygon', coordinates: [square(10, 10, 20, 20), square(14, 14, 16, 16)] } },
+    { properties: { featurecla: 'Reservoir', name: 'pair' }, geometry: { type: 'MultiPolygon', coordinates: [[square(-40, -10, -35, -5)], [square(-30, -10, -25, -5)]] } },
+    { properties: { featurecla: 'Playa', name: 'pan' }, geometry: { type: 'Polygon', coordinates: [square(100, 0, 110, 10)] } },
+  ] };
+  const { lakes, left } = lakeFeatures(geojson);
+  assert.deepEqual([lakes.map((l) => l.name), left.map((l) => l.name)], [['ring', 'pair'], ['pan']]);
+  const rows = 180, cols = 360, id = rasterizeLakes(lakes, rows, cols), at = (lat, lon) => id[Math.floor(90 - lat) * cols + Math.floor(lon + 180)];
+  let ring = 0, pair = 0;
+  for (const k of id) { if (k === 1) ring++; if (k === 2) pair++; }
+  assert.deepEqual([ring, pair], [100 - 4, 50]);
+  assert.deepEqual([at(12.5, 12.5), at(15.5, 15.5), at(-7.5, -37.5), at(-7.5, -32.5), at(5.5, 105.5)], [1, 0, 2, 0, 0]);
+  const surface = Float64Array.from({ length: rows * cols }, (_, n) => (id[n] === 1 ? 200 : id[n] === 2 ? (n % 7) * 10 - 100 : 250 + (n % 10)));
+  const [flat, bed] = lakeLevels(id, surface, rows, cols, lakes.length);
+  assert.deepEqual([flat.level, flat.flat], [200, true]);
+  assert.equal(bed.flat, false);
+  assert.ok(bed.level >= 250 && bed.level <= 252, `the shore's level ${bed.level}`);
+});
+
 const meshes = new Map();
-function synthetic(N, depthOf, sillOf) {
+function synthetic(N, depthOf, sillOf, lakes = null) {
   if (!meshes.has(N)) {
     const coarse = gridMesh(new Grid(N)), fine = relaxedMesh(4 * N, 30), edges = fineEdges(fine), owner = new Int32Array(fine.nCells);
     for (let f = 0, c = 0; f < fine.nCells; f++) owner[f] = c = nearestCell(fine.xCell[3 * f], fine.xCell[3 * f + 1], fine.xCell[3 * f + 2], c, coarse.xCell, coarse.nEdgesOnCell, coarse.cellsOnCell, coarse.maxEdges);
@@ -57,13 +80,22 @@ function synthetic(N, depthOf, sillOf) {
   const { coarse, fine, owner } = meshes.get(N), C = fine.nCells;
   const depth = Float64Array.from({ length: C }, (_, f) => depthOf(f, owner[f], fine));
   const fields = { points: new Float64Array(C).fill(14), landFraction: depth.map((d) => (d > 0 ? 0 : 1)), elevation: depth.map((d) => (d > 0 ? -d : 300)), landElevation: depth.map((d) => (d > 0 ? 0 : 300)), seaElevation: depth.map((d) => -d), bed: depth.map((d) => (d > 0 ? -d : 300)), maxDepth: depth };
+  fields.dryMaxDepth = Float64Array.from(depth);
+  fields.wetDepth = Float64Array.from(depth);
   for (const name of Object.keys(FIELDS)) fields[name] ??= new Float64Array(C);
+  if (lakes) {
+    for (let f = 0; f < C; f++) {
+      const lake = lakes(f, owner[f], fine, owner);
+      if (!lake) continue;
+      fields.lakeFraction[f] = 1; fields.lakeLevel[f] = lake.level; fields.lakeDepth[f] = lake.depth; fields.lakeId[f] = lake.id; fields.dryMaxDepth[f] = 0;
+    }
+  }
   const edgeSill = Float64Array.from({ length: fine.nEdges }, (_, e) => {
     const f = fine.cellsOnEdge[2 * e], g = fine.cellsOnEdge[2 * e + 1];
     return depth[f] > 0 && depth[g] > 0 ? sillOf(f, g, owner, Math.min(depth[f], depth[g])) : 0;
   });
   const geography = { ...fine, ...fields, edgeSill }, raw = coarseGeography(coarse, geography);
-  return { coarse, owner, fine: geography, raw, rule: connectedGeography(coarse, raw, geography) };
+  return { coarse, owner, fine: geography, raw, rule: connectedGeography(coarse, raw, geography), mask: maskGeography(coarse, geography) };
 }
 const cellNear = (mesh, lat, lon) => {
   const r = Math.PI / 180;
@@ -133,5 +165,51 @@ for (const N of [16, 64]) {
     assert.ok(controls(coarse, through.rule, a, s, 200), 'the 200 m channel through the third cell joins the two cells');
     const closed = synthetic(N, (f, o) => (o === a || o === s ? 1000 : 0), wall);
     assert.ok(!joinedAt(coarse, closed.rule, a, s, 1), 'the wall keeps them apart');
+  });
+
+  test(`N=${N}: a cell is a lake where lakes cover most of it, water at the lake's level and depth open only to its own lake, and land where they cover less`, () => {
+    const { coarse } = synthetic(N, () => 0, () => 0), i = cellNear(coarse, 40, 60), around = neighbors(coarse, i);
+    const lake = [i, around[0], around[1]], most = around[3], least = around[4];
+    const x = coarse.xCell, dot = (fine, f, j) => [0, 1, 2].reduce((sum, k) => sum + fine.xCell[3 * f + k] * x[3 * j + k], 0);
+    let share = null;
+    const { mask, raw } = synthetic(N, (f, o, fine) => (fine.xCell[3 * f + 2] < -0.5 ? 4000 : 0), (f, g, o, d) => d, (f, o, fine, owner) => {
+      if (!share) {
+        share = new Set();
+        for (const [j, part] of [[most, 0.6], [least, 0.4]]) {
+          const mine = [];
+          for (let g = 0; g < fine.nCells; g++) if (owner[g] === j) mine.push(g);
+          mine.sort((a, b) => dot(fine, b, i) - dot(fine, a, i));
+          const total = mine.reduce((sum, g) => sum + fine.area[g], 0);
+          let taken = 0;
+          for (const g of mine) { if (taken >= part * total) break; share.add(g); taken += fine.area[g]; }
+        }
+      }
+      return lake.includes(o) || share.has(f) ? { level: 300, depth: 80, id: 1 } : null;
+    });
+    assert.ok(Math.abs(raw.lakeFraction[most] - 0.6) < 0.1 && Math.abs(raw.lakeFraction[least] - 0.4) < 0.1, `lake fractions ${raw.lakeFraction[most]}, ${raw.lakeFraction[least]}`);
+    for (const j of [...lake, most]) assert.deepEqual([mask.lake[j], mask.land[j], Math.round(mask.elevation[j]), Math.round(mask.surface[j])], [1, 0, -80, 300], `cell ${j} is the lake`);
+    assert.deepEqual([mask.lake[least], mask.land[least]], [0, 1], 'the cell the lake covers less than half of is land');
+    for (let e = 0; e < coarse.nEdges; e++) {
+      const a = coarse.cellsOnEdge[2 * e], b = coarse.cellsOnEdge[2 * e + 1];
+      if (mask.lake[a] && mask.lake[b]) assert.ok(mask.edgeOcean[e] && Math.abs(mask.edgeSill[e] - 80) < 1e-9);
+      else if (mask.lake[a] || mask.lake[b]) assert.equal(mask.edgeOcean[e], 0);
+    }
+    assert.equal(mask.depressions.length, 0);
+  });
+
+  test(`N=${N}: a closed basin no deeper than any dry land turns to land at its own elevation, a deeper one stays sea, and one the lakes mark stays water`, () => {
+    const { coarse } = synthetic(N, () => 0, () => 0), basin = (lat, lon) => { const i = cellNear(coarse, lat, lon); return [i, ...neighbors(coarse, i).slice(0, 2)]; };
+    const dry = basin(40, 0), deep = basin(40, 120), wet = basin(40, -120);
+    const { mask } = synthetic(N, (f, o, fine) => (fine.xCell[3 * f + 2] < -0.5 ? 4000 : dry.includes(o) ? 100 : deep.includes(o) ? 1000 : wet.includes(o) ? 200 : 0), (f, g, o, d) => d,
+      (f, o) => (wet.includes(o) ? { level: -30, depth: 170, id: 1 } : null));
+    for (const i of dry) assert.deepEqual([mask.land[i], mask.depression[i], Math.round(mask.elevation[i]), Math.round(mask.surface[i])], [1, 1, -100, -100], `dry cell ${i}`);
+    for (const i of deep) assert.deepEqual([mask.land[i], mask.depression[i]], [0, 0], `deep cell ${i}`);
+    for (const i of wet) assert.deepEqual([mask.land[i], mask.lake[i], Math.round(mask.elevation[i]), Math.round(mask.surface[i])], [0, 1, -170, -30], `lake cell ${i}`);
+    assert.deepEqual([mask.depressions.length, mask.closed.length], [1, 1]);
+    const parts = encodeMask(coarse, mask, mask), bytes = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
+    parts.reduce((at, p) => { bytes.set(p, at); return at + p.byteLength; }, 0);
+    const read = createGeography(coarse, null, { mask: 'n1024', maskData: decodeMask(bytes) });
+    assert.deepEqual([Array.from(read.land), Array.from(read.lake), Array.from(read.depression), Array.from(read.edgeOcean)], [Array.from(mask.land), Array.from(mask.lake), Array.from(mask.depression), Array.from(mask.edgeOcean)]);
+    for (let i = 0; i < coarse.nCells; i++) assert.ok(Math.abs(read.surface[i] - mask.surface[i]) <= 0.5 && Math.abs(read.elevation[i] - mask.elevation[i]) <= 0.5, `cell ${i} read back`);
   });
 }
