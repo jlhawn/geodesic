@@ -21,6 +21,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { saturationHumidity, LATENT_HEAT } from '../js/physics/moist.module.js';
+import { PUBLISHED_RADIATION, PUBLISHED_MOIST } from './published.module.js';
 
 export const JORDAN = [[1015, 26.3, 18.9], [1000, 25.4, 18.4], [950, 22.2, 16.6], [900, 19.6, 14.4], [850, 17.3, 12.4], [800, 14.8, 10.5], [750, 12.0, 8.8],
   [700, 8.9, 7.4], [650, 5.6, 6.0], [600, 1.8, 4.7], [550, -2.3, 3.6], [500, -6.9, 2.6], [450, -11.9, 1.8], [400, -17.3, 1.2], [350, -24.4, 0.66],
@@ -63,7 +64,7 @@ function modelFor(spacing, ice) {
   if (models.has(key)) return models.get(key);
   const grid = new Grid(2);
   if (!meanCell) { const probe = buildMesh(grid); meanCell = Math.sqrt(probe.areaCell.reduce((a, b) => a + b, 0) / probe.nCells); }
-  const model = createModel(buildMesh(grid, { radius: 6.371e6 * spacing / meanCell }), { ocean: false, levels: LEVELS, moist: { cumulusMemory: 0, plumePhase: ice ? 'mixed' : 'liquid' } });
+  const model = createModel(buildMesh(grid, { radius: 6.371e6 * spacing / meanCell }), { ocean: false, levels: LEVELS, radiation: PUBLISHED_RADIATION, moist: { ...PUBLISHED_MOIST, cumulusMemory: 0, plumePhase: ice ? 'mixed' : 'liquid' } });
   const { K, C } = model.core.diagnostics;
   model.moist.trace.convection = new Float64Array(K * C);
   model.moist.trace.largeScale = new Float64Array(K * C);

@@ -76,7 +76,7 @@ test('the cloud layer atop a cloud-topped boundary layer holds the uniform distr
   const expected = (Q + b) * (Q + b) / (4 * b);
   const top = new Float64Array(C).fill(1e5), cloudLayer = new Float64Array(C).fill(k0), none = new Float64Array(C).fill(-1);
   const condensed = (boundaryCondensation, layer) => {
-    const physics = createMoistPhysics(model.mesh, core, { boundaryTop: top, boundaryCloudLayer: layer, boundaryCondensation });
+    const physics = createMoistPhysics(model.mesh, core, { stabilityLayer: model.radiation.stabilityLayer, boundaryTop: top, boundaryCloudLayer: layer, boundaryCondensation });
     const t = Float64Array.from(theta), v = Float64Array.from(q), c = Float64Array.from(qc);
     physics.condenseColumn(0, pi, t, v, c);
     for (let k = 0; k < K; k++) {

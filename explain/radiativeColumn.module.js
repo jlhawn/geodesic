@@ -25,6 +25,7 @@ import { openWaterAlbedo } from '../js/physics/ice.module.js';
 import { saturationHumidity, LATENT_HEAT } from '../js/physics/moist.module.js';
 import { sunTrack } from './insolation.module.js';
 import { moistAdjustColumn } from './moistParcel.module.js';
+import { PUBLISHED_RADIATION } from './published.module.js';
 
 export const LEVELS = sigmaInterfaces('bl36');
 export const K = LEVELS.length - 1;
@@ -152,6 +153,7 @@ export function makeColumn(options = {}) {
     const { surfacePressure, mu, beam, carbonDioxide, gases: on } = settings;
     ozone = Float64Array.from(settings.ozoneProfile ?? meanOzone(null, surfacePressure), (x) => (on.ozone ? x : 0));
     radiation = createRadiation(mesh, core, {
+      ...PUBLISHED_RADIATION,
       longwaveLines: 'scaled',
       solarConstant: beam > 0 ? beam / mu : SOLAR_CONSTANT,
       carbonDioxide: on.carbonDioxide ? carbonDioxide * GREENHOUSE_GASES.carbonDioxide : 0,

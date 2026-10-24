@@ -24,6 +24,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { CP_DRY, GRAVITY } from '../js/dynamics/sigmaCore.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
+import { PUBLISHED_OCEAN } from './published.module.js';
 import { MODE_DEPTH } from '../js/ocean/column.module.js';
 
 export const DAY = 86400, YEAR_DAYS = 365, STEP = 5400, START_T = 288.15, STORE = 100, CELL_LATITUDE = 32;
@@ -68,7 +69,7 @@ export function createSeasonalColumn({
   if (sea !== 'model' && sea !== 'slab') throw new Error(`sea is 'model' or 'slab', not ${sea}`);
   const steps = Math.round(days * DAY / dt), samples = Math.floor(steps / every) + 1;
   const grid = columnMesh(), cell = nearestCell(grid, CELL_LATITUDE), m = atLatitude(grid, latitude), C = m.nCells, live = sea === 'model';
-  const ocean = live ? createOcean(m, { everySteps: 1, ...oceanOptions }) : null;
+  const ocean = live ? createOcean(m, { ...PUBLISHED_OCEAN, everySteps: 1, ...oceanOptions }) : null;
   const L = live ? ocean.layers : 0, minimum = live ? Float32Array.from(ocean.table.minimum) : new Float32Array(0);
   const surfaceT = new Float64Array(C).fill(mean), ice = new Float64Array(C), flux = new Float64Array(C);
   const stress = eastwardStress(m, wind);

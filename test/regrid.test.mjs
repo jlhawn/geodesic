@@ -4,6 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { interpolationWeights, regridState, regridOcean } from '../js/physics/regrid.module.js';
 import { P0 } from '../js/dynamics/sigmaCore.module.js';
+import { PREVIOUS_LEVELS, PREVIOUS_RADIATION } from './helpers/previousDefaults.mjs';
 
 const coarse = createModel(new Grid(16));
 const fine = createModel(new Grid(32));
@@ -166,7 +167,7 @@ test('the deck\'s carried height and gate survive a saved state: a model\'s fiel
   const { initializeState } = await import('../js/physics/init.module.js');
   assert.deepEqual(DECK_FIELDS, { mlmSubsidence: 0, mlmHeight: 0, mlmGate: 0.5 });
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
-  const source = createModel(new Grid(16), { topography, ocean: false, radiation: { stratusSubsidence: 0, minimumInversion: 0 } }), target = createModel(new Grid(24), { topography, ocean: false });
+  const source = createModel(new Grid(16), { topography, ocean: false, levels: PREVIOUS_LEVELS, radiation: { ...PREVIOUS_RADIATION, stratusSubsidence: 0, minimumInversion: 0 } }), target = createModel(new Grid(24), { topography, ocean: false, levels: PREVIOUS_LEVELS, radiation: PREVIOUS_RADIATION });
   const C = source.mesh.nCells, sea = (model, i) => !model.geography.land[i];
   assert.ok(source.radiation.mlmHeight.every((h) => h === 0) && source.radiation.mlmGate.every((x) => x === 0.5), 'a fresh model starts unset and undecided');
   initializeState(source, {}).forEach((values, a) => source.state[a].set(values));
@@ -178,7 +179,7 @@ test('the deck\'s carried height and gate survive a saved state: a model\'s fiel
   const [pi, theta, u, surfaceT, q, qc, ice] = source.state;
   const bytes = encodeState({ N: 16, K: source.core.K, day: 1, time: 3600, pi, theta, u, surfaceT, q, qc, ice, mlmSubsidence, mlmHeight, mlmGate });
   const saved = await decodeState(bytes);
-  const restored = createModel(new Grid(16), { topography, ocean: false });
+  const restored = createModel(new Grid(16), { topography, ocean: false, levels: PREVIOUS_LEVELS, radiation: PREVIOUS_RADIATION });
   for (const name of Object.keys(DECK_FIELDS)) restored.radiation[name].set(savedDeckField(saved, name, restored));
   for (let i = 0; i < C; i++) {
     assert.equal(restored.radiation.mlmHeight[i], Math.fround(mlmHeight[i]), `height of cell ${i}`);
@@ -203,7 +204,7 @@ test('the deck\'s carried height and gate survive a saved state: a model\'s fiel
   assert.ok(savedDeckField(legacy, 'mlmHeight', source).every((h) => h === 0), 'a state saved without a height starts unset');
   assert.ok(savedDeckField(legacy, 'mlmGate', source).every((x) => x === 0.5), 'a state saved without a gate starts undecided');
   assert.ok(savedDeckField(null, 'mlmGate', target).every((x) => x === 0.5) && savedDeckField(null, 'mlmHeight', target).every((h) => h === 0), 'so does a fresh start');
-  const resumed = createModel(new Grid(16), { topography, ocean: false, radiation: { stratusSubsidence: 0, minimumInversion: 0 } });
+  const resumed = createModel(new Grid(16), { topography, ocean: false, levels: PREVIOUS_LEVELS, radiation: { ...PREVIOUS_RADIATION, stratusSubsidence: 0, minimumInversion: 0 } });
   [pi, theta, u, surfaceT, q, qc, ice].forEach((values, a) => resumed.state[a].set(values));
   for (const name of Object.keys(DECK_FIELDS)) resumed.radiation[name].set(savedDeckField(legacy, name, resumed));
   resumed.step(900); resumed.step(900);

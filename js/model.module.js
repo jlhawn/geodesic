@@ -8,6 +8,7 @@ import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.
 import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
 import { createOcean, JERLOV } from './ocean/layered.module.js';
+import { COUPLED_ICE_DRIFT } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
@@ -128,7 +129,7 @@ export function createModel(gridOrMesh, {
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
   if (moist) radiation.useCondensation(moistPhysics.condensation);
-  const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography, ...oceanOptions }) : null;
+  const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography, iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }) : null;
   const land = physics && geography ? createLandSurface(mesh, geography, { buffers: buffers ? buffers.land : null, ...landOptions }) : null;
   const landMask = geography ? geography.land : null;
   const orography = subgridFields ? createOrographicDrag(mesh, core, subgridFields, { buffers: buffers ? buffers.orography : null, ...dragConstants(subgridFields, dragOptions) }) : null;

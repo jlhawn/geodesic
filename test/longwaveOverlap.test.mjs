@@ -11,6 +11,7 @@ import { saturationHumidity } from '../js/physics/moist.module.js';
 import { STEFAN_BOLTZMANN } from '../js/physics/radiation.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { encodeState } from '../js/stateFile.module.js';
+import { PREVIOUS_RADIATION, PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
 
 function partlyCloudy() {
   const model = createModel(new Grid(16), { ocean: false, divergenceDamping: 0, radiation: { mixedLayerDeck: false } });
@@ -84,14 +85,14 @@ test('longwave overlap rejects an unknown overlap', () => {
 
 test('scripts/longwaveOverlap.mjs repeats the radiation\'s OLR and surface downward longwave under its own overlap, exponential-random by default and random on request, and finds the exponential-random OLR above the random', () => {
   const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const model = createModel(new Grid(16), { topography, ocean: false });
+  const model = createModel(new Grid(16), { topography, ocean: false, radiation: PREVIOUS_RADIATION, moist: PREVIOUS_MOIST });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   model.land.initialize();
   for (let n = 0; n < 6; n++) model.step(1350);
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
   const dir = mkdtempSync(join(tmpdir(), 'longwaveOverlap-')), file = join(dir, 'overlap16_day0000.bin');
   writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
-  const script = (radiation) => spawnSync(process.execPath, [new URL('../scripts/longwaveOverlap.mjs', import.meta.url).pathname, file], { env: { ...process.env, RADIATION: JSON.stringify(radiation) }, encoding: 'utf8' });
+  const script = (radiation) => spawnSync(process.execPath, [new URL('../scripts/longwaveOverlap.mjs', import.meta.url).pathname, file], { env: { ...process.env, RADIATION: JSON.stringify({ ...PREVIOUS_RADIATION, ...radiation }), MOIST: JSON.stringify(PREVIOUS_MOIST) }, encoding: 'utf8' });
   const runs = [script({}), script({ longwaveOverlap: 'random' })];
   rmSync(dir, { recursive: true, force: true });
   for (const [n, run] of runs.entries()) {
