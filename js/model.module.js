@@ -8,7 +8,7 @@ import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.
 import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
 import { createOcean, JERLOV } from './ocean/layered.module.js';
-import { COUPLED_ICE_DRIFT } from './ocean/iceDrift.module.js';
+import { COUPLED_ICE_DRIFT, iceDriftMoves } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
@@ -138,6 +138,7 @@ export function createModel(gridOrMesh, {
     buffers: { ...(buffers && buffers.ice ? buffers.ice : {}), ...(land ? { snow: land.shared.snow, snowAlbedo: land.shared.snowAlbedo } : {}) },
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...(ocean && ocean.penetration ? { transmission: ocean.transmission, penetrated: ocean.penetrated } : {}),
+    keepSmallIce: !!ocean && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift),
     ...iceOptions,
   });
   const heatCapacity = ocean ? ocean.capacity : sharedCapacity, capacityOf = (i) => (heatCapacity ? heatCapacity[i] : seaIce.slabHeatCapacity);

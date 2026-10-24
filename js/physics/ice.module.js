@@ -2,6 +2,24 @@ export const FREEZING_POINT = 271.35;
 export const MELTING_POINT = 273.15;
 export const MINIMUM_CONCENTRATION = 0.01;
 export const MINIMUM_VOLUME = 1e-4;
+export const NEGLIGIBLE_CONCENTRATION = 1e-6;
+export const NEGLIGIBLE_VOLUME = 1e-6;
+
+/*
+ * Open water forms ice only from MINIMUM_CONCENTRATION of its cell and
+ * MINIMUM_VOLUME of volume up. Ice that exists melts away, its latent heat
+ * drawn from the water, below the same area or volume; with `keepSmallIce`
+ * (a drift carries ice into open cells a few thousandths of a cell at a time)
+ * only below NEGLIGIBLE_CONCENTRATION or NEGLIGIBLE_VOLUME, what single-
+ * precision arithmetic cannot tell from zero: floats near one are 2^-23
+ * apart, and a cover or a volume is a sum of several terms of order one.
+ * CICE removes ice by the same rule, at `puny` = 1e-11 of the cell in double
+ * precision (Hunke et al., the CICE Consortium's CICE documentation, index
+ * of primary variables; Icepack's icepack_itd.F90 zap_small_areas and
+ * icepack_parameters.F90, itd_area_min = 1e-11), and sends the enthalpy,
+ * fresh water and salt of what it removes to the ocean as meltAway does.
+ */
+export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: NEGLIGIBLE_CONCENTRATION, volume: NEGLIGIBLE_VOLUME } : { concentration: MINIMUM_CONCENTRATION, volume: MINIMUM_VOLUME });
 
 /*
  * The slab ocean and its sea ice, a zero-layer thermodynamic model in
@@ -43,9 +61,10 @@ export const MINIMUM_VOLUME = 1e-4;
  * Hibler (1979) does, half the relative loss of volume from the area;
  * ice frozen in the leads closes them as new ice leadClosing thick. Open
  * water that cools below freezing forms ice leadClosing thick over the
- * area its volume covers. Ice below MINIMUM_CONCENTRATION of its cell
- * or MINIMUM_VOLUME of volume melts away, so water cools a little below
- * freezing before its first ice forms. When the area shrinks the lost
+ * area its volume covers. Ice below the floors of seaIceRemoval melts
+ * away, and open water forms ice only from MINIMUM_CONCENTRATION and
+ * MINIMUM_VOLUME up, so water cools a little below freezing before its
+ * first ice forms. When the area shrinks the lost
  * area's snow melts, its latent heat drawn from the water at freezing,
  * which freezes the same mass onto the ice, and its skin heat goes to
  * the ice volume; new area joins at the freezing point without snow.
@@ -109,10 +128,11 @@ export function createSeaIce(mesh, {
   iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10,
   snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
-  heatCapacity = null, transmission = null, penetrated = null, buffers = null,
+  heatCapacity = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
 } = {}) {
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion;
+  const removal = seaIceRemoval(keepSmallIce);
   const budget = { frozen: 0, melted: 0, snowfall: 0, snowMelted: 0, snowIce: 0, leadFrozen: 0, lateralMelted: 0 };
   const oceanFlux = new Float64Array(buffers && buffers.oceanFlux ? buffers.oceanFlux : new SharedArrayBuffer(8 * C));
   const snow = new Float64Array(buffers && buffers.snow ? buffers.snow : new SharedArrayBuffer(8 * C));
@@ -235,7 +255,7 @@ export function createSeaIce(mesh, {
     let skin = T, snowOnIce = s;
     if (area < A) volume += (A - area) * (s / iceDensity - skinHeatCapacity * (T - FREEZING_POINT) / latent);
     else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; }
-    if (area < MINIMUM_CONCENTRATION || volume < MINIMUM_VOLUME) {
+    if (area < removal.concentration || volume < removal.volume) {
       meltAway(surfaceT, ice, i, energyLeft, cellArea * A * h, cellArea * A * s);
       return;
     }
@@ -252,7 +272,7 @@ export function createSeaIce(mesh, {
   }
 
   return {
-    albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration,
+    albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, removal, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration,
     shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, snowAlbedo: snowAlbedo.buffer, concentration: concentration.buffer },
   };
 }
