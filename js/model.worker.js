@@ -15,7 +15,7 @@ import { fetchState, stateName, savedLevels, groupHeader, groupArrays } from './
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
-import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, frameIsFinite } from './frames.module.js';
+import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, UPWELLING_MEMORY, foldMemory, frameIsFinite } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
@@ -25,6 +25,7 @@ let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24
 let subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false }, layerWinds = [];
 const rain = { total: null, time: 0 };
 const vertical = { values: null, level: null, time: 0 };
+const upwelling = { values: null, key: null, time: 0 };
 
 function restartRain() { rain.total = null; rain.time = model.time; if (model.restartPrecipitation) model.restartPrecipitation(); }
 
@@ -146,6 +147,8 @@ function placeEnergy(model, saved) {
 // A frame that is no longer finite stops the loop and tells the page so, in place of the frame.
 function postFrame({ time, level, depth, fields, diagnostics }) {
   if (!frameIsFinite(fields, diagnostics)) { running = false; self.postMessage({ type: 'halted', day: time / 86400 }); return; }
+  if (fields.upwelling) fields.upwelling = foldMemory(upwelling, fields.upwelling, time, depth, UPWELLING_MEMORY);
+  else upwelling.values = null;
   if (diagnostics && model.energyRecord) { feedEnergy(diagnostics, time); diagnostics.energy = model.energyRecord.windows(); diagnostics.energyDay = model.energyRecord.newest; }
   const transfer = [...new Set(Object.values(fields).map((values) => values.buffer))];
   self.postMessage({ type: 'frame', frame: frame++, time, day: time / 86400, level, depth, engine: model.engine ?? 'cpu', pause: model.beginFrame ? pace.pause : 0, fields, diagnostics }, transfer);
@@ -679,6 +682,7 @@ async function restore(snapshot) {
   placeEnergy(model, saved);
   model.time = saved.time;
   restartRain();
+  upwelling.values = null;
   serving = true;
   self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   await sendFrame();
@@ -749,6 +753,7 @@ async function start(message) {
   layerWinds = new Array(model.core.K).fill(null);
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
+  upwelling.values = null;
   serving = true;
   self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   refresh();
