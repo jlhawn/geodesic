@@ -1,4 +1,4 @@
-import { FREEZING_POINT, MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js';
+import { FREEZING_POINT, MELTING_POINT, MINIMUM_CONCENTRATION } from '../physics/ice.module.js';
 
 /*
  * The drift of sea ice on the ocean's own C-grid: one velocity component
@@ -74,9 +74,17 @@ import { FREEZING_POINT, MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physic
  * Closure. A cell whose area passes maximumConcentration is set to it at
  * constant volume, snow mass and skin enthalpy, so the excess area becomes
  * thickness (the two-category closure of Hibler 1979). Ice left below the
- * thermodynamics' minimum concentration or volume melts away through
- * seaIce.meltAway, the rule of ice.update, which draws its latent heat from
- * the water.
+ * sea ice's removal floors (seaIce.removal, the rule of ice.update) melts
+ * away through seaIce.meltAway, which draws its latent heat from the water.
+ * With keepSmallIce the floors are NEGLIGIBLE_CONCENTRATION and
+ * NEGLIGIBLE_VOLUME, so that the few thousandths of a cell that a Courant
+ * number of 0.005 carries into open water survive to freeze on, or to melt
+ * in the water's heat. The limited edge values lie between the donor's and
+ * the acceptor's, so the thickness, snow per ice area and skin temperature
+ * of a nearly emptied cell, quotients of small numbers, are not bounded by
+ * its neighbors'; a cell under MINIMUM_CONCENTRATION whose quotients have
+ * left ICE_REMNANT melts away as well, which keeps them finite in single
+ * precision.
  *
  * Coupling with the ocean's bookkeeping. The ocean's virtual salt flux follows
  * the change of each cell's ice volume, so `previousVolume` is shifted by the
@@ -89,6 +97,7 @@ import { FREEZING_POINT, MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physic
  * sea: not land, not an ice-shelf cavity.
  */
 export const ICE_RHEOLOGIES = ['frozen', 'free', 'cavitating'], ICE_HEMISPHERES = ['both', 'south', 'north'];
+export const COUPLED_ICE_DRIFT = { rheology: 'cavitating', hemisphere: 'both' };
 export const ICE_DRIFT = {
   rheology: 'cavitating', hemisphere: 'both',
   strength: 27.5e3, strengthDecay: 20, waterDrag: 5.5e-3, waterTurn: 0,
@@ -96,6 +105,9 @@ export const ICE_DRIFT = {
   alpha: null, beta: null, iterations: null, freePasses: 6, dynamicsEvery: 1,
   speedLimit: 2, dynamicConcentration: MINIMUM_CONCENTRATION, minimumRelativeSpeed: 1e-3, courantLimit: 0.2,
 };
+
+export const ICE_REMNANT = { thickness: 50, snow: 5e3, skinLow: 150, skinHigh: MELTING_POINT + 1 };
+export const iceDriftMoves = (option) => !!option && (option === true || (option.rheology ?? ICE_DRIFT.rheology) !== 'frozen');
 
 export const coverOf = (ice, concentration, i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
 
@@ -148,13 +160,17 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
   const Vstart = new Float64Array(C), Astart = new Float64Array(C), touched = new Uint8Array(C), touchedList = new Int32Array(C), cellList = new Int32Array(C);
   const Ae = new Float64Array(E), mu = new Float64Array(E), uw = new Float64Array(E), uwt = new Float64Array(E), tilt = new Float64Array(E);
   const act = new Int32Array(E), upd = new Int32Array(E);
-  let nAct = 0, nUpd = 0, nCellsActive = 0, nTouched = 0, calls = 0, ice = null;
-  const count = { clamps: 0, fallbacks: 0, closures: 0, closedArea: 0, courant: 0, thickest: 0, topSpeed: 0 };
+  let nAct = 0, nUpd = 0, nCellsActive = 0, nTouched = 0, calls = 0, ice = null, removal = null, enthalpyLow = 0, enthalpyHigh = 0;
+  const count = { clamps: 0, fallbacks: 0, closures: 0, closedArea: 0, courant: 0, thickest: 0, topSpeed: 0, removed: 0 };
 
   function attach(seaIce) {
-    if (!seaIce || !seaIce.snow || !seaIce.meltAway) throw new Error('the ice drift needs the sea ice of physics/ice.module.js: ocean.useSeaIce(concentration, seaIce)');
+    if (!seaIce || !seaIce.snow || !seaIce.meltAway || !seaIce.removal) throw new Error('the ice drift needs the sea ice of physics/ice.module.js: ocean.useSeaIce(concentration, seaIce)');
     ice = seaIce;
+    removal = seaIce.removal;
+    enthalpyLow = seaIce.skinHeatCapacity * (ICE_REMNANT.skinLow - FREEZING_POINT);
+    enthalpyHigh = seaIce.skinHeatCapacity * (ICE_REMNANT.skinHigh - FREEZING_POINT);
   }
+  const remnant = (a, v, s, e) => v > ICE_REMNANT.thickness * a || s > ICE_REMNANT.snow * a || e < enthalpyLow * a || e > enthalpyHigh * a;
   function reset(saved = null) {
     velocity.fill(0); spare.fill(0); sigma.fill(0); iceStress.fill(0); volumeFlux.fill(0); valid.fill(0); arrived.fill(0); calls = 0;
     if (saved && saved.length === E) velocity.set(saved);
@@ -252,7 +268,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
     const { skinHeatCapacity, freshSnowAlbedo, snow, snowAlbedo, latent, latentHeatFusion, meltAway } = ice;
     let courant = 0;
     for (let n = 0; n < nAct; n++) { const e = act[n]; courant = Math.max(courant, Math.abs(velocity[e]) * dt / dcEdge[e]); }
-    count.courant = courant;
+    count.courant = courant; count.removed = 0;
     volumeFlux.fill(0);
     if (!(courant > 0)) return;
     const sub = Math.ceil(courant / o.courantLimit), step = dt / sub;
@@ -299,12 +315,13 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
       const V1 = V[i], S1 = Sn[i], E1 = En[i], Sa1 = Sa[i];
       previousVolume[i] += V1 - Vstart[i];
       if (A1 > o.maximumConcentration) { count.closedArea += (A1 - o.maximumConcentration) * areaCell[i]; count.closures++; A1 = o.maximumConcentration; }
-      if (A1 < MINIMUM_CONCENTRATION || V1 < MINIMUM_VOLUME) {
+      if (A1 < removal.concentration || V1 < removal.volume || (A1 < MINIMUM_CONCENTRATION && remnant(A1, V1, S1, E1))) {
+        count.removed += areaCell[i] * V1;
         meltAway(surfaceT, thickness, i, E1 - latent * V1 - latentHeatFusion * S1, areaCell[i] * V1, areaCell[i] * S1, Astart[i] > 0 ? FREEZING_POINT : surfaceT[i]);
         continue;
       }
       if (Astart[i] === 0) { waterT[i] = surfaceT[i]; arrived[i] = 1; }
-      thickness[i] = V1 / A1; concentration[i] = A1; snow[i] = S1 / A1; surfaceT[i] = FREEZING_POINT + E1 / (A1 * skinHeatCapacity); snowAlbedo[i] = S1 > 0 ? Sa1 / S1 : freshSnowAlbedo;
+      thickness[i] = V1 / A1; concentration[i] = A1; snow[i] = S1 / A1; surfaceT[i] = FREEZING_POINT + E1 / (A1 * skinHeatCapacity); snowAlbedo[i] = S1 > 0 ? Math.min(1, Sa1 / S1) : freshSnowAlbedo;
       count.thickest = Math.max(count.thickest, thickness[i]);
     }
   }
@@ -333,7 +350,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
   function diagnostics() {
     const circle = 60 * Math.PI / 180;
     return {
-      iceSpeed: count.topSpeed, iceSpeedClamps: count.clamps, iceLimiterFallbacks: count.fallbacks, iceClosures: count.closures, iceClosedArea: count.closedArea, iceThickest: count.thickest,
+      iceSpeed: count.topSpeed, iceSpeedClamps: count.clamps, iceLimiterFallbacks: count.fallbacks, iceClosures: count.closures, iceClosedArea: count.closedArea, iceThickest: count.thickest, iceRemoved: count.removed,
       iceTransport60S: transportAcross(-circle), iceTransport60N: transportAcross(circle),
     };
   }

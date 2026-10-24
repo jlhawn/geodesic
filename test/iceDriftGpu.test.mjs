@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
-import { createSeaIce, FREEZING_POINT } from '../js/physics/ice.module.js';
+import { iceDriftMoves } from '../js/ocean/iceDrift.module.js';
+import { createSeaIce, FREEZING_POINT, MINIMUM_CONCENTRATION } from '../js/physics/ice.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { DEG, streamOn } from './helpers/iceDrift.mjs';
+import { DEG, streamOn, northwardOn } from './helpers/iceDrift.mjs';
 
 /*
  * The GPU ice drift (js/gpu/iceDrift.gpu.js, merged into the hybrid ocean's
@@ -45,11 +46,11 @@ function windStress(mesh) {
  * the ocean initialized on the CPU and uploaded to the device with the ice in
  * the atmosphere's buffers.
  */
-async function scenario(drift, { global = false, velocity = null, stress = null } = {}) {
-  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false } });
+async function scenario(drift, { global = false, velocity = null, stress = null, keep = iceDriftMoves(drift) } = {}) {
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ice: { keepSmallIce: keep }, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false } });
   const mesh = gpuModel.mesh, geography = gpuModel.geography, C = mesh.nCells, E = mesh.nEdges, gpu = gpuModel.gpu, ocean = gpuModel.oceanEngine;
   const cpu = createOcean(mesh, { geography, vertical: 'hybrid', everySteps: 1, iceDrift: drift });
-  const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity });
+  const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity, keepSmallIce: keep });
   cpu.useSeaIce(seaIce.concentration, seaIce);
   const surfaceT = new Float64Array(C).fill(280), ice = new Float64Array(C);
   const centre = [Math.cos(-78 * DEG) * Math.cos(40 * DEG), Math.cos(-78 * DEG) * Math.sin(40 * DEG), Math.sin(-78 * DEG)];
@@ -182,6 +183,28 @@ test('inside the model\'s own step every rheology takes the atmosphere\'s stress
     assert.ok(top <= 2.0001 && (rheology === 'frozen' ? top === 0 : iced === 0 || top > 1e-4), `${rheology}: ${top} m/s over ${iced} iced cells`);
     model.destroy();
   }
+});
+
+test('ice that drifts into open water at a Courant number of 0.005 persists on the GPU as on the CPU, the trace cells below the minimum cover included', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh, toward = northwardOn(pm, (lat) => lat < -40 * DEG);
+  probe.destroy();
+  const velocity = Float64Array.from(toward, (d, e) => d * 0.005 * pm.dcEdge[e] / DT);
+  const s = await scenario({ rheology: 'frozen' }, { velocity, keep: true });
+  const before = cpuFields(s).A.filter((a) => a > 0).length;
+  for (let n = 0; n < 5; n++) { s.stepCpu(); await s.stepGpu(); }
+  const a = cpuFields(s), b = await gpuFields(s);
+  const trace = (f) => Array.from(f.A, (v, i) => i).filter((i) => f.A[i] > 0 && f.A[i] < MINIMUM_CONCENTRATION);
+  const onCpu = trace(a), onGpu = trace(b), both = onCpu.filter((i) => b.A[i] > 0);
+  let worst = 0, scale = 0;
+  for (const i of both) { worst = Math.max(worst, Math.abs(a.A[i] - b.A[i])); scale = Math.max(scale, a.A[i]); }
+  const larger = onCpu.filter((i) => a.A[i] > 1e-5), missing = larger.filter((i) => !(b.A[i] > 0));
+  console.log(`after five calls the ice covers ${a.A.filter((v) => v > 0).length} cells (${before} to start); ${onCpu.length} on the CPU and ${onGpu.length} on the device hold under 1 percent cover, ${both.length} in common to within ${worst.toExponential(2)} of ${scale.toExponential(2)}`);
+  assert.ok(a.A.filter((v) => v > 0).length > before + 10 && b.A.filter((v) => v > 0).length > before + 10, 'the edge advanced on both engines');
+  assert.ok(onCpu.length >= 10 && onGpu.length >= 10, `${onCpu.length} and ${onGpu.length} cells under 1 percent cover`);
+  assert.equal(missing.length, 0, 'every trace cell above 1e-5 on the CPU is on the device');
+  assert.ok(worst < 1e-4 * scale + 1e-8, 'their covers agree');
+  await compareIce('five calls of trace arrivals', s, { A: 1e-4, V: 1e-4, S: 1e-4, E: 1e-3 });
+  s.gpuModel.destroy();
 });
 
 test('over a hundred calls the GPU conserves the ice volume and snow mass to single precision, and stored ice volume follows the transport', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

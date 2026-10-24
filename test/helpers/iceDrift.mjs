@@ -41,6 +41,34 @@ export function streamOn(m, omega) {
   if (agree < 0) for (let e = 0; e < m.nEdges; e++) u[e] = -u[e];
   return u;
 }
+/*
+ * The same rotation about any axis, from a streamfunction at the vertices.
+ */
+export function streamAbout(m, axis, omega) {
+  const norm = Math.hypot(...axis), a = axis.map((v) => v / norm);
+  const psi = (v) => -omega * m.radius * m.radius * (a[0] * m.xVertex[3 * v] + a[1] * m.xVertex[3 * v + 1] + a[2] * m.xVertex[3 * v + 2]);
+  const u = Float64Array.from({ length: m.nEdges }, (_, e) => (psi(m.verticesOnEdge[2 * e + 1]) - psi(m.verticesOnEdge[2 * e])) / m.dvEdge[e]);
+  const solid = Float64Array.from({ length: m.nEdges }, (_, e) => {
+    const x = unit(m.xEdge, e), n = unit(m.nEdge, e), v = cross(a, x);
+    return omega * m.radius * dot(v, n);
+  });
+  let agree = 0;
+  for (let e = 0; e < m.nEdges; e++) agree += u[e] * solid[e];
+  if (agree < 0) for (let e = 0; e < m.nEdges; e++) u[e] = -u[e];
+  return u;
+}
+/*
+ * The component of the local northward unit vector along each edge's
+ * normal, where `keep(latitude)` and zero elsewhere: times a speed it is a
+ * drift toward the equator in the Southern Hemisphere.
+ */
+export function northwardOn(m, keep = () => true) {
+  return Float64Array.from({ length: m.nEdges }, (_, e) => {
+    const x = unit(m.xEdge, e), r = Math.hypot(x[0], x[1]);
+    if (!keep(m.latEdge[e]) || r === 0) return 0;
+    return dot(unit(m.nEdge, e), [-x[2] * x[0] / r, -x[2] * x[1] / r, r]);
+  });
+}
 export function edgesNear(m, c0, spacings) {
   const x0 = unit(m.xCell, c0), spacing = m.dcEdge.reduce((s, d) => s + d, 0) / m.nEdges, out = [];
   for (let e = 0; e < m.nEdges; e++) if (Math.acos(Math.min(1, dot(unit(m.xEdge, e), x0))) * m.radius < spacings * spacing) out.push(e);
@@ -67,11 +95,11 @@ export function closedForm(Fn, Ft, f, mu, theta, c = RHO_W * 5.5e-3) {
  * cells everywhere or where a geography has sea, and the arrays the
  * ocean would hand it.
  */
-export function rig(m, options, geography = null, extra = {}) {
+export function rig(m, options, geography = null, extra = {}, iceOptions = {}) {
   const C = m.nCells, E = m.nEdges;
   const cellOpen = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
   const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
-  const previousVolume = new Float64Array(C), seaIce = createSeaIce(m);
+  const previousVolume = new Float64Array(C), seaIce = createSeaIce(m, iceOptions);
   const drift = createIceDrift(m, options, { cellOpen, edgeOcean, waterDensity: RHO_W, iceDensity: RHO_I, gravity: 9.81, previousVolume, beyond: beyondCells(m), limited: limitedEdgeValue, ...extra });
   drift.attach(seaIce);
   const r = {

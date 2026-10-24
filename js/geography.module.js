@@ -60,7 +60,7 @@ export function topographyFromInt16(buffer, rows = 720, cols = 1440, name = 'eto
 export const TOPOGRAPHIES = { etopo1: 'topography_0p25.bin', etopo2022: 'topography2022_0p25.bin' };
 export const ICE_SHEETS = ['rule', 'observed'], ICE_SHELVES = ['land', 'sea', 'cavity'], MASKS = ['raster', 'n1024'];
 export const LEGACY_GEOGRAPHY = { topography: 'etopo1', iceSheets: 'rule', iceShelves: 'land', mask: 'raster' };
-export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'land' };
+export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity' };
 export const topographyUrl = (name = 'etopo1') => new URL(`../data/${TOPOGRAPHIES[name]}`, import.meta.url);
 
 export function checkGeography(record) {

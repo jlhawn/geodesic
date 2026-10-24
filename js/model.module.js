@@ -8,6 +8,7 @@ import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.
 import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
 import { createOcean, JERLOV } from './ocean/layered.module.js';
+import { COUPLED_ICE_DRIFT, iceDriftMoves } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createLake, lakeWater, LAKE_DEFAULTS, FLAKE } from './physics/lake.module.js';
@@ -130,7 +131,7 @@ export function createModel(gridOrMesh, {
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
   if (moist) radiation.useCondensation(moistPhysics.condensation);
   const lake = physics && geography && (lakeOptions.model ?? LAKE_DEFAULTS.model) !== 'off' ? createLake(mesh, geography, lakeOptions) : null, lakeCell = lake ? lake.isLake : null;
-  const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography: lake ? lakeWater(mesh, geography) : geography, ...oceanOptions }) : null;
+  const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography: lake ? lakeWater(mesh, geography) : geography, iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }) : null;
   const land = physics && geography ? createLandSurface(mesh, geography, { buffers: buffers ? buffers.land : null, ...landOptions }) : null;
   const landMask = geography ? geography.land : null;
   const orography = subgridFields ? createOrographicDrag(mesh, core, subgridFields, { buffers: buffers ? buffers.orography : null, ...dragConstants(subgridFields, dragOptions) }) : null;
@@ -139,6 +140,7 @@ export function createModel(gridOrMesh, {
     buffers: { ...(buffers && buffers.ice ? buffers.ice : {}), ...(land ? { snow: land.shared.snow, snowAlbedo: land.shared.snowAlbedo } : {}) },
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...(ocean && ocean.penetration ? { transmission: ocean.transmission, penetrated: ocean.penetrated } : {}),
+    keepSmallIce: !!ocean && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift),
     ...iceOptions,
   });
   const heatCapacity = ocean ? ocean.capacity : sharedCapacity, capacityOf = (i) => (heatCapacity ? heatCapacity[i] : seaIce.slabHeatCapacity);

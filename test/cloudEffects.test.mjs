@@ -7,6 +7,7 @@ import { createModel } from '../js/model.module.js';
 import { createSigmaCore, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { createRadiation } from '../js/physics/radiation.module.js';
 import { cloudSaturation } from '../js/physics/moist.module.js';
+import { PUBLISHED_RADIATION } from '../explain/published.module.js';
 import { makeColumn, readColumn, K, LEVELS } from '../explain/radiativeColumn.module.js';
 import { createSweep, zeroCrossings, uniformCloud, cloudFromHumidity, LAYERS, PATHS, SUNS, HIGHEST } from '../explain/cloudEffects.module.js';
 
@@ -121,7 +122,7 @@ test('the uniform distribution: cloud begins at the critical humidity, covers ha
 test('the cloud a layer\'s humidity makes, blended by its cover, is the model\'s own partial cover: the same infrared, and the same sunlight once the cloud holds more than a few g/m²', () => {
   const mesh = buildMesh(new Grid(16)), C = mesh.nCells, core = createSigmaCore(mesh, { levels: LEVELS }), { exnerLayer } = core.diagnostics, ps = MLS.surfacePressure;
   const pi = new Float64Array(C).fill(ps), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
-  const pdf = createRadiation(mesh, core, { longwaveLines: 'scaled', solarConstant: 340.5 * 1.5, ozoneProfile: MLS.ozone, nearInfrared: 'clirad' });
+  const pdf = createRadiation(mesh, core, { ...PUBLISHED_RADIATION, longwaveLines: 'scaled', solarConstant: 340.5 * 1.5, ozoneProfile: MLS.ozone, nearInfrared: 'clirad' });
   pdf.useCondensation(createModel(new Grid(16), { ocean: false, levels: LEVELS }).moist.condensation);
   const column = makeColumn({ profile: MLS, humidity: MLS.humidity });
   const call = (water) => {

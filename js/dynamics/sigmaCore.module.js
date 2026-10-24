@@ -141,7 +141,7 @@ function ladder(from, to, first, growing, equal) {
  * in the stratosphere are finer than GFDL AM3's 3-4 km (Donner et al.
  * 2011): 48 layers.
  */
-export function sigmaInterfaces(name = 'cam26') {
+export function sigmaInterfaces(name = 'bl48') {
   const levels = [0];
   for (let k = 0; k < CAM_L26_HYAI.length; k++) levels.push(CAM_L26_HYAI[k] + CAM_L26_HYBI[k]);
   levels[levels.length - 1] = 1;

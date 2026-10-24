@@ -183,7 +183,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * DECK_OPEN, falling linearly to 0 at DECK_CLOSED (`deckVeto` false:
  * 1 everywhere), and with `coupledVeto` not at all where the moist
  * boundary layer (`boundaryRegime`) is a coupled stratocumulus-topped
- * layer, COUPLED_REGIME. With `stratocumulusInversion` (K; null: none)
+ * layer, COUPLED_REGIME. With `stratocumulusInversion` (K, 7 by default; null: none)
  * neither runs where the column's estimated inversion strength exceeds it,
  * the IFS's switch between a well-mixed stratocumulus-topped boundary
  * layer and a decoupled one that convects (7 K; Bechtold et al. 2014,
@@ -215,12 +215,12 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * carried from `plumeVelocity`² at its first cloudy layer by the deep
  * plume's law (`plumeAcceleration` a, `plumeDrag` b: dw²/dz = 2 a B −
  * 2 b ε w²) and spent against the layer's negative buoyancy; a number
- * gives the share directly. With `cumulusAscent` 'kinetic' ('buoyant',
- * the default, is the rule above) the plume crosses each non-buoyant
+ * gives the share directly. With `cumulusAscent` 'kinetic' (the default;
+ * 'buoyant' is the rule above) the plume crosses each non-buoyant
  * cloudy layer its w² carries it through and ends in the first one it
  * does not, as the w equation tops cumulus where w vanishes (Siebesma et
  * al. 2003). With `cumulusEntrainmentHeight` c
- * (null: none) it entrains at ε = c / z, z the layer midpoint's height
+ * (1 by default; null: none) it entrains at ε = c / z, z the layer midpoint's height
  * above the surface, in place of `cumulusEntrainment` (Siebesma et al.
  * 2003 fit 1/z to BOMEX's cloud cores), and detrains at ε +
  * `cumulusDetrainment` − `cumulusEntrainment`, so its mass flux falls
@@ -512,9 +512,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
   autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
-  deckVeto: true, coupledVeto: false, stratocumulusInversion: null, evaporationInCloud: false, virtualBuoyancy: true,
+  deckVeto: true, coupledVeto: false, stratocumulusInversion: 7, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
-  cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'buoyant', cumulusEntrainmentHeight: null, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
+  cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: true, plumeConsumption: 'all',
   condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,

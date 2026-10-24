@@ -8,7 +8,8 @@
  * iFlux on the edges and iUpdate on the cells, which carries the ice's
  * area, volume, snow, skin enthalpy and snow albedo, shifts the ocean's
  * stored ice volume, closes the cover, melts away what the transport left
- * too thin and flags the cells the ice reached while open. The cells'
+ * under the sea ice's removal floors or out of ICE_REMNANT's bounds and flags
+ * the cells the ice reached while open. The cells'
  * totals are gathered from the edge fluxes by each cell's own six slots, the
  * form that needs no atomics, where the CPU scatters them from the edges.
  *
@@ -32,13 +33,14 @@ export const driftSections = (C, E, given) => [...DRIFT_EDGE_SECTIONS.map((name)
  * section of the ocean's scratch the host fills, else the surface layer's
  * as oStressFromAtmosphere computes it.
  */
-export function iceDriftHead({ options: d, waterDensity, thermo, minimumConcentration, minimumVolume, freezing, implicitStress, given }) {
+export function iceDriftHead({ options: d, waterDensity, thermo, minimumConcentration, removal, remnant, freezing, implicitStress, given }) {
   const turn = d.waterTurn * Math.PI / 180;
   return `
 ${constant('ID_STRENGTH', d.strength)} ${constant('ID_DECAY', d.strengthDecay)} ${constant('ID_DRAG', waterDensity * d.waterDrag)} ${constant('ID_COS', Math.cos(turn))} ${constant('ID_SIN', Math.sin(turn))}
 ${constant('ID_DMIN', d.minimumDeformation)} ${constant('ID_LIMIT', d.speedLimit)} ${constant('ID_FLOOR', d.minimumRelativeSpeed)} ${constant('ID_DYNCONC', d.dynamicConcentration)} ${constant('ID_MAXCONC', d.maximumConcentration)}
 ${constant('ID_SKINC', thermo.skinHeatCapacity)} ${constant('ID_LATENT', thermo.iceDensity * thermo.latentHeatFusion)} ${constant('ID_LFUS', thermo.latentHeatFusion)} ${constant('ID_FRESH', thermo.freshSnowAlbedo)}
-${constant('ID_MINCONC', minimumConcentration)} ${constant('ID_MINVOL', minimumVolume)} ${constant('ID_FREEZE', freezing)}
+${constant('ID_MINCONC', minimumConcentration)} ${constant('ID_GONECONC', removal.concentration)} ${constant('ID_GONEVOL', removal.volume)} ${constant('ID_FREEZE', freezing)}
+${constant('ID_MAXH', remnant.thickness)} ${constant('ID_MAXSNOW', remnant.snow)} ${constant('ID_EMIN', thermo.skinHeatCapacity * (remnant.skinLow - freezing))} ${constant('ID_EMAX', thermo.skinHeatCapacity * (remnant.skinHigh - freezing))}
 fn openCell(i: i32) -> bool { return OD[O_CMASK + i] > 0.5 && OD[O_SHELF + i] < 0.5; }
 fn iceCover(i: i32) -> f32 {
   let c = PH[PH_CONC + i];
@@ -206,7 +208,8 @@ ${third ? `  let beyond = i32(OD[O_BEY + 2 * e + select(1, 0, forward)]);
 ${last ? `  OD[O_PREVVOL + i] += V1 - OD[O_IV0 + i];
   let started = OD[O_IA0 + i];
   let full = min(A1, ID_MAXCONC);
-  if (full < ID_MINCONC || V1 < ID_MINVOL) {
+  let tidy = full >= ID_MINCONC || (V1 <= ID_MAXH * full && S1 <= ID_MAXSNOW * full && E1 >= ID_EMIN * full && E1 <= ID_EMAX * full);
+  if (full < ID_GONECONC || V1 < ID_GONEVOL || !tidy) {
     let base = select(S[S_TS + i], ID_FREEZE, started > 0.0);
     S[S_TS + i] = base + (E1 - ID_LATENT * V1 - ID_LFUS * S1) / PH[PH_CAP + i];
     S[S_ICE + i] = 0.0; PH[PH_SNOW + i] = 0.0; PH[PH_SNOWALB + i] = ID_FRESH; PH[PH_CONC + i] = 0.0;
@@ -215,7 +218,7 @@ ${last ? `  OD[O_PREVVOL + i] += V1 - OD[O_IV0 + i];
   if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + i]; OD[O_ARRIVED + i] = 1.0; }
   S[S_ICE + i] = V1 / full; PH[PH_CONC + i] = full; PH[PH_SNOW + i] = S1 / full;
   S[S_TS + i] = ID_FREEZE + E1 / (full * ID_SKINC);
-  PH[PH_SNOWALB + i] = select(ID_FRESH, Sa1 / S1, S1 > 0.0);
+  PH[PH_SNOWALB + i] = select(ID_FRESH, min(1.0, Sa1 / S1), S1 > 0.0);
 }` : `  OD[O_IA + i] = A1; OD[O_IV + i] = V1; OD[O_ISN + i] = S1; OD[O_IEN + i] = E1; OD[O_ISA + i] = Sa1; OD[O_ITOUCH + i] = 1.0;
 }`}`;
   kernels.iUpdateMid = update(false);

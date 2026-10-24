@@ -20,6 +20,7 @@ import { skinOptions, skinRequiresRoughness } from '../physics/skin.module.js';
 import { JERLOV } from '../ocean/layered.module.js';
 import { createLake, lakeWater, LAKE_DEFAULTS } from '../physics/lake.module.js';
 import { lakeUpload, lakeDownload, LAKE_SLOTS } from './lake.gpu.js';
+import { COUPLED_ICE_DRIFT, iceDriftMoves } from '../ocean/iceDrift.module.js';
 
 export const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'soilDarkening', 'wetSoilAlbedo', 'darkeningWetness', 'rootZoneCapacity', 'dryWetness', 'wetWetness', 'growthTime', 'declineTime', 'snowDeclineTime', 'oldSnowAlbedo', 'snowMasking', 'forestSnowAlbedo', 'closedCanopy', 'canopyMemory', 'treeline', 'seasonThreshold', 'minimumSeason', 'treelineWarmth', 'seasonMemory', 'treeGrowthTime', 'treeDeclineTime', 'surfaceCapacity', 'percolationTime', 'stomatalResistance', 'growthColdest', 'growthWarmest', 'iceSheetAlbedo', 'iceSheetBalance', 'snowCap', 'bareIceAlbedo', 'treeMoisture', 'moistureMemory', 'forestAridity', 'grassland', 'forestAlbedo', 'grassAlbedo', 'grassSnowDarkening', ...Object.keys(SOIL_CARBON)];
 const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
@@ -90,6 +91,7 @@ export async function createGpuModel(gridOrMesh, {
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
     orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
+    keepSmallIce: ice.keepSmallIce ?? (oceanOptions !== false && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift)),
     ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
@@ -98,11 +100,11 @@ export async function createGpuModel(gridOrMesh, {
   const sponge = spongeRates(core.sigmaMid, surface.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surface.spongeDays ?? SPONGE.days);
   const lidFriction = lidFrictionRates(levels, surface.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : surface.lidFriction);
   const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), physics, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, spongeMeanRates: lidFriction, gravityWaves, surfaceGeopotential: phis, registerLength: oceanOptions === false ? 0 : oceanStateLength(mesh.nCells, mesh.nEdges, oceanOptions), lake: !!lakeCpu });
-  const seaIce = createSeaIce(mesh, ice);
+  const seaIce = createSeaIce(mesh, { keepSmallIce: physics.keepSmallIce, ...ice });
   const radiationCpu = createRadiation(mesh, core, { surfaceLayer: mode === 'roughness', ...radiation, radiationEvery: 1 });
   const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });
   const moistCpu = createMoistPhysics(mesh, core, { ...moist, stabilityLayer: radiationCpu.stabilityLayer });
-  const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography: lakeCpu ? lakeWater(mesh, geography) : geography, registers: { T: gpu.buffers.T, K1: gpu.buffers.K1, K2: gpu.buffers.K2, K3: gpu.buffers.K3, K4: gpu.buffers.K4 } });
+  const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography: lakeCpu ? lakeWater(mesh, geography) : geography, registers: { T: gpu.buffers.T, K1: gpu.buffers.K1, K2: gpu.buffers.K2, K3: gpu.buffers.K3, K4: gpu.buffers.K4 } });
   if (gpuOcean) gpuOcean.useSeaIce(seaIce.concentration);
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;
   if (landCpu) gpu.hooks.landWeights = landCpu.weights;
