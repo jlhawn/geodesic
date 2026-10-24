@@ -13,12 +13,12 @@ const N = 16, DT = 1350 * 16 / N, MASKED = { ...FRESH_GEOGRAPHY, mask: 'n1024' }
 const nonFinite = (fields) => Object.entries(fields).filter(([, a]) => ArrayBuffer.isView(a) && a.some((v) => !Number.isFinite(v))).map(([name]) => name);
 
 test('the n1024 mask is a geography of ETOPO 2022 with the observed ice and its shelves as land or cavities, in the state header only when chosen, and the raster records are as they were', () => {
-  assert.deepEqual(checkGeography(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'land' });
+  assert.deepEqual(checkGeography(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity' });
   const record = checkGeography(MASKED);
   assert.deepEqual(record, { ...FRESH_GEOGRAPHY, mask: 'n1024' });
-  assert.deepEqual(geographyHeader(record), { topography: 'etopo2022', iceSheets: 'observed', mask: 'n1024' });
+  assert.deepEqual(geographyHeader(record), { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity', mask: 'n1024' });
   assert.deepEqual(savedGeography(geographyHeader(record)), record);
-  assert.deepEqual(geographyHeader(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed' });
+  assert.deepEqual(geographyHeader(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity' });
   assert.throws(() => checkGeography({ mask: 'n1024' }), /n1024/);
   assert.throws(() => checkGeography({ ...MASKED, iceShelves: 'sea' }), /n1024/);
   assert.throws(() => checkGeography({ ...FRESH_GEOGRAPHY, mask: 'n512' }), /mask/);
