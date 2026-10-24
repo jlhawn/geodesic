@@ -24,6 +24,21 @@ test('the upwelling memory keeps a steady signal and leaves 3 percent of a near-
   }
 });
 
+test('a fresh upwelling memory is the running mean, within 2/(ωT) of a steady signal from day 1 to day 5', () => {
+  for (const frameSeconds of [506, 2025]) {
+    for (let n = 0; n < 8; n++) {
+      const phase = n * Math.PI / 4, memory = { values: null, key: null, time: 0 };
+      for (let t = 0; t <= 5 * 86400; t += frameSeconds) {
+        const [value] = foldMemory(memory, [1 + 50 * Math.sin(INERTIAL_30 * t + phase)], t, 100, UPWELLING_MEMORY);
+        if (t < 86400) continue;
+        const error = Math.abs(value - 1) / 50, bound = 2 / (INERTIAL_30 * t);
+        assert.ok(error <= 1.02 * bound, `${frameSeconds} s frames, phase ${phase.toFixed(2)}, day ${(t / 86400).toFixed(2)}: ${error} vs ${bound}`);
+      }
+    }
+  }
+  assert.ok(Math.abs(2 / (INERTIAL_30 * 2 * 86400) - 0.16) < 0.01 && Math.abs(2 / (INERTIAL_30 * 5 * 86400) - 0.063) < 0.005);
+});
+
 test('the upwelling memory restarts at a new depth, when time goes back, and in a cell that was not finite', () => {
   const memory = { values: null, key: null, time: 0 };
   assert.deepEqual([...foldMemory(memory, [1, 2], 0, 100, UPWELLING_MEMORY)], [1, 2]);

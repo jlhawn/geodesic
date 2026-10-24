@@ -25,7 +25,7 @@ let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24
 let subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false }, layerWinds = [];
 const rain = { total: null, time: 0 };
 const vertical = { values: null, level: null, time: 0 };
-const upwelling = { values: null, key: null, time: 0 };
+const upwelling = { values: null, key: null, time: 0, start: 0 };
 
 function restartRain() { rain.total = null; rain.time = model.time; if (model.restartPrecipitation) model.restartPrecipitation(); }
 
