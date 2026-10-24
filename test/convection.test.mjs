@@ -8,6 +8,7 @@ import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSIO
 import { syntheticTopography } from '../js/geography.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
+import { PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -1521,8 +1522,8 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ autoconversionFloor: 'mixingTop' });
-  await parity({ cumulusOvershoot: 1 });
-  await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
+  await parity({ cumulusOvershoot: 1, cumulusAscent: 'buoyant' });
+  await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, cumulusAscent: 'buoyant', virtualBuoyancy: false });
   await parity({ cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1 });
   await parity({ cumulusAscent: 'kinetic', cumulusSource: 'lowest', cumulusRain: 5e-4 });
   await parity({ stratocumulusInversion: 2 });
@@ -1586,7 +1587,7 @@ test("stratocumulusInversion shuts both plumes where the column's estimated inve
     model.phases.adjust(0, C, 900);
     return { C, flux: Float64Array.from(model.moist.cumulusBaseFlux), rain: Float64Array.from(model.moist.convectivePrecipitation), state: model.state.map((a) => Float64Array.from(a)) };
   };
-  const base = step({}), none = step({ stratocumulusInversion: -1e3 }), every = step({ stratocumulusInversion: 1e3 }), capped = step({ stratocumulusInversion: 2 }), C = base.C;
+  const base = step({ stratocumulusInversion: null }), none = step({ stratocumulusInversion: -1e3 }), every = step({ stratocumulusInversion: 1e3 }), capped = step({ stratocumulusInversion: 2 }), C = base.C;
   const plumes = (run) => run.flux.reduce((n, flux) => n + (flux > 0 ? 1 : 0), 0);
   let shut = 0, kept = 0;
   for (let i = 0; i < C; i++) {
@@ -1625,7 +1626,7 @@ test('the retired Betts–Miller options are refused on both engines', async () 
 
 test("with cumulusOvershoot 'kinetic' the plume's reach into its first non-buoyant layer sets the share it detrains there: a share within (0, 1) for the trade-wind inversion that falls as the inversion strengthens, the layer below taking the rest, and the budgets stay exact", () => {
   const column = (options, jump) => {
-    const model = build(options);
+    const model = build({ ...PREVIOUS_MOIST, ...options });
     place(model, 0, 101500, (z, p) => { const air = tradeWind(z, p); return z >= 1300 ? { T: air.T + jump, q: air.q } : air; });
     setDepth(model, 0, 600);
     model.boundaryLayer.buoyancyFlux[0] = 4e-4;
@@ -1674,7 +1675,7 @@ test("on BOMEX's profile (Siebesma et al. 2003, Table B1) the shallow plume carr
     const base = upper(top + 1);
     return base + moist.cumulus.overshoot * (upper(top) - base);
   };
-  const arms = { defaults: {}, carried: { cumulusAscent: 'kinetic' }, perHeight: { cumulusEntrainmentHeight: 1 }, both: { cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1 }, lowest: { cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusSource: 'lowest' } };
+  const arms = { defaults: { cumulusAscent: 'buoyant', cumulusEntrainmentHeight: null }, carried: { cumulusAscent: 'kinetic', cumulusEntrainmentHeight: null }, perHeight: { cumulusAscent: 'buoyant', cumulusEntrainmentHeight: 1 }, both: { cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1 }, lowest: { cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusSource: 'lowest' } };
   for (const set of ['bl34', 'bl36', 'bl42']) {
     const tops = Object.fromEntries(Object.entries(arms).map(([name, options]) => [name, run(options, set)]));
     console.log(`BOMEX cumulus top on ${set}, the top layer's base + its share of the layer (km): ${Object.entries(tops).map(([name, z]) => `${name} ${(z / 1000).toFixed(2)}`).join(', ')}`);

@@ -10,6 +10,7 @@ import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
 import { createModel } from '../js/model.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
+import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -202,7 +203,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
 test('the EIS deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (stratus) => {
     const radiation = { stratus, mixedLayerDeck: false };
-    const cpu = createModel(new Grid(N), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation });
+    const cpu = createModel(new Grid(N), { ocean: false, levels: PREVIOUS_LEVELS, radiation }), gpu = await createGpuModel(new Grid(N), { ocean: false, levels: PREVIOUS_LEVELS, radiation });
     const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
     const init = initializeState(cpu, {});
     for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }

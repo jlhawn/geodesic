@@ -48,7 +48,7 @@ async function loadInto(model, saved) {
 
 test('the ocean takes each cell\'s own drag coefficient: with the sea\'s at zero the stress vanishes on every edge between two sea cells on either engine, and with the default it does not', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const stressOf = async (dragCoefficient) => {
-    const model = await freshModel({ surface: { dragCoefficient } }), { mesh } = model, E = mesh.nEdges, ocean = model.oceanEngine;
+    const model = await freshModel({ surface: { dragCoefficient }, ocean: { iceDrift: false } }), { mesh } = model, E = mesh.nEdges, ocean = model.oceanEngine;
     for (let n = 0; n < ocean.everySteps; n++) await model.step(DT);
     await model.settle();
     const [[stress], physics] = await Promise.all([readRanges(model.gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.STRESS, length: E }]), model.gpu.downloadPhysics()]);
@@ -134,10 +134,10 @@ test('two recorded days replayed over the ocean alone keep its SST with the coup
   const fresh = await freshModel();
   const ocean = await fresh.ocean.serialize(), land = await fresh.land.serialize();
   const [pi, theta, u, surfaceT, q, qc, ice] = fresh.state;
-  writeFileSync(join(dir, 'rec_day0000.bin'), encodeState({ N, K: fresh.core.K, day: 0, time: 0, terrain: !!fresh.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: fresh.seaIce.concentration, mlmSubsidence: fresh.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
+  writeFileSync(join(dir, 'rec_day0000.bin'), encodeState({ N, K: fresh.core.K, levels: fresh.core.levels, day: 0, time: 0, terrain: !!fresh.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: fresh.seaIce.concentration, mlmSubsidence: fresh.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
   fresh.destroy();
   const forcing = join(dir, 'forcing');
-  const run = (script, env) => execFileSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, ...env }, encoding: 'utf8' });
+  const run = (script, env) => execFileSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, OCEAN: JSON.stringify({ iceDrift: false }), ...env }, encoding: 'utf8' });
   run('spinup.mjs', { TAG: 'rec', RECORD: forcing, DAYS: '2', MINUTES: '100', MOIST: JSON.stringify({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 }) });
   assert.deepEqual(readdirSync(forcing).sort(), [forcingName(1), forcingName(2)]);
   run('oceanSpinup.mjs', { TAG: 'alone', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });

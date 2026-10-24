@@ -29,7 +29,7 @@ test('the GPU tendency matches the CPU core to single precision', { skip: !gpuAv
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const out = model.state.map((s) => new Float64Array(s.length));
   model.core.tendency(model.state, out);
-  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, gravityWaves: false, referenceTheta: meanTheta(model) });
+  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, spongeMeanRates: null, gravityWaves: false, referenceTheta: meanTheta(model) });
   gpu.upload(model.state);
   await gpu.tendency();
   const got = await gpu.download(gpu.buffers.K1);
@@ -42,7 +42,7 @@ test('a rest state stays at rest on the GPU', { skip: !gpuAvailable && 'webgpu n
   const [pi, theta, u] = model.state;
   pi.fill(101325); u.fill(0);
   for (let k = 0; k < model.core.K; k++) for (let i = 0; i < model.mesh.nCells; i++) theta[k * model.mesh.nCells + i] = 300 + 2 * (model.core.K - 1 - k);
-  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, gravityWaves: false });
+  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, spongeMeanRates: null, gravityWaves: false });
   gpu.upload(model.state);
   for (let n = 0; n < 20; n++) await gpu.step(450);
   const [piAfter, , uAfter] = await gpu.download();
@@ -57,7 +57,7 @@ test('twenty GPU steps track twenty CPU steps', { skip: !gpuAvailable && 'webgpu
   const model = createModel(new Grid(N), { physics: false });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, gravityWaves: false, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model) });
+  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, spongeMeanRates: null, gravityWaves: false, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model) });
   gpu.upload(model.state);
   const dt = 900;
   for (let n = 0; n < 20; n++) { model.step(dt); await gpu.step(dt); }
@@ -80,7 +80,7 @@ test('twenty GPU steps with divergence damping track twenty CPU steps, and the d
     return model;
   };
   const model = run(0.05), free = run(0);
-  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, gravityWaves: false, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: 0.05, referenceTheta: meanTheta(model) });
+  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, spongeMeanRates: null, gravityWaves: false, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: 0.05, referenceTheta: meanTheta(model) });
   gpu.upload(model.state);
   const dt = 900;
   for (let n = 0; n < 20; n++) { model.step(dt); free.step(dt); await gpu.step(dt); }

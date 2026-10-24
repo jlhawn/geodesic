@@ -71,7 +71,7 @@ before(async () => {
   const ocean = await model.ocean.serialize(), land = await model.land.serialize();
   const [pi, theta, u, surfaceT, q, qc, ice] = state;
   fresh = join(dir, 'fresh_day0000.bin');
-  writeFileSync(fresh, encodeState({ N, K: model.core.K, day: 0, time: 0, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence: model.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
+  writeFileSync(fresh, encodeState({ N, K: model.core.K, levels: model.core.levels, day: 0, time: 0, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence: model.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
   model.destroy();
   const recorded = outDir('recorded', 'rec_day0000.bin');
   forcing = join(recorded, 'forcing');

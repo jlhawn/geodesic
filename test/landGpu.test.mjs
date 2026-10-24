@@ -6,6 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
+import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -50,8 +51,8 @@ function prepare(model, fog = false) {
 
 test('eight GPU steps over a continent track the CPU model: surface, soil, snow, vegetation, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
-  const cpu = prepare(createModel(new Grid(16), { topography, land }), true);
-  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land }), true);
+  const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS }), true);
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS }), true);
   const decisions = decisionTracker(cpu.core.K, cpu.mesh.nCells);
   for (let n = 0; n < 8; n++) {
     cpu.step(900); await gpu.step(900);

@@ -14,7 +14,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 
 const heights = [...Array.from({ length: 21 }, (_, n) => 100 * n), 2500, 3000, 4000, 5500, 7500, 10000, 13000, 17000, 22000, 30000];
 const fine = Float64Array.from([0, ...heights.slice(1).reverse().map((z) => Math.exp(-z / 8000)), 1]);
-const model = createModel(new Grid(16), { levels: fine, ocean: false });
+const model = createModel(new Grid(16), { levels: fine, ocean: false, radiation: { varianceCover: 'deficit' } });
 const { core, mesh, radiation } = model;
 const { K, C, E, dSigma, sigmaMid, g, cp, exnerLayer, geopotential, kappa } = core.diagnostics;
 const { thetaV } = core.arrays;
