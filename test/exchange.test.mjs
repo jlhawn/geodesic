@@ -8,6 +8,7 @@ import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN } from '../js/physics/exchange.module.js';
+import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -116,8 +117,8 @@ function prepare(model) {
 }
 
 test('both engines give every surface the same transfer coefficients and fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = prepare(createModel(new Grid(16), { topography }));
-  const gpu = prepare(await createGpuModel(new Grid(16), { topography }));
+  const cpu = prepare(createModel(new Grid(16), { topography, levels: PREVIOUS_LEVELS }));
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, levels: PREVIOUS_LEVELS }));
   cpu.step(900); await gpu.step(900); await gpu.settle();
   const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells;
   const [drag, heat, reference, evaporation, surfaceFlux] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['DRAG', 'HEATX', 'REFX', 'EVAP', 'SFLUX'].map((name) => ({ offset: PH[name], length: C })));
@@ -143,7 +144,7 @@ test('both engines give every surface the same transfer coefficients and fluxes'
 });
 
 test('snow smooths grass and bare soil but leaves the trees, and the implicit drag applies the stress it stores', () => {
-  const model = prepare(createModel(new Grid(16), { topography, orography: false }));
+  const model = prepare(createModel(new Grid(16), { topography, orography: false, moist: { plumeMomentum: false } }));
   model.step(900);
   const { land, iceSheet } = model.geography, C = model.mesh.nCells;
   const i = [...Array(C).keys()].find((n) => land[n] && !iceSheet[n]);

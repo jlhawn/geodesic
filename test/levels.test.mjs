@@ -425,7 +425,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
 
   assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere remapped from cam26 on bl48 \(48 layers\) and its deck; the clock at day 0/);
   const iced = await read('iced_day0001.bin');
-  assert.equal(iced.K, 60);
+  assert.equal(iced.K, 48);
   let covered = 0, thickest = 0;
   for (let i = 0; i < C; i++) if (iced.ice[i] > 0) { covered++; thickest = Math.max(thickest, iced.ice[i]); assert.ok(Math.abs(iced.concentration[i] - 0.6) < 0.2, `concentration ${iced.concentration[i]} at ${i}`); }
   assert.ok(covered > 0 && thickest < 0.4, `${covered} iced cells, the thickest ${thickest} m`);
