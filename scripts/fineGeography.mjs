@@ -10,19 +10,24 @@
  * a crest one point wide (Gibraltar's Camarinal Sill reads 341 m that way,
  * 283 m four-connected). A point under ice afloat is water to its bed for
  * the sea fields. With LAKES, a GeoJSON file of lakes (scripts/lakes.mjs),
- * each lake's points carry its level and their depth below it.
+ * each lake's points carry its level and their depth below it; Australia's
+ * alkaline lakes are salt pans and stay land. With LAND, a GSHHG gshhs_f.b
+ * (scripts/landWater.mjs), a point whose whole cell GSHHG puts on land is
+ * land down to SHALLOW below sea level: the polders, the deltas and the
+ * Caspian's lowland, which ETOPO's surface alone counts as water.
  * The file is generated and not committed.
  *
- *   [LAKES=ne_10m_lakes.geojson] node --max-old-space-size=20000 scripts/fineGeography.mjs [CACHE] [N] [OUT]
+ *   [LAKES=ne_10m_lakes.geojson] [LAND=gshhs_f.b] node --max-old-space-size=20000 scripts/fineGeography.mjs [CACHE] [N] [OUT]
  */
 import { openSync, writeSync, closeSync, readFileSync, writeFileSync } from 'node:fs';
-import { lakeFeatures, rasterizeLakes, lakeLevels } from './lakes.mjs';
+import { lakeFeatures, rasterizeLakes, lakeLevels, AUSTRALIAN_PANS } from './lakes.mjs';
+import { readGshhg, landRaster } from './landWater.mjs';
 import { openTiff } from './landIce.mjs';
 import { relaxedMesh, nearestCell, fineEdges, encodeFineGeography, FINE_GEOGRAPHY_URL } from '../js/fineGeography.module.js';
 import { ICE_DENSITY, SEAWATER_DENSITY } from '../js/geography.module.js';
 import { DEFAULT_RELAX } from '../js/grid.module.js';
 
-const ROWS = 10800, COLS = 21600, FLOATING = 1 / (1 - ICE_DENSITY / SEAWATER_DENSITY), MINIMUM_THICKNESS = 10, FIRN_AIR = 15;
+const ROWS = 10800, COLS = 21600, SHALLOW = 50, FLOATING = 1 / (1 - ICE_DENSITY / SEAWATER_DENSITY), MINIMUM_THICKNESS = 10, FIRN_AIR = 15;
 const cache = process.argv[2] ?? '/Users/jlhawn/git_repos/jlhawn/geodesic-terrain-cache/etopo2022';
 const N = Number(process.argv[3] ?? 1024), out = process.argv[4] ?? FINE_GEOGRAPHY_URL;
 const clock = performance.now(), stamp = (what) => console.log(`${((performance.now() - clock) / 1000).toFixed(1)} s  ${what}  rss ${(process.memoryUsage().rss / 2 ** 30).toFixed(1)} GB`);
@@ -30,6 +35,9 @@ const clock = performance.now(), stamp = (what) => console.log(`${((performance.
 const mesh = relaxedMesh(N, DEFAULT_RELAX), C = mesh.nCells;
 stamp(`relaxed mesh N=${N}: ${C} cells`);
 
+const dry = process.env.LAND ? landRaster(readGshhg(process.env.LAND), ROWS, COLS) : null;
+if (dry) stamp('GSHHG land rasterized');
+let reclaimed = 0;
 const surface = openTiff(`${cache}/ETOPO_2022_v1_60s_N90W180_surface.tif`), bedTiff = openTiff(`${cache}/ETOPO_2022_v1_60s_N90W180_bed.tif`);
 const sums = Object.fromEntries(['weight', 'land', 'surface', 'landSurface', 'seaSurface', 'bed', 'ice', 'iceThickness', 'floating', 'floatThickness', 'floatSurface', 'floatBed', 'wet', 'wetSea'].map((k) => [k, new Float64Array(C)]));
 const points = new Uint32Array(C), maxDepth = new Float64Array(C), deepPoint = new Int32Array(C).fill(-1), maxDepthSea = new Float64Array(C), deepPointSea = new Int32Array(C).fill(-1);
@@ -49,12 +57,14 @@ for (let ty = 0; ty * th < ROWS; ty++) {
       owner[n] = cell;
       const tx = Math.floor(c / tw), x = c - tx * tw, s = top[tx][y + x], b = under[tx][y + x];
       if (s === surface.nodata || b === bedTiff.nodata || !Number.isFinite(s) || !Number.isFinite(b)) { missing++; owner[n] = -1; continue; }
-      const d = Math.max(0, -s);
+      const onLand = s > 0 || (dry !== null && dry[n] === 1 && s > -SHALLOW);
+      if (onLand && s <= 0) reclaimed++;
+      const d = onLand ? 0 : Math.max(0, -s);
       depth[n] = depthSea[n] = Math.min(65535, Math.round(d));
       height[n] = Math.max(-32768, Math.min(32767, Math.round(s)));
       points[cell]++;
       sums.weight[cell] += weight; sums.surface[cell] += weight * s; sums.bed[cell] += weight * b; sums.wet[cell] += weight * d;
-      if (s > 0) { sums.land[cell] += weight; sums.landSurface[cell] += weight * s; } else sums.seaSurface[cell] += weight * s;
+      if (onLand) { sums.land[cell] += weight; sums.landSurface[cell] += weight * s; } else sums.seaSurface[cell] += weight * s;
       if (deepPoint[cell] < 0 || d > maxDepth[cell]) { maxDepth[cell] = d; deepPoint[cell] = n; }
       let wet = d;
       if (s > 0 && s > b) {
@@ -73,7 +83,7 @@ for (let ty = 0; ty * th < ROWS; ty++) {
   }
   if (ty % 20 === 0) stamp(`row ${Math.min(ROWS, (ty + 1) * th)} of ${ROWS}`);
 }
-stamp(`points assigned (${missing} without data)`);
+stamp(`points assigned (${missing} without data, ${reclaimed} at or below sea level on GSHHG land)`);
 
 let empty = 0;
 const fields = { points, maxDepth, maxDepthSea };
@@ -102,9 +112,9 @@ stamp('point lists');
 
 const lakeFraction = new Float64Array(C), lakeLevel = new Float64Array(C), lakeDepth = new Float64Array(C), dryMaxDepth = new Float64Array(C), lakeId = new Uint32Array(C);
 if (process.env.LAKES) {
-  const { lakes, left } = lakeFeatures(JSON.parse(readFileSync(process.env.LAKES, 'utf8')));
+  const { lakes, left } = lakeFeatures(JSON.parse(readFileSync(process.env.LAKES, 'utf8')), { pans: AUSTRALIAN_PANS });
   const id = rasterizeLakes(lakes, ROWS, COLS), levels = lakeLevels(id, height, ROWS, COLS, lakes.length), shares = new Map();
-  stamp(`${lakes.length} lakes rasterized (${left.length} intermittent left out: ${[...new Set(left.map((l) => l.featurecla))].join(', ')})`);
+  stamp(`${lakes.length} lakes rasterized (${left.length} left out: ${[...new Set(left.map((l) => l.featurecla))].join(', ')})`);
   for (let r = 0; r < ROWS; r++) {
     const north = Math.PI / 2 - r * Math.PI / ROWS, weight = Math.sin(north) - Math.sin(north - Math.PI / ROWS);
     for (let n = r * COLS; n < (r + 1) * COLS; n++) {

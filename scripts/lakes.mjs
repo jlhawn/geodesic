@@ -4,19 +4,33 @@
  * features with properties featurecla, name and scalerank, and Polygon or
  * MultiPolygon geometry. Features whose featurecla names an intermittent
  * water body are left out, as are any whose `intermittent` property is
- * set. A point belongs to a lake where its center lies inside an odd
+ * set, and with `pans` those it holds, whose featurecla and the center of
+ * whose bounds it matches. A point belongs to a lake where its center lies inside an odd
  * number of the lake's rings.
  */
 export const INTERMITTENT = /playa|intermittent|ephemeral/i;
 
-export function lakeFeatures(geojson, { exclude = INTERMITTENT } = {}) {
+export const AUSTRALIAN_PANS = { featurecla: 'Alkaline Lake', box: [110, 155, -45, -10] };
+
+const center = (polygons) => {
+  let west = 180, east = -180, south = 90, north = -90;
+  for (const rings of polygons) for (const ring of rings) for (const [lon, lat] of ring) { west = Math.min(west, lon); east = Math.max(east, lon); south = Math.min(south, lat); north = Math.max(north, lat); }
+  return [(west + east) / 2, (south + north) / 2];
+};
+
+export function lakeFeatures(geojson, { exclude = INTERMITTENT, pans = null } = {}) {
   const lakes = [], left = [];
   for (const feature of geojson.features ?? []) {
     const { properties = {}, geometry } = feature;
     if (!geometry || !['Polygon', 'MultiPolygon'].includes(geometry.type)) continue;
     const record = { name: properties.name ?? null, featurecla: properties.featurecla ?? null, scalerank: properties.scalerank ?? null };
     if ((record.featurecla && exclude.test(record.featurecla)) || properties.intermittent) { left.push(record); continue; }
-    lakes.push({ ...record, polygons: geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates });
+    const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+    if (pans && record.featurecla === pans.featurecla) {
+      const [lon, lat] = center(polygons), [w, e, s, n] = pans.box;
+      if (lon >= w && lon <= e && lat >= s && lat <= n) { left.push({ ...record, pan: true }); continue; }
+    }
+    lakes.push({ ...record, polygons });
   }
   return { lakes, left };
 }

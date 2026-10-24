@@ -5,6 +5,7 @@ import { gridMesh } from '../js/stateGrid.module.js';
 import { relaxedMesh, nearestCell, fineEdges, encodeFineGeography, decodeFineGeography, coarseGeography, connectedGeography, maskGeography, FIELDS } from '../js/fineGeography.module.js';
 import { encodeMask, decodeMask, createGeography } from '../js/geography.module.js';
 import { lakeFeatures, rasterizeLakes, lakeLevels } from '../scripts/lakes.mjs';
+import { landRaster } from '../scripts/landWater.mjs';
 
 test('relaxedMesh reproduces Grid bit for bit at N=16', () => {
   const grid = new Grid(16, { relax: 30 }), mesh = relaxedMesh(16, 30);
@@ -213,3 +214,12 @@ for (const N of [16, 64]) {
     for (let i = 0; i < coarse.nCells; i++) assert.ok(Math.abs(read.surface[i] - mask.surface[i]) <= 0.5 && Math.abs(read.elevation[i] - mask.elevation[i]) <= 0.5, `cell ${i} read back`);
   });
 }
+
+test('GSHHG land fills a raster point only where its whole cell is land: inside the land, not the lake on it, but the island in that lake, across the date line, and never by Antarctica\'s levels', () => {
+  const square = (w, s, e, n, level) => ({ level, xy: Float64Array.of(w, s, e, s, e, n, w, n) });
+  const polygons = [square(0, 0, 60, 60, 1), square(10, 10, 50, 50, 2), square(20, 20, 40, 40, 3), square(170, -30, 190, -10, 1), square(-60, -80, 60, -70, 5), square(-30, 2, -21, 8, 1)];
+  const rows = 18, cols = 36, land = landRaster(polygons, rows, cols);
+  const at = (lat, lon) => land[Math.floor((90 - lat) / 10) * cols + Math.floor((lon + 180) / 10)];
+  assert.equal(land.reduce((n, v) => n + v, 0), 24 + 4);
+  assert.deepEqual([at(5, 5), at(15, 15), at(25, 25), at(55, 55), at(-15, 175), at(-25, -175), at(-75, 0), at(5, -25)], [1, 0, 1, 1, 1, 1, 0, 0]);
+});

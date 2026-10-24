@@ -207,19 +207,21 @@ Geography records gain a `mask` key: `'raster'` or `'n1024'`. A raster record ha
 
 Build:
 ```
-LAKES=~/.cache/webgcm-lakes/ne_10m_lakes.geojson LAKE_REPORT=lakes.json node --max-old-space-size=20000 scripts/fineGeography.mjs
+LAKES=~/.cache/webgcm-lakes/ne_10m_lakes.geojson LAND=~/.cache/webgcm-gshhg/bin/gshhs_f.b LAKE_REPORT=lakes.json node --max-old-space-size=22000 scripts/fineGeography.mjs
 LAKE_REPORT=lakes.json REPORT=mask.json node --max-old-space-size=16000 scripts/geographyMask.mjs
 MASK=n1024 TOPOGRAPHY=etopo2022 node scripts/subgridTerrain.mjs CACHE 16 32 64 128 192
 ```
-The fine build takes 5.4 min (18.5 GB peak); the five masks take 5.4 min (5.7 GB).
+The fine build takes 2.1 min (18.5 GB peak); the five masks take about 4.5 min (5.7 GB).
 
-| N | land cells | land, 10⁶ km² | lakes | lake cells | depressions (cells) | seawater lakes (cells) | closed seas | file |
+| N | land cells | land, 10⁶ km² | lakes | lake cells | depressions (cells) | seawater lakes (cells) | Caspian, km² | file |
 |---|---|---|---|---|---|---|---|---|
-| 16 | 731 | 145.49 | 0 | 0 | 0 | 0 | Black Sea, Caspian | 35 KB |
-| 32 | 2948 | 146.83 | 2 | 2 | 0 | 0 | Black Sea, Caspian | 137 KB |
-| 64 | 11832 | 147.35 | 14 | 33 | 2 (3) | 1 (1) | Black Sea, Caspian | 544 KB |
-| 128 | 47359 | 147.44 | 47 | 196 | 6 (15) | 3 (7) | + Marmara, a Magellan fjord | 2.1 MB |
-| 192 | 106670 | 147.59 | 106 | 556 | 11 (39) | 6 (17) | + Marmara | 4.8 MB |
+| 16 | 732 | 145.69 | 0 | 0 | 0 | 0 | 402,725 | 35 KB |
+| 32 | 2956 | 147.23 | 2 | 2 | 0 | 0 | 400,417 | 137 KB |
+| 64 | 11860 | 147.70 | 14 | 33 | 0 | 1 (1) | 411,337 | 544 KB |
+| 128 | 47482 | 147.82 | 43 | 190 | 3 (6) | 3 (7) | 414,092 | 2.1 MB |
+| 192 | 106918 | 147.94 | 101 | 541 | 6 (16) | 5 (16) | 401,270 | 4.8 MB |
+
+The observed Caspian is about 371,000 km². The Black Sea, the Caspian and, from N = 128, Marmara are closed seas at every N; a Magellan fjord is one too at N = 128.
 
 **Ice.** The fine dataset also carries a sea mode, in which floating ice is water to its bed. Each mask file stores the shelf mode in full and the cells and edges where the sea mode differs. `'cavity'` builds on the sea mode.
 
@@ -230,24 +232,40 @@ The fine build takes 5.4 min (18.5 GB peak); the five masks take 5.4 min (5.7 GB
 - A lake cell is water at elevation −depth with its own surface (`surface`, used by `surfaceGeopotential`). Its edges open only to cells of the same lake.
 - Natural Earth's "Alkaline Lake" class marks a lake as saline.
 
-Natural Earth lists neither the Caspian nor Maracaibo. The dataset has no intermittent class: salt pans such as Eyre, Frome and Torrens are "Alkaline Lake", as are the Dead Sea and the Great Salt Lake. They first take cells at N = 128 (10 lakes).
+Natural Earth lists neither the Caspian nor Maracaibo. The dataset has no intermittent class: salt pans such as Eyre, Frome and Torrens are "Alkaline Lake", as are the Dead Sea and the Great Salt Lake.
+- Natural Earth's playas file covers none of the Australian pans.
+- So the 24 Alkaline Lake features centered in 110–155° E, 10–45° S are left out as dry pans (`AUSTRALIAN_PANS`).
+- Every other Alkaline Lake stays a lake: Urmia, Turkana, Issyk-Kul, Qinghai, the Great Salt Lake, Van.
+
+**Land below sea level.** ETOPO's surface alone puts every point at or below 0 m in the water. GSHHG 2.3.7 full resolution (Wessel and Smith 1996, J. Geophys. Res. 101, 8741; LGPL 3, https://www.soest.hawaii.edu/pwessel/gshhg/) separates them.
+- A 60″ point is land if its surface is above 0. It is also land if all nine 3×3 samples across its cell lie inside GSHHG land (levels 1–4 by even-odd; Antarctica's levels 5 and 6 left out) and its surface is above −50 m.
+- A channel through any part of a cell keeps the cell water, so every strait sill of phase 1 is unchanged at every N and on the fine mesh: Gibraltar 283, Bab-el-Mandeb 134, Hormuz 83–85, Bering 44, Lombok 215, Danish 17–24, Hudson 163–195, Tsushima 116, Florida 735, Denmark Strait 609, Faroe Bank 827; Bosporus and Panama closed as before.
+- 184,414 points move to land: the Caspian's lowland, the polders, the deltas.
+- Cells changed per N (all sea to land):
+
+| N | Caspian lowland | Netherlands | Po | New Orleans | Sacramento delta | elsewhere |
+|---|---|---|---|---|---|---|
+| 16 | 1 | 0 | 0 | 0 | 0 | 0 |
+| 32 | 5 | 0 | 0 | 0 | 0 | 3 |
+| 64 | 19 | 0 | 0 | 0 | 0 | 10 |
+| 128 | 69 | 5 | 2 | 2 | 0 | 51 |
+| 192 | 159 | 11 | 0 | 1 | 1 (lake to land) | 84 |
+
+"Elsewhere" means single coastal cells, plus the Australian pans and the depressions that GSHHG land now fills (Salton, Melrhir, part of Qattara). The Fens change no cell at any N. The derived files (data/geography1024.bin, data/geography_n1024_N*.bin and the n1024 subgrid files) carry GSHHG's coastline and are distributed under GSHHG's LGPL.
 
 **Depressions and cut-off seawater.** Every sea component but the largest is a closed basin.
 - A closed basin deeper than 500 m below sea level at its deepest point stays a closed sea: the Black Sea, the Caspian, Marmara.
-- A shallower one the lakes don't mark is seawater the mesh cuts off if its fine water (60″ points below 0 m outside lakes) joins the world ocean's through neighboring fine cells that both hold some. It becomes saline lake cells at level 0 (`seawater`).
+- A shallower one the lakes don't mark is seawater the mesh cuts off if its fine water joins the world ocean's through neighboring fine cells that both hold some. It becomes saline lake cells at level 0 (`seawater`).
 - Otherwise it is a dry depression and becomes land at its own elevation (`depression`).
 
 The dry depressions:
-- N = 64: Qattara, Eyre.
-- N = 128 adds: the Chott Melrhir, Danakil, Turpan, Salton.
-- N = 192 adds: the Dead Sea, a Libyan sabkha (30.2° N 21.1° E), more of Eyre, and one Skyring cell.
+- N = 128: Qattara, Danakil, Turpan.
+- N = 192 adds: the Dead Sea, a second Danakil cell, and one Skyring cell.
 
 The seawater lakes:
 - N = 64: Maracaibo.
 - N = 128 adds: Lake Melville, Chesterfield Inlet.
-- N = 192 adds: Lagoa dos Patos, Skyring and Otway, and the Sacramento delta.
-
-The delta is wrong. ETOPO counts every point at or below 0 m as water, so its subsided islands (to −7 m) are water. The same holds for the polders and for the Caspian lowland between −28 and 0 m: the model's Caspian is 605,000–751,000 km² against about 371,000. An elevation-independent land–water source would fix these.
+- N = 192 adds: Lagoa dos Patos, Skyring and Otway.
 
 **Lake model.** `lake: { model: 'flake' }` (off by default; `js/physics/lake.module.js`) runs FLake (Mironov 2008; Mironov et al. 2010) on lake cells. It follows the IFS's choices (Balsamo et al. 2012; Choulga et al. 2019):
 - depth bounded to 2–50 m;
