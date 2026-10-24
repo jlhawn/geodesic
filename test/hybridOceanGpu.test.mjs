@@ -21,7 +21,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
-const HYBRID = { vertical: 'hybrid', everySteps: 1 };
+const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
 const N = 16, DT = 1350;
 
 function stats(cpu, gpu, mask = null) {

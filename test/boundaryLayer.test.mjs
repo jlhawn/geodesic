@@ -8,11 +8,12 @@ import { initializeState, equilibriumProfile } from '../js/physics/init.module.j
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG } from '../js/physics/surface.module.js';
+import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 
-const model = createModel(new Grid(16), { boundaryLayer: { turbulence: 'dry' } });
+const model = createModel(new Grid(16), { levels: PREVIOUS_LEVELS, boundaryLayer: { turbulence: 'dry' } });
 const reference = equilibriumProfile(model);
 const { core, mesh, boundaryLayer } = model;
 const { K, C, E, dSigma, g, geopotential } = core.diagnostics;

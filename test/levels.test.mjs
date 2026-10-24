@@ -37,9 +37,9 @@ function prepare(model) {
   return model;
 }
 
-test('the sigma grids go by name, cam26 by default, and a grid is named again from its interfaces in single precision', () => {
+test('the sigma grids go by name, bl48 by default, and a grid is named again from its interfaces in single precision', () => {
   assert.deepEqual(SIGMA_GRIDS, ['cam26', 'bl34', 'bl36', 'bl42', 'bl48', 'bl60']);
-  assert.deepEqual(sigmaInterfaces(), cam);
+  assert.deepEqual(sigmaInterfaces(), sigmaInterfaces('bl48'));
   assert.equal(cam.length - 1, 27);
   assert.equal(bl.length - 1, 34);
   assert.throws(() => sigmaInterfaces('cam30'), /no sigma grid is named cam30/);
@@ -73,7 +73,7 @@ test('above 2.5 km bl34 is cam26 exactly, interfaces and layers, down to the 2.4
   assert.equal(shared, 22);
   assert.ok(Math.abs(standardHeight(cam[shared]) - 2421) < 1);
   assert.deepEqual(bl.subarray(0, shared + 1), cam.subarray(0, shared + 1));
-  const a = createModel(new Grid(16), { physics: false }), b = createModel(new Grid(16), { physics: false, levels: bl });
+  const a = createModel(new Grid(16), { physics: false, levels: cam }), b = createModel(new Grid(16), { physics: false, levels: bl });
   for (let k = 0; k < shared; k++) {
     assert.equal(b.core.sigmaMid[k], a.core.sigmaMid[k]);
     assert.equal(b.core.diagnostics.dSigma[k], a.core.diagnostics.dSigma[k]);
@@ -119,7 +119,7 @@ test('a state saved on bl34 reloads on bl34, with the deck\'s carried state, and
 });
 
 test('a bl34 state regrids across resolutions onto bl34 and not onto cam26', () => {
-  const coarse = createModel(new Grid(16), { levels: bl, physics: false }), fine = createModel(new Grid(24), { levels: bl, physics: false }), other = createModel(new Grid(24), { physics: false });
+  const coarse = createModel(new Grid(16), { levels: bl, physics: false }), fine = createModel(new Grid(24), { levels: bl, physics: false }), other = createModel(new Grid(24), { physics: false, levels: cam });
   const K = coarse.core.K, C = coarse.mesh.nCells, E = coarse.mesh.nEdges;
   const pi = new Float64Array(C).fill(1e5), theta = Float64Array.from({ length: K * C }, (_, x) => 280 + 100 * (1 - coarse.core.sigmaMid[Math.floor(x / C)]));
   const [fPi, fTheta, fU] = regridState(coarse, fine, [pi, theta, new Float64Array(K * E), new Float64Array(C).fill(288)]);
@@ -349,10 +349,10 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   gpu.destroy();
 });
 
-test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0, carrying its atmosphere and deck (remapped onto bl34, or onto bl60 where LEVELS is unset) unless ATMOSPHERE=fresh, with fresh sea ice unless ICE_FROM, checkpoints it inside a day on bl34 and resumes it there alone, and refuses a state at another N', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0, carrying its atmosphere and deck (remapped onto bl34, or onto bl48 where LEVELS is unset) unless ATMOSPHERE=fresh, with fresh sea ice unless ICE_FROM, checkpoints it inside a day on bl34 and resumes it there alone, and refuses a state at another N', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const root = new URL('..', import.meta.url).pathname, N = 16, dir = mkdtempSync(join(tmpdir(), 'levels-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const source = await createGpuModel(new Grid(N), { topography: topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer) });
+  const source = await createGpuModel(new Grid(N), { levels: cam, topography: topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer) });
   const { state, mesh } = source, C = mesh.nCells, land = source.geography.land;
   initializeState(source, { geostrophic: false }).forEach((values, a) => state[a].set(values));
   for (let i = 0; i < C; i++) if (land[i]) state[6][i] = 0;
@@ -423,7 +423,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   assert.ok(kept.water < 1.4 && started.water - kept.water > 0.4, `water ${kept.water} and ${started.water} of FROM's`);
   assert.ok(kept.gate > 0.7 && started.gate < 0.65, `sea gate ${kept.gate} and ${started.gate}`);
 
-  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere remapped from cam26 on bl60 \(60 layers\) and its deck; the clock at day 0/);
+  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere remapped from cam26 on bl48 \(48 layers\) and its deck; the clock at day 0/);
   const iced = await read('iced_day0001.bin');
   assert.equal(iced.K, 60);
   let covered = 0, thickest = 0;
