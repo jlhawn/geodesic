@@ -164,20 +164,55 @@ export function readFineGeography(url = FINE_GEOGRAPHY_URL) {
 }
 
 /*
+ * The depth to which each fine cell's water stays joined to the deepest
+ * fine cell's, the world ocean's: the widest path over fine edges, its
+ * value the shallowest sill on the way; 0 for water the ocean never
+ * reaches.
+ */
+export function oceanDepth(fine) {
+  const F = fine.nCells, depth = new Float64Array(F), done = new Uint8Array(F), buckets = [];
+  let seed = 0;
+  for (let f = 1; f < F; f++) if (fine.maxDepth[f] > fine.maxDepth[seed]) seed = f;
+  depth[seed] = Math.round(fine.maxDepth[seed]);
+  buckets[depth[seed]] = [seed];
+  for (let d = depth[seed]; d > 0; d--) {
+    const list = buckets[d];
+    if (!list) continue;
+    while (list.length) {
+      const f = list.pop();
+      if (done[f]) continue;
+      done[f] = 1;
+      for (let k = 0; k < fine.nEdgesOnCell[f]; k++) {
+        const g = fine.cellsOnCell[6 * f + k], v = Math.min(d, fine.edgeSill[fine.edgeOfSlot[6 * f + k]]);
+        if (v > depth[g]) { depth[g] = v; (buckets[v] ??= []).push(g); }
+      }
+    }
+  }
+  return depth;
+}
+
+/*
  * A model mesh's geography from the fine one. Every fine cell goes to the
  * model cell nearest its center; a cell's fractions and means are its fine
  * cells' weighted by area (the land's elevation by land area, the sea's by
- * sea area). edgeSill on every model edge is the greatest depth to which
- * the deepest fine cells of its two cells stay joined through fine edges
- * between fine cells of those two cells, 0 where no water crosses. The
- * class is land where the land fraction exceeds landThreshold.
+ * sea area). A cell's water is represented by its fine cell joined deepest
+ * to the ocean (oceanDepth), the deepest of them for water the ocean never
+ * reaches. edgeSill on a model edge is the depth to which the
+ * representatives of its two cells stay joined through fine edges among
+ * the fine cells of its two cells and of the two cells at its ends, so that
+ * a channel leaving through a third cell counts and land between them gives
+ * 0. Where that is shallower than both representatives' depth to the
+ * ocean, the fine cells of every neighbor of the two cells join the search,
+ * which can only deepen the edge. By the ultrametric inequality no model
+ * path is then deeper than the fine water between its ends. The class is land where the land fraction
+ * exceeds landThreshold.
  */
-export function coarseGeography(mesh, fine, { landThreshold = 0.5 } = {}) {
-  const { nCells: C, nEdges: E, xCell, nEdgesOnCell, cellsOnCell, cellsOnEdge, maxEdges } = mesh;
+export function coarseGeography(mesh, fine, { landThreshold = 0.5, ocean = oceanDepth(fine) } = {}) {
+  const { nCells: C, nEdges: E, xCell, nEdgesOnCell, cellsOnCell, cellsOnEdge, verticesOnEdge, cellsOnVertex, maxEdges } = mesh;
   const F = fine.nCells, owner = new Int32Array(F);
   let cell = 0;
   for (let f = 0; f < F; f++) owner[f] = cell = nearestCell(fine.xCell[3 * f], fine.xCell[3 * f + 1], fine.xCell[3 * f + 2], cell, xCell, nEdgesOnCell, cellsOnCell, maxEdges);
-  const area = new Float64Array(C), landArea = new Float64Array(C), elevation = new Float64Array(C), landElevation = new Float64Array(C), seaElevation = new Float64Array(C), maxDepth = new Float64Array(C), deepest = new Int32Array(C).fill(-1);
+  const area = new Float64Array(C), landArea = new Float64Array(C), elevation = new Float64Array(C), landElevation = new Float64Array(C), seaElevation = new Float64Array(C), maxDepth = new Float64Array(C), rep = new Int32Array(C).fill(-1);
   const iceArea = new Float64Array(C), iceVolume = new Float64Array(C), floatArea = new Float64Array(C), floatVolume = new Float64Array(C);
   for (let f = 0; f < F; f++) {
     const i = owner[f], a = fine.area[f], l = fine.landFraction[f];
@@ -185,7 +220,9 @@ export function coarseGeography(mesh, fine, { landThreshold = 0.5 } = {}) {
     landElevation[i] += a * l * fine.landElevation[f]; seaElevation[i] += a * (1 - l) * fine.seaElevation[f];
     iceArea[i] += a * fine.iceFraction[f]; iceVolume[i] += a * fine.iceFraction[f] * fine.iceThickness[f];
     floatArea[i] += a * fine.floatFraction[f]; floatVolume[i] += a * fine.floatFraction[f] * fine.floatThickness[f];
-    if (fine.maxDepth[f] > maxDepth[i] || deepest[i] < 0) { maxDepth[i] = fine.maxDepth[f]; deepest[i] = f; }
+    maxDepth[i] = Math.max(maxDepth[i], fine.maxDepth[f]);
+    const r = rep[i];
+    if (fine.maxDepth[f] > 0 && (r < 0 || ocean[f] > ocean[r] || (ocean[f] === ocean[r] && fine.maxDepth[f] > fine.maxDepth[r]))) rep[i] = f;
   }
   const land = new Uint8Array(C), landFraction = new Float64Array(C), iceFraction = new Float64Array(C), iceThickness = new Float64Array(C), floatFraction = new Float64Array(C), floatThickness = new Float64Array(C);
   for (let i = 0; i < C; i++) {
@@ -201,80 +238,97 @@ export function coarseGeography(mesh, fine, { landThreshold = 0.5 } = {}) {
   for (let f = 0; f < F; f++) start[owner[f] + 1]++;
   for (let i = 0; i < C; i++) start[i + 1] += start[i];
   { const fill = Int32Array.from(start.subarray(0, C)); for (let f = 0; f < F; f++) list[fill[owner[f]]++] = f; }
-  const slotEdge = fine.edgeOfSlot, edgeSill = new Float64Array(E), parent = new Map();
-  const find = (p) => { let r = p; while (parent.get(r) !== r) r = parent.get(r); while (parent.get(p) !== r) { const q = parent.get(p); parent.set(p, r); p = q; } return r; };
-  for (let e = 0; e < E; e++) {
-    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
-    if (maxDepth[a] <= 0 || maxDepth[b] <= 0) continue;
-    const links = [];
-    for (const i of [a, b]) {
+  const edgeSill = new Float64Array(E), local = new Int32Array(F).fill(-1), SHIFT = 2 ** 26;
+  let parent = new Int32Array(1024), keys = new Float64Array(1024), ends = new Int32Array(2048);
+  const find = (p) => { while (parent[p] !== p) { parent[p] = parent[parent[p]]; p = parent[p]; } return p; };
+  const sillWithin = (a, b, region) => {
+    let nodes = 0, links = 0, sill = 0;
+    for (const i of region) {
+      for (let p = start[i]; p < start[i + 1]; p++) {
+        if (nodes >= parent.length) { const grown = new Int32Array(2 * parent.length); grown.set(parent); parent = grown; }
+        local[list[p]] = nodes; parent[nodes] = nodes; nodes++;
+      }
+    }
+    for (const i of region) {
       for (let p = start[i]; p < start[i + 1]; p++) {
         const f = list[p];
         for (let k = 0; k < fine.nEdgesOnCell[f]; k++) {
           const g = fine.cellsOnCell[6 * f + k];
-          if (g < f || (owner[g] !== a && owner[g] !== b)) continue;
-          const s = fine.edgeSill[slotEdge[6 * f + k]];
-          if (s > 0) links.push(s, f, g);
+          if (g < f || local[g] < 0) continue;
+          const s = fine.edgeSill[fine.edgeOfSlot[6 * f + k]];
+          if (!(s > 0)) continue;
+          if (links >= keys.length) { const k2 = new Float64Array(2 * keys.length); k2.set(keys); keys = k2; const e2 = new Int32Array(2 * keys.length); e2.set(ends); ends = e2; }
+          keys[links] = s * SHIFT + links; ends[2 * links] = local[f]; ends[2 * links + 1] = local[g]; links++;
         }
       }
     }
-    const order = Array.from({ length: links.length / 3 }, (_, n) => n).sort((m, n) => links[3 * n] - links[3 * m]);
-    parent.clear();
-    const touch = (f) => { if (!parent.has(f)) parent.set(f, f); };
-    touch(deepest[a]); touch(deepest[b]);
-    for (const n of order) {
-      const f = links[3 * n + 1], g = links[3 * n + 2];
-      touch(f); touch(g);
-      const x = find(f), y = find(g);
-      if (x !== y) parent.set(x, y);
-      if (find(deepest[a]) === find(deepest[b])) { edgeSill[e] = links[3 * n]; break; }
+    const order = keys.subarray(0, links).sort(), ra = local[rep[a]], rb = local[rep[b]];
+    for (let q = links - 1; q >= 0; q--) {
+      const n = order[q] % SHIFT, x = find(ends[2 * n]), y = find(ends[2 * n + 1]);
+      if (x !== y) parent[x] = y;
+      if (find(ra) === find(rb)) { sill = Math.floor(order[q] / SHIFT); break; }
     }
+    for (const i of region) for (let p = start[i]; p < start[i + 1]; p++) local[list[p]] = -1;
+    return sill;
+  };
+  for (let e = 0; e < E; e++) {
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+    if (rep[a] < 0 || rep[b] < 0) continue;
+    const region = [a, b];
+    for (const v of [verticesOnEdge[2 * e], verticesOnEdge[2 * e + 1]]) for (let m = 0; m < 3; m++) { const c = cellsOnVertex[3 * v + m]; if (c >= 0 && !region.includes(c)) region.push(c); }
+    edgeSill[e] = sillWithin(a, b, region);
+    if (!(edgeSill[e] > 0 && edgeSill[e] < Math.min(ocean[rep[a]], ocean[rep[b]]))) continue;
+    for (const i of [a, b]) for (let m = 0; m < nEdgesOnCell[i]; m++) { const c = cellsOnCell[maxEdges * i + m]; if (!region.includes(c)) region.push(c); }
+    edgeSill[e] = Math.max(edgeSill[e], sillWithin(a, b, region));
   }
-  return { owner, area, land, landFraction, elevation, landElevation, seaElevation, maxDepth, iceFraction, iceThickness, floatFraction, floatThickness, edgeSill };
+  return { owner, rep, area, land, landFraction, elevation, landElevation, seaElevation, maxDepth, iceFraction, iceThickness, floatFraction, floatThickness, edgeSill };
 }
 
 /*
  * The connectivity rule on a coarse geography. Water is resolved at fine
  * scale where it crosses fine edges (sill > 0) between fine cells that are
  * mostly sea; land where fine cells that are mostly land touch. A model
- * ocean edge is open where water crosses it at fine scale (edgeSill > 0).
- * Straits: where the resolved water joins model ocean components that the
- * model's open edges keep apart, the model land cells on the fine paths
- * between them turn to sea, at least as deep as the path's sill through
- * them, and no edge of theirs deeper than that sill. The paths are the
- * widest, any sill of openSill or more counting the same, then those
- * through the model cells with the least land. Bridges: where resolved
- * land joins model land components kept apart by model sea cells, those
- * cells on the fine paths through the model cells with the most land turn
- * to land, unless a strait needs them.
+ * ocean edge is open where its edgeSill is above 0. Model ocean components
+ * are the sea cells joined by open edges. One of fewer than minimumSea
+ * cells that resolved water joins to one of minimumSea or more is a
+ * feature the mesh does not resolve and turns to land; one the water joins
+ * to no other component (a lake, or dry land below sea level) is left as
+ * it is. Straits: where resolved water joins the remaining components,
+ * the model land cells on the fine paths between them turn to sea, as deep
+ * as their deepest edge at least. The paths are the widest, any sill of
+ * openSill or more counting the same, then those through the model cells
+ * with the least land. Bridges: where resolved land joins model land
+ * components kept apart by model sea cells, those cells on the fine paths
+ * through the model cells with the most land turn to land, unless a strait
+ * needs them. Bridges keep no minimum size.
  */
-export function connectedGeography(mesh, coarse, fine, { landThreshold = 0.5, openSill = 150 } = {}) {
+export function connectedGeography(mesh, coarse, fine, { landThreshold = 0.5, openSill = 150, minimumSea = 3 } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell, edgesOnCell } = mesh, F = fine.nCells, E = fine.nEdges;
-  const { owner } = coarse, land = Uint8Array.from(coarse.land), elevation = Float64Array.from(coarse.elevation);
-  const edgeSill = Float64Array.from(coarse.edgeSill), flipped = new Int8Array(C), crossing = new Float64Array(C).fill(Infinity);
+  const { owner, edgeSill } = coarse, land = Uint8Array.from(coarse.land), elevation = Float64Array.from(coarse.elevation);
+  const flipped = new Int8Array(C);
   const components = (isLand) => {
-    const id = new Int32Array(C).fill(-1);
+    const id = new Int32Array(C).fill(-1), size = [];
     let n = 0;
     for (let s = 0; s < C; s++) {
       if (id[s] >= 0 || land[s] !== isLand) continue;
-      const stack = [s]; id[s] = n;
+      const stack = [s]; id[s] = n; size.push(1);
       while (stack.length) {
         const i = stack.pop();
         for (let m = 0; m < nEdgesOnCell[i]; m++) {
           const j = cellsOnCell[maxEdges * i + m];
           if (id[j] >= 0 || land[j] !== isLand || (!isLand && !(edgeSill[edgesOnCell[maxEdges * i + m]] > 0))) continue;
-          id[j] = n; stack.push(j);
+          id[j] = n; size[n]++; stack.push(j);
         }
       }
       n++;
     }
-    return { id, n };
+    return { id, size, n };
   };
-  const join = (isLand, allowed, weightOf) => {
-    const { id, n } = components(isLand), parent = new Int32Array(F + n);
+  const join = (isLand, allowed, weightOf, smallest = 0) => {
+    const { id, size, n } = components(isLand), parent = new Int32Array(F + n);
     for (let p = 0; p < F + n; p++) parent[p] = p;
     const find = (p) => { while (parent[p] !== p) { parent[p] = parent[parent[p]]; p = parent[p]; } return p; };
-    const node = (f) => (land[owner[f]] === isLand ? F + id[owner[f]] : f);
+    const node = (f) => (land[owner[f]] === isLand && size[id[owner[f]]] >= smallest ? F + id[owner[f]] : f);
     const buckets = new Map();
     for (let e = 0; e < E; e++) {
       const f = fine.cellsOnEdge[2 * e], g = fine.cellsOnEdge[2 * e + 1];
@@ -289,60 +343,63 @@ export function connectedGeography(mesh, coarse, fine, { landThreshold = 0.5, op
         const a = node(fine.cellsOnEdge[2 * e]), b = node(fine.cellsOnEdge[2 * e + 1]);
         if (a === b) continue;
         const x = find(a), y = find(b);
-        if (x !== y) { parent[x] = y; tree.push(e, a, b, w); }
+        if (x !== y) { parent[x] = y; tree.push(e, a, b); }
       }
     }
     const degree = new Int32Array(F + n), links = new Map();
-    for (let t = 0; t < tree.length; t += 4) {
+    for (let t = 0; t < tree.length; t += 3) {
       for (const [p, q] of [[tree[t + 1], tree[t + 2]], [tree[t + 2], tree[t + 1]]]) { degree[p]++; if (!links.has(p)) links.set(p, []); links.get(p).push(q, t); }
     }
-    const removed = new Uint8Array(tree.length / 4), leaves = [];
+    const removed = new Uint8Array(tree.length / 3), leaves = [];
     for (const [p] of links) if (p < F && degree[p] === 1) leaves.push(p);
     while (leaves.length) {
       const p = leaves.pop();
       for (let k = 0; k < links.get(p).length; k += 2) {
         const q = links.get(p)[k], t = links.get(p)[k + 1];
-        if (removed[t / 4]) continue;
-        removed[t / 4] = 1; degree[p]--; degree[q]--;
+        if (removed[t / 3]) continue;
+        removed[t / 3] = 1; degree[p]--; degree[q]--;
         if (q < F && degree[q] === 1) leaves.push(q);
       }
     }
     const kept = [];
-    for (let t = 0; t < tree.length; t += 4) if (!removed[t / 4]) kept.push(tree[t], tree[t + 1], tree[t + 2], tree[t + 3]);
-    return { kept, before: n };
+    for (let t = 0; t < tree.length; t += 3) if (!removed[t / 3]) kept.push(tree[t + 1], tree[t + 2]);
+    return { kept, id, size, n, root: (c) => find(F + c) };
   };
   const seaFine = (f) => fine.landFraction[f] <= landThreshold;
+  const water = (f, g, e) => seaFine(f) && seaFine(g) && fine.edgeSill[e] > 0;
   const most = (f, g) => Math.max(coarse.landFraction[owner[f]], coarse.landFraction[owner[g]]);
-  const strait = join(0, (f, g, e) => seaFine(f) && seaFine(g) && fine.edgeSill[e] > 0, (f, g, e) => 1000 * Math.min(fine.edgeSill[e], openSill) + Math.round(999 * (1 - most(f, g))));
-  const straitCells = new Set();
-  for (let t = 0; t < strait.kept.length; t += 4) {
-    for (const p of [strait.kept[t + 1], strait.kept[t + 2]]) {
-      if (p >= F) continue;
-      const i = owner[p];
-      straitCells.add(i); crossing[i] = Math.min(crossing[i], fine.edgeSill[strait.kept[t]]);
-    }
+  const widest = (f, g, e) => 1000 * Math.min(fine.edgeSill[e], openSill) + Math.round(999 * (1 - most(f, g)));
+  const cellsOf = (id, c) => { const out = []; for (let i = 0; i < C; i++) if (id[i] === c) out.push(i); return out; };
+  const first = join(0, water, widest), withLarge = new Set(), seen = new Map(), unresolved = [], isolated = [];
+  for (let c = 0; c < first.n; c++) {
+    const r = first.root(c);
+    seen.set(r, (seen.get(r) ?? 0) + 1);
+    if (first.size[c] >= minimumSea) withLarge.add(r);
   }
-  for (let t = 0; t < strait.kept.length; t += 4) {
-    const a = owner[fine.cellsOnEdge[2 * strait.kept[t]]], b = owner[fine.cellsOnEdge[2 * strait.kept[t] + 1]];
-    if (a === b) continue;
-    for (let m = 0; m < nEdgesOnCell[a]; m++) if (cellsOnCell[maxEdges * a + m] === b) { const e = edgesOnCell[maxEdges * a + m]; edgeSill[e] = Math.max(edgeSill[e], fine.edgeSill[strait.kept[t]]); }
+  for (let c = 0; c < first.n; c++) {
+    if (first.size[c] >= minimumSea) { if (seen.get(first.root(c)) === 1) isolated.push(cellsOf(first.id, c)); continue; }
+    const cells = cellsOf(first.id, c);
+    if (!withLarge.has(first.root(c))) { isolated.push(cells); continue; }
+    unresolved.push(cells);
+    for (const i of cells) { land[i] = 1; flipped[i] = 1; elevation[i] = Math.max(coarse.landElevation[i], 1); }
   }
+  const strait = join(0, water, widest, minimumSea), straitCells = new Set();
+  for (const p of strait.kept) if (p < F && land[owner[p]]) straitCells.add(owner[p]);
   for (const i of straitCells) {
-    land[i] = 0; flipped[i] = -1; elevation[i] = Math.min(coarse.seaElevation[i], -crossing[i]);
-    for (let m = 0; m < nEdgesOnCell[i]; m++) { const e = edgesOnCell[maxEdges * i + m]; edgeSill[e] = Math.min(edgeSill[e], crossing[i]); }
+    let deepest = 0;
+    for (let m = 0; m < nEdgesOnCell[i]; m++) deepest = Math.max(deepest, edgeSill[edgesOnCell[maxEdges * i + m]]);
+    land[i] = 0; flipped[i] = flipped[i] === 1 ? 0 : -1; elevation[i] = Math.min(coarse.seaElevation[i], -deepest);
   }
   const bridge = join(1, (f, g) => !seaFine(f) && !seaFine(g), (f, g) => Math.round(1000 * Math.min(coarse.landFraction[owner[f]], coarse.landFraction[owner[g]])));
   const conflicts = [];
-  for (let t = 0; t < bridge.kept.length; t += 4) {
-    for (const p of [bridge.kept[t + 1], bridge.kept[t + 2]]) {
-      if (p >= F) continue;
-      const i = owner[p];
-      if (straitCells.has(i)) { if (!conflicts.includes(i)) conflicts.push(i); continue; }
-      if (land[i]) continue;
-      land[i] = 1; flipped[i] = 1; elevation[i] = Math.max(coarse.landElevation[i], 1);
-    }
+  for (const p of bridge.kept) {
+    if (p >= F) continue;
+    const i = owner[p];
+    if (straitCells.has(i)) { if (!conflicts.includes(i)) conflicts.push(i); continue; }
+    if (land[i]) continue;
+    land[i] = 1; flipped[i] = 1; elevation[i] = Math.max(coarse.landElevation[i], 1);
   }
   const edgeOcean = new Uint8Array(mesh.nEdges);
   for (let e = 0; e < mesh.nEdges; e++) edgeOcean[e] = !land[mesh.cellsOnEdge[2 * e]] && !land[mesh.cellsOnEdge[2 * e + 1]] && edgeSill[e] > 0 ? 1 : 0;
-  return { land, elevation, edgeOcean, edgeSill, flipped, conflicts, seaComponents: strait.before, landComponents: bridge.before };
+  return { land, elevation, edgeOcean, edgeSill, flipped, conflicts, unresolved, isolated, seaComponents: first.n, landComponents: bridge.n };
 }

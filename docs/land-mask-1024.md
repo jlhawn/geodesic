@@ -7,8 +7,9 @@ Oct 24, 2026. Branch `claude/land-mask-1024`. Model defaults, sub-grid files, sa
 - `js/fineGeography.module.js`
   - `relaxedMesh(N, relax)`: Grid's seeds, topology and Lloyd passes on typed arrays. Its centers, areas and neighbors match `new Grid(N, { relax })` bit for bit (checked at N = 16 and 64; `test/fineGeography.test.mjs`).
   - The file format of `data/geography1024.bin`.
-  - `coarseGeography(mesh, fine)`: area-weighted fractions and means on a model mesh, plus each model edge's sill from the fine edges.
-  - `connectedGeography(mesh, coarse, fine)`: the proposed connectivity rule.
+  - `oceanDepth(fine)`: how deep each fine cell's water stays joined to the world ocean.
+  - `coarseGeography(mesh, fine)`: area-weighted fractions and means on a model mesh, each cell's representative fine water, and each model edge's sill.
+  - `connectedGeography(mesh, coarse, fine)`: the connectivity rule.
 - `scripts/fineGeography.mjs`: builds the N = 1024 dataset from ETOPO 2022's 60″ surface and bed GeoTIFFs (the cache that `scripts/landIce.mjs` reads).
 - `scripts/landMaskCompare.mjs`: compares the new masks with `createGeography` on the 0.25° ETOPO 2022 raster, the fresh-start geography.
 
@@ -21,7 +22,7 @@ Oct 24, 2026. Branch `claude/land-mask-1024`. Model defaults, sub-grid files, sa
 | dataset N = 256 | 75 s | 3.1 GB | 62 MiB |
 | dataset N = 512 | 75 s | 4.8 GB | 248 MiB |
 | dataset N = 1024 | 108 s (mesh 44.5, 233M points 14, fine-edge sills 39) | 12.3 GB | 990 MiB |
-| comparison, N = 16 to 192 | 129 s | 4.8 GB | |
+| comparison, N = 16 to 192 | 135 s | 4.7 GB | |
 
 At N = 1024 the object Grid would need about 25 GB of heap. The typed-array mesh peaks at 8.9 GB, most of it the unrelaxed Grid used as the seed.
 
@@ -40,103 +41,139 @@ At N = 1024 the object Grid would need about 25 GB of heap. The typed-array mesh
 
 Every fine cell holds at least one point; no point lacks data. The total land area is 148.36 million km².
 
+## The rule (`coarseGeography` + `connectedGeography`)
+
+1. **Class.** A cell is land where its area-weighted land fraction exceeds 0.5.
+
+2. **Edge depth.** Exchange through a strait is controlled at its sill (Armi & Farmer 1986, J. Fluid Mech. 164; Bryden & Kinder 1991, Deep-Sea Res. 38). Adcroft (2013, Ocean Modelling 67, 13–27) derives model face depths from high-resolution topography the same way. Here:
+   - Each model cell's water is represented by one fine cell: the one whose water stays joined to the world ocean deepest (`oceanDepth`, a widest path from the deepest fine cell). Lakes have no such join, so for them the deepest fine cell is used.
+   - A model edge's `edgeSill` is the depth to which the representatives of its two cells stay joined through fine edges.
+     - The search covers the fine cells of the two cells and of the two cells at the edge's ends, so a channel that leaves through a third cell counts.
+     - Where land parts them at the fine scale, the edge is 0.
+   - Where the edge comes out shallower than both representatives' depth to the ocean, the search widens to every neighbor of the two cells. This can only deepen the edge.
+   - Since every edge equals a fine bottleneck between representatives, no model path can be deeper than the fine water between its ends (the ultrametric inequality). Over-reading is ruled out by construction.
+   - An ocean edge is open where `edgeSill` > 0.
+
+3. **Minimum size.** Model ocean components are sea cells joined by open edges.
+   - A component of fewer than 3 cells that resolved fine water joins to a component of 3 or more is a feature the mesh does not resolve. It turns to land, under the Oct 18 ruling that features the mesh cannot resolve are ignored. Resolved fine water means fine cells ≤ 0.5 land, joined by fine edges with sill > 0.
+   - A component the fine water joins to no other is left as it is (see Lakes and depressions).
+
+4. **Straits.** Where resolved fine water joins components of 3 or more cells that the model keeps apart, the model land cells on the joining paths turn to sea.
+   - The paths come from a maximum spanning tree over the fine edges, with each component as one node, pruned to the branches that join components.
+   - Weight: the sill capped at 150 m, then the least land in the model cells.
+   - A flipped cell is at least as deep as its deepest edge.
+
+5. **Bridges.** These keep no minimum size.
+   - Where resolved fine land (fine cells > 0.5 land that touch) joins model land components kept apart by sea cells, the sea cells on the paths through the most land turn to land.
+   - A cell that a strait needs stays sea. There are no conflicts at any N now.
+
+The rule replaces LAND_BRIDGES and SEA_STRAITS. `test/fineGeography.test.mjs` checks it at N = 16 and 64 on synthetic geographies:
+- a two-cell estuary that a channel joins to the ocean turns to land;
+- a three-cell sea is joined through its 100 m channel;
+- a 50 m sill inside one cell controls the model path;
+- a 200 m channel through a third, land, cell joins two cells that a wall parts;
+- the wall alone keeps them apart.
+
 ## Per-N comparison
 
 Three masks:
 - **today**: `createGeography` with ETOPO 2022 + observed ice. Land means more than half of the 0.25° points; LAND_BRIDGES and SEA_STRAITS apply.
-- **area**: area-weighted land fraction > 0.5 from N = 1024.
-- **rule**: area plus the connectivity rule.
+- **area**: area land fraction > 0.5 from N = 1024.
+- **rule**: area plus the rule above.
 
-Box columns give the land cells of today / area / rule, out of the box's cells.
+Column notes:
+- "to land" counts the cells of the small components that (a) removes as well as the bridge cells.
+- Box columns give the land cells of today / area / rule, out of the box's cells.
 
-| N | land cells, today / area / rule | land, million km² | today→area: to sea, to land | rule flips: to sea, to land | sea cells with mean z > 0, today / area | elevation RMS vs today, all / land (m) | Darién 7–10N 80–76.5W | Cuba box | SF box |
-|---|---|---|---|---|---|---|---|---|---|
-| 16 | 735 / 726 / 725 | 146.30 / 144.48 / 144.28 | 10, 1 | 7, 6 | 23 / 26 | 57 / 13 | 1/0/1 of 1 | 0/0/0 of 2 | – |
-| 32 | 2939 / 2942 / 2944 | 146.39 / 146.54 / 146.63 | 14, 17 | 8, 10 | 75 / 78 | 23 / 13 | 2/1/2 of 3 | 1/2/3 of 9 | – |
-| 64 | 11849 / 11841 / 11848 | 147.56 / 147.46 / 147.55 | 71, 63 | 8, 15 | 185 / 220 | 28 / 19 | 5/5/5 of 12 | 7/8/8 of 35 | – |
-| 128 | 47258 / 47489 / 47493 | 147.13 / 147.84 / 147.86 | 237, 468 | 18, 22 | 656 / 553 | 60 / 39 | 14/16/16 of 41 | 25/34/34 of 144 | 2/2/2 of 3 |
-| 192 | 106056 / 107074 / 107052 | 146.74 / 148.15 / 148.12 | 489, 1507 | 49, 27 | 1430 / 866 | 79 / 48 | 31/34/34 of 91 | 59/79/78 of 318 | 6/6/6 of 7 |
+| N | land cells, today / area / rule | land, million km² | today→area: to sea, to land | rule: to sea, to land | small components to land (cells) | isolated components | sea cells with mean z > 0, today / area / rule | Darién | Cuba | SF |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 16 | 735 / 726 / 731 | 146.30 / 144.48 / 145.49 | 10, 1 | 3, 8 | 2 (2) | 2 | 23 / 26 / 24 | 1/0/1 of 1 | 0/0/0 of 2 | – |
+| 32 | 2939 / 2942 / 2953 | 146.39 / 146.54 / 147.08 | 14, 17 | 4, 15 | 4 (5) | 1 | 75 / 78 / 75 | 2/1/2 of 3 | 1/2/3 of 9 | – |
+| 64 | 11849 / 11841 / 11861 | 147.56 / 147.46 / 147.71 | 71, 63 | 2, 22 | 6 (7) | 4 | 185 / 220 / 214 | 5/5/5 of 12 | 7/8/8 of 35 | – |
+| 128 | 47258 / 47489 / 47518 | 147.13 / 147.84 / 147.94 | 237, 468 | 7, 36 | 11 (14) | 18 | 656 / 553 / 537 | 14/16/16 of 41 | 25/34/34 of 144 | 2/2/2 of 3 |
+| 192 | 106056 / 107074 / 107126 | 146.74 / 148.15 / 148.23 | 489, 1507 | 5, 57 | 26 (30) | 25 | 1430 / 866 / 841 | 31/34/34 of 91 | 59/79/79 of 318 | 6/6/6 of 7 |
 
-Today's rule loses land as N grows: 1.6 million km² short of the 60″ total at N = 192. A cell at exactly half its points counts as sea, and at N ≥ 128 a cell has only 3 to 6 points. The area rule stays within 0.2–0.5 million km² of the total at N ≥ 128.
+The 60″ land total is 148.36 million km². Today's rule falls 1.6 million km² short of it at N = 192, because a cell at exactly half its points counts as sea.
 
 **Panama, N = 128.** Two of the three Darién sea cells become land:
 - 8.86N 77.80W: half of the points today → 0.73 of the area;
 - 8.45N 78.08W: half → 0.86.
 
-The third, 9.33N 78.09W (0.40 → 0.33), is the San Blas coast, mostly sea, and stays sea. The ocean is closed across the isthmus at every N in all three masks, and at N = 1024.
+The third, 9.33N 78.09W (0.33), is the San Blas coast and stays sea. **Panama stays closed at every N** in all three masks, and at N = 1024.
 
-**Cuba, N = 128.** 9 cells become land (25 → 34). Sea cells with a positive mean elevation in the box fall from 7 to 2.
+**Cuba, N = 128:** 25 → 34 land cells. **San Francisco:** no change.
 
-**San Francisco, N = 128.** No change. The Golden Gate cell is 0.39 land and stays sea; the Bay cell is 0.79 and stays land.
+## Controlling depths
 
-## Strait connectivity
+The table compares the model's controlling depth with the fine one, in meters.
+- **Model depth:** the widest model ocean path's sill between the sea cells nearest two points inside the basins. Paths are confined to a box around the passage, widened by half a cell spacing.
+- **N = 1024 depth:** the depth at which the two basins' fine water first joins, from the deepest fine cell within 0.3° of each point.
+- **Cell format:** today / area / rule, then in brackets the fine depth between the representatives of the same two model cells, within the same box.
+- "1c" means both points fall in one model cell.
+- Today's figures include the forced SEA_STRAITS sills.
 
-The table gives the widest ocean path's sill in meters: the deepest level at which water still connects the two basins.
-- 0: closed.
-- "one cell": both basins fall in the same model cell.
-- Coarse paths are confined to a box around the strait, widened by 1.5 cell spacings.
-- Today's values include SEA_STRAITS, which forces 300 m at Gibraltar, 150 at Bab-el-Mandeb and 90 at Hormuz.
-
-| strait (N = 1024) | N=16 today / area / rule | N=32 | N=64 | N=128 | N=192 |
+| passage (N = 1024) | N = 16 | N = 32 | N = 64 | N = 128 | N = 192 |
 |---|---|---|---|---|---|
-| Gibraltar (341) | 0 / 0 / one cell | 300 / 341 / 341 | 300 / 341 / 341 | 300 / 318 / 318 | 300 / 341 / 341 |
-| Bab-el-Mandeb (137) | 0 / 0 / 137 | 150 / 0 / 137 | 150 / 0 / 169 | 104 / 59 / 59 | 99 / 137 / 137 |
-| Hormuz (83) | 0 / 0 / 83 | 90 / 83 / 83 | 90 / 83 / 83 | 69 / 83 / 83 | 47 / 83 / 83 |
-| Bering (44) | 0 / 39 / 39 | 44 / 39 / 39 | 44 / 30 / 30 | 44 / 44 / 44 | 44 / 44 / 44 |
-| Lombok (216) | one cell everywhere | one cell | 336 / 216 / 216 | 336 / 216 / 216 | 336 / 216 / 216 |
-| Panama (0) | 0 / – / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| Gibraltar (341) | 0/0/341 [341] | 0/0/341 [341] | 300/341/341 [341] | 300/341/341 [341] | 300/341/341 [341] |
+| Bab-el-Mandeb (137) | 0/0/137 [0] | 150/0/137 [137] | 150/0/137 [137] | 104/137/137 [137] | 99/137/137 [137] |
+| Hormuz (83) | 1c | 90/86/86 [86] | 90/83/83 [83] | 69/83/83 [83] | 47/83/83 [83] |
+| Bering (44) | 0/44/44 [44] | 44/44/44 [44] | 44/44/44 [44] | 44/44/44 [44] | 44/44/44 [44] |
+| Lombok (216) | 1c | 1c | 336/216/216 [216] | 336/216/216 [216] | 298/216/216 [216] |
+| Danish straits (18, Darss sill) | 1c | 1/24/24 [24] | 0/18/18 [18] | 0/0/18 [18] | 8/18/18 [18] |
+| Bosporus (0) | 0/0/0 [0] | 1c/1c/0 [0] | 1983/0/1982 [1982] | 0/0/0 [0] | 0/0/0 [0] |
+| Hudson Strait (163) | 0/0/195 [195] | 195/195/195 [195] | 176/176/176 [176] | 143/165/165 [165] | 148/163/163 [163] |
+| Tsushima (122) | 109/122/122 [0] | 109/122/122 [0] | 103/122/122 [122] | 109/122/122 [122] | 109/122/122 [122] |
+| Tatar Strait (5) | 943/1311/1311 [0] | 0/0/0 [5] | 0/0/0 [5] | 0/5/5 [5] | 0/0/0 [5] |
+| Florida Straits (737) | 576/737/737 [737] | 827/737/737 [660] | 632/737/737 [737] | 641/737/737 [737] | 634/737/737 [737] |
+| Denmark Strait (609) | 563/609/609 [609] | 563/609/609 [609] | 563/609/609 [609] | 563/609/609 [609] | 516/609/609 [609] |
+| Faroe Bank Channel (832) | 922/832/832 [832] | 922/832/832 [832] | 899/832/832 [832] | 922/832/832 [832] | 922/832/832 [832] |
+| Panama (0) | 0/1c/0 [0] | 0/0/0 [0] | 0/0/0 [0] | 0/0/0 [0] | 0/0/0 [0] |
 
-The N = 1024 sills agree with the literature at Bab-el-Mandeb (Hanish sill, 137 m), Hormuz and Bering. Gibraltar reads 341 m against the Camarinal sill's ~290 m: the 60″ raster is coarser than the sill.
+At N ≥ 64 the rule's value matches the fine value between the same cells everywhere except Tatar. The N = 1024 sills agree with the literature: Hanish 137 m, Darss 18 m, Denmark Strait ~620 m, Faroe Bank Channel ~840 m, Bering ~50 m. Gibraltar reads 341 m against the Camarinal sill's ~290 m, because the 60″ raster is coarser than the sill.
 
-## The proposed rule (`connectedGeography`)
+What remains:
+- **Coarse cells straddling a passage.** At N ≤ 64 one cell can hold both basins; its representative then sits on the ocean side. Hudson at N = 16–64 reads 176–195 between the representatives, and the rule matches that. The bracketed 0s at N = 16–32 and the 1311/1982 readings come from the box: at those N the nearest model sea cell to a point lies outside the passage. They are not readings of the passage.
+- **Bosporus at N = 64.** The Sea of Marmara (one cell) turns to land under (a), and a Black Sea cell is the nearest to its point. At N ≥ 128 the Black Sea (152 / 330 cells) and Marmara are lakes: the Bosporus and Dardanelles, 0.7–1.2 km wide, are unresolved even at 60″. Today's mesh also keeps the Black Sea closed at N = 128 and 192.
+- **Tatar at N = 32, 64 and 192.** The model reads 0 against the fine 5 m. The Japan Sea and the Okhotsk are already one component through La Pérouse, so the rule cuts no second passage. Only joining separate components is in the rule.
 
-1. **Class.** A cell is land where its area-weighted land fraction exceeds 0.5.
-2. **Edge sills.** A model edge's sill is the depth at which the deepest fine cells of its two cells join through fine edges between those cells. An ocean edge is open only where that sill is above 0, so water crosses at fine scale.
-3. **Straits.**
-   - Resolved water is fine cells with a land fraction ≤ 0.5, joined by fine edges with sill > 0.
-   - Where resolved water joins model ocean components that the open edges keep apart, the model land cells on the joining fine paths become sea.
-   - Paths come from a maximum spanning tree over the fine edges, with each model ocean component as one node, pruned to the branches that join components. Weight: the sill capped at `openSill` = 150 m, then the least land in the model cells the edge lies in.
-   - A flipped cell is at least as deep as the sill through it, and none of its edges is deeper than that sill.
-4. **Bridges.** The same construction applies to land:
-   - resolved land is fine cells with a land fraction > 0.5 that touch;
-   - model sea cells on the paths become land, preferring the model cells with the most land;
-   - a cell that a strait needs stays sea.
+## What (a) removes
 
-This replaces LAND_BRIDGES and SEA_STRAITS.
+These are the small ocean components that turn to land, and the strait flips they made under the earlier version of the rule.
 
-### Cases it changes
+**Small components to land:**
+- N = 16: the Baltic and the Persian Gulf, one cell each.
+- N = 32: the White Sea, the Sea of Marmara, a Gulf of Boothia pocket, the Gulf of California head.
+- N = 64: Bothnian Bay, the Gulf of Finland, Marmara, a Volga pocket by the Caspian, two Canadian Arctic inlets.
+- N = 128 (11, 14 cells):
+  - Alaska: Cook Inlet, Chatham Strait.
+  - The Canadian Arctic: Eureka Sound, Prince Regent Inlet, Roes Welcome, Frobisher Bay, Kennedy Channel.
+  - Elsewhere: Chesapeake Bay, a Scoresby Sund pocket, Río de la Plata, Lagoa dos Patos.
+- N = 192 (26, 30 cells): Svalbard's Isfjorden; the Gulf of Corinth; the Volga delta; the Gulf of Aqaba; the Mangyshlak gulf; the Ob and Yenisei pockets; the Seto Inland Sea; Kolyuchin Bay; Alaska's inside passage (3); Eureka Sound; Queen Charlotte Strait; Long Island Sound; the St. Lawrence estuary (2); Greenland fjords (2); the Amazon mouth; the Banc d'Arguin; the Gulf of Khambhat; Halmahera; Shark Bay; Chiloé; Lagoa dos Patos.
 
-**N = 64:**
-- To sea: Bab-el-Mandeb (12.7N 43.0E); the Gulf of Bothnia and Gulf of Finland throats; the White Sea; Dease and Queen Maud straits.
-- To land: Sulawesi's arms; Jutland and Fehmarn; Novaya Zemlya; the Gulf of California head; Cape Breton; Auckland; Panama at 8.2N 80.1W.
+**Strait flips no longer made:**
+- N = 128: Cook Inlet; Chatham Strait (2); the Canadian Arctic channels (4); Hudson and Frobisher (3, one cell at 0.91 land); Río de la Plata.
+- N = 192: 44, including Corinth, Aqaba, the Volga, the Ob and Yenisei, Tatar, Kanmon and Seto, Alaska's inside passage, the St. Lawrence, the Amazon, Khambhat, Halmahera, Chiloé.
 
-**N = 128:**
-- To sea:
-  - Europe and Russia: the Great Belt (55.4N 11.4E), the White Sea, the Ob and Taz gulfs, Khatanga.
-  - Alaska and Canada: Cook Inlet, Chatham Strait, Juan de Fuca, Hudson Strait and Frobisher Bay (one cell at 0.91 land), Canadian Arctic channels.
-  - Río de la Plata.
-- To land:
-  - Asia and the western Pacific: Kanmon (Kyushu–Honshu), Hokkaido, Palawan and Sulawesi pieces, Bali.
-  - The Alaska Peninsula.
-  - Elsewhere: Calabria, New Caledonia, Auckland, Valdés.
+**Strait flips still made:**
+- N = 128: the Great Belt, the White Sea throat, the Ob and Taz gulfs (3), Khatanga, Juan de Fuca.
+- N = 192: the Mangyshlak gulf of the Caspian (2), Khatanga, Juan de Fuca, an inlet of north Baffin Island.
 
-**N = 192:** 76 flips. Besides those above:
-- To sea:
-  - Europe and Russia: the Gulf of Corinth; the Volga delta and the north Caspian; the Yenisei.
-  - Asia: Tatar Strait; the Seto Inland Sea; the Gulf of Khambhat; Halmahera.
-  - The Middle East: the Gulf of Aqaba.
-  - The Americas: the St. Lawrence; the Amazon mouth; Lagoa dos Patos; Chiloé.
-  - The Arctic: a Svalbard fjord.
-- To land: the Mississippi delta, Andros, the Solomons.
-- Three conflicts, kept as sea: north Caspian 44.5N 51.1E, Chatham Strait, Halmahera.
+## Lakes and depressions
 
-## Open points for Joshua
+These are the components the fine water joins to nothing. Today's geography counts every point with surface ≤ 0 m as sea. A closed basin whose cells are mostly below sea level therefore becomes an isolated ocean basin in both today's mask and the new one, and the rule leaves it there.
 
-1. **Narrow features.** The rule carves every feature resolved at 7 km into the model mesh, including estuaries and lagoons that leave a one- to four-cell coarse sea component. This conflicts with the unresolved-bathymetry ruling. A minimum size for the smaller component, or turning such components to land or lakes, is his call.
-2. **Edge-sill limit.** The deepest-to-deepest edge sill can miss the crossing inside one cell that holds both basins:
-   - Bab-el-Mandeb at N = 64 reads 169 m against 137 m.
-   - It can also read a shelf shallower than the channel: Bab-el-Mandeb at N = 128 gives 59 m, Bering at N = 64 gives 30 m.
+That covers:
+- the Caspian (218 cells at N = 128), the Black Sea and Marmara (see above);
+- dry depressions below sea level: Qattara (6 cells at N = 128), the Chott Melrhir, Turpan, Danakil, the Dead Sea, the Salton Sink, Lake Eyre;
+- lakes whose ETOPO 2022 bed lies below sea level: Superior and Michigan (6), Ontario (3), Baikal (4 + 1), Lake Melville;
+- Lake Maracaibo (5);
+- Patagonian sounds.
 
-   Both limits apply to today's rule too.
-3. **Porous barriers.** Adcroft (2013) open widths are not built. The fine edges give the data for them.
-4. **Not yet carried to the model.** The ice fields and `iceShelves` 'sea' / 'cavity' (the floating ice's bed) are not passed through `createGeography`. Sub-grid files, sills, cavities and saved states would all need rebuilding at every N.
+At N = 128, 18 such components; at N = 192, 25. Nearly all of their cells are sea in today's geography too: 405 of 414 at N = 128.
+
+## Open points
+
+1. **Porous barriers.** Adcroft (2013) open widths wait. The fine edges give the data for them.
+2. **Phase 2 is not started, by Joshua's choice.** Not done: ice and cavity pass-through; sub-grid files and sills for the model; an option. Nothing in the model reads this code.
+3. **Lakes and depressions** stay sea, as today. Turning them to land, or giving lakes their own surface level, is a separate decision.
+4. **Passages between joined basins** (Tatar) are not cut. Cutting them would mean a second pass that matches every pair of basins, not only separate components.
