@@ -72,7 +72,7 @@ test('lakes fill the raster points whose centers lie inside an odd number of the
 });
 
 const meshes = new Map();
-function synthetic(N, depthOf, sillOf, lakes = null) {
+function synthetic(N, depthOf, sillOf, lakes = null, heightOf = () => 300) {
   if (!meshes.has(N)) {
     const coarse = gridMesh(new Grid(N)), fine = relaxedMesh(4 * N, 30), edges = fineEdges(fine), owner = new Int32Array(fine.nCells);
     for (let f = 0, c = 0; f < fine.nCells; f++) owner[f] = c = nearestCell(fine.xCell[3 * f], fine.xCell[3 * f + 1], fine.xCell[3 * f + 2], c, coarse.xCell, coarse.nEdgesOnCell, coarse.cellsOnCell, coarse.maxEdges);
@@ -80,7 +80,7 @@ function synthetic(N, depthOf, sillOf, lakes = null) {
   }
   const { coarse, fine, owner } = meshes.get(N), C = fine.nCells;
   const depth = Float64Array.from({ length: C }, (_, f) => depthOf(f, owner[f], fine));
-  const fields = { points: new Float64Array(C).fill(14), landFraction: depth.map((d) => (d > 0 ? 0 : 1)), elevation: depth.map((d) => (d > 0 ? -d : 300)), landElevation: depth.map((d) => (d > 0 ? 0 : 300)), seaElevation: depth.map((d) => -d), bed: depth.map((d) => (d > 0 ? -d : 300)), maxDepth: depth };
+  const fields = { points: new Float64Array(C).fill(14), landFraction: depth.map((d) => (d > 0 ? 0 : 1)), elevation: depth.map((d, f) => (d > 0 ? -d : heightOf(f, owner[f]))), landElevation: depth.map((d, f) => (d > 0 ? 0 : heightOf(f, owner[f]))), seaElevation: depth.map((d) => -d), bed: depth.map((d) => (d > 0 ? -d : 300)), maxDepth: depth };
   fields.dryMaxDepth = Float64Array.from(depth);
   fields.wetDepth = Float64Array.from(depth);
   for (const name of Object.keys(FIELDS)) fields[name] ??= new Float64Array(C);
@@ -212,6 +212,17 @@ for (const N of [16, 64]) {
     const read = createGeography(coarse, null, { mask: 'n1024', maskData: decodeMask(bytes) });
     assert.deepEqual([Array.from(read.land), Array.from(read.lake), Array.from(read.depression), Array.from(read.edgeOcean)], [Array.from(mask.land), Array.from(mask.lake), Array.from(mask.depression), Array.from(mask.edgeOcean)]);
     for (let i = 0; i < coarse.nCells; i++) assert.ok(Math.abs(read.surface[i] - mask.surface[i]) <= 0.5 && Math.abs(read.elevation[i] - mask.elevation[i]) <= 0.5, `cell ${i} read back`);
+  });
+
+  test(`N=${N}: land below sea level stands at its own mean elevation and reads back from the mask file`, () => {
+    const { coarse } = synthetic(N, () => 0, () => 0), i = cellNear(coarse, 45, 50), low = [i, ...neighbors(coarse, i).slice(0, 2)];
+    const { mask } = synthetic(N, (f, o, fine) => (fine.xCell[3 * f + 2] < -0.5 ? 4000 : 0), (f, g, o, d) => d, null, (f, o) => (low.includes(o) ? -28 : 300));
+    for (const j of low) assert.deepEqual([mask.land[j], mask.depression[j], mask.low[j], Math.round(mask.elevation[j]), Math.round(mask.surface[j])], [1, 0, 1, -28, -28], `low cell ${j}`);
+    assert.equal(mask.low.reduce((n, v) => n + v, 0), low.length);
+    const parts = encodeMask(coarse, mask, mask), bytes = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
+    parts.reduce((at, p) => { bytes.set(p, at); return at + p.byteLength; }, 0);
+    const read = createGeography(coarse, null, { mask: 'n1024', maskData: decodeMask(bytes) });
+    for (let j = 0; j < coarse.nCells; j++) assert.ok(Math.abs(read.surface[j] - mask.surface[j]) <= 0.5, `cell ${j} read back`);
   });
 }
 

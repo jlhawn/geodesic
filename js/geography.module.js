@@ -404,7 +404,7 @@ function cavityGeography(mesh, shelf, sea, cavityDepth) {
  * as sea): a 48-byte header ('GMK1', N, Lloyd passes, cells, edges, then
  * the counts of the ice cells, of the cells and edges the shelves' water
  * changes, and of the lake cells), then per cell its flags (uint8: 1 land,
- * 2 ice sheet, 4 lake, 8 dry depression, 16 a saline lake), land fraction (uint16 over
+ * 2 ice sheet, 4 lake, 8 dry depression, 16 a saline lake, 32 land below sea level), land fraction (uint16 over
  * 65535), elevation (int16, meters) and mean water depth (uint16, meters),
  * per edge its sill (uint16, meters); then for the ice cells their index
  * (uint32), ice fraction and shelf fraction (uint16 over 65535), and ice
@@ -418,7 +418,7 @@ export const maskUrl = (N, mask = 'n1024') => new URL(`../data/geography_${mask}
 export function encodeMask({ nCells, relax }, shelf, sea) {
   const N = Math.round(Math.sqrt((nCells - 2) / 10)), C = shelf.land.length, E = shelf.edgeSill.length, fraction = (v) => Math.round(65535 * Math.min(1, Math.max(0, v)));
   const meters = (v) => Math.max(-32768, Math.min(32767, Math.round(v))), depth = (v) => Math.max(0, Math.min(65535, Math.round(v)));
-  const flags = (g, i) => (g.land[i] ? 1 : 0) | (g.iceSheet?.[i] ? 2 : 0) | (g.lake?.[i] ? 4 : 0) | (g.depression?.[i] ? 8 : 0) | (g.saline?.[i] ? 16 : 0);
+  const flags = (g, i) => (g.land[i] ? 1 : 0) | (g.iceSheet?.[i] ? 2 : 0) | (g.lake?.[i] ? 4 : 0) | (g.depression?.[i] ? 8 : 0) | (g.saline?.[i] ? 16 : 0) | (g.low?.[i] ? 32 : 0);
   const ice = [], cells = [], edges = [], lakes = [];
   for (let i = 0; i < C; i++) {
     if (shelf.iceFraction[i] > 0 || shelf.shelfFraction[i] > 0) ice.push(i);
@@ -466,8 +466,8 @@ export function readMask(mesh, mask = 'n1024') {
  * as land, or with cavityGeography's cavities where the shelves' water
  * reaches cavityDepth under them. An ocean edge is open where its sill is
  * above 0; `surface` is the height the atmosphere stands on (the land's,
- * at sea level or below only in a dry depression, a lake's level, 0 at
- * sea).
+ * at sea level or below only in a dry depression or where the land lies
+ * below it, a lake's level, 0 at sea).
  */
 function maskedGeography(mesh, file, iceShelves, cavityDepth) {
   const { nCells: C, nEdges: E, cellsOnEdge, areaCell } = mesh;
@@ -484,7 +484,7 @@ function maskedGeography(mesh, file, iceShelves, cavityDepth) {
     return { land, elevation, wetDepth, edgeOcean, edgeSill, coastEdges: Int32Array.from(coast) };
   };
   const shelf = build(file.flags, Float64Array.from(file.elevation), Float64Array.from(file.wetDepth), Float64Array.from(file.edgeSill));
-  const lake = Uint8Array.from(file.flags, (f) => (f & 4 ? 1 : 0)), saline = Uint8Array.from(file.flags, (f) => (f & 16 ? 1 : 0)), depression = Uint8Array.from(file.flags, (f) => (f & 8 ? 1 : 0)), lakeLevel = new Float64Array(C);
+  const lake = Uint8Array.from(file.flags, (f) => (f & 4 ? 1 : 0)), saline = Uint8Array.from(file.flags, (f) => (f & 16 ? 1 : 0)), depression = Uint8Array.from(file.flags, (f) => (f & 8 ? 1 : 0)), low = Uint8Array.from(file.flags, (f) => (f & 32 ? 1 : 0)), lakeLevel = new Float64Array(C);
   file.lakes.index.forEach((i, k) => { lakeLevel[i] = file.lakes.level[k]; });
   const iceFraction = new Float64Array(C), iceThickness = new Float64Array(C), shelfFraction = new Float64Array(C), shelfThickness = new Float64Array(C);
   file.ice.index.forEach((i, k) => {
@@ -492,7 +492,7 @@ function maskedGeography(mesh, file, iceShelves, cavityDepth) {
     if (shelf.land[i]) { iceFraction[i] = file.ice.iceFraction[k] / 65535; if (file.flags[i] & 2) iceThickness[i] = file.ice.iceThickness[k]; }
   });
   const iceSheet = Uint8Array.from(file.flags, (f) => (f & 2 ? 1 : 0)), landFraction = Float64Array.from(file.landFraction, (v) => v / 65535);
-  const surface = Float64Array.from(shelf.elevation, (h, i) => (shelf.land[i] ? (depression[i] ? h : Math.max(0, h)) : lake[i] ? lakeLevel[i] : 0));
+  const surface = Float64Array.from(shelf.elevation, (h, i) => (shelf.land[i] ? (depression[i] || low[i] ? h : Math.max(0, h)) : lake[i] ? lakeLevel[i] : 0));
   let landArea = 0, total = 0;
   for (let i = 0; i < C; i++) { total += areaCell[i]; if (shelf.land[i]) landArea += areaCell[i]; }
   const geography = { mask: 'n1024', ...shelf, landFraction, surface, iceSheet, iceFraction, iceThickness, shelfFraction, shelfThickness, lake, lakeLevel, saline, depression, landArea: landArea / total };

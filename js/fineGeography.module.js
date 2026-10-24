@@ -342,7 +342,9 @@ export function seaFine(fine) {
  * (`seawater`, a lake at sea level) and otherwise a dry depression, which
  * turns to land at its own elevation. `surface` is
  * the height the atmosphere stands on: the land's elevation, clamped at
- * sea level outside the depressions, a lake's level, and 0 at sea.
+ * sea level outside the depressions and the `low` cells, whose land lies
+ * below it on average and which take that land's mean, a lake's level, and
+ * 0 at sea.
  */
 export function maskGeography(mesh, fine, { landThreshold = 0.5, openSill = 150, minimumSea = 3, lakeThreshold = 0.5, depressionDepth = 500 } = {}) {
   const { nCells: C, nEdges: E, cellsOnEdge, nEdgesOnCell, cellsOnCell, edgesOnCell, maxEdges, areaCell } = mesh;
@@ -389,9 +391,10 @@ export function maskGeography(mesh, fine, { landThreshold = 0.5, openSill = 150,
     depressions.push(basin.cells);
     for (const i of basin.cells) { land[i] = 1; depression[i] = 1; landFraction[i] = 1; elevation[i] = coarse.elevation[i]; }
   });
-  const iceSheet = new Uint8Array(C), iceFraction = new Float64Array(C), iceThickness = new Float64Array(C), surface = new Float64Array(C);
+  const iceSheet = new Uint8Array(C), iceFraction = new Float64Array(C), iceThickness = new Float64Array(C), surface = new Float64Array(C), low = new Uint8Array(C);
   for (let i = 0; i < C; i++) {
-    surface[i] = land[i] ? (depression[i] ? elevation[i] : Math.max(0, elevation[i])) : lake[i] ? lakeLevel[i] : 0;
+    if (land[i] && !depression[i] && coarse.landElevation[i] < 0 && elevation[i] <= 0) { low[i] = 1; elevation[i] = coarse.landElevation[i]; }
+    surface[i] = land[i] ? (depression[i] || low[i] ? elevation[i] : Math.max(0, elevation[i])) : lake[i] ? lakeLevel[i] : 0;
     if (!land[i]) continue;
     iceFraction[i] = coarse.iceFraction[i];
     if (iceFraction[i] > 0.5 * landFraction[i]) { iceSheet[i] = 1; iceThickness[i] = coarse.iceThickness[i]; }
@@ -406,7 +409,7 @@ export function maskGeography(mesh, fine, { landThreshold = 0.5, openSill = 150,
   for (let i = 0; i < C; i++) { total += areaCell[i]; if (land[i]) landArea += areaCell[i]; }
   return {
     land, landFraction, elevation, surface, iceSheet, iceFraction, iceThickness, shelfFraction: coarse.floatFraction, shelfThickness: Float64Array.from(coarse.floatFraction, (f, i) => f * coarse.floatThickness[i]),
-    wetDepth: coarse.wetDepth, edgeOcean, edgeSill, coastEdges: Int32Array.from(coast), landArea: landArea / total, lake, lakeLevel, depression, seawater,
+    wetDepth: coarse.wetDepth, edgeOcean, edgeSill, coastEdges: Int32Array.from(coast), landArea: landArea / total, lake, lakeLevel, depression, low, seawater,
     coarse, rule, depressions, closed, inlets,
   };
 }

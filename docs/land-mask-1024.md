@@ -258,6 +258,18 @@ Natural Earth lists neither the Caspian nor Maracaibo. The dataset has no interm
 - A shallower one the lakes don't mark is seawater the mesh cuts off if its fine water joins the world ocean's through neighboring fine cells that both hold some. It becomes saline lake cells at level 0 (`seawater`).
 - Otherwise it is a dry depression and becomes land at its own elevation (`depression`).
 
+**Land below sea level outside the depressions.** A land cell whose land points average below 0 m stands at that mean, unclamped (`low`, flag 32 in the mask file); every other land cell stands at no less than 0. The cells (mean surface of the changed cells):
+
+| N | cells | Caspian lowland | polders | Qattara rim | elsewhere | lowest changed |
+|---|---|---|---|---|---|---|
+| 16 | 1 | 1, −10 m | 0 | 0 | 0 | −10 m |
+| 32 | 3 | 2, −8.5 m | 0 | 0 | 1 | −15 m |
+| 64 | 19 | 14, −13.7 m | 0 | 0 | 5 | −26 m |
+| 128 | 88 | 60, −15.6 m | 3, −1 m | 1, −8 m | 24 | −27 m |
+| 192 | 220 | 156, −15.6 m | 7, −1.1 m | 4, −14.5 m | 53 | −29 m |
+
+The Sacramento delta changes no cell: its land points average above 0. No other field, sill or cavity-water cell changes, so the straits are as they were.
+
 The dry depressions:
 - N = 128: Qattara, Danakil, Turpan.
 - N = 192 adds: the Dead Sea, a second Danakil cell, and one Skyring cell.
