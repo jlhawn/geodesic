@@ -118,7 +118,7 @@ async function build(file) {
     model.time = saved.time;
     if (model.load) model.load();
     model.ocean.load(saved.ocean, state[3], state[6]);
-    if (saved.land) model.land.load(saved.land);
+    if (saved.land) model.land.load(saved.land, state[6]);
     return model;
   };
   const cpu = load(createModel(mesh, { ...options, subgrid: subgridOf() }));
