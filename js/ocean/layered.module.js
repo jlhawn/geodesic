@@ -1477,7 +1477,7 @@ export function createOcean(mesh, {
       if (saved.penetrated && saved.penetrated.length === C) penetrated.set(saved.penetrated);
       if (saved.calved && saved.calved.length === C) calved.set(saved.calved);
       if (saved.boundaryDepths && saved.boundaryDepths.length === C) boundaryDepths.set(saved.boundaryDepths);
-      if (drift && saved.iceVelocity) drift.reset(saved.iceVelocity);
+      if (drift && saved.iceVelocity) drift.reset(saved.iceVelocity, saved.iceSigma);
     }
     counter = 0;
     initialised = true;
@@ -1487,7 +1487,7 @@ export function createOcean(mesh, {
     return {
       Q: copy(Q), W: copy(W), previousT0: copy(previousT0), previousIceVolume: copy(previousVolume), fresh: copy(fresh), calved: copy(calved), buoyancy: copy(buoyancyLoss), capacity: copy(capacity), penetrated: copy(penetrated), boundaryDepths: copy(boundaryDepths),
       ...(penetration ? { transmission: copy(transmission) } : {}),
-      ...(drift ? { iceVelocity: copy(drift.velocity) } : {}),
+      ...(drift ? { iceVelocity: copy(drift.velocity), iceSigma: copy(drift.sigma) } : {}),
     };
   }
 
