@@ -310,7 +310,7 @@ test(`on ISOMIP+'s warm profile the shelf melts, fastest near its grounding line
 
 test('with the shelves loading the water and its top at their sloping draft, every phase of the ocean step but the rescale keeps its water, heat and salt to rounding beyond what the melt and the outlets\' calving take and give, and the rescale corrects the columns under and beside the shelves as little as the open sea\'s', () => {
   const { mesh, raster, options } = shelfBands(250), geography = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' }), DT = 1350;
-  const C = mesh.nCells, ocean = createOcean(mesh, { geography, everySteps: 1 }), L = ocean.layers, P = ocean.phases, parts = Math.max(1, Math.ceil(DT / inertialStepLimit(mesh))), part = DT / parts;
+  const C = mesh.nCells, ocean = createOcean(mesh, { geography, everySteps: 1, shelfMeltLayer: 0 }), L = ocean.layers, P = ocean.phases, parts = Math.max(1, Math.ceil(DT / inertialStepLimit(mesh))), part = DT / parts;
   const surfaceT = new Float64Array(C).fill(290), ice = new Float64Array(C), flux = new Float64Array(C), wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
   ocean.initialize(surfaceT, ice);
   ocean.advance(surfaceT, ice, flux, wind, DT);

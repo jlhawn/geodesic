@@ -12,6 +12,7 @@ import { runoffOutlets } from '../js/ocean/layered.module.js';
 import { gridMesh, stateGrid } from '../js/stateGrid.module.js';
 import { DEFAULT_RELAX } from '../js/grid.module.js';
 import { syntheticTopography, createGeography, encodeLandIce, decodeLandIce, landIceUrl, geographyOptions, readTopography, savedGeography, geographyHeader, pickGeography, checkGeography, stateGeography, FRESH_GEOGRAPHY, LEGACY_GEOGRAPHY, ICE_DENSITY, SEAWATER_DENSITY } from '../js/geography.module.js';
+import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -186,7 +187,8 @@ function snowOnTheSheets(model) {
   const { state, core, geography, mesh } = model, { K } = core.diagnostics, C = mesh.nCells, kappa = R_DRY / CP_DRY;
   core.diagnose(state[0], state[1]);
   const exner = core.diagnostics.exnerLayer;
-  for (let k = K - 2; k < K; k++) for (let i = 0; i < C; i++) if (geography.iceSheet[i]) {
+  const levels = core.levels, top = PREVIOUS_LEVELS[PREVIOUS_LEVELS.length - 3];
+  for (let k = 0; k < K; k++) if (levels[k] + levels[k + 1] > 2 * top) for (let i = 0; i < C; i++) if (geography.iceSheet[i]) {
     const n = k * C + i;
     state[4][n] = 1.5 * saturationHumidity(state[1][n] * exner[n], P0 * exner[n] ** (1 / kappa));
   }

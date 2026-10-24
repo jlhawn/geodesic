@@ -321,7 +321,7 @@ test('at a six-hour ocean step, four times the coupled ocean\'s at N=16, the GPU
 
 test('with rotationLimit rh18 the GPU hybrid ocean\'s boundary layer takes Reichl and Hallberg\'s rotational decay as the CPU\'s does and tracks it over sixteen steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, RH18 = { ...HYBRID, rotationLimit: 'rh18' };
-  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...RH18 }), algebraic = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID });
+  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...RH18 }), algebraic = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID, rotationLimit: 'algebraic' });
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: RH18 });
   const gpu = gpuModel.oceanEngine, flux = new Float64Array(C);
   for (const ocean of [cpu, algebraic, gpu]) ocean.initialize(Float64Array.from(surfaceT), ice);
@@ -341,7 +341,7 @@ test('with rotationLimit rh18 the GPU hybrid ocean\'s boundary layer takes Reich
 
 test('with langmuirIce tanh the GPU hybrid ocean weights the Langmuir factor by the open water as the CPU does and tracks it over sixteen steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, DAMPED = { ...HYBRID, langmuirIce: 'tanh' };
-  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...DAMPED }), kept = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID });
+  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...DAMPED }), kept = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID, langmuirIce: 'none' });
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: DAMPED });
   const gpu = gpuModel.oceanEngine, flux = new Float64Array(C);
   for (const ocean of [cpu, kept, gpu]) ocean.initialize(Float64Array.from(surfaceT), ice);
