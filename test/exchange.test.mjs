@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
+import { VIRTUAL_FACTOR, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN } from '../js/physics/exchange.module.js';
 import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
 
@@ -116,9 +116,11 @@ function prepare(model) {
   return model;
 }
 
-test('both engines give every surface the same transfer coefficients and fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = prepare(createModel(new Grid(16), { topography, levels: PREVIOUS_LEVELS }));
-  const gpu = prepare(await createGpuModel(new Grid(16), { topography, levels: PREVIOUS_LEVELS }));
+const bottomLayer = (levels) => levels[levels.length - 1] - levels[levels.length - 2];
+for (const [name, levels] of [['cam26', PREVIOUS_LEVELS], ['bl48', sigmaInterfaces('bl48')]]) test(`on ${name} both engines give every surface the same transfer coefficients and fluxes, to an f32 bound that grows as the lowest layer thins`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const bound = 2e-4 * bottomLayer(PREVIOUS_LEVELS) / bottomLayer(levels);
+  const cpu = prepare(createModel(new Grid(16), { topography, levels }));
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, levels }));
   cpu.step(900); await gpu.step(900); await gpu.settle();
   const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells;
   const [drag, heat, reference, evaporation, surfaceFlux] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['DRAG', 'HEATX', 'REFX', 'EVAP', 'SFLUX'].map((name) => ({ offset: PH[name], length: C })));
@@ -137,7 +139,7 @@ test('both engines give every surface the same transfer coefficients and fluxes'
   }
   for (const [k, w] of Object.entries(worst)) {
     console.log(`${k}: ${w.cells} cells, mean C_D ${(w.cd / w.cells * 1e3).toFixed(3)}e-3; engines apart: C_D ${w.drag.toExponential(1)} and C_H ${w.heat.toExponential(1)} relative to the coefficient or 1e-5 if larger, reference ${w.reference.toExponential(1)} relative; latent heat ${w.evaporation.toExponential(1)}, net surface flux ${w.flux.toExponential(1)} W/m² beyond 1e-5 of each cell's own`);
-    assert.ok(w.drag < 2e-4 && w.heat < 2e-4 && w.reference < 1e-5, `${k} coefficients`);
+    assert.ok(w.drag < bound && w.heat < bound && w.reference < bound / 20, `${k} coefficients against ${bound.toExponential(1)}`);
     assert.ok(w.evaporation < 0.05 && w.flux < 0.1, `${k} fluxes`);
   }
   for (const k of ['ice sheet', 'snow', 'forest', 'other land', 'sea ice', 'open sea']) assert.ok(worst[k] && worst[k].cells > 0, `the grid has ${k}`);
