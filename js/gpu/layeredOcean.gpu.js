@@ -1813,8 +1813,10 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     device.queue.writeBuffer(ob.OD, 4 * OD.CMASK, Float32Array.from(cellOcean));
     device.queue.writeBuffer(ob.OD, 4 * OD.SHELF, Float32Array.from(shelf));
     device.queue.writeBuffer(ob.OD, 4 * OD.DRAFT, Float32Array.from(draft));
+    const restoredLoad = restart && [restart.shelfLoadRest, restart.shelfLoadT, restart.shelfLoadS].every((values) => values && values.length === C);
     const load = new Float32Array(C), loadT = new Float32Array(C), loadS = new Float32Array(C);
-    for (let i = 0; i < C; i++) {
+    if (restoredLoad) { load.set(restart.shelfLoadRest); loadT.set(restart.shelfLoadT); loadS.set(restart.shelfLoadS); }
+    else for (let i = 0; i < C; i++) {
       if (!shelf[i]) continue;
       loadT[i] = Math.fround(packed[OS.OQ + i] / packed[OS.OH + i]); loadS[i] = Math.fround(packed[OS.OW + i] / packed[OS.OH + i]);
       load[i] = shelfLoad[i] - seawaterDensity(loadT[i] + HEAT_REFERENCE, loadS[i] + SALT_REFERENCE) * draft[i];
@@ -2017,7 +2019,8 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ]);
     const transmission = o.penetration ? (await readRanges(device, buffers.PH, [{ offset: PHL.TRANS, length: C }]))[0] : null;
     const [iceVelocity, iceSigma] = driftOptions ? await readRanges(device, ob.OD, [{ offset: OD.UICE, length: E }, { offset: OD.SIGMA, length: C }]) : [null, null];
-    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, calved, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}), ...(iceVelocity ? { iceVelocity, iceSigma } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
+    const [shelfLoadRest, shelfLoadT, shelfLoadS] = hasShelves ? await readRanges(device, ob.OD, [{ offset: OD.LOAD, length: C }, { offset: OD.LOADT, length: C }, { offset: OD.LOADS, length: C }]) : [null, null, null];
+    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, calved, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}), ...(iceVelocity ? { iceVelocity, iceSigma } : {}), ...(shelfLoadRest ? { shelfLoadRest, shelfLoadT, shelfLoadS } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
   function diagnosticsFrom(sums) {

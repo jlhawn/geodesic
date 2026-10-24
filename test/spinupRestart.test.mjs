@@ -12,6 +12,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 
 const root = fileURLToPath(new URL('..', import.meta.url)), N = 16;
 const arms = {
+  cavity: { ICE_SHELVES: 'cavity', OCEAN: JSON.stringify({ iceDrift: false }) },
   drift: { ICE_SHELVES: 'land', OCEAN: JSON.stringify({ iceDrift: { rheology: 'cavitating', hemisphere: 'both' } }) },
 };
 
