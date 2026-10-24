@@ -2,6 +2,7 @@ import { buildMesh } from '../mesh.module.js';
 import { createEnergyRecord } from '../physics/energyRecord.module.js';
 import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, GRAVITY, dynamicsOptions } from '../dynamics/sigmaCore.module.js';
 import { createSeaIce, SNOW_AGEING } from '../physics/ice.module.js';
+import { iceDriftMoves } from '../ocean/iceDrift.module.js';
 import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { createRadiation } from '../physics/radiation.module.js';
@@ -87,6 +88,7 @@ export async function createGpuModel(gridOrMesh, {
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
     orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
+    keepSmallIce: ice.keepSmallIce ?? (oceanOptions !== false && iceDriftMoves(oceanOptions.iceDrift)),
     ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
@@ -95,7 +97,7 @@ export async function createGpuModel(gridOrMesh, {
   const sponge = spongeRates(core.sigmaMid, surface.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surface.spongeDays ?? SPONGE.days);
   const lidFriction = lidFrictionRates(levels, surface.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : surface.lidFriction);
   const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), physics, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, spongeMeanRates: lidFriction, gravityWaves, surfaceGeopotential: phis, registerLength: oceanOptions === false ? 0 : oceanStateLength(mesh.nCells, mesh.nEdges, oceanOptions) });
-  const seaIce = createSeaIce(mesh, ice);
+  const seaIce = createSeaIce(mesh, { keepSmallIce: physics.keepSmallIce, ...ice });
   const radiationCpu = createRadiation(mesh, core, { surfaceLayer: mode === 'roughness', ...radiation, radiationEvery: 1 });
   const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });
   const moistCpu = createMoistPhysics(mesh, core, { ...moist, stabilityLayer: radiationCpu.stabilityLayer });
