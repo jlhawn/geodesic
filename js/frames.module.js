@@ -50,7 +50,7 @@ export const FIELDS = {
   ssh: 'sea surface height, m',
   current: 'current speed at the depth, m/s',
   currents: 'current at the depth, m/s, three components per cell',
-  upwelling: 'vertical velocity at the depth, m/s, positive upward',
+  upwelling: 'vertical velocity at the depth, m/s, positive upward, its exponential mean over UPWELLING_MEMORY',
 };
 
 export const LEVEL_FIELDS = new Set(['temperature', 'height', 'humidity', 'speed', 'wind', 'dewPoint', 'wetBulb', 'misery', 'vertical']);
@@ -126,3 +126,28 @@ export function visibleCloudHeights(K, z, ground, path, deck, deckTop, out) {
 
 export const RAIN_MEMORY = 3 * 3600;
 export const VERTICAL_MEMORY = 2 * 3600;
+export const UPWELLING_MEMORY = 5 * 86400;
+
+/*
+ * Folds a frame's field into a memory kept over frames, memory ←
+ * memory + α·(values − memory), and returns a copy of the memory. α is
+ * the larger of 1 − exp(−Δt / timescale) and the running mean's
+ * Δt / (time − start + Δt), so the memory is the plain mean of the frames
+ * since it restarted until it spans the timescale, then an exponential
+ * mean. It restarts from the frame's values when it is empty, when `key`
+ * (the depth or level it was kept at) changes, or when time goes back; a
+ * cell restarts alone when its memory is not finite.
+ */
+export function foldMemory(memory, values, time, key, timescale) {
+  const kept = memory.values && memory.values.length === values.length && memory.key === key && time >= memory.time;
+  if (!kept) { memory.values = Float32Array.from(values); memory.start = time; }
+  else if (time > memory.time) {
+    const dt = time - memory.time, alpha = Math.max(1 - Math.exp(-dt / timescale), dt / (time - memory.start + dt));
+    for (let i = 0; i < values.length; i++) {
+      const m = memory.values[i];
+      memory.values[i] = Number.isFinite(m) ? m + alpha * (values[i] - m) : values[i];
+    }
+  }
+  memory.key = key; memory.time = time;
+  return Float32Array.from(memory.values);
+}
