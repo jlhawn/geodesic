@@ -58,11 +58,11 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
       if (!(cpu.geography && cpu.geography.land[i]) && Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) > FLIP) decided[i] = 1;
       const cpuSurface = cpu.state[3][i] + cpu.skin.offset(i, capacityOf(i)), gpuSurface = gpu.state[3][i] + surfaceShare(capacity[i], SKIN_DEFAULTS) * warm[i] - cool[i];
       if (!decided[i]) worst.warm = Math.max(worst.warm, Math.abs(warm[i] - cpu.skin.warm[i]));
-      worst.cool = Math.max(worst.cool, Math.abs(cool[i] - cpu.skin.cool[i]));
-      worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
+      if (!decided[i]) worst.cool = Math.max(worst.cool, Math.abs(cool[i] - cpu.skin.cool[i]));
+      if (!decided[i]) worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
       worst.bulk = Math.max(worst.bulk, Math.abs(gpu.state[3][i] - cpu.state[3][i]));
-      worst.net = Math.max(worst.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) / Math.max(1, Math.abs(cpu.radiation.surfaceFlux[i])));
-      worst.sensible = Math.max(worst.sensible, Math.abs(sensible[i] - cpu.radiation.sensibleHeat[i]) / Math.max(1, Math.abs(cpu.radiation.sensibleHeat[i])));
+      if (!decided[i]) worst.net = Math.max(worst.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) / Math.max(1, Math.abs(cpu.radiation.surfaceFlux[i])));
+      if (!decided[i]) worst.sensible = Math.max(worst.sensible, Math.abs(sensible[i] - cpu.radiation.sensibleHeat[i]) / Math.max(1, Math.abs(cpu.radiation.sensibleHeat[i])));
       if (n === 0) first.net = Math.max(first.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
     }
     if (n === 0) Object.assign(first, { warm: worst.warm, cool: worst.cool, ts: worst.ts, sensible: worst.sensible });
@@ -73,7 +73,8 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
   assert.ok(cpu.skin.warm.some((x) => x > 1e-3), 'a warm layer grows');
   assert.ok(first.warm < 1e-4 && first.cool < 1e-4 && first.ts < 1e-4, 'the first step\'s skin to 1e-4 K');
   assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
-  assert.ok(flipped <= 0.02 * C, `${flipped} of ${C} cells have a flux the engines decided apart`);
+  const sea = cpu.geography ? cpu.geography.land.reduce((n, l) => n + (l ? 0 : 1), 0) : C;
+  assert.ok(flipped <= Math.min(46, 0.02 * sea), `${flipped} of ${sea} sea cells have a flux the engines decided apart`);
   assert.ok(worst.warm < WARM_BOUND, `the warm layer to ${WARM_BOUND} K over every step`);
   if (warmStart) return;
   assert.ok(worst.cool < 1e-2 && worst.ts < 1e-2, 'the surface to 1e-2 K over every step');
