@@ -58,24 +58,27 @@ export function topographyFromInt16(buffer, rows = 720, cols = 1440, name = 'eto
  * surface above and the sea beneath it.
  */
 export const TOPOGRAPHIES = { etopo1: 'topography_0p25.bin', etopo2022: 'topography2022_0p25.bin' };
-export const ICE_SHEETS = ['rule', 'observed'], ICE_SHELVES = ['land', 'sea', 'cavity'];
-export const LEGACY_GEOGRAPHY = { topography: 'etopo1', iceSheets: 'rule', iceShelves: 'land' };
+export const ICE_SHEETS = ['rule', 'observed'], ICE_SHELVES = ['land', 'sea', 'cavity'], MASKS = ['raster', 'n1024'];
+export const LEGACY_GEOGRAPHY = { topography: 'etopo1', iceSheets: 'rule', iceShelves: 'land', mask: 'raster' };
 export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity' };
 export const topographyUrl = (name = 'etopo1') => new URL(`../data/${TOPOGRAPHIES[name]}`, import.meta.url);
 
 export function checkGeography(record) {
-  const { topography, iceSheets, iceShelves } = { ...LEGACY_GEOGRAPHY, ...record };
+  const { topography, iceSheets, iceShelves, mask } = { ...LEGACY_GEOGRAPHY, ...record };
   if (!TOPOGRAPHIES[topography]) throw new Error(`topography is ${Object.keys(TOPOGRAPHIES).join(' or ')}, not ${topography}`);
   if (!ICE_SHEETS.includes(iceSheets)) throw new Error(`iceSheets is ${ICE_SHEETS.join(' or ')}, not ${iceSheets}`);
   if (!ICE_SHELVES.includes(iceShelves)) throw new Error(`iceShelves is ${ICE_SHELVES.join(' or ')}, not ${iceShelves}`);
   if (iceShelves !== 'land' && iceSheets !== 'observed') throw new Error(`ice shelves at ${iceShelves} need the observed ice sheets`);
-  return { topography, iceSheets, iceShelves };
+  if (!MASKS.includes(mask)) throw new Error(`mask is ${MASKS.join(' or ')}, not ${mask}`);
+  if (mask === 'raster') return { topography, iceSheets, iceShelves };
+  if (topography !== 'etopo2022' || iceSheets !== 'observed' || iceShelves === 'sea') throw new Error('the n1024 mask is ETOPO 2022\'s with the observed ice sheets, its shelves land or cavities');
+  return { topography, iceSheets, iceShelves, mask };
 }
 
 export const savedGeography = (saved) => checkGeography(Object.fromEntries(Object.keys(LEGACY_GEOGRAPHY).map((key) => [key, saved?.[key] ?? LEGACY_GEOGRAPHY[key]])));
 export const geographyHeader = (record) => Object.fromEntries(Object.entries(checkGeography(record)).filter(([key, value]) => value !== LEGACY_GEOGRAPHY[key]));
 export const pickGeography = (source) => geographyHeader(savedGeography(source));
-export const geographyRecordOf = (topography, options = {}) => (topography?.name ? checkGeography({ topography: topography.name, iceSheets: options.landIce ? 'observed' : 'rule', iceShelves: options.iceShelves ?? 'land' }) : null);
+export const geographyRecordOf = (topography, options = {}) => (topography?.name ? checkGeography({ topography: topography.name, iceSheets: options.landIce ? 'observed' : 'rule', iceShelves: options.iceShelves ?? 'land', mask: options.mask ?? 'raster' }) : null);
 
 export function readTopography(name = 'etopo1') {
   const fs = globalThis.process?.getBuiltinModule?.('node:fs');
@@ -141,14 +144,14 @@ export function decodeLandIce(buffer) {
  * iceSheetBalance.
  */
 export function geographyOptions(record = {}, landIce = null) {
-  const { iceSheets, iceShelves } = checkGeography(record);
+  const { iceSheets, iceShelves, mask = 'raster' } = checkGeography(record);
   if (iceSheets === 'rule') return { geography: {}, land: {} };
   if (!landIce) {
     const fs = globalThis.process?.getBuiltinModule?.('node:fs');
     if (!fs) throw new Error('the observed ice sheets need the land ice of data/landice_0p25.bin');
     landIce = decodeLandIce(fs.readFileSync(landIceUrl));
   }
-  return { geography: { landIce, ...(iceShelves !== 'land' ? { iceShelves } : {}) }, land: { iceSheetBalance: true } };
+  return { geography: { landIce, ...(iceShelves !== 'land' ? { iceShelves } : {}), ...(mask !== 'raster' ? { mask } : {}) }, land: { iceSheetBalance: true } };
 }
 
 export function syntheticTopography(rows, cols, elevationAt) {
@@ -175,7 +178,9 @@ export const NARROW_STRAITS = {
   danish: { sill: 50, points: [[55.5, 12.7], [56.1, 12.3], [56.8, 11.5], [57.6, 10.5]] },
 };
 
-export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land', cavityDepth = 50 } = {}) {
+export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land', cavityDepth = 50, mask = 'raster', maskData = null } = {}) {
+  if (!MASKS.includes(mask)) throw new Error(`mask is ${MASKS.join(' or ')}, not ${mask}`);
+  if (mask !== 'raster') return maskedGeography(mesh, maskData ?? readMask(mesh), iceShelves, cavityDepth);
   const { nCells: C, nEdges: E, xCell, cellsOnCell, nEdgesOnCell, edgesOnCell, cellsOnEdge, areaCell, latCell, lonCell } = mesh;
   const { rows, cols } = topography;
   if (landIce && (landIce.rows !== rows || landIce.cols !== cols)) throw new Error(`the land ice is ${landIce.rows} × ${landIce.cols}, the topography ${rows} × ${cols}`);
@@ -393,6 +398,114 @@ function cavityGeography(mesh, shelf, sea, cavityDepth) {
 }
 
 /*
+ * data/geography_n1024_N<N>.bin, which scripts/geographyMask.mjs writes
+ * from data/geography1024.bin (js/fineGeography.module.js's
+ * maskGeography, with the ice shelves as land and, for the cavities' water,
+ * as sea): a 48-byte header ('GMK1', N, Lloyd passes, cells, edges, then
+ * the counts of the ice cells, of the cells and edges the shelves' water
+ * changes, and of the lake cells), then per cell its flags (uint8: 1 land,
+ * 2 ice sheet, 4 lake, 8 dry depression, 16 a saline lake, 32 land below sea level), land fraction (uint16 over
+ * 65535), elevation (int16, meters) and mean water depth (uint16, meters),
+ * per edge its sill (uint16, meters); then for the ice cells their index
+ * (uint32), ice fraction and shelf fraction (uint16 over 65535), and ice
+ * and shelf thickness (uint16, meters, the shelf's over the whole cell);
+ * for the cells the shelves' water changes their index, flags, elevation
+ * and water depth; for those edges their index and sill; and for the lake
+ * cells their index and the lake's level (int16, meters).
+ */
+export const maskUrl = (N, mask = 'n1024') => new URL(`../data/geography_${mask}_N${N}.bin`, import.meta.url);
+
+export function encodeMask({ nCells, relax }, shelf, sea) {
+  const N = Math.round(Math.sqrt((nCells - 2) / 10)), C = shelf.land.length, E = shelf.edgeSill.length, fraction = (v) => Math.round(65535 * Math.min(1, Math.max(0, v)));
+  const meters = (v) => Math.max(-32768, Math.min(32767, Math.round(v))), depth = (v) => Math.max(0, Math.min(65535, Math.round(v)));
+  const flags = (g, i) => (g.land[i] ? 1 : 0) | (g.iceSheet?.[i] ? 2 : 0) | (g.lake?.[i] ? 4 : 0) | (g.depression?.[i] ? 8 : 0) | (g.saline?.[i] ? 16 : 0) | (g.low?.[i] ? 32 : 0);
+  const ice = [], cells = [], edges = [], lakes = [];
+  for (let i = 0; i < C; i++) {
+    if (shelf.iceFraction[i] > 0 || shelf.shelfFraction[i] > 0) ice.push(i);
+    if (flags(sea, i) !== flags(shelf, i) || meters(sea.elevation[i]) !== meters(shelf.elevation[i]) || depth(sea.wetDepth[i]) !== depth(shelf.wetDepth[i])) cells.push(i);
+    if (shelf.lake[i]) lakes.push(i);
+  }
+  for (let e = 0; e < E; e++) if (depth(sea.edgeSill[e]) !== depth(shelf.edgeSill[e])) edges.push(e);
+  const head = new DataView(new ArrayBuffer(48));
+  [71, 77, 75, 49].forEach((b, j) => head.setUint8(j, b));
+  [N, relax, C, E, ice.length, cells.length, edges.length, lakes.length].forEach((v, j) => head.setUint32(4 + 4 * j, v, true));
+  const parts = [
+    Uint8Array.from({ length: C }, (_, i) => flags(shelf, i)), Uint16Array.from(shelf.landFraction, fraction), Int16Array.from(shelf.elevation, meters), Uint16Array.from(shelf.wetDepth, depth), Uint16Array.from(shelf.edgeSill, depth),
+    Uint32Array.from(ice), Uint16Array.from(ice, (i) => fraction(shelf.iceFraction[i])), Uint16Array.from(ice, (i) => fraction(shelf.shelfFraction[i])), Uint16Array.from(ice, (i) => depth(shelf.iceThickness[i])), Uint16Array.from(ice, (i) => depth(shelf.shelfThickness[i])),
+    Uint32Array.from(cells), Uint8Array.from(cells, (i) => flags(sea, i)), Int16Array.from(cells, (i) => meters(sea.elevation[i])), Uint16Array.from(cells, (i) => depth(sea.wetDepth[i])),
+    Uint32Array.from(edges), Uint16Array.from(edges, (e) => depth(sea.edgeSill[e])),
+    Uint32Array.from(lakes), Int16Array.from(lakes, (i) => meters(shelf.lakeLevel[i])),
+  ];
+  return [new Uint8Array(head.buffer), ...parts.map((p) => new Uint8Array(p.buffer, p.byteOffset, p.byteLength))];
+}
+
+export function decodeMask(bytes) {
+  const buffer = bytes instanceof ArrayBuffer ? bytes : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), head = new DataView(buffer);
+  if (buffer.byteLength < 48 || String.fromCharCode(...new Uint8Array(buffer, 0, 4)) !== 'GMK1') throw new Error('not a geography mask file');
+  const [N, relax, C, E, nIce, nCells, nEdges, nLakes] = Array.from({ length: 8 }, (_, j) => head.getUint32(4 + 4 * j, true));
+  let at = 48;
+  const take = (Type, n) => { const out = new Type(buffer.slice(at, at + n * Type.BYTES_PER_ELEMENT)); at += n * Type.BYTES_PER_ELEMENT; return out; };
+  const out = {
+    N, relax, nCells: C, nEdges: E, flags: take(Uint8Array, C), landFraction: take(Uint16Array, C), elevation: take(Int16Array, C), wetDepth: take(Uint16Array, C), edgeSill: take(Uint16Array, E),
+    ice: { index: take(Uint32Array, nIce), iceFraction: take(Uint16Array, nIce), shelfFraction: take(Uint16Array, nIce), iceThickness: take(Uint16Array, nIce), shelfThickness: take(Uint16Array, nIce) },
+    sea: { index: take(Uint32Array, nCells), flags: take(Uint8Array, nCells), elevation: take(Int16Array, nCells), wetDepth: take(Uint16Array, nCells), edges: take(Uint32Array, nEdges), edgeSill: take(Uint16Array, nEdges) },
+    lakes: { index: take(Uint32Array, nLakes), level: take(Int16Array, nLakes) },
+  };
+  if (at !== buffer.byteLength) throw new Error('geography mask file of the wrong size');
+  return out;
+}
+
+export function readMask(mesh, mask = 'n1024') {
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs'), N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
+  if (!fs) throw new Error(`data/geography_${mask}_N${N}.bin is read under node only; pass it as maskData`);
+  return decodeMask(fs.readFileSync(maskUrl(N, mask)));
+}
+
+/*
+ * createGeography's geography of a mesh from its mask file: the shelves
+ * as land, or with cavityGeography's cavities where the shelves' water
+ * reaches cavityDepth under them. An ocean edge is open where its sill is
+ * above 0; `surface` is the height the atmosphere stands on (the land's,
+ * at sea level or below only in a dry depression or where the land lies
+ * below it, a lake's level, 0 at sea).
+ */
+function maskedGeography(mesh, file, iceShelves, cavityDepth) {
+  const { nCells: C, nEdges: E, cellsOnEdge, areaCell } = mesh;
+  if (file.nCells !== C || file.nEdges !== E) throw new Error(`the mask file is of N=${file.N}, not this mesh of ${C} cells`);
+  if (Number.isInteger(mesh.relax) && mesh.relax !== file.relax) throw new Error(`the mask file is of ${file.relax} Lloyd passes, the mesh of ${mesh.relax}`);
+  if (!['land', 'cavity'].includes(iceShelves)) throw new Error(`the n1024 mask takes ice shelves as land or cavities, not ${iceShelves}`);
+  const build = (flags, elevation, wetDepth, edgeSill) => {
+    const land = Uint8Array.from(flags, (f) => f & 1), edgeOcean = new Uint8Array(E), coast = [];
+    for (let e = 0; e < E; e++) {
+      const a = land[cellsOnEdge[2 * e]], b = land[cellsOnEdge[2 * e + 1]];
+      edgeOcean[e] = !a && !b && edgeSill[e] > 0 ? 1 : 0;
+      if (a !== b) coast.push(e);
+    }
+    return { land, elevation, wetDepth, edgeOcean, edgeSill, coastEdges: Int32Array.from(coast) };
+  };
+  const shelf = build(file.flags, Float64Array.from(file.elevation), Float64Array.from(file.wetDepth), Float64Array.from(file.edgeSill));
+  const lake = Uint8Array.from(file.flags, (f) => (f & 4 ? 1 : 0)), saline = Uint8Array.from(file.flags, (f) => (f & 16 ? 1 : 0)), depression = Uint8Array.from(file.flags, (f) => (f & 8 ? 1 : 0)), low = Uint8Array.from(file.flags, (f) => (f & 32 ? 1 : 0)), lakeLevel = new Float64Array(C);
+  file.lakes.index.forEach((i, k) => { lakeLevel[i] = file.lakes.level[k]; });
+  const iceFraction = new Float64Array(C), iceThickness = new Float64Array(C), shelfFraction = new Float64Array(C), shelfThickness = new Float64Array(C);
+  file.ice.index.forEach((i, k) => {
+    shelfFraction[i] = file.ice.shelfFraction[k] / 65535; shelfThickness[i] = file.ice.shelfThickness[k];
+    if (shelf.land[i]) { iceFraction[i] = file.ice.iceFraction[k] / 65535; if (file.flags[i] & 2) iceThickness[i] = file.ice.iceThickness[k]; }
+  });
+  const iceSheet = Uint8Array.from(file.flags, (f) => (f & 2 ? 1 : 0)), landFraction = Float64Array.from(file.landFraction, (v) => v / 65535);
+  const surface = Float64Array.from(shelf.elevation, (h, i) => (shelf.land[i] ? (depression[i] || low[i] ? h : Math.max(0, h)) : lake[i] ? lakeLevel[i] : 0));
+  let landArea = 0, total = 0;
+  for (let i = 0; i < C; i++) { total += areaCell[i]; if (shelf.land[i]) landArea += areaCell[i]; }
+  const geography = { mask: 'n1024', ...shelf, landFraction, surface, iceSheet, iceFraction, iceThickness, shelfFraction, shelfThickness, lake, lakeLevel, saline, depression, landArea: landArea / total };
+  if (iceShelves === 'land') return geography;
+  const flags = Uint8Array.from(file.flags), elevation = Float64Array.from(file.elevation), wetDepth = Float64Array.from(file.wetDepth), edgeSill = Float64Array.from(file.edgeSill);
+  file.sea.index.forEach((i, k) => { flags[i] = file.sea.flags[k]; elevation[i] = file.sea.elevation[k]; wetDepth[i] = file.sea.wetDepth[k]; });
+  file.sea.edges.forEach((e, k) => { edgeSill[e] = file.sea.edgeSill[k]; });
+  const cavities = cavityGeography(mesh, geography, build(flags, elevation, wetDepth, edgeSill), cavityDepth);
+  cavities.ocean.edgeOcean.forEach((open, e) => { if (open && !(cavities.ocean.edgeSill[e] > 0)) cavities.ocean.edgeOcean[e] = 0; });
+  return cavities;
+}
+
+/*
  * The surface geopotential for the dynamical core: the land elevation,
  * clamped at sea level and smoothed on the mesh so that nothing sits at
  * the grid scale, times g. Each pass relaxes every land cell toward the
@@ -401,12 +514,12 @@ function cavityGeography(mesh, shelf, sea, cavityDepth) {
  */
 export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = 2, weight = 0.5 } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
-  const { land, elevation } = geography;
-  let height = Float64Array.from(elevation, (h, i) => (land[i] ? Math.max(0, h) : 0));
+  const { land, elevation, surface = null } = geography;
+  let height = surface ? Float64Array.from(surface) : Float64Array.from(elevation, (h, i) => (land[i] ? Math.max(0, h) : 0));
   for (let pass = 0; pass < passes; pass++) {
     const next = new Float64Array(C);
     for (let i = 0; i < C; i++) {
-      if (!land[i]) continue;
+      if (!land[i]) { next[i] = height[i]; continue; }
       let sum = 0;
       for (let m = 0; m < nEdgesOnCell[i]; m++) sum += height[cellsOnCell[maxEdges * i + m]];
       next[i] = (1 - weight) * height[i] + weight * sum / nEdgesOnCell[i];
@@ -563,20 +676,20 @@ export function decodeSubgrid(buffer) {
   return fields;
 }
 
-export const subgridUrl = (N, topography = 'etopo1') => new URL(`../data/subgrid_${topography === 'etopo1' ? '' : `${topography}_`}N${N}.bin`, import.meta.url);
+export const subgridUrl = (N, topography = 'etopo1', mask = 'raster') => new URL(`../data/subgrid_${topography === 'etopo1' ? '' : `${topography}_`}${mask === 'raster' ? '' : `${mask}_`}N${N}.bin`, import.meta.url);
 
 /*
  * The fields for a mesh: `given` when it has the mesh's cell count, else
  * under node the file for N and the topography if there is one, else null
  * (the caller computes them from the 0.25° raster and says so).
  */
-export function meshSubgrid(mesh, given = undefined, topography = 'etopo1') {
+export function meshSubgrid(mesh, given = undefined, topography = 'etopo1', mask = 'raster') {
   if (given === false) return null;
   if (given) return given.deviation.length === mesh.nCells ? given : null;
   const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
   const fs = globalThis.process?.getBuiltinModule?.('node:fs');
   if (!fs || 10 * N * N + 2 !== mesh.nCells) return null;
-  const url = subgridUrl(N, topography);
+  const url = subgridUrl(N, topography, mask);
   if (!fs.existsSync(url)) return null;
   return decodeSubgrid(fs.readFileSync(url));
 }
@@ -605,8 +718,8 @@ const SUBGRID_FALLBACK = {
   relax: (file, mesh, fields) => `${file} was made for the mesh of ${fields.relax} Lloyd passes, not this one of ${mesh.relax}`,
 };
 const fallbackSaid = new Set();
-export function subgridFallbackNote(mesh, reason = 'missing', fields = null, topography = 'etopo1') {
-  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10)), file = `data/${subgridUrl(N, topography).pathname.split('/').pop()}`;
+export function subgridFallbackNote(mesh, reason = 'missing', fields = null, topography = 'etopo1', mask = 'raster') {
+  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10)), file = `data/${subgridUrl(N, topography, mask).pathname.split('/').pop()}`;
   if (fallbackSaid.has(`${file} ${reason}`)) return;
   fallbackSaid.add(`${file} ${reason}`);
   console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](file, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);

@@ -76,6 +76,7 @@ export const TOTALS = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', '
  */
 export async function createParallelModel(grid, options = {}, workers = null, probe = null) {
   workers ??= Math.max(1, await parallelism());
+  if ((options.lake?.model ?? 'off') !== 'off') throw new Error('the lake model runs on one CPU thread or the GPU, not on parallel workers');
   if (options.ocean && options.ocean.climatology) options = { ...options, ocean: { ...options.ocean, climatology: await loadClimatology(options.ocean.climatology) } };
   const model = createModel(grid, options);
   const { K, C, E } = model.core.diagnostics;
