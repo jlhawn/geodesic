@@ -43,7 +43,7 @@ test('the fixed scheme takes no account of the surface buoyancy flux, and mixCol
   assert.equal(run(fluxes, {}), run({ ...fluxes, buoyancy: 0 }, {}));
 });
 
-test('the ocean keeps the heat and salt its surface gave it over the step, the light that passed the top layer and the brine of ice grown included, and leaves them out of the default scheme', () => {
+test('the ocean keeps the heat and salt its surface gave it over the step, the light that passed the top layer and the brine of ice grown included, and leaves them out of the fixed m*', () => {
   const mesh = buildMesh(new Grid(16)), C = mesh.nCells, DT = 1350;
   const stress = new Float64Array(mesh.nEdges).fill(0.02);
   const give = (options) => {
@@ -54,7 +54,7 @@ test('the ocean keeps the heat and salt its surface gave it over the step, the l
     ocean.advance(warm, grown, flux, stress, DT);
     return ocean;
   };
-  const ocean = give({ mstarScheme: 'rh18' }), rest = give({});
+  const ocean = give({ mstarScheme: 'rh18' }), rest = give({ mstarScheme: 'fixed', langmuirScheme: 'factor' });
   let warmed = 0, cooled = 0, brined = 0;
   for (let i = 0; i < C; i++) {
     if (!ocean.cellOcean[i] || ocean.shelf?.[i]) continue;
@@ -88,6 +88,6 @@ test('with langmuirScheme rescale the energy is the rh18 m* times min(5, 1 + wav
   assert.ok(run({ langmuirScheme: 'rescale', waves: 0.5 }).depth < run({ langmuirScheme: 'rescale' }).depth);
   assert.deepEqual(LANGMUIR_SCHEMES, ['factor', 'rescale']);
   const mesh = buildMesh(new Grid(16));
-  assert.throws(() => createOcean(mesh, { everySteps: 1, langmuirScheme: 'rescale' }), /langmuirScheme 'rescale' multiplies the m\* of mstarScheme 'rh18'/);
+  assert.throws(() => createOcean(mesh, { everySteps: 1, mstarScheme: 'fixed', langmuirScheme: 'rescale' }), /langmuirScheme 'rescale' multiplies the m\* of mstarScheme 'rh18'/);
   assert.throws(() => createOcean(mesh, { everySteps: 1, mstarScheme: 'rh18', langmuirScheme: 'additive' }), /langmuirScheme is one of factor, rescale/);
 });
