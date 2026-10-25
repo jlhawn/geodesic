@@ -23,6 +23,9 @@ const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js')
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
 const RESTRAT = { ...HYBRID, mixedLayerRestratification: { coefficient: 50 } };
+const FIXED_ENERGY = { ...HYBRID, mstarScheme: 'fixed', langmuirScheme: 'factor' };
+const RH18_ENERGY = { ...HYBRID, mstarScheme: 'rh18' };
+const RH18_ENERGY_ALL = { ...RH18_ENERGY, langmuirScheme: 'rescale', mixedLayerRestratification: { coefficient: 50 } };
 const N = 16, DT = 1350;
 
 function stats(cpu, gpu, mask = null) {
@@ -100,6 +103,11 @@ async function tracking(options) {
   ];
   for (const [name, onCpu, onGpu] of phases) {
     onCpu(); onGpu();
+    if (name === 'column' && options.mstarScheme === 'rh18') {
+      const depths = stats(cpu.boundaryDepths, (await gpu.restartArrays()).boundaryDepths, wet);
+      console.log(`boundary depths after the column phase: rms ${depths.rmsRel.toExponential(2)} max ${depths.maxDiff.toExponential(2)} m`);
+      assert.ok(depths.rmsRel < 1e-2, `the boundary layer depths part by ${depths.rmsRel} rms relative (largest ${depths.maxDiff} m)`);
+    }
     compare(`after ${name}`, cpuFields(cpu, C), await gpu.download(), wet, loose);
   }
   const state = await gpu.serialize();
@@ -128,6 +136,8 @@ async function tracking(options) {
 const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
 test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
+test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
+test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));
 
 /*
  * What each phase of the GPU hybrid step changes of the stores' heat
@@ -327,8 +337,8 @@ test('at a six-hour ocean step, four times the coupled ocean\'s at N=16, the GPU
 });
 
 test('with rotationLimit rh18 the GPU hybrid ocean\'s boundary layer takes Reichl and Hallberg\'s rotational decay as the CPU\'s does and tracks it over sixteen steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, RH18 = { ...HYBRID, rotationLimit: 'rh18' };
-  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...RH18 }), algebraic = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID, rotationLimit: 'algebraic' });
+  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, RH18 = { ...FIXED_ENERGY, rotationLimit: 'rh18' };
+  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...RH18 }), algebraic = createCpuOcean(mesh, { geography: cpuModel.geography, ...FIXED_ENERGY, rotationLimit: 'algebraic' });
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: RH18 });
   const gpu = gpuModel.oceanEngine, flux = new Float64Array(C);
   for (const ocean of [cpu, algebraic, gpu]) ocean.initialize(Float64Array.from(surfaceT), ice);
