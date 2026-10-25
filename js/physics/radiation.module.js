@@ -9,6 +9,8 @@ import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptiv
 export const STEFAN_BOLTZMANN = 5.670374419e-8;
 export const SOLAR_CONSTANT = 1362;
 export const AXIAL_TILT = 23.44 * Math.PI / 180;
+export const ECCENTRICITY = 0.0167;
+export const PERIHELION = 282.9 * Math.PI / 180;
 export const DAY = 86400;
 export const YEAR = 365 * DAY;
 export const REFERENCE_RESISTANCE = 70;
@@ -25,18 +27,52 @@ export function referenceEvaporation(netRadiation, airTemperature, q, p, density
 }
 
 /*
- * Unit vector toward the sun at model time t. t = 0 is the spring equinox
- * with the sun over the +x meridian; the subsolar latitude follows
- * AXIAL_TILT·sin(2πt/YEAR) and the sun circles westward once per day.
+ * The sun's true longitude λ and (a/r)² at model time t on the 'kepler'
+ * orbit: Kepler's equation E − e sin E = M for M = M₀ + 2πt/YEAR, M₀ the
+ * mean anomaly of the spring equinox (λ = 0 at t = 0), and λ = ν + PERIHELION
+ * for the true anomaly ν. PERIHELION is the sun's longitude at perihelion
+ * from the spring equinox, the earth's heliocentric longitude of perihelion
+ * plus 180°.
  */
-export function sunDirection(t, out = new Float64Array(3)) {
-  const tilt = -AXIAL_TILT * Math.sin((t % YEAR) * 2 * Math.PI / YEAR);
-  const x = Math.cos(tilt), z = -Math.sin(tilt);
+const EQUINOX_ANOMALY = (() => {
+  const E = 2 * Math.atan2(Math.sqrt(1 - ECCENTRICITY) * Math.sin(-PERIHELION / 2), Math.sqrt(1 + ECCENTRICITY) * Math.cos(-PERIHELION / 2));
+  return E - ECCENTRICITY * Math.sin(E);
+})();
+const SIN_TILT = Math.sin(AXIAL_TILT);
+
+function keplerSun(t) {
+  const e = ECCENTRICITY, M = EQUINOX_ANOMALY + (t % YEAR) * 2 * Math.PI / YEAR;
+  let E = M + e * Math.sin(M);
+  for (let n = 0; n < 4; n++) E -= (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E));
+  const nu = 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2)), r = 1 - e * Math.cos(E);
+  return { longitude: nu + PERIHELION, distance: 1 / (r * r) };
+}
+
+/*
+ * Unit vector toward the sun at model time t. t = 0 is the spring equinox
+ * with the sun over the +x meridian and the sun circles westward once per
+ * day. The subsolar latitude is AXIAL_TILT·sin(2πt/YEAR) on the 'circular'
+ * orbit, and on the 'kepler' orbit δ with sin δ = sin(AXIAL_TILT) sin λ.
+ */
+export function sunDirection(t, out = new Float64Array(3), orbit = 'circular') {
+  let x, z;
+  if (orbit === 'kepler') {
+    z = SIN_TILT * Math.sin(keplerSun(t).longitude);
+    x = Math.sqrt(1 - z * z);
+  } else {
+    const tilt = -AXIAL_TILT * Math.sin((t % YEAR) * 2 * Math.PI / YEAR);
+    x = Math.cos(tilt); z = -Math.sin(tilt);
+  }
   const spin = -((t % DAY) * 2 * Math.PI / DAY);
   out[0] = x * Math.cos(spin);
   out[1] = x * Math.sin(spin);
   out[2] = z;
   return out;
+}
+
+/* (a/r)², the factor on solarConstant, the irradiance at the mean distance a: 1 on the 'circular' orbit. */
+export function sunDistance(t, orbit = 'circular') {
+  return orbit === 'kepler' ? keplerSun(t).distance : 1;
 }
 
 /*
@@ -631,7 +667,7 @@ function coreDepth(row, paths, k) {
 }
 
 export function createRadiation(mesh, core, {
-  solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
+  solarConstant = SOLAR_CONSTANT, orbit = 'circular', albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
   prognosticHeight = true, deckRest = 'regime', deckSlab = 'fraction', deckReference = 'layer', deckInversion = 'grid', deckCloud = 'sigma', deckResolved = mixedLayerDeck && prognosticHeight ? 'above' : 'added', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'exponentialRandom', decorrelationLength = DECORRELATION_LENGTH, decorrelationSlope = DECORRELATION_SLOPE, cloudColumns = cloudCover === 'pdf' && cloudOverlap === 'exponentialRandom', cloudSpread = cloudColumns ? 0.75 : 0,
   boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, varianceCover: varianceRule = 'water', buoyancyLength = 0.53, deckRegime = 'inversion', deckBypass = false,
@@ -653,6 +689,7 @@ export function createRadiation(mesh, core, {
   const ozoneAbove = (sigma) => (sigma <= 0 ? 0 : (1 + Math.exp(-ozoneHeight / ozoneWidth)) / (1 + Math.exp((-scaleHeight * Math.log(sigma) - ozoneHeight) / ozoneWidth)));
   const beamLeft = (sigma) => Math.exp(-ozoneOpacity * ozoneAbove(sigma));
   const ozoneFraction = Float64Array.from({ length: K }, (_, k) => (beamLeft(levels[k]) - beamLeft(levels[k + 1])) / (1 - Math.exp(-ozoneOpacity)));
+  if (orbit !== 'circular' && orbit !== 'kepler') throw new Error(`orbit must be 'circular' or 'kepler', not ${orbit}`);
   if (longwaveScheme !== 'correlated' && longwaveScheme !== 'gray') throw new Error(`longwaveScheme must be 'correlated' or 'gray', not ${longwaveScheme}`);
   if (longwaveOverlap !== 'exponentialRandom' && longwaveOverlap !== 'random') throw new Error(`longwaveOverlap must be 'exponentialRandom' or 'random', not ${longwaveOverlap}`);
   if (solarGases !== 'clirad' && solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${solarGases}`);
@@ -785,7 +822,7 @@ export function createRadiation(mesh, core, {
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]), ozoneWeight = new Float64Array(5);
-  let yearFraction = 0;
+  let yearFraction = 0, distance = 1, strength = solarConstant;
   const budget = { absorbedSolar: 0, atmosphereSolar: 0, aerosolSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceBuoyancy: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, mlmThetaL: NaN, mlmTotalWater: NaN, mlmThetaLAbove: NaN, mlmTotalWaterAbove: NaN, stratiform: 0, ozoneSolar: 0, vaporSolar: 0, oxygenSolar: 0, carbonDioxideSolar: 0, methaneSolar: 0, upwardGasSolar: 0, downwardLongwave: 0 };
   const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0, visibleReflectance: 0 }, decked = { ...sky }, probe = { ...sky }, columnLight = { ...sky };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, depth: 0, layer: 0, clear: 0, rate: 0, unit: 0 };
@@ -793,7 +830,9 @@ export function createRadiation(mesh, core, {
 
   function setTime(t) {
     now = t;
-    sunDirection(t, sun);
+    sunDirection(t, sun, orbit);
+    distance = sunDistance(t, orbit);
+    strength = solarConstant * distance;
     yearFraction = (t % YEAR) / YEAR;
   }
 
@@ -802,7 +841,7 @@ export function createRadiation(mesh, core, {
   }
 
   function insolation(i) {
-    return solarConstant * cosZenith(i);
+    return strength * cosZenith(i);
   }
 
   /*
@@ -1232,7 +1271,7 @@ export function createRadiation(mesh, core, {
       for (let k = 0; k < K; k++) { const below = climatologyAbove(pi * levels[k + 1], ozoneWeight); layerOzone[k] = below - above; above = below; }
     }
     if (clirad || correlated) for (let k = 0; k < K; k++) { if (ozoneProfile || ozone !== 'afgl') layerOzone[k] = ozoneProfile ? ozoneProfile[k] : ozoneCell[i] * ozoneShare[k]; ozoneColumnAmount += layerOzone[k]; }
-    const solarPaths = clirad && beam > 0 ? solarGasPaths(i, pi, theta, q, beam / solarConstant) : null;
+    const solarPaths = clirad && beam > 0 ? solarGasPaths(i, pi, theta, q, beam / strength) : null;
     const ozoneHeating = clirad ? (solarPaths ? beam * ozoneTaken[K - 1] : 0) : beam * ozoneAbsorption;
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
     const coupled = vaporCoupling > 0 && q !== null;
@@ -1244,7 +1283,7 @@ export function createRadiation(mesh, core, {
     const sensible = surfaceLayer ? exchange * (cp * (surfaceT - airTemperature) - cp * thetaV[bottom * C + i] * (exnerLower[bottom * C + i] - exnerLayer[bottom * C + i])) : exchange * cp * (surfaceT - airTemperature);
     const evaporation = qAir === null ? 0 : wetness * Math.max(0, exchange * (saturationHumidity(surfaceT, pi) * (1 - (1 - seaHumidity) * openSea) - qAir));
     budget.surfaceBuoyancy = g / theta[bottom * C + i] * (sensible / (airDensity * cp * exnerLayer[bottom * C + i]) + 0.61 * theta[bottom * C + i] * evaporation / airDensity);
-    const mu = beam / solarConstant, lit = !clirad && vaporAbsorption > 0 && q !== null && mu > 0;
+    const mu = beam / strength, lit = !clirad && vaporAbsorption > 0 && q !== null && mu > 0;
     let downPath = 0;
     if (lit) {
       const magnification = 35 / Math.sqrt(1224 * mu * mu + 1);
@@ -1713,12 +1752,13 @@ export function createRadiation(mesh, core, {
    * full longwave and shortwave run under callCosZenith's sun with the
    * direct albedos `callAlbedo` for that cosine, and the layers' heating
    * and the surface and top-of-atmosphere fluxes are kept. Between calls
-   * the shortwave scales by the cosine of the zenith angle over the call's,
-   * and a change in the surface's emission since the call, σT⁴ less the
-   * call's, is absorbed by the layers in the shares the call found and
-   * the rest reaches space (Hogan and Bozzo 2015): the layers' longwave
-   * heating, the downward longwave at the surface and the column's
-   * emission otherwise stay the call's.
+   * the shortwave scales by the cosine of the zenith angle times the
+   * sun's distance factor over the call's (held.mu keeps the call's
+   * product), and a change in the surface's emission since the call,
+   * σT⁴ less the call's, is absorbed by the layers in the shares the
+   * call found and the rest reaches space (Hogan and Bozzo 2015): the
+   * layers' longwave heating, the downward longwave at the surface and
+   * the column's emission otherwise stay the call's.
    */
   function applyHeld(state, out, windSpeed, totals, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, wetness, openSea, depth, dt, callAlbedo) {
     const [pi, theta, , surfaceT] = state;
@@ -1750,15 +1790,15 @@ export function createRadiation(mesh, core, {
       const emission = STEFAN_BOLTZMANN * surfaceT[i] * surfaceT[i] * surfaceT[i] * surfaceT[i];
       if (!(held.step[i] >= start && held.step[i] <= index)) {
         const mu = callCosZenith(i, dt);
-        column(...args, solarConstant * mu, qAir, q && dQ ? q : null, q && dQ ? qc : null, callAlbedo ? callAlbedo[i] : direct, diffuse, ...rest, 'radiation');
-        held.step[i] = index; held.mu[i] = mu; held.emission[i] = emission;
+        column(...args, strength * mu, qAir, q && dQ ? q : null, q && dQ ? qc : null, callAlbedo ? callAlbedo[i] : direct, diffuse, ...rest, 'radiation');
+        held.step[i] = index; held.mu[i] = mu * distance; held.emission[i] = emission;
         held.absorbed[i] = budget.surfaceSolar; held.back[i] = budget.downwardLongwave; held.outgoing[i] = budget.outgoingLongwave; held.escape[i] = budget.escape;
         held.down[i] = budget.surfaceShortwave; held.direct[i] = budget.surfaceDirect;
         held.atmosphere[i] = budget.atmosphereSolar; held.top[i] = budget.absorbedSolar; held.reflected[i] = budget.reflectedSolar;
         held.clearAbsorbed[i] = budget.clearAbsorbedSolar; held.clearOutgoing[i] = budget.clearOutgoingLongwave; held.clearEscape[i] = budget.clearEscape;
         for (let k = 0; k < K; k++) { held.shortwave[k * C + i] = beforeBands[k]; held.share[k * C + i] = liftShare[k]; }
       }
-      const scale = held.mu[i] > 0 ? cosZenith(i) / held.mu[i] : 0, lift = emission - held.emission[i];
+      const scale = held.mu[i] > 0 ? distance * cosZenith(i) / held.mu[i] : 0, lift = emission - held.emission[i];
       const absorbed = scale * held.absorbed[i], back = held.back[i], net = absorbed - emission + back - sensible - latentHeat * evaporated;
       const top = scale * held.top[i], atmosphere = scale * held.atmosphere[i], reflected = scale * held.reflected[i], rising = held.outgoing[i] + held.escape[i] * lift, beam = insolation(i);
       surfaceFlux[i] = net;

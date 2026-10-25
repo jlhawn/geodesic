@@ -254,6 +254,7 @@ export function physicsConstants(o) {
   const nir = o.nearInfrared === 'bands' ? nearInfraredWgsl(o) : null;
   if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from its climatology, not an ozoneProfile');
   if (o.ozone !== 'afgl' && o.ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${o.ozone}`);
+  if (o.orbit !== 'circular' && o.orbit !== 'kepler') throw new Error(`orbit must be 'circular' or 'kepler', not ${o.orbit}`);
   const LONGWAVE_TABLE = o.longwaveTable ?? DEFAULT_LONGWAVE_TABLE, points = LONGWAVE_TABLE.points, LW_CORED = longwaveCores(LONGWAVE_TABLE), LW_NP = LW_CORED ? 6 + LONGWAVE_CORES.length : 6, LW_NODES = CORE_EDGES.length - 1, f32 = (values) => `array<f32, ${values.length}>(${values.map((v) => v.toPrecision(9)).join(', ')})`;
   const rayleigh = o.rayleighDepth != null ? [[1, o.rayleighDepth]] : o.rayleighBands;
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((sum, [w]) => sum + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
@@ -266,7 +267,7 @@ const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.thr
 const BL_A2: f32 = ${entrainment.evaporativeEnhancement}; const BL_AMAX: f32 = ${entrainment.maximumEfficiency}; const BL_TAPER: bool = ${!!entrainment.taper}; const BL_JUMP2: bool = ${entrainment.jumpLayers > 1};
 const VARIANCE_COVER: bool = ${moistTurbulence && o.boundaryCover === 'variance'}; const VAR_FLOOR: f32 = ${o.varianceFloor}; const VAR_SCALE: f32 = ${o.varianceScale}; const MIX_LENGTH: f32 = ${o.mixingLength}; const STABLE_LENGTH: f32 = ${o.stableMixingLength}; const VAR_WATER: bool = ${o.varianceCover === 'water'}; const BUOY_LENGTH: f32 = ${o.buoyancyLength ?? 0}; const VIRTUAL: f32 = ${VIRTUAL_FACTOR};
 const MLM_BL_GATE: bool = ${o.deckRegime === 'boundaryLayer'}; const MLM_BYPASS: bool = ${!!o.deckBypass};
-const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
+const S0: f32 = ${o.solarConstant}; const KEPLER: bool = ${o.orbit === 'kepler'}; fn sunDistance() -> f32 { return select(1.0, P[8], KEPLER); } const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${VISIBLE_PATH}; const RHC: f32 = ${o.criticalHumidity}; const RHC_BL: f32 = ${o.boundaryCriticalHumidity}; const COVER_FLOOR: f32 = ${o.coverFloor ?? 0.01}; const BOUND_WIDTH: bool = ${o.overcastWater != null}; const OVERCAST_WATER: f32 = ${o.overcastWater ?? 0}; const OVERCAST_EIS: f32 = ${o.overcastInversion[0]}; const OVERCAST_RAMP: f32 = ${o.overcastInversion[1] - o.overcastInversion[0]}; const RANDOM_OVERLAP: bool = ${o.cloudOverlap === 'maximumRandom'}; const EXP_OVERLAP: bool = ${o.cloudOverlap === 'exponentialRandom'}; const DECOR_LEN: f32 = ${o.decorrelationLength}; const DECOR_SLOPE: f32 = ${o.decorrelationSlope};
 const COLUMNS: bool = ${!!o.cloudColumns}; const SPREAD2: f32 = ${(o.cloudSpread ?? 0) ** 2};
 fn transmitted(depth: f32) -> f32 { return ${lognormalNodes((o.cloudSpread ?? 0) ** 2).map(([x, w]) => `${w} * exp(-depth * ${x})`).join(' + ')}; }
@@ -1277,8 +1278,8 @@ const HELD_OPEN = `  var shone = 0.0; var weighted = 0.0;
     let ahead = MF[F_XC + 3 * i] * (sun.x * c + sun.y * s) + MF[F_XC + 3 * i + 1] * (sun.y * c - sun.x * s) + MF[F_XC + 3 * i + 2] * sun.z;
     if (ahead > 0.0) { shone += ahead; weighted += ahead * ahead; }
   }
-  let mu = select(0.0, weighted / shone, shone > 0.0); let beam = S0 * mu;
-  PH[PH_RADMU + i] = mu;
+  let mu = select(0.0, weighted / shone, shone > 0.0); let beam = S0 * sunDistance() * mu;
+  PH[PH_RADMU + i] = mu * sunDistance();
   let waterDir = openWaterAlbedo(mu); let iceDir = surfaceAlbedo(ice, waterDir, snow0, skin, PH[PH_SNOWALB + i]);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
 ${SOLAR_OPEN}`;
@@ -1315,7 +1316,7 @@ const HELD_GRAY = `    let outgoing = v.up + g.up + w.up; let back = v.down + g.
       PH[PH_RADTC + i] = throughVapor + throughGas + WINDOW;
     }
 `;
-const HELD_REST = `  let held = PH[PH_RADMU + i]; let sunScale = select(0.0, mu / held, held > 0.0); let lift = surfaceEmission - PH[PH_RADEMIT + i];
+const HELD_REST = `  let held = PH[PH_RADMU + i]; let sunScale = select(0.0, mu * sunDistance() / held, held > 0.0); let lift = surfaceEmission - PH[PH_RADEMIT + i];
   let absorbed = sunScale * PH[PH_RADABS + i]; let back = PH[PH_RADBACK + i]; let outgoing = PH[PH_RADOLR + i] + PH[PH_RADT + i] * lift;
 `;
 const HELD_THETA = `  for (var k = 0; k < K; k++) {
@@ -1351,7 +1352,7 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
   D[D_WIND + i] = ws;
   let sun = vec3<f32>(P[2], P[3], P[4]);
   let mu = max(0.0, MF[F_XC + 3 * i] * sun.x + MF[F_XC + 3 * i + 1] * sun.y + MF[F_XC + 3 * i + 2] * sun.z);
-  let beam = S0 * mu;
+  let beam = S0 * sunDistance() * mu;
   let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5; let continental = onLand && !onIceSheet;
   let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i]; let surf0 = PH[PH_SURF + i];
   let bucket = select(BUCKET, ROOTCAP, VEGETATED);
