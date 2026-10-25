@@ -1,6 +1,6 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
-import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
+import { sunDirection, sunDistance, DEFAULT_ORBIT, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, PHYSICS_PASSES, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
@@ -63,9 +63,10 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
  * radiationEvery is more than 1 (the layers' longwave heating stays in
  * LWH): RADP the step's parameters [full call, steps the call covers,
  * the sun's turn per step], RADMU the cosine of the zenith angle the call
- * took, RADSW the layers' shortwave heating, RADDF the share of a change
- * in the surface's upwelling longwave each layer absorbs, RADT and RADTC
- * the shares that reach space all-sky and clear-sky, and the call's
+ * took times the sun's distance factor (P[8], 1 unless the orbit is
+ * 'kepler'), RADSW the layers' shortwave heating, RADDF the share of a
+ * change in the surface's upwelling longwave each layer absorbs, RADT and
+ * RADTC the shares that reach space all-sky and clear-sky, and the call's
  * surface and top-of-atmosphere fluxes.
  */
 const HELD_RADIATION = ['RADP', 'RADMU', 'RADSW', 'RADDF', 'RADABS', 'RADBACK', 'RADEMIT', 'RADOLR', 'RADT', 'RADSWDN', 'RADDIR', 'RADATM', 'RADTOA', 'RADREFL', 'RADCLRSW', 'RADCLROLR', 'RADTC'];
@@ -812,7 +813,7 @@ const columnKernel = (diagnose) => `@compute @workgroup_size(${WORKGROUP}) fn ma
 Object.assign(KERNELS, { column: columnKernel('diagnoseColumnMid'), columnLast: columnKernel('diagnoseColumn') });
 
 export const PHYSICS_DEFAULTS = {
-  solarConstant: 1362, cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
+  solarConstant: 1362, orbit: DEFAULT_ORBIT, cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
   mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'exponentialRandom', decorrelationLength: DECORRELATION_LENGTH, decorrelationSlope: DECORRELATION_SLOPE, prognosticHeight: true, deckRest: 'regime', deckSlab: 'fraction', deckReference: 'layer', deckInversion: 'grid', deckCloud: 'sigma', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false, radiationEvery: 1, dragEvery: 1,
@@ -945,7 +946,7 @@ export async function createGpuCore(mesh, {
     MI: storageBuffer(device, mi), MF: storageBuffer(device, mf), LV: storageBuffer(device, lv),
     S: emptyBuffer(device, 4 * L.S.total),
     ...Object.fromEntries(['T', 'K1', 'K2', 'K3', 'K4'].map((name) => [name, emptyBuffer(device, 4 * Math.max(L.S.total, registerLength, name === 'K1' ? LONGWAVE_STASH_FLOATS(L.K, L.C) : 0))])),
-    D: emptyBuffer(device, 4 * L.D.total), P: storageBuffer(device, new Float32Array(8)), PH: emptyBuffer(device, 4 * L.PH.total),
+    D: emptyBuffer(device, 4 * L.D.total), P: storageBuffer(device, Float32Array.of(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)), PH: emptyBuffer(device, 4 * L.PH.total),
     FR: emptyBuffer(device, 4 * L.FR.total), FP: storageBuffer(device, new Float32Array(8)), PR: emptyBuffer(device, 32 * RING_SLOTS),
   };
   for (const [name, b] of Object.entries(buffers)) b.label = name;
@@ -1120,13 +1121,14 @@ export async function createGpuCore(mesh, {
   let stepCount = 0, dragCall = -1;
   const hooks = { beforePhysics: null, afterPhysics: null, landWeights: null };
   async function stepModel(dt, time) {
-    const sun = sunDirection(time);
+    const sun = sunDirection(time, undefined, phys.orbit);
     rungeKutta(dt);
     stepCount++;
     if (hooks.beforePhysics) await hooks.beforePhysics(dt, stepCount);
     const g = group(buffers.S, buffers.K1);
     const [seasonKeep, moistureKeep, hold] = hooks.landWeights ? hooks.landWeights(dt) : [1 - Math.exp(-dt / phys.seasonMemory), 1 - Math.exp(-dt / phys.moistureMemory), 0];
     setParams([dt, (time % YEAR) / YEAR, sun[0], sun[1], sun[2], seasonKeep, moistureKeep, hold]);
+    if (phys.orbit !== 'circular') writeParams(Float32Array.of(sunDistance(time, phys.orbit), 0, 0, 0, 0, 0, 0, 0), buffers.P, 32);
     if (heldRadiation) {
       const into = Math.round(time / dt) % phys.radiationEvery;
       writeParams(new Float32Array([into === 0 ? 1 : 0, phys.radiationEvery - into, 2 * Math.PI * dt / DAY, 0, 0, 0, 0, 0]), buffers.PH, 4 * L.PH.RADP);

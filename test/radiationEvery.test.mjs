@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { STEFAN_BOLTZMANN } from '../js/physics/radiation.module.js';
+import { STEFAN_BOLTZMANN, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 
 function heldModel(radiationEvery, options = {}) {
   const model = createModel(new Grid(16), { ocean: false, radiation: { stratus: true, clearSkyPass: true, radiationEvery, ...options }, surface: { exchange: 'roughness' } });
@@ -33,7 +33,7 @@ test('a full call keeps fluxes that close: the layers\' shortwave and the surfac
   }
 });
 
-test('between calls the sunlight scales with the cosine of the zenith angle, a cell whose sun rises between calls takes sunlight, and the OLR follows the surface\'s emission', () => {
+test('between calls the sunlight scales with the cosine of the zenith angle and the distance factor, a cell whose sun rises between calls takes sunlight, and the OLR follows the surface\'s emission', () => {
   const model = heldModel(4), radiation = model.radiation, { held } = radiation, C = model.mesh.nCells, dt = 900;
   model.step(dt);
   const rising = [];
@@ -45,7 +45,7 @@ test('between calls the sunlight scales with the cosine of the zenith angle, a c
     model.step(dt);
     radiation.setTime(time);
     for (let i = 0; i < C; i++) {
-      const scale = held.mu[i] > 0 ? radiation.cosZenith(i) / held.mu[i] : 0, gained = radiation.summed.absorbedSolar[i] - before[i];
+      const scale = held.mu[i] > 0 ? radiation.insolation(i) / (SOLAR_CONSTANT * held.mu[i]) : 0, gained = radiation.summed.absorbedSolar[i] - before[i];
       assert.ok(Math.abs(gained - scale * top[i]) < 1e-9 * Math.max(1, top[i]), `step ${n + 1} cell ${i}: absorbed ${gained} against ${scale} × ${top[i]}`);
       assert.ok(Math.abs(radiation.summed.insolation[i] - insolationBefore[i] - radiation.insolation(i)) < 1e-9, `step ${n + 1} cell ${i}: insolation`);
       if (ice[i] > 0) continue;

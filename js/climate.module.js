@@ -5,7 +5,7 @@ import { fetchState, stateName, decodeState, encodeState, listedStates, stateDay
 import { seasonPhrase } from "./levels.module.js";
 import { sigmaInterfaces } from "./dynamics/sigmaCore.module.js";
 import { HYBRID_LAYERS } from "./ocean/column.module.js";
-import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
+import { sunDirection, orbitOf, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot, listRuns, deleteRun, runStore } from "./snapshots.module.js";
 import { Stats } from "./stats.module.js";
@@ -354,9 +354,10 @@ export default function runClimate({ N = null, from = null, levels = null, worke
    */
   const dateLine = document.getElementById('date'), dateTime = document.createElement('span'), dateSeason = document.createElement('span');
   dateSeason.className = 'season';
+  const modelOrbit = () => orbitOf(ready?.options);
   function showDate(time) {
     if (dateTime.parentNode !== dateLine) dateLine.replaceChildren(dateTime, dateSeason);
-    const text = formatTime(time), phrase = seasonPhrase(time);
+    const text = formatTime(time), phrase = seasonPhrase(time, modelOrbit());
     if (dateTime.textContent !== text) dateTime.textContent = text;
     if (dateSeason.textContent !== phrase) dateSeason.textContent = phrase;
   }
@@ -458,7 +459,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     if (!latest) return;
     const time = display.advance(now, latest.time, { ...recentFrames(), running });
     if (running) showDate(time);
-    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR), frame: settings.frame, ambient: settings.ambient, intensity: settings.sun });
+    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time, undefined, modelOrbit()), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR), frame: settings.frame, ambient: settings.ambient, intensity: settings.sun });
   }
   requestAnimationFrame(tick);
 

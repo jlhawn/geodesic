@@ -52,7 +52,7 @@ const shadow = createMixedLayer({ cp, R, g, latentHeat: ph.latentHeat, reference
 const longwave = dycomsLongwave(), Lh = ph.latentHeat, HMAX = shadow.maximumHeight, HMEM = { ...MIXED_LAYER_DEFAULTS, ...ph.mixedLayer }.heightMemory;
 const prognostic = !!ph.prognosticHeight, restInversion = ph.deckRest !== 'depth', restRegime = ph.deckRest === 'regime' && ph.turbulence === 'moist';
 const ceilingJump = ph.ceilingInversion ?? ph.minimumInversion, blGate = ph.deckRegime === 'boundaryLayer';
-const sun = sunDirection(input.time);
+const sun = sunDirection(input.time, undefined, ph.orbit);
 const fresh = (x) => -Math.expm1(-x);
 const zOf = (k, i) => (D.GEO[k * C + i] + LV.GABS[k]) / g;
 const interfaceHeight = (i, m) => (D.GEO[m * C + i] + LV.GABS[m] + cp * D.THV[m * C + i] * (D.EXM[m * C + i] - D.EXL[(m - 1) * C + i])) / g;

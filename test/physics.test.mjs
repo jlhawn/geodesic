@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY, R_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { curl, divergence } from '../js/dynamics/operators.module.js';
-import { createRadiation as radiationModule, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean, VISIBLE_PATH, STABILITY_SIGMA, DECORRELATION_LENGTH, DECORRELATION_SLOPE, overlapped } from '../js/physics/radiation.module.js';
+import { createRadiation as radiationModule, sunDirection, seasonTimes, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean, VISIBLE_PATH, STABILITY_SIGMA, DECORRELATION_LENGTH, DECORRELATION_SLOPE, overlapped } from '../js/physics/radiation.module.js';
 import { smoothCells } from '../js/levels.module.js';
 import { LATENT_HEAT, saturationHumidity, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
@@ -39,13 +39,16 @@ function sampleState(seed) {
   return [pi, theta, u, surfaceT];
 }
 
-test('the sun follows the equinox, the solstice and the daily rotation', () => {
-  const s0 = sunDirection(0);
-  assert.ok(Math.abs(s0[0] - 1) < EPS && Math.abs(s0[1]) < EPS && Math.abs(s0[2]) < EPS);
-  const solstice = sunDirection(YEAR / 4);
-  assert.ok(Math.abs(solstice[2] - Math.sin(AXIAL_TILT)) < 1e-9);
-  const noonLater = sunDirection(DAY / 2);
-  assert.ok(noonLater[0] < -0.9999 && Math.abs(noonLater[1]) < 1e-9);
+test('the sun follows the equinox, the solstice and the daily rotation, on the circular orbit and on the kepler one', () => {
+  for (const orbit of ['circular', 'kepler']) {
+    const s0 = sunDirection(0, undefined, orbit);
+    assert.ok(Math.abs(s0[0] - 1) < EPS && Math.abs(s0[1]) < EPS && Math.abs(s0[2]) < EPS, orbit);
+    const solstice = sunDirection(seasonTimes(orbit)[1], undefined, orbit);
+    assert.ok(Math.abs(solstice[2] - Math.sin(AXIAL_TILT)) < 1e-9, orbit);
+    const noonLater = sunDirection(DAY / 2, undefined, orbit);
+    assert.ok(noonLater[0] < -0.9999 && Math.abs(noonLater[1]) < 1e-9, orbit);
+  }
+  assert.equal(seasonTimes('circular')[1], YEAR / 4);
 });
 
 test('radiation column: layer and surface fluxes sum to absorbed solar minus outgoing longwave', () => {

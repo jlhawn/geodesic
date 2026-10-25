@@ -3,6 +3,7 @@ import { Grid } from '../../js/grid.module.js';
 import { buildMesh } from '../../js/mesh.module.js';
 import { sunDirection, AXIAL_TILT } from '../../js/physics/radiation.module.js';
 import { Globe } from '../globe.module.js';
+import { PUBLISHED_RADIATION } from '../published.module.js';
 import { slider, buttons, legend, caption, readout, text, sequentialRGB, paletteVersion, ACCENT } from '../runtime.module.js';
 import { SOLAR_CONSTANT, timeOf, subsolarPoint, sunlightAt, sunlightOnCells, areaMean } from '../subsolar.module.js';
 
@@ -51,7 +52,7 @@ export function mountSunlit(root) {
   function refresh() {
     const t = timeOf(day, hour), key = `${t}/${paletteVersion}`;
     if (key === painted) return;
-    sunDirection(t, sun);
+    sunDirection(t, sun, PUBLISHED_RADIATION.orbit);
     sunlightOnCells(mesh.xCell, sun, values);
     mean = areaMean(values, mesh.areaCell);
     paint((i, rgb) => sequentialRGB(values[i] / SOLAR_CONSTANT, rgb));

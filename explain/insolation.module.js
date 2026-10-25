@@ -5,6 +5,7 @@
  * March equinox; each mean samples the sun perDay times at longitude 0.
  */
 import { sunDirection, SOLAR_CONSTANT, DAY } from '../js/physics/radiation.module.js';
+import { PUBLISHED_RADIATION } from './published.module.js';
 
 export const DAYS = 365;
 export const MARKERS = [[0, 'March equinox'], [91, 'June solstice'], [183, 'September equinox'], [274, 'December solstice'], [365, 'March equinox']];
@@ -13,7 +14,7 @@ const D = Math.PI / 180;
 export function sunTrack(day, perDay, out = { x: new Float64Array(perDay), z: new Float64Array(perDay) }) {
   const sun = new Float64Array(3);
   for (let k = 0; k < perDay; k++) {
-    sunDirection((day - 0.5 + (k + 0.5) / perDay) * DAY, sun);
+    sunDirection((day - 0.5 + (k + 0.5) / perDay) * DAY, sun, PUBLISHED_RADIATION.orbit);
     out.x[k] = sun[0]; out.z[k] = sun[2];
   }
   return out;
@@ -52,7 +53,7 @@ export function daylightHours(latitude, day, perDay = 1440) {
   return 24 * lit / perDay;
 }
 
-export const subsolarLatitude = (day) => Math.asin(sunDirection(day * DAY)[2]) / D;
+export const subsolarLatitude = (day) => Math.asin(sunDirection(day * DAY, undefined, PUBLISHED_RADIATION.orbit)[2]) / D;
 
 export const noonElevation = (latitude, day) => 90 - Math.abs(latitude - subsolarLatitude(day));
 
