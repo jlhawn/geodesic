@@ -126,7 +126,7 @@ test('one cloud layer: the overcast and clear calls blended by the cover reprodu
     humidity[k] = 0.85 * saturationHumidity(MLS.temperature[k], ps * sigmaMid[k]);
     for (let j = 0; j < K; j++) { q[j * C] = humidity[j]; qc[j * C] = 0; }
     qc[k * C] = water / (ps * dSigma[k] / g);
-    pdf.column(0, ps, theta, MLS.groundTemperature, 5, undefined, 340.5, null, q, qc, 0.07, 0.07, 1, SEA_DRAG, 0, 0, 0, 0, 'radiation');
+    pdf.column(0, ps, theta, MLS.groundTemperature, 5, undefined, { beam: 340.5, mu: 2 / 3 }, null, q, qc, 0.07, 0.07, 1, SEA_DRAG, 0, 0, 0, 0, 'radiation');
     const f = pdf.layerCover[k], column = makeColumn({ profile: MLS, humidity, cloud: { pressure: ps * sigmaMid[k], path: water / f, cover: f } });
     assert.ok(f > 0.1 && f < 0.2, `a partial cover, ${f}`);
     assert.equal(column.cloudLayer, k);

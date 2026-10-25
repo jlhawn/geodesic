@@ -138,7 +138,7 @@ for (let i = 0; i < C; i++) {
   if (!landMask[i]) { const cov = seaIce.cover(i, h); openSea = 1 - cov; if (h > 0 && cov < 1) skin = cov * surfaceT[i] + (1 - cov) * FREEZING_POINT; }
   const drag = landMask[i] ? LAND_DRAG : SURFACE.dragCoefficient ?? SEA_DRAG;
   const albedo = model.surfaceAlbedo[i];
-  radiation.column(i, pi[i], theta, skin, surface.windSpeed[i], undefined, radiation.insolation(i), q[bottom * C + i], q, qc, albedo, albedo, 1, drag, openSea, bl.depth[i] - geopotential[bottom * C + i] / g, 0, bl.mixingTop[i] - geopotential[bottom * C + i] / g);
+  radiation.column(i, pi[i], theta, skin, surface.windSpeed[i], undefined, undefined, q[bottom * C + i], q, qc, albedo, albedo, 1, drag, openSea, bl.depth[i] - geopotential[bottom * C + i] / g, 0, bl.mixingTop[i] - geopotential[bottom * C + i] / g);
   const budget = radiation.budget;
   out.model[i] = budget.outgoingLongwave; out.modelDown[i] = budget.downwardLongwave; out.clear[i] = budget.clearOutgoingLongwave;
   const ozoneCell = R.ozoneColumn[0] + (R.ozoneColumn[1] - R.ozoneColumn[0]) * Math.sin(mesh.latCell[i]) ** 2;

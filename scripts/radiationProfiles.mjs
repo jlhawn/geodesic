@@ -64,7 +64,7 @@ for (let n = 0; n < TIMES; n++) {
       let skin = surfaceT[i], openSea = 0;
       if (!land[i]) { const cover = M.seaIce.cover(i, ice[i]); openSea = 1 - cover; if (ice[i] > 0 && cover < 1) skin = cover * surfaceT[i] + (1 - cover) * FREEZING_POINT; }
       const albedo = M.surfaceAlbedo[i], bottom = (K - 1) * C + i;
-      M.radiation.column(i, pi[i], theta, skin, M.surface.windSpeed[i], undefined, M.radiation.insolation(i), q[bottom], q, qc, albedo, albedo, 1, land[i] ? LAND_DRAG : SEA_DRAG, openSea, M.boundaryLayer.depth[i] - geopotential[bottom] / g, 0, M.boundaryLayer.mixingTop[i] - geopotential[bottom] / g);
+      M.radiation.column(i, pi[i], theta, skin, M.surface.windSpeed[i], undefined, undefined, q[bottom], q, qc, albedo, albedo, 1, land[i] ? LAND_DRAG : SEA_DRAG, openSea, M.boundaryLayer.depth[i] - geopotential[bottom] / g, 0, M.boundaryLayer.mixingTop[i] - geopotential[bottom] / g);
       const flux = M.radiation.layerFlux, sensible = M.radiation.budget.sensibleHeat;
       hit.forEach((inside, b) => {
         if (!inside) return;

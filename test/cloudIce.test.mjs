@@ -4,6 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+import { SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 import { R_VAPOR, saturationHumidity, cloudSaturation, iceVaporPressure, saturationVaporPressure, criticalHumidityAt, uniformCondensate, uniformCover, LATENT_HEAT, MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 
 const levels = sigmaInterfaces('bl34');
@@ -254,7 +255,7 @@ test('a layer whose only cloud is plume cumulus is seen as its plume: its in-clo
     const cover = new Float64Array(K * C), water = new Float64Array(K * C);
     cover[k * C] = f; water[k * C] = w;
     model.radiation.useCumulus(cover, water);
-    model.radiation.column(0, s.pi[0], s.theta, 290, 5, undefined, 600, s.q[bottom], s.q, s.qc, 0.06, 0.06, 1, undefined, 0, 0, 0, 0);
+    model.radiation.column(0, s.pi[0], s.theta, 290, 5, undefined, { beam: 600, mu: 600 / SOLAR_CONSTANT }, s.q[bottom], s.q, s.qc, 0.06, 0.06, 1, undefined, 0, 0, 0, 0);
     const plume = w * mass, grid = f * plume, seen = model.radiation.budget.cloudCover;
     const expected = f * -Math.expm1(-plume / 1e-3);
     console.log(`cover ${f}, plume path ${(1e3 * plume).toFixed(1)} g/m²: column cover ${seen.toExponential(4)}, in-cloud path ${(1e3 * grid / seen).toFixed(2)} g/m² (the grid-mean visibility gave ${(grid / (f * -Math.expm1(-grid / 1e-3))).toExponential(2)} kg/m²)`);

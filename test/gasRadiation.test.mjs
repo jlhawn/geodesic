@@ -176,7 +176,7 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
     const down = beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour) + nir(m));
     const visible = VISIBLE_FRACTION * beam - beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour));
     const up = albedo * beam * (nir(m + 5 / 3) - nir(m)) + albedo * visible * -Math.expm1(-0.054209 * ozone * 5 / 3);
-    const run = (model) => { model.radiation.column(i, pi[i], theta, 290, 5, undefined, beam, q[bottom + i], q, null, albedo, albedo); return { ...model.radiation.budget }; };
+    const run = (model) => { model.radiation.column(i, pi[i], theta, 290, 5, undefined, { beam, mu }, q[bottom + i], q, null, albedo, albedo); return { ...model.radiation.budget }; };
     const a = run(on), b = run(off);
     const error = Math.max(Math.abs(b.atmosphereSolar - down) / down, albedo > 0 ? Math.abs(a.atmosphereSolar - b.atmosphereSolar - up) / up : 0);
     worst = Math.max(worst, error);
