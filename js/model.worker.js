@@ -724,7 +724,7 @@ async function start(message) {
     options.topography = await loadTopography(message.topography ?? topographyUrl(geography.topography).href, geography.topography);
     options.subgrid = await loadSubgrid(N, geography.topography, geography.mask);
     const sheets = geographyOptions(geography, geography.iceSheets === 'rule' ? null : await loadLandIce());
-    options.geography = { ...(options.geography ?? {}), ...sheets.geography, ...(geography.mask ? { maskData: await loadMask(N, geography.mask) } : {}) };
+    options.geography = { ...(options.geography ?? {}), ...sheets.geography, ...(geography.mask && geography.mask !== 'raster' ? { maskData: await loadMask(N, geography.mask) } : {}) };
     options.land = { ...sheets.land, ...(options.land ?? {}) };
   }
   if (!saved && message.land !== false && message.climatology !== false) {
