@@ -80,7 +80,11 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * (RH18_ENERGY, MOM6's RH18_MSTAR_CN1 to CN3), C = 1 − c_C B⁻ / (B⁻ + 2 m*_N u*³/h)
  * under a destabilizing surface buoyancy flux B⁻ (MSTAR_CONV_ADJ), and
  * m*_S = c_S1 (B⁺² h / (u*⁵ |f|))^c_S2 under a stabilizing one B⁺, m* no more
- * than 10 (MSTAR_CAP of the OM4 configuration) and n* 0.06. B is the
+ * than 10 (MSTAR_CAP of the OM4 configuration) and n* 0.06. With langmuirScheme
+ * 'rescale' the factor on m* is min(5, 1 + waves · 0.447 La^(−1.33)), La the
+ * surface-layer Langmuir number over the depth h (MOM6's EPBL_LANGMUIR_SCHEME
+ * RESCALE with LT_ENHANCE_COEF 0.447, LT_ENHANCE_EXP −1.33 and the five
+ * LT_MOD_LAC terms zero). B is the
  * buoyancy the surface gains over the step from the heat, light and salt it
  * gives the top layer, g (α heat − β salt) / dt, in m²/s³. Λ − 1 is scaled by waves, the share of the
  * wave field the sea ice leaves: 1 − tanh(10 A) under cover A with the
@@ -119,6 +123,7 @@ export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3, RETREAT_EKMAN = 0.7;
 export const ROTATION_LIMITS = ['algebraic', 'rh18'], RH18_NEUTRAL = { c2: 8, c3: -5 };
 export const MSTAR_SCHEMES = ['fixed', 'rh18'], RH18_ENERGY = { cN1: 0.275, cN2: 8, cN3: -5, cS1: 0.2, cS2: 0.4, cC: 0.667, nstar: 0.06, cap: 10 };
 export const LANGMUIR_ICE = ['none', 'tanh'], ICE_WAVE_DAMPING = 10;
+export const LANGMUIR_SCHEMES = ['factor', 'rescale'], LANGMUIR_RESCALE = { coefficient: 0.447, exponent: -1.33, cap: 5 };
 export function erfc(x) {
   const t = 1 / (1 + 0.3275911 * x);
   return t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * Math.exp(-x * x);
@@ -479,7 +484,17 @@ export function surfaceBuoyancy(T, S, heat, salt, dt, gravity = GRAVITY) {
   return gravity * (thermalExpansion(T, S) * heat - halineContraction(T, S) * salt) / dt;
 }
 
-export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, rotationLimit = 'algebraic', mstarScheme = 'fixed', nstar = 0.2, langmuir = 2, waves = 1, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
+export function langmuirInverse(ustar, depth) {
+  const u10 = ustar / FRICTION_PER_WIND;
+  return u10 > CALM_WIND ? Math.min(100, Math.max(0, stokesSurfaceLayer(u10, depth) / ustar)) : 0;
+}
+
+export function langmuirRescale(ustar, depth, waves = 1) {
+  const inverse = langmuirInverse(ustar, depth);
+  return inverse > 0 ? Math.min(LANGMUIR_RESCALE.cap, 1 + waves * LANGMUIR_RESCALE.coefficient * inverse ** (-0.5 * LANGMUIR_RESCALE.exponent)) : 1;
+}
+
+export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, rotationLimit = 'algebraic', mstarScheme = 'fixed', langmuirScheme = 'factor', nstar = 0.2, langmuir = 2, waves = 1, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
   const { alpha, beta, trialT, trialS, gain } = scratch;
   let H = 0;
   for (let k = 0; k < K; k++) H += h[k];
@@ -490,8 +505,9 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy
   const convective = Math.max(0, released), vstar = Math.cbrt(ustar * ustar * ustar + convective / (rho0 * dt));
   for (let k = 0; k < K; k++) kappa[k] = 0;
   if (!(vstar > 0)) return { depth: 0, energy: 0, work: 0, velocity: 0 };
+  const rescale = langmuirScheme === 'rescale';
   const energy = (depth) => {
-    const factor = ustar > 0 && langmuir > 0 ? 1 + (langmuirFactor(ustar, Math.max(depth, 1), langmuir) - 1) * waves : 1;
+    const factor = ustar > 0 && langmuir > 0 ? (rescale ? langmuirRescale(ustar, Math.max(depth, 1), waves) : 1 + (langmuirFactor(ustar, Math.max(depth, 1), langmuir) - 1) * waves) : 1;
     if (mstarScheme === 'rh18') {
       if (!(ustar > 0)) return RH18_ENERGY.nstar * convective;
       const { cN1, cN2, cN3, cS1, cS2, cC, cap } = RH18_ENERGY, u3 = ustar * ustar * ustar, absf = Math.abs(f);

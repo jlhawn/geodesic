@@ -2,7 +2,7 @@ import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGro
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
 import { oceanCells, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
-import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
+import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
 import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval } from '../physics/ice.module.js';
 import { iceDriftOptions, iceDriftPasses, ICE_REMNANT } from '../ocean/iceDrift.module.js';
@@ -10,6 +10,7 @@ import { iceDriftHead, iceDriftKernels, driftStressKernel, driftSections } from 
 import { basalMeltWgsl, baseFreezing, SHELF_MELT } from '../ocean/iceShelfMelt.module.js';
 
 const waveFactor = (o) => (o.langmuirIce === 'tanh' ? 'select(1.0, 1.0 + (langmuirFactor(ustar, max(depth, 1.0)) - 1.0) * waves, ustar > 0.0)' : 'select(1.0, langmuirFactor(ustar, max(depth, 1.0)), ustar > 0.0 && waves)');
+const rescaleFactor = (o) => (o.langmuirIce === 'tanh' ? 'select(1.0, min(LTCAP, 1.0 + waves * LTCOEF * pow(langmuirInverse(ustar, max(depth, 1.0)), LTPOW)), ustar > 0.0)' : 'select(1.0, min(LTCAP, 1.0 + LTCOEF * pow(langmuirInverse(ustar, max(depth, 1.0)), LTPOW)), ustar > 0.0 && waves)');
 
 /*
  * The ocean of ocean/layered.module.js on the GPU: the ALE hybrid layers,
@@ -47,7 +48,7 @@ export const OCEAN_DEFAULTS = {
   momentumDepth: 50, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, topDrag: 2.5e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: false,
   gustiness: 3,
-  generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'fixed', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
+  generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'fixed', langmuirScheme: 'factor', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
   edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 20,
 };
@@ -171,7 +172,7 @@ fn crossing(qL: f32, d: f32, c: f32, b: f32) -> f32 {
   return xi;
 }
 fn blEnergy(depth: f32, ustar: f32, f: f32, dt: f32, convective: f32, buoyancy: f32, waves: ${o.langmuirIce === 'tanh' ? 'f32' : 'bool'}) -> f32 {
-${o.mstarScheme === 'rh18' ? `  let factor = ${o.langmuir > 0 ? waveFactor(o) : '1.0'};
+${o.mstarScheme === 'rh18' ? `  let factor = ${o.langmuir > 0 ? (o.langmuirScheme === 'rescale' ? rescaleFactor(o) : waveFactor(o)) : '1.0'};
   if (!(ustar > 0.0)) { return RHnstar * convective; }
   let u3 = ustar * ustar * ustar; let absf = abs(f);
   let decay = RHcN2 * exp(RHcN3 * depth * absf / ustar); let neutral = RHcN1 * decay / (1.0 + decay);
@@ -693,23 +694,26 @@ function oceanKernels(o) {
   const jerlov = JERLOV[o.penetration ?? 'IB'];
   const rhoLine = `const RHO: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => v.toFixed(6)).join(', ')});`;
   const labelLine = `const LABEL_T: array<f32, ${L}> = array<f32, ${L}>(${o.labelT.map((v) => v.toFixed(6)).join(', ')});\nconst LABEL_S: array<f32, ${L}> = array<f32, ${L}>(${o.labelS.map((v) => v.toFixed(6)).join(', ')});\nconst RHOA: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => (v - SEAWATER.rho0).toFixed(6)).join(', ')});`;
-  const langmuirLines = `fn erfcApprox(x: f32) -> f32 {
-  let t = 1.0 / (1.0 + 0.3275911 * x);
-  return t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * exp(-x * x);
-}
-fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
-  let u10 = ustar / ${FRICTION_PER_WIND.toExponential(10)};
-  if (!(u10 > ${CALM_WIND.toExponential(10)})) { return 1.0; }
-  let drift = 0.0162 * u10; let height = 0.0246 * u10 * u10; let mean = ${(1.296 * 0.877 * 9.81 / (2 * Math.PI * 1.075)).toExponential(10)} / u10;
+  const windLines = (calm) => `  let u10 = ustar / ${FRICTION_PER_WIND.toExponential(10)};
+  if (!(u10 > ${CALM_WIND.toExponential(10)})) { return ${calm}; }`;
+  const stokesLines = `  let drift = 0.0162 * u10; let height = 0.0246 * u10 * u10; let mean = ${(1.296 * 0.877 * 9.81 / (2 * Math.PI * 1.075)).toExponential(10)} / u10;
   let k = 0.176 * drift / (${(0.125 * Math.PI * 0.667).toExponential(10)} * mean * height * height); let ks = 2.56 * k; let z = 0.2 * depth;
   let r1 = (0.151 / (k * z) - 0.84) * (1.0 - exp(-2.0 * k * z));
   let r2 = -(0.84 + 0.0591 / (k * z)) * sqrt(${(2 * Math.PI).toExponential(10)} * k * z) * erfcApprox(sqrt(2.0 * k * z));
   let r3 = (0.0632 / (ks * z) + 0.125) * (1.0 - exp(-2.0 * ks * z));
   let r4 = (0.125 + 0.0946 / (ks * z)) * sqrt(${(2 * Math.PI).toExponential(10)} * ks * z) * erfcApprox(sqrt(2.0 * ks * z));
-  let inverse = min(100.0, max(0.0, drift * (0.715 + r1 + r2 + r3 + r4) / ustar));
+  let inverse = min(100.0, max(0.0, drift * (0.715 + r1 + r2 + r3 + r4) / ustar));`;
+  const langmuirLines = `fn erfcApprox(x: f32) -> f32 {
+  let t = 1.0 / (1.0 + 0.3275911 * x);
+  return t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * exp(-x * x);
+}
+fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
+${windLines('1.0')}
+${stokesLines}
   return min(LANGMUIR, sqrt(1.0 + inverse / 2.25 + inverse * inverse / 850.3056));
 }`;
-  const langmuirHead = o.langmuir > 0 ? `${constLine('LANGMUIR', o.langmuir)}\n${langmuirLines}\n` : '';
+  const rescaleLines = o.langmuirScheme === 'rescale' ? `${constLine('LTCOEF', LANGMUIR_RESCALE.coefficient)} ${constLine('LTPOW', -0.5 * LANGMUIR_RESCALE.exponent)} ${constLine('LTCAP', LANGMUIR_RESCALE.cap)}\nfn langmuirInverse(ustar: f32, depth: f32) -> f32 {\n${windLines('0.0')}\n${stokesLines}\n  return inverse;\n}\n` : '';
+  const langmuirHead = o.langmuir > 0 ? `${constLine('LANGMUIR', o.langmuir)}\n${langmuirLines}\n${rescaleLines}` : '';
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
   const head = `
@@ -1310,6 +1314,8 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   if (!ROTATION_LIMITS.includes(o.rotationLimit)) throw new Error(`rotationLimit is one of ${ROTATION_LIMITS.join(', ')}, not ${o.rotationLimit}`);
   if (!MSTAR_SCHEMES.includes(o.mstarScheme)) throw new Error(`mstarScheme is one of ${MSTAR_SCHEMES.join(', ')}, not ${o.mstarScheme}`);
   if (!LANGMUIR_ICE.includes(o.langmuirIce)) throw new Error(`langmuirIce is one of ${LANGMUIR_ICE.join(', ')}, not ${o.langmuirIce}`);
+  if (!LANGMUIR_SCHEMES.includes(o.langmuirScheme)) throw new Error(`langmuirScheme is one of ${LANGMUIR_SCHEMES.join(', ')}, not ${o.langmuirScheme}`);
+  if (o.langmuirScheme === 'rescale' && o.mstarScheme !== 'rh18') throw new Error("langmuirScheme 'rescale' multiplies the m* of mstarScheme 'rh18'");
   const given = !!o.iceDrift && typeof o.iceDrift === 'object' && o.iceDrift.airStress === 'given';
   const driftOptions = o.iceDrift ? iceDriftOptions(typeof o.iceDrift === 'object' ? Object.fromEntries(Object.entries(o.iceDrift).filter(([name]) => name !== 'airStress')) : o.iceDrift) : null;
   const third = o.tracerAdvection === 'third';
