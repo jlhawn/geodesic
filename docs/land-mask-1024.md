@@ -1,6 +1,6 @@
 # Land mask from an N = 1024 resampling: phases 1 and 2
 
-Oct 24, 2026. Branch `claude/land-mask-1024`. Model defaults, sub-grid files, saved states and page defaults are untouched.
+Oct 24, 2026. Branch `claude/land-mask-1024`. Fresh starts take the n1024 geography with its lakes (`FRESH_GEOGRAPHY`, Joshua's go, Oct 24). Saved states keep the geography they record, so the page's raster states are unchanged.
 
 ## What was built
 
@@ -199,9 +199,9 @@ That covers:
 
 At N = 128, 18 such components; at N = 192, 25. Nearly all of their cells are sea in today's geography too: 405 of 414 at N = 128.
 
-## Phase 2: the `n1024` geography option
+## Phase 2: the `n1024` geography, the fresh-start default
 
-Geography records gain a `mask` key: `'raster'` or `'n1024'`. A raster record has no key, so every existing record, state and digest is unchanged. An n1024 record:
+Geography records gain a `mask` key: `'raster'` or `'n1024'`. A state header leaves out a raster mask, so a state saved without the key loads as raster. A fresh start (`FRESH_GEOGRAPHY`) is n1024 with the ice shelves as cavities. The files are built in for N = 64 and N = 128 (`MASK_GRIDS`); N = 16 and N = 32 are committed for the tests. A fresh start at any other N fails with a message naming the built-in grids (`missingMask`), because building a mask needs the 1.3 GB `data/geography1024.bin` and about 16 GB of memory. A state saved at any N carries its own geography. An n1024 record:
 - needs `topography: 'etopo2022'`, observed ice sheets, and ice shelves `'land'` or `'cavity'`;
 - reads `data/geography_n1024_N<N>.bin` (`maskUrl`, `encodeMask`, `decodeMask`) and `data/subgrid_etopo2022_n1024_N<N>.bin`.
 
@@ -279,7 +279,7 @@ The seawater lakes:
 - N = 128 adds: Lake Melville, Chesterfield Inlet.
 - N = 192 adds: Lagoa dos Patos, Skyring and Otway.
 
-**Lake model.** `lake: { model: 'flake' }` (off by default; `js/physics/lake.module.js`) runs FLake (Mironov 2008; Mironov et al. 2010) on lake cells. It follows the IFS's choices (Balsamo et al. 2012; Choulga et al. 2019):
+**Lake model.** `lake: { model: 'flake' }` (the default wherever the geography has lake cells, so on every n1024 geography; `'off'` turns it off; `js/physics/lake.module.js`) runs FLake (Mironov 2008; Mironov et al. 2010) on lake cells. It follows the IFS's choices (Balsamo et al. 2012; Choulga et al. 2019):
 - depth bounded to 2–50 m;
 - no snow layer and no bottom sediments;
 - one shortwave band at 3 m⁻¹, with the ice opaque.

@@ -6,7 +6,7 @@ import { withCadence } from './cadence.module.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
-import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, decodeMask, decodeLandIce, landIceUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
+import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, missingMask, decodeMask, decodeLandIce, landIceUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
@@ -438,6 +438,7 @@ async function loadSubgrid(N, topography = 'etopo1', mask = 'raster') {
 
 async function loadMask(N, mask) {
   const response = await fetch(maskUrl(N, mask));
+  if (response.status === 404) throw missingMask(N, mask);
   if (!response.ok) throw new Error(`the ${mask} land mask for N=${N}: ${response.status}`);
   return decodeMask(await response.arrayBuffer());
 }

@@ -18,7 +18,7 @@ import { loadClimatology } from '../ocean/climatology.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from '../physics/exchange.module.js';
 import { skinOptions, skinRequiresRoughness } from '../physics/skin.module.js';
 import { JERLOV } from '../ocean/layered.module.js';
-import { createLake, lakeWater, LAKE_DEFAULTS } from '../physics/lake.module.js';
+import { createLake, lakeWater, lakeModelOf } from '../physics/lake.module.js';
 import { lakeUpload, lakeDownload, LAKE_SLOTS } from './lake.gpu.js';
 import { COUPLED_ICE_DRIFT, iceDriftMoves } from '../ocean/iceDrift.module.js';
 
@@ -68,7 +68,7 @@ export async function createGpuModel(gridOrMesh, {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
-  const lakeCpu = geography && (lakeOptions.model ?? LAKE_DEFAULTS.model) !== 'off' ? createLake(mesh, geography, lakeOptions) : null;
+  const lakeCpu = geography && lakeModelOf(geography, lakeOptions) !== 'off' ? createLake(mesh, geography, lakeOptions) : null;
   const mode = exchangeMode(surface, landOptions);
   const skinSet = skinOptions(surface), skinOn = skinSet.warmLayer || skinSet.coolSkin;
   skinRequiresRoughness(skinSet, mode);

@@ -22,7 +22,7 @@ const out = process.argv[2], Ns = process.argv.slice(3).map(Number);
 const fine = readFineGeography(), F = fine.nCells;
 const fineLat = Float64Array.from({ length: F }, (_, f) => Math.asin(Math.max(-1, Math.min(1, fine.xCell[3 * f + 2]))) * deg);
 const fineLon = Float64Array.from({ length: F }, (_, f) => Math.atan2(fine.xCell[3 * f + 1], fine.xCell[3 * f]) * deg);
-const topography = readTopography('etopo2022'), { geography: options } = geographyOptions(FRESH_GEOGRAPHY);
+const topography = readTopography('etopo2022'), { geography: options } = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'raster' });
 
 const inBox = (lat, lon, [s, n, w, e], margin = 0) => lat >= s - margin && lat <= n + margin && lon >= w - margin / Math.cos((s + n) / 2 / deg) && lon <= e + margin / Math.cos((s + n) / 2 / deg);
 let last = null;
