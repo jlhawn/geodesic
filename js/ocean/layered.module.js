@@ -1175,6 +1175,8 @@ export function createOcean(mesh, {
       lightIn[i] = penetrated[i];
       if (penetrated[i] !== 0) depositLight(i);
     }
+    measureIce(ice, concentration, iceVolume);
+    surfaceInputs();
   }
   function depositLight(i) {
     const light = penetrated[i];
@@ -1285,8 +1287,6 @@ export function createOcean(mesh, {
       drift.advance({ surfaceT, ice, concentration, stress: totalStress, waterU: u, eta, dt: dtOcean });
     }
     readSurface(surfaceT, ice, concentration);
-    measureIce(ice, concentration, iceVolume);
-    surfaceInputs();
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dtOcean);
     regrid(dtOcean); columnPhysics(dtOcean);

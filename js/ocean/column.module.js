@@ -564,7 +564,7 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy
     return raised;
   };
   let done = 0, available = 0;
-  const excess = (depth) => { done = work(depth); available = energy(depth); const w = Math.max(0, done); return (w - available) / (w + available); };
+  const excess = (depth) => { done = work(depth); available = energy(depth); const w = Math.max(0, done), total = w + available; return total > 0 ? (w - available) / total : -1; };
   /*
    * The search evaluates the excess at the whole column (phase 0) and, when
    * the work exceeds the energy there, at the floor (1), then at the

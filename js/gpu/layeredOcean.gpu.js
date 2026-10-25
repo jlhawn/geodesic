@@ -234,8 +234,7 @@ ${edgeFlow(thickness, 'keptAfter += he * IN[uOff(k) + e]; keptDepth += he;')}  i
         raised += OGRAV * RHO0 * lift * (CA[k] * heatDown - CB[k] * saltDown);
       }
       let supplied = blEnergy(depth, ustar, f, dt, convective, ${o.mstarScheme === 'rh18' ? 'buoy' : '0.0'}, ${o.langmuirIce === 'tanh' ? 'waves' : '!capped'}); let worked = max(raised, 0.0);
-      let excess = (worked - supplied) / (worked + supplied);
-`;
+${o.mstarScheme === 'rh18' ? '      let total = worked + supplied;\n      let excess = select(-1.0, (worked - supplied) / max(total, 1.0e-30), total > 0.0);\n' : '      let excess = (worked - supplied) / (worked + supplied);\n'}`;
   return {
     oKineticPhi: `${K}  let i = ${idx}; if (i >= C) { return; }
   var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
