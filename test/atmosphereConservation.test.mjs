@@ -10,6 +10,7 @@ import { withCadence } from '../js/cadence.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { CLIMATOLOGY_FILE, loadClimatology } from '../js/ocean/climatology.module.js';
+import { FLAKE } from '../js/physics/lake.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -295,11 +296,12 @@ test('at N=32 FLake holds the n1024 lakes: dry to the ocean, finite for two days
     lake.cells.forEach((i, k) => {
       if (heat[k] === null || lake.passed[i] - water[k] + model.radiation.evaporation[i] * dt > 1e-12) return;
       checked++;
-      worst = Math.max(worst, Math.abs(lake.enthalpy(i) - heat[k] - model.radiation.surfaceFlux[i] * dt) / Math.max(1, Math.abs(model.radiation.surfaceFlux[i] * dt)));
+      const given = model.radiation.surfaceFlux[i] * dt, grain = FLAKE.rhoWater * FLAKE.cWater * lake.depth[i] * lake.mean[i] * Number.EPSILON;
+      worst = Math.max(worst, Math.abs(lake.enthalpy(i) - heat[k] - given) / (1e-9 * Math.max(1, Math.abs(given)) + 4 * grain));
     });
   }
   const nonFinite = (fields) => Object.entries(fields).filter(([, v]) => ArrayBuffer.isView(v) && v.some((x) => !Number.isFinite(x))).map(([name]) => name);
   assert.deepEqual([...nonFinite(Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].map((name, k) => [name, state[k]]))), ...nonFinite(lake.serialize())], []);
   for (const i of lake.cells) assert.ok(state[3][i] > 240 && state[3][i] < 315 && lake.mixedDepth[i] > 0 && lake.mixedDepth[i] <= lake.depth[i], `lake cell ${i}: ${state[3][i]} K, mixed ${lake.mixedDepth[i]} of ${lake.depth[i]} m`);
-  assert.ok(checked > 0 && worst < 1e-9, `${checked} lake steps, worst relative heat-budget miss ${worst}`);
+  assert.ok(checked > 0 && worst < 1, `${checked} lake steps, worst heat-budget miss ${worst} of its bound`);
 });
