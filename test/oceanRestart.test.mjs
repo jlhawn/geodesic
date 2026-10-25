@@ -6,6 +6,8 @@ import { gridMesh } from '../js/stateGrid.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { createGeography, decodeLandIce, geographyOptions, landIceUrl, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { zonalWindOnEdges } from './helpers/layered.mjs';
+import { createModel } from '../js/model.module.js';
+import { initializeState } from '../js/physics/init.module.js';
 
 const N = 16;
 
@@ -30,4 +32,18 @@ test(`on ETOPO 2022 with its cavities at N=${N}, an ocean restarted from its arr
     assert.equal(at, -1, `${name}[${at}]: ${a[name][at]} whole against ${b[name][at]} restarted`);
   }
   console.log(`${cavities} cavity cells; the restarted second day matches the whole run bit for bit`);
+});
+
+test(`at N=${N} a model's ocean saves the heat its top layer hands the sea ice, and a model loaded from it gives the ice the same heat before its first ocean step`, () => {
+  const options = { ocean: { everySteps: 1 } };
+  const prepare = (model) => { initializeState(model, {}).forEach((values, a) => model.state[a].set(values)); model.ocean.initialize(model.state[3], model.state[6]); return model; };
+  const run = prepare(createModel(new Grid(N), options));
+  for (let n = 0; n < 4; n++) run.step(1350);
+  const saved = { ...run.ocean.serialize(), ...run.ocean.restartArrays() };
+  assert.ok(saved.flux && saved.flux.some((x) => x > 0), 'the ocean hands the ice some heat');
+  const resumed = createModel(new Grid(N), options);
+  resumed.state.forEach((array, a) => array.set(run.state[a]));
+  resumed.seaIce.load(resumed.state[6], run.seaIce.concentration);
+  resumed.ocean.load(saved, resumed.state[3], resumed.state[6]);
+  assert.deepEqual(Array.from(resumed.seaIce.oceanFlux), Array.from(run.seaIce.oceanFlux));
 });
