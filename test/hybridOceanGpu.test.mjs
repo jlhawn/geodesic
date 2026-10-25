@@ -419,7 +419,8 @@ test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes
   console.log(`restratification start: GPU against CPU h ${begin.h.toExponential(1)} m, T ${begin.T.toExponential(1)} K, S ${begin.S.toExponential(1)} rms`);
   console.log(`restratification over 30 eddy steps: CPU changes h by ${change.h.toExponential(2)} m, T ${change.T.toExponential(2)} K rms; GPU differs by ${diff.h.toExponential(2)} m, ${diff.T.toExponential(2)} K; per application at most ${worst.volume.toExponential(1)} m water, ${worst.heat.toExponential(1)} W/m², ${worst.salt.toExponential(1)} psu·m, a column ${worst.column.toExponential(1)} m`);
   assert.ok(change.h > 1e-3 && change.T > 1e-3, 'the front moves water');
-  for (const f of ['h', 'T', 'S']) assert.ok(diff[f] < 0.03 * change[f] + 1e-9, `${f}: the engines part by ${diff[f]} against a change of ${change[f]}`);
+  for (const f of ['h', 'T']) assert.ok(diff[f] < 0.03 * change[f], `${f}: the engines part by ${diff[f]} against a change of ${change[f]}`);
+  assert.ok(diff.S < 1e-5, `S: the engines part by ${diff.S} psu rms, the front's salinity change being ${change.S}`);
   const gpuMle = (await gpu.restartArrays()).mleDepths;
   let mle = 0;
   for (let i = 0; i < C; i++) if (wet[i]) mle = Math.max(mle, Math.abs(gpuMle[i] - cpu.mleDepths[i]));
