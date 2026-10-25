@@ -11,6 +11,7 @@ import { SUMMER_DAY } from '../physics/ozone.module.js';
 import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT, NEAR_INFRARED_BANDS, NEAR_INFRARED_P_REF, NEAR_INFRARED_MOLAR, VISIBLE_VAPOR_BANDS } from '../physics/shortwaveGases.module.js';
 import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
 import { SKIN, SEA_RHO_CP } from '../physics/skin.module.js';
+import { layeredKernel, LAYERED_SLOTS } from './layered.gpu.js';
 
 /*
  * The column physics of the model as WGSL, one thread per column (or per
@@ -297,6 +298,10 @@ export function physicsConstants(o) {
   const visibleSum = (term) => rayleigh.map(([w, tau]) => `${w} * ${term(`${tau / REFERENCE_PRESSURE} * light.y + light.z`)}`).join(' + ');
   const scatters = rayleigh.some(([, tau]) => tau > 0) || o.nearInfraredRayleigh > 0 || o.landAerosol > 0 || o.seaAerosol > 0;
   if (shielding && !(o.solarGases === 'clirad' && o.nearInfrared === 'bands' && o.upwardAbsorption && scatters && (o.cloudCover !== 'pdf' || o.cloudOverlap === 'exponentialRandom'))) throw new Error(`vaporShielding 'cloudTop' needs solarGases 'clirad', nearInfrared 'bands', upwardAbsorption, Rayleigh scattering or aerosol and, under cloudCover 'pdf', cloudOverlap 'exponentialRandom'`);
+  const shortwaveScheme = o.shortwave ?? 'sequential';
+  if (shortwaveScheme !== 'sequential' && shortwaveScheme !== 'layered') throw new Error(`shortwave must be 'sequential' or 'layered', not ${shortwaveScheme}`);
+  const layering = shortwaveScheme === 'layered';
+  if (layering && !(o.solarGases === 'clirad' && o.nearInfrared === 'bands' && scatters && !shielding && o.cloudScattering == null && o.vaporAbsorption === 1)) throw new Error(`shortwave 'layered' needs solarGases 'clirad', nearInfrared 'bands', Rayleigh scattering or aerosol, vaporShielding 'none', no gray cloudScattering and vaporAbsorption 1`);
   return `
 ${solarGasFunctions(nir, shielding)}fn visibleStreams(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> { return ${visibleSum((depth) => `stream(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 fn visibleEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `streamEscape(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
@@ -1534,7 +1539,7 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
   stash(9, i, ts); stash(10, i, warmth); stash(11, i, wetness); stash(12, i, bareShare); stash(13, i, surfaceEmission);
   stash(22, i, landAlbedo); stash(23, i, stratiform); stash(24, i, ozoneColumn); stash(25, i, adir);
 }`;
-export const radiationKernel = (held) => `${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+export const radiationKernel = (held, layered = false) => `${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -1657,16 +1662,22 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
       }
     }
   }
-  var shieldEsc = vec3<f32>(0.0, 0.0, 0.0); var shieldSplit = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+${layered ? `  let layeredOn = solarOn && cloudPath > 0.0 && incident > 0.0;
+  PH[PH_LYR + i] = select(0.0, 1.0, layeredOn);
+  if (layeredOn) {
+    PH[PH_LYR + C + i] = mu; PH[PH_LYR + 2 * C + i] = beam; PH[PH_LYR + 3 * C + i] = adir; PH[PH_LYR + 4 * C + i] = adif;
+    PH[PH_LYR + 5 * C + i] = columnCover; PH[PH_LYR + 6 * C + i] = select(0.0, moments.z, columns); PH[PH_LYR + 7 * C + i] = fraction; PH[PH_LYR + 8 * C + i] = aerosol;
+  }
+` : ''}  var shieldEsc = vec3<f32>(0.0, 0.0, 0.0); var shieldSplit = vec4<f32>(0.0, 0.0, 0.0, 0.0);
   var sw: vec4<f32>;
-  if (shieldOn) {
+  ${layered ? 'if (layeredOn) { sw = shortwave(0.0, 1.0, mu, adir, adif, light); } else ' : ''}if (shieldOn) {
     var shielded: Shielded;
     if (columns) { shielded = shieldedColumns(moments.x, moments.y, moments.z, mu, adir, adif, light, shieldGap, shieldScale); }
     else { shielded = shieldedColumns(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudPath / columnCover, 0.0, mu, adir, adif, light, shieldGap, shieldScale); }
     sw = shielded.sw; shieldEsc = shielded.esc; shieldSplit = shielded.split;
   } else if (columns) { sw = columnsShortwave(moments.x, moments.y, moments.z, mu, adir, adif, light); }
   else { sw = shortwave(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudKeep(cloudPath / columnCover), mu, adir, adif, light); }
-  if (PDF_COVER && columnCover < 1.0) { sw = columnCover * sw + (1.0 - columnCover) * shortwave(0.0, 1.0, mu, adir, adif, light); }
+  if (PDF_COVER && columnCover < 1.0${layered ? ' && !layeredOn' : ''}) { sw = columnCover * sw + (1.0 - columnCover) * shortwave(0.0, 1.0, mu, adir, adif, light); }
   var clearShare = select(0.0, incident * sw.w / cloudPath, cloudPath > 0.0);
   var deckShare = 0.0;
   if (deck > 0.0) {
@@ -1695,10 +1706,10 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
     let sunlit = beam - ozoneHeating;
     let restAfter = sunlit - max(0.0, VIS_FRAC * beam - visibleTaken) - vaporHeating;
     var esc: vec3<f32>;
-    if (shieldOn) { esc = shieldEsc; }
+    ${layered ? 'if (layeredOn) { esc = escapes(0.0, 1.0, mu, adir, adif, light); } else ' : ''}if (shieldOn) { esc = shieldEsc; }
     else if (columns) { esc = columnsEscapes(moments.x, moments.y, moments.z, mu, adir, adif, light); }
     else { esc = escapes(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudKeep(cloudPath / columnCover), mu, adir, adif, light); }
-    if (PDF_COVER && columnCover < 1.0) { esc = columnCover * esc + (1.0 - columnCover) * escapes(0.0, 1.0, mu, adir, adif, light); }
+    if (PDF_COVER && columnCover < 1.0${layered ? ' && !layeredOn' : ''}) { esc = columnCover * esc + (1.0 - columnCover) * escapes(0.0, 1.0, mu, adir, adif, light); }
     if (deck > 0.0) {
       var deckedEsc: vec3<f32>;
       if (COLUMNS) { deckedEsc = deckedEscapes(overCover, overMoments, select(deckUnit * deck, CLOUD_SCAT * deck, GRAY_SW), deck, mu, adir, adif, light); }
@@ -2557,6 +2568,9 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
 export const PHYSICS_PASSES = ['physics', 'radiation', 'longwave', 'physicsSurface'];
+export const LAYERED_PASSES = ['physics', 'radiation', 'layered', 'longwave', 'physicsSurface'];
+export const layeredPass = (o, held) => layeredKernel(o, held, LONGWAVE_STASH);
+export { LAYERED_SLOTS };
 export const PHYSICS_KERNELS = {
   physics: physicsKernel(false),
   radiation: radiationKernel(false),

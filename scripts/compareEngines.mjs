@@ -56,7 +56,7 @@ export const PH_INPUT = {
   CUDEEP: 'plume-to-rain hand-off', CUBASE: 'plume-to-rain hand-off', CURAIN: 'cumulus part of CONV', LWSFCSUM: 'running sum for the means', CLOUDK: 'cloud layer index, written inside the physics kernel',
   CUSHALLOW: 'plume diagnostic', CUSNOW: 'plume diagnostic', MOMU: 'momentum-layer scratch', MOMK: 'momentum-layer scratch', MOMD: 'momentum-layer scratch', MOMKD: 'momentum-layer scratch', MOMS: 'momentum-layer scratch',
   ABS: 'per-step value whose CPU counterpart is the running sum ABSSUM compares', INS: 'per-step value whose CPU counterpart is the running sum INSSUM compares', REFL: 'per-step value whose CPU counterpart is the running sum REFLSUM compares', ATMSW: 'per-step value whose CPU counterpart is the running sum ATMSUM compares',
-  FOGMEAN: 'running mean', FSTRESS: 'form drag, off unless formDrag is on', OFLT: 'orographic filter scratch', TOFD: 'form drag profile', RADP: 'held radiation scratch',
+  FOGMEAN: 'running mean', FSTRESS: 'form drag, off unless formDrag is on', OFLT: 'orographic filter scratch', TOFD: 'form drag profile', RADP: 'held radiation scratch', LYR: 'layered shortwave hand-off from the radiation kernel to its pass',
 };
 // mapped regions that may legitimately be all zero in a configuration (env MAY_BE_ZERO_EXTRA adds names, comma separated); the land
 // regions are exempt on a planet without land and the radiation.held ones where held radiation is off (no CPU array, no GPU region)
