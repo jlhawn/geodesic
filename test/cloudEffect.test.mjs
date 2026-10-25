@@ -7,6 +7,7 @@ import { CLEAR_SUMMED } from '../js/physics/radiation.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { RADIATION_FIELDS, savedRadiationField } from '../js/physics/regrid.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
+import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -53,9 +54,9 @@ test('the clear-sky pass gives each column the top-of-atmosphere fluxes of the s
   console.log(`${checked} columns (${lit} lit above a grazing sun, μ > 0.01) with cloud in every third layer: clear-sky ASR and OLR equal the cloudless column's to ${worst.toExponential(1)}`);
 });
 
-async function engines(radiation, cloud = 0) {
+async function engines(radiation, cloud = 0, levels = undefined) {
   const surface = { exchange: 'fixed' };
-  const cpu = createModel(new Grid(N), { ocean: false, radiation, surface, moist: { excessVelocity: 'convective', plumeEntrainmentLaw: 'gregory' } }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation, surface, moist: { excessVelocity: 'convective', plumeEntrainmentLaw: 'gregory' } });
+  const cpu = createModel(new Grid(N), { ocean: false, radiation, surface, levels, moist: { excessVelocity: 'convective', plumeEntrainmentLaw: 'gregory' } }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation, surface, levels, moist: { excessVelocity: 'convective', plumeEntrainmentLaw: 'gregory' } });
   const init = initializeState(cpu, {}), { K, C, sigmaMid } = cpu.core.diagnostics;
   for (let k = 0; k < K; k++) if (sigmaMid[k] > 0.5 && sigmaMid[k] < 0.9) for (let i = 0; i < C; i++) init[5][k * C + i] = cloud;
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
@@ -64,7 +65,7 @@ async function engines(radiation, cloud = 0) {
 }
 
 test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state, alike in every column whose dry adjustment merged the same layers, whose shallow plume topped at the same interface, whose layers held cloud water alike and whose regime, plume and cloud against the cloud-top threshold decided alike on both engines after every step, and whose neighbours within two cells did', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpu, gpu, C } = await engines({ clearSkyPass: true }, 3e-4);
+  const { cpu, gpu, C } = await engines({ clearSkyPass: true }, 3e-4, PREVIOUS_LEVELS);
   const K = cpu.core.K;
   const mixedTop = (q, i) => { let k = K - 1; while (k > 0 && Math.abs(q[(k - 1) * C + i] - q[(K - 1) * C + i]) <= 1e-6 * q[(K - 1) * C + i]) k--; return k; };
   const cloudyLayers = (qc, i) => { let bits = ''; for (let k = 0; k < K; k++) bits += qc[k * C + i] > 0 ? '1' : '0'; return bits; };

@@ -5,10 +5,11 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { sunDirection, SOLAR_CONSTANT, STEFAN_BOLTZMANN, GREENHOUSE_GASES, YEAR } from '../js/physics/radiation.module.js';
-import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
+import { longwaveTableFor, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn } from '../scripts/standardAtmospheres.mjs';
+import { PREVIOUS_RADIATION } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -45,11 +46,11 @@ function referenceLongwave({ model, i, k, q, surfaceT }, cloudEmissivity, ozoneP
   const { K, sigmaMid, dSigma, g, exnerLayer } = model.core.diagnostics, C = model.mesh.nCells, [pi, theta] = model.state;
   const row = new Float64Array(6), surface = STEFAN_BOLTZMANN * surfaceT ** 4;
   let outgoing = 0;
-  for (const point of LONGWAVE_TABLE.points) {
+  for (const point of longwaveTableFor(model.core.levels).points) {
     let up = planckShare(point, surfaceT) * surface;
     for (let j = K - 1; j >= 0; j--) {
       const x = j * C + i, T = theta[x] * exnerLayer[x], dry = 1 - q[x];
-      layerPaths(row, pi[i] * sigmaMid[j], pi[i] * dSigma[j] / g, T, q[x], ozoneProfile[j] * OZONE_CM_ATM, GREENHOUSE_GASES.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air * dry, GREENHOUSE_GASES.methane * GAS_MOLAR.ch4 / GAS_MOLAR.air * dry, GREENHOUSE_GASES.nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air * dry);
+      layerPaths(row, pi[i] * sigmaMid[j], pi[i] * dSigma[j] / g, T, q[x], ozoneProfile[j] * OZONE_CM_ATM, GREENHOUSE_GASES.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air * dry, GREENHOUSE_GASES.methane * GAS_MOLAR.ch4 / GAS_MOLAR.air * dry, GREENHOUSE_GASES.nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air * dry, longwaveTableFor(model.core.levels));
       let tau = 0;
       for (let n = 0; n < 6; n++) tau += point[n] * row[n];
       const eps = 1 - Math.exp(-LONGWAVE_CONSTANTS.diffusivity * tau) * (j === k ? 1 - cloudEmissivity : 1);
@@ -214,11 +215,11 @@ function handEffects({ model, layers }, i, covers) {
   const T = Array.from({ length: K }, (_, k) => theta[k * C + i] * exnerLayer[k * C + i]), row = new Float64Array(6);
   const paths = T.map((t, k) => {
     const x = k * C + i, dry = (1 - q[x]) / GAS_MOLAR.air;
-    layerPaths(row, pi[i] * sigmaMid[k], pi[i] * dSigma[k] / g, t, q[x], 0, GREENHOUSE_GASES.carbonDioxide * GAS_MOLAR.co2 * dry, GREENHOUSE_GASES.methane * GAS_MOLAR.ch4 * dry, GREENHOUSE_GASES.nitrousOxide * GAS_MOLAR.n2o * dry);
+    layerPaths(row, pi[i] * sigmaMid[k], pi[i] * dSigma[k] / g, t, q[x], 0, GREENHOUSE_GASES.carbonDioxide * GAS_MOLAR.co2 * dry, GREENHOUSE_GASES.methane * GAS_MOLAR.ch4 * dry, GREENHOUSE_GASES.nitrousOxide * GAS_MOLAR.n2o * dry, longwaveTableFor(model.core.levels));
     return Float64Array.from(row);
   });
   let top = 0, surface = 0;
-  for (const point of LONGWAVE_TABLE.points) {
+  for (const point of longwaveTableFor(model.core.levels).points) {
     const gas = paths.map((p) => 1 - Math.exp(-LONGWAVE_CONSTANTS.diffusivity * p.reduce((s, x, n) => s + point[n] * x, 0)));
     const B = T.map((t) => planckShare(point, t) * STEFAN_BOLTZMANN * t ** 4);
     const down = [0], up = new Array(K + 1);
@@ -259,7 +260,7 @@ async function gpuLongwave({ model, levels }, radiation, water) {
 
 test('on the midlatitude-summer profile 100 g/m2 of liquid at 285 K under 20 g/m2 of ice at 220 K change the OLR and the downward longwave by the g-point sums of their phase emissivities on the clear-sky fluxes, overcast and under the uniform cover, on both engines', async () => {
   const lines = [];
-  for (const [label, radiation] of [['overcast', { cloudCover: 'overcast', longwaveLines: 'scaled' }], ['uniform cover', { longwaveLines: 'scaled' }]]) {
+  for (const [label, radiation] of [['overcast', { cloudCover: 'overcast', longwaveLines: 'scaled' }], ['uniform cover', { ...PREVIOUS_RADIATION, longwaveLines: 'scaled' }]]) {
     const column = layeredColumns(radiation), { model, cloud } = column, C = model.mesh.nCells, rad = model.radiation, [pi, theta, , surfaceT, q] = model.state;
     const { K } = model.core.diagnostics, none = new Float64Array(K * C);
     const run = (i, water) => { rad.column(i, pi[i], theta, surfaceT[i], 5, undefined, 0, q[(K - 1) * C + i], q, water, 0.07, 0.07); return { ...rad.budget, covers: column.layers.map(([k]) => rad.layerCover[k]) }; };

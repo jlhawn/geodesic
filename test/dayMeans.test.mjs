@@ -7,6 +7,7 @@ import { SUMMED } from '../js/physics/radiation.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { RADIATION_FIELDS, savedRadiationField } from '../js/physics/regrid.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -27,7 +28,7 @@ const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0,
 
 async function engines() {
   const surface = { exchange: 'fixed' };
-  const cpu = createModel(new Grid(N), { ocean: false, radiation: UNSCATTERED, surface, moist: { excessVelocity: 'convective', convectionType: 'cloudDepth', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' } }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation: UNSCATTERED, surface, moist: { excessVelocity: 'convective', convectionType: 'cloudDepth', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' } });
+  const cpu = createModel(new Grid(N), { ocean: false, radiation: { ...PREVIOUS_RADIATION, ...UNSCATTERED }, surface, levels: PREVIOUS_LEVELS, moist: { ...PREVIOUS_MOIST, excessVelocity: 'convective', convectionType: 'cloudDepth', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' } }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation: { ...PREVIOUS_RADIATION, ...UNSCATTERED }, surface, levels: PREVIOUS_LEVELS, moist: { ...PREVIOUS_MOIST, excessVelocity: 'convective', convectionType: 'cloudDepth', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' } });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();

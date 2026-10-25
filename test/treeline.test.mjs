@@ -8,6 +8,7 @@ import { MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { neighbourhood } from './helpers/decisions.mjs';
+import { ROWS, lowestLayerRatio } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -152,7 +153,7 @@ test('the model hands the land its lowest air temperature each step: after the s
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
-test('over 48 GPU steps the season means and the tree cover evolve as on the CPU in every land cell more than two cells from one whose step fell in season or under snow on one engine only', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const [name, levels] of ROWS) test(`on ${name} over 48 GPU steps the season means and the tree cover evolve as on the CPU in every land cell more than two cells from one whose step fell in season or under snow on one engine only, their count within the thinning of the lowest layer`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { soilCarbon: false, seasonMemory: 6 * 3600, treeGrowthTime: 3 * 3600, treeDeclineTime: 2 * 3600, treelineWarmth: [6, 22], growthTime: 4 * 3600, declineTime: 3 * 3600, snowDeclineTime: 4 * 3600 };
   const prepare = (model) => {
     const C = model.mesh.nCells, init = initializeState(model, {});
@@ -170,8 +171,8 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
     return model;
   };
   const surface = { exchange: 'fixed' };
-  const cpu = prepare(createModel(new Grid(16), { topography, land, surface }));
-  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, surface }));
+  const cpu = prepare(createModel(new Grid(16), { topography, land, surface, levels }));
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, surface, levels }));
   const C = cpu.mesh.nCells, before = Float64Array.from(cpu.land.canopy), lengthBefore = Float64Array.from(cpu.land.seasonLength);
   const { K, exnerLayer } = cpu.core.diagnostics;
   const target = (record, i) => treelineFactor(record.seasonLength[i], record.seasonWarmth[i], { treelineWarmth: land.treelineWarmth }) * aridityFactor(record.rainMean[i], record.demandMean[i]) * record.vegetation[i];
@@ -211,7 +212,7 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
   gpu.destroy();
   console.log(`N=16, 48 steps over ${cells} land cells (${snowy} under snow, ${seasonal} in season): trees grew on ${grew} and died back on ${died}; a step fell in season or under snow on one engine only in ${parted.size} cells (${[...parted].join(', ')}), ${left} land cells left out with those within two cells; over the other ${cells - left} engines apart by ${worstLength.toExponential(1)} in season length, ${worstWarmth.toExponential(1)} K in season warmth (the lowest air by up to ${worstAir.toExponential(1)} K over the run), ${worstTrees.toExponential(1)} in tree cover, which the trees' targets (treeline factor times moisture factor times cover, from each engine's own means) parted by up to ${widestGap.toExponential(1)} over the run; no cell's trees part by more than ${beyond.toExponential(1)} beyond their target's largest gap`);
   assert.ok(grew > cells / 10 && died > cells / 10 && snowy > cells / 20 && seasonal > cells / 10 && cells - seasonal > cells / 10, `${grew} grew, ${died} died, ${snowy} snowy, ${seasonal} in season of ${cells}`);
-  assert.ok(parted.size <= 0.04 * cells && left <= 0.4 * cells, `${parted.size} of ${cells} land cells' season or snow parted, ${left} left out with their neighbours`);
+  assert.ok(parted.size <= 0.04 * lowestLayerRatio(levels) * cells && left <= 0.4 * cells, `${parted.size} of ${cells} land cells' season or snow parted, ${left} left out with their neighbours`);
   assert.ok(worstLength < 1e-4 && worstWarmth <= worstAir && beyond < 1e-4, `season length ${worstLength}, warmth ${worstWarmth} under air ${worstAir}, trees ${worstTrees}, ${beyond} beyond their target's gap`);
 });
 
