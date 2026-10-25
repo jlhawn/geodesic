@@ -21,6 +21,7 @@ import { createParallelModel } from '../js/parallel.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { levelFields } from '../js/levels.module.js';
 import { EARTH, edgeNormalVelocity, hyperdiffusion, cellVelocity } from '../explain/swCases.module.js';
+import { PUBLISHED_RADIATION } from '../explain/published.module.js';
 
 const which = process.argv[2], N = 16, DAY = 86400, dt = 450 * 16 / N;
 const named = { state: 'jw06state', wet: 'water' };
@@ -112,7 +113,7 @@ if (which === 'wet') {
   const STEP = 450, WORKERS = 6, GRID = 'bl36', FRAME_DAYS = 5, BINS = 36, ICE = JSON.parse(process.env.WET_ICE ?? '{}');
   const weatherFrom = Math.max(0, Math.min(287, RECORD_DAYS - 30)), WEATHER_DAYS = [weatherFrom, Math.min(RECORD_DAYS, weatherFrom + 30)];
   const cadence = withCadence({ ocean: false }, STEP, N);
-  const options = { ocean: false, levels: sigmaInterfaces(GRID), ...cadence, radiation: { ...cadence.radiation, clearSkyPass: true }, ice: ICE };
+  const options = { ocean: false, levels: sigmaInterfaces(GRID), ...cadence, radiation: { ...cadence.radiation, clearSkyPass: true, orbit: PUBLISHED_RADIATION.orbit }, ice: ICE };
   const t0 = performance.now(), seconds = () => (performance.now() - t0) / 1000;
   const model = await createParallelModel(new Grid(N), options, WORKERS);
   initializeState(model).forEach((values, s) => model.state[s].set(values));
@@ -466,7 +467,7 @@ if (which === 'state') {
 if (which === 'radiation') {
   const HELD_DAYS = 60, SPINUP_DAYS = 150, RECORD_DAYS = 365, FRAME_DAYS = 5, WEATHER_DAYS = [287, 317];
   const ALBEDO = 0.07, HEAT_CAPACITY = 2.1e7, EVERY = 2;
-  const surface = createSurface(mesh, core), radiation = createRadiation(mesh, core, { albedo: ALBEDO, radiationEvery: EVERY });
+  const surface = createSurface(mesh, core), radiation = createRadiation(mesh, core, { albedo: ALBEDO, radiationEvery: EVERY, orbit: PUBLISHED_RADIATION.orbit });
   const Ts = new Float64Array(C), q0 = new Float64Array(K * C), qc0 = new Float64Array(K * C), dry = new Float64Array(C), albedo = new Float64Array(C).fill(ALBEDO);
   const columns = [pi, theta, u, Ts, q0, qc0], heating = [null, new Float64Array(K * C), null, null, new Float64Array(K * C)], totals = {};
   const area = mesh.areaCell.reduce((sum, x) => sum + x, 0), perDay = Math.round(DAY / dt), bottom = (K - 1) * C, t0 = performance.now();

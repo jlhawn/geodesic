@@ -11,6 +11,8 @@ export const SOLAR_CONSTANT = 1362;
 export const AXIAL_TILT = 23.44 * Math.PI / 180;
 export const ECCENTRICITY = 0.0167;
 export const PERIHELION = 282.9 * Math.PI / 180;
+export const DEFAULT_ORBIT = 'kepler';
+export const orbitOf = (options) => options?.radiation?.orbit ?? DEFAULT_ORBIT;
 export const DAY = 86400;
 export const YEAR = 365 * DAY;
 export const REFERENCE_RESISTANCE = 70;
@@ -54,7 +56,7 @@ function keplerSun(t) {
  * day. The subsolar latitude is AXIAL_TILT·sin(2πt/YEAR) on the 'circular'
  * orbit, and on the 'kepler' orbit δ with sin δ = sin(AXIAL_TILT) sin λ.
  */
-export function sunDirection(t, out = new Float64Array(3), orbit = 'circular') {
+export function sunDirection(t, out = new Float64Array(3), orbit = DEFAULT_ORBIT) {
   let x, z;
   if (orbit === 'kepler') {
     z = SIN_TILT * Math.sin(keplerSun(t).longitude);
@@ -71,8 +73,17 @@ export function sunDirection(t, out = new Float64Array(3), orbit = 'circular') {
 }
 
 /* (a/r)², the factor on solarConstant, the irradiance at the mean distance a: 1 on the 'circular' orbit. */
-export function sunDistance(t, orbit = 'circular') {
+export function sunDistance(t, orbit = DEFAULT_ORBIT) {
   return orbit === 'kepler' ? keplerSun(t).distance : 1;
+}
+
+/* The model times of the sun's longitudes 0°, 90°, 180° and 270°: the spring equinox, summer solstice, autumn equinox and winter solstice. */
+export function seasonTimes(orbit = DEFAULT_ORBIT) {
+  return [0, 1, 2, 3].map((k) => {
+    if (orbit !== 'kepler' || k === 0) return k * YEAR / 4;
+    const nu = k * Math.PI / 2 - PERIHELION, E = 2 * Math.atan2(Math.sqrt(1 - ECCENTRICITY) * Math.sin(nu / 2), Math.sqrt(1 + ECCENTRICITY) * Math.cos(nu / 2));
+    return ((E - ECCENTRICITY * Math.sin(E) - EQUINOX_ANOMALY) / (2 * Math.PI) % 1 + 1) % 1 * YEAR;
+  });
 }
 
 /*
@@ -667,7 +678,7 @@ function coreDepth(row, paths, k) {
 }
 
 export function createRadiation(mesh, core, {
-  solarConstant = SOLAR_CONSTANT, orbit = 'circular', albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
+  solarConstant = SOLAR_CONSTANT, orbit = DEFAULT_ORBIT, albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
   prognosticHeight = true, deckRest = 'regime', deckSlab = 'fraction', deckReference = 'layer', deckInversion = 'grid', deckCloud = 'sigma', deckResolved = mixedLayerDeck && prognosticHeight ? 'above' : 'added', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'exponentialRandom', decorrelationLength = DECORRELATION_LENGTH, decorrelationSlope = DECORRELATION_SLOPE, cloudColumns = cloudCover === 'pdf' && cloudOverlap === 'exponentialRandom', cloudSpread = cloudColumns ? 0.75 : 0,
   boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, varianceCover: varianceRule = 'water', buoyancyLength = 0.53, deckRegime = 'inversion', deckBypass = false,

@@ -91,3 +91,20 @@ test('a batched run of the kepler orbit leaves the device where the same steps o
   const circular = await pair({ orbit: 'circular' }, { steps: 2 }), untouched = await readBuffer(circular.gpu.device, circular.gpu.buffers.P, 64, Float32Array);
   assert.equal(untouched[8], 1, 'P[8] stays 1 on the circular orbit');
 });
+
+test('with no orbit option both engines run the kepler orbit, bit for bit as when it is named', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { steps: 3, day: 120, offset: 1 };
+  const plain = await pair({ radiationEvery: 2 }, options), named = await pair({ orbit: 'kepler', radiationEvery: 2 }, options);
+  assert.equal(plain.gpu.physics.orbit, 'kepler');
+  for (let a = 0; a < plain.model.state.length; a++) assert.deepEqual(plain.model.state[a], named.model.state[a], `CPU state ${a}`);
+  const a = await bits(plain.gpu), b = await bits(named.gpu);
+  for (const name of ['S', 'PH']) {
+    let differ = 0;
+    for (let x = 0; x < a[name].length; x++) if (a[name][x] !== b[name][x]) differ++;
+    assert.equal(differ, 0, `${name} differs in ${differ} words`);
+  }
+  const params = await readBuffer(plain.gpu.device, plain.gpu.buffers.P, 64, Float32Array);
+  assert.equal(params[8], Math.fround(sunDistance(120 * DAY + 3 * DT, 'kepler')), 'the last step\'s distance factor in P[8]');
+  const m = measure('default orbit, radiationEvery 2', plain), C = plain.model.mesh.nCells, mu = stats(plain.model.radiation.held.mu, plain.physics.RADMU.subarray(0, C));
+  assert.ok(m.insolation.rmsRel < 1e-6 && mu.rmsRel < 1e-5, `insolation sums rms ${m.insolation.rmsRel}, held cosine rms ${mu.rmsRel}`);
+});

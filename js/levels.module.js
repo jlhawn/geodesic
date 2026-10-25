@@ -1,4 +1,4 @@
-import { DAY, YEAR } from './physics/radiation.module.js';
+import { DAY, YEAR, DEFAULT_ORBIT, seasonTimes } from './physics/radiation.module.js';
 import { saturationHumidity } from './physics/moist.module.js';
 import { SURFACE_VERTICAL_SIGMA } from './frames.module.js';
 
@@ -143,19 +143,20 @@ export function miseryIndex(t, rh, v) {
   if (t <= 10) return Math.min(t, windChill(t, v));
   return t;
 }
-const SEASONS = [[0, 'spring equinox'], [0.25, 'summer solstice'], [0.5, 'autumn equinox'], [0.75, 'winter solstice'], [1, 'spring equinox']];
+const SEASONS = ['spring equinox', 'summer solstice', 'autumn equinox', 'winter solstice'];
 
 /*
  * The model's season as a phrase: the number of days to the nearest
- * equinox or solstice (northern names; t = 0 is the spring equinox).
+ * equinox or solstice of the orbit (northern names; t = 0 is the spring
+ * equinox).
  */
-export function seasonPhrase(time) {
-  const day = (time % YEAR) / DAY, year = YEAR / DAY;
+export function seasonPhrase(time, orbit = DEFAULT_ORBIT) {
+  const day = (time % YEAR) / DAY;
   let best = null;
-  for (const [fraction, name] of SEASONS) {
-    const offset = day - fraction * year;
-    if (!best || Math.abs(offset) < Math.abs(best.offset)) best = { offset, name };
-  }
+  [...seasonTimes(orbit), YEAR].forEach((at, k) => {
+    const offset = day - at / DAY;
+    if (!best || Math.abs(offset) < Math.abs(best.offset)) best = { offset, name: SEASONS[k % 4] };
+  });
   const n = Math.round(Math.abs(best.offset));
   if (n === 0) return `the Northern ${best.name}`;
   return `${n} day${n === 1 ? '' : 's'} ${best.offset > 0 ? 'past' : 'before'} the Northern ${best.name}`;
