@@ -22,6 +22,7 @@ const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js')
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
+const RESTRAT = { ...HYBRID, mixedLayerRestratification: { coefficient: 50 } };
 const N = 16, DT = 1350;
 
 function stats(cpu, gpu, mask = null) {
@@ -42,13 +43,13 @@ function buildStress(mesh) {
   }
   return stress;
 }
-function scenario(n) {
+function scenario(n, options = HYBRID) {
   const cpuModel = createModel(new Grid(n), { topography });
   const init = initializeState(cpuModel, {});
   for (let a = 0; a < init.length; a++) cpuModel.state[a].set(init[a]);
   for (let i = 0; i < cpuModel.mesh.nCells; i++) if (cpuModel.geography.land[i]) cpuModel.state[6][i] = 0;
   const surfaceT = Float64Array.from(cpuModel.state[3]), ice = Float64Array.from(cpuModel.state[6]), stress = buildStress(cpuModel.mesh);
-  const cpu = createCpuOcean(cpuModel.mesh, { geography: cpuModel.geography, ...HYBRID });
+  const cpu = createCpuOcean(cpuModel.mesh, { geography: cpuModel.geography, ...options });
   return { cpuModel, mesh: cpuModel.mesh, cpu, surfaceT, ice, stress };
 }
 const cpuFields = (ocean, C) => {
@@ -63,9 +64,9 @@ const compare = (label, a, b, wet, limit) => {
   return results;
 };
 
-test('the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { mesh, cpu, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, E = mesh.nEdges;
-  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });
+async function tracking(options) {
+  const { mesh, cpu, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options });
   const gpu = gpuModel.oceanEngine;
   assert.equal(gpu.layers, cpu.layers);
   cpu.initialize(Float64Array.from(surfaceT), ice);
@@ -123,7 +124,10 @@ test('the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start
   for (const key of ['oceanSpeed', 'oceanSSH']) assert.ok(Math.abs(cpuDiag[key] - gpuDiag[key]) < 0.05 * Math.max(Math.abs(cpuDiag[key]), 1) + 1e-3, `${key}: cpu=${cpuDiag[key]} gpu=${gpuDiag[key]}`);
   assert.equal(gpuDiag.oceanDried, 0);
   gpuModel.destroy();
-});
+}
+const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
+test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
+test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
 
 /*
  * What each phase of the GPU hybrid step changes of the stores' heat
@@ -142,9 +146,9 @@ const FLOORS = {
   regrid: [0.05, 0.2, 1e-3, 3e-3, 3e-5, 6e-5],
   column: [0.05, 0.2, 3e-4, 1e-3, 1e-15, 1e-15],
 };
-test('in single precision the GPU hybrid ocean keeps the heat, salt and water it stores through the regrid and the column physics to the stores\' rounding, and through the other phases of its step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, E = mesh.nEdges;
-  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });
+async function conservation(options) {
+  const { mesh, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options });
   const gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu, { OS } = gpu.layout, L = gpu.layers, rhoCp = gpu.options.density * gpu.options.specificHeat;
   gpu.initialize(Float64Array.from(surfaceT), ice);
   for (let n = 0; n < 4; n++) await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
@@ -204,7 +208,10 @@ test('in single precision the GPU hybrid ocean keeps the heat, salt and water it
   for (const f of ['h', 'u', 'T', 'S', 'eta']) for (const v of final[f]) assert.ok(Number.isFinite(v), `${f} finite`);
   assert.equal(final.u.length, L * E);
   gpuModel.destroy();
-});
+}
+const CONSERVATION = 'in single precision the GPU hybrid ocean keeps the heat, salt and water it stores through the regrid and the column physics to the stores\' rounding, and through the other phases of its step';
+test(CONSERVATION, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(HYBRID));
+test(`${CONSERVATION}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(RESTRAT));
 
 test('the GPU hybrid ocean keeps a brackish band\'s fixed-depth surface layers as the CPU does and tracks it over five steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const brackish = (lat) => (Math.abs(lat) < 0.35 ? 12 : 34.5);
@@ -359,5 +366,66 @@ test('with langmuirIce tanh the GPU hybrid ocean weights the Langmuir factor by 
   }
   console.log(`boundary depths: GPU against CPU ${engines.toFixed(2)} m summed; under ice (${cells} cells) tanh against none on the CPU ${iced.toFixed(2)} m`);
   assert.ok(cells > 0 && engines < 0.1 * iced, `the engines part by ${engines} m, the two options under ice by ${iced} m`);
+  gpuModel.destroy();
+});
+
+test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes across a strong front at N=16 and keeps the water, heat and salt it stores', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice, stress } = scenario(N, RESTRAT), C = mesh.nCells;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: RESTRAT });
+  const gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu, { OS } = gpu.layout, L = gpu.layers, rhoCp = gpu.options.density * gpu.options.specificHeat;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  const front = (i) => 288 + 4 * Math.tanh((mesh.latCell[i] - 0.8) / 0.12);
+  for (let i = 0; i < C; i++) {
+    let top = 0;
+    for (let k = 0; k < L && top < 150; k++) {
+      const n = k * C + i;
+      if (cpu.h[n] > 0) { cpu.Q[n] = cpu.h[n] * front(i); cpu.W[n] = cpu.h[n] * 35; }
+      top += cpu.h[n];
+    }
+  }
+  cpu.boundaryDepths.fill(100);
+  cpu.phases.regrid(Infinity);
+  const zeros = new Float64Array(C);
+  await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths }, Float64Array.from(surfaceT), ice);
+  cpu.setStress(stress, ice); gpu.setStress(stress, ice);
+  const wet = Array.from(cpu.h, (v) => v > 1), start = cpuFields(cpu, C), first = { h: Float64Array.from(start.h), T: Float64Array.from(start.T), S: Float64Array.from(start.S) };
+  const g0 = await gpu.download(), begin = { h: stats(first.h, g0.h).rms, T: stats(first.T, g0.T, wet).rms, S: stats(first.S, g0.S, wet).rms };
+  assert.ok(begin.h < 1e-3 && begin.T < 1e-4 && begin.S < 1e-5, `the upload parts from the CPU state: ${JSON.stringify(begin)}`);
+  const area = mesh.areaCell, snapshot = async () => {
+    await device.queue.onSubmittedWorkDone();
+    const [h, q, w] = await readRanges(device, gpu.buffers.S, [{ offset: OS.OH, length: L * C }, { offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]);
+    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w) };
+  };
+  let before = await snapshot(), worst = { volume: 0, heat: 0, salt: 0, column: 0 };
+  for (let n = 0; n < 30; n++) {
+    cpu.phases.eddy(DT); gpu.phases.eddy(DT);
+    const after = await snapshot();
+    let dh = 0, dq = 0, dw = 0, ocean = 0;
+    for (let i = 0; i < C; i++) {
+      if (!gpu.cellOcean[i]) continue;
+      let column = 0;
+      for (let k = 0; k < L; k++) { const m = k * C + i; column += after.h[m] - before.h[m]; dq += area[i] * (after.q[m] - before.q[m]); dw += area[i] * (after.w[m] + SALT_REFERENCE * after.h[m] - before.w[m] - SALT_REFERENCE * before.h[m]); }
+      dh += area[i] * column; ocean += area[i]; worst.column = Math.max(worst.column, Math.abs(column));
+    }
+    worst.volume = Math.max(worst.volume, Math.abs(dh) / ocean); worst.heat = Math.max(worst.heat, Math.abs(rhoCp * dq / (ocean * DT))); worst.salt = Math.max(worst.salt, Math.abs(dw) / ocean);
+    before = after;
+  }
+  const a = cpuFields(cpu, C), b = await gpu.download();
+  const change = {}, diff = {};
+  for (const f of ['h', 'T', 'S']) {
+    change[f] = stats(first[f], a[f], f === 'h' ? null : wet).rms;
+    diff[f] = stats(a[f], b[f], f === 'h' ? null : wet).rms;
+  }
+  console.log(`restratification start: GPU against CPU h ${begin.h.toExponential(1)} m, T ${begin.T.toExponential(1)} K, S ${begin.S.toExponential(1)} rms`);
+  console.log(`restratification over 30 eddy steps: CPU changes h by ${change.h.toExponential(2)} m, T ${change.T.toExponential(2)} K rms; GPU differs by ${diff.h.toExponential(2)} m, ${diff.T.toExponential(2)} K; per application at most ${worst.volume.toExponential(1)} m water, ${worst.heat.toExponential(1)} W/m², ${worst.salt.toExponential(1)} psu·m, a column ${worst.column.toExponential(1)} m`);
+  assert.ok(change.h > 1e-3 && change.T > 1e-3, 'the front moves water');
+  for (const f of ['h', 'T']) assert.ok(diff[f] < 0.03 * change[f], `${f}: the engines part by ${diff[f]} against a change of ${change[f]}`);
+  assert.ok(diff.S < 1e-5, `S: the engines part by ${diff.S} psu rms, the front's salinity change being ${change.S}`);
+  const gpuMle = (await gpu.restartArrays()).mleDepths;
+  let mle = 0;
+  for (let i = 0; i < C; i++) if (wet[i]) mle = Math.max(mle, Math.abs(gpuMle[i] - cpu.mleDepths[i]));
+  assert.ok(mle < 1e-3, `the filtered depths part by ${mle} m`);
+  const [, floorHeat, , floorSalt, , floorVolume] = FLOORS.eddy;
+  assert.ok(worst.volume < floorVolume && worst.heat < floorHeat && worst.salt < floorSalt && worst.column < 1e-4, `the books: ${JSON.stringify(worst)}`);
   gpuModel.destroy();
 });
