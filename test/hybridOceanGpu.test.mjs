@@ -387,9 +387,10 @@ test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes
   cpu.phases.regrid(Infinity);
   const zeros = new Float64Array(C);
   await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths }, Float64Array.from(surfaceT), ice);
-  cpu.readSurface(Float64Array.from(surfaceT), ice); cpu.setStress(stress, ice);
-  gpu.readSurface(Float64Array.from(surfaceT), ice); gpu.setStress(stress, ice);
+  cpu.setStress(stress, ice); gpu.setStress(stress, ice);
   const wet = Array.from(cpu.h, (v) => v > 1), start = cpuFields(cpu, C), first = { h: Float64Array.from(start.h), T: Float64Array.from(start.T), S: Float64Array.from(start.S) };
+  const g0 = await gpu.download(), begin = { h: stats(first.h, g0.h).rms, T: stats(first.T, g0.T, wet).rms, S: stats(first.S, g0.S, wet).rms };
+  assert.ok(begin.h < 1e-3 && begin.T < 1e-4 && begin.S < 1e-5, `the upload parts from the CPU state: ${JSON.stringify(begin)}`);
   const area = mesh.areaCell, snapshot = async () => {
     await device.queue.onSubmittedWorkDone();
     const [h, q, w] = await readRanges(device, gpu.buffers.S, [{ offset: OS.OH, length: L * C }, { offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]);
@@ -415,6 +416,7 @@ test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes
     change[f] = stats(first[f], a[f], f === 'h' ? null : wet).rms;
     diff[f] = stats(a[f], b[f], f === 'h' ? null : wet).rms;
   }
+  console.log(`restratification start: GPU against CPU h ${begin.h.toExponential(1)} m, T ${begin.T.toExponential(1)} K, S ${begin.S.toExponential(1)} rms`);
   console.log(`restratification over 30 eddy steps: CPU changes h by ${change.h.toExponential(2)} m, T ${change.T.toExponential(2)} K rms; GPU differs by ${diff.h.toExponential(2)} m, ${diff.T.toExponential(2)} K; per application at most ${worst.volume.toExponential(1)} m water, ${worst.heat.toExponential(1)} W/m², ${worst.salt.toExponential(1)} psu·m, a column ${worst.column.toExponential(1)} m`);
   assert.ok(change.h > 1e-3 && change.T > 1e-3, 'the front moves water');
   for (const f of ['h', 'T', 'S']) assert.ok(diff[f] < 0.03 * change[f] + 1e-9, `${f}: the engines part by ${diff[f]} against a change of ${change[f]}`);
