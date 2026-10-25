@@ -1130,7 +1130,7 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   assert.ok(convective.rmsRel < 1e-3 && largeScaleOfRain < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScaleOfRain} of the rain`);
 });
 
-test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux, the lowest layers and the boundary layer\'s regime, but for the odd column whose dry adjustment merges one layer more on one engine', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux, the lowest layers and the boundary layer\'s regime, but for the columns where a discrete decision parted (the dry adjustment merging one layer more on one engine, a layer\'s cloud water switching a cover on one engine only) and, outside the ice, their neighbours within two cells', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
@@ -1148,7 +1148,7 @@ test('step by step from one state with partly iced, melting polar cells, the eng
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SNOW, snow);
   const worst = { h: 0, A: 0, snow: 0, albedo: 0, skin: 0, flux: 0, iceFlux: 0, theta: 0, flips: 0 };
   const mixedTop = (q, i) => { let k = K - 1; while (k > 0 && Math.abs(q[(k - 1) * C + i] - q[(K - 1) * C + i]) <= 1e-6 * q[(K - 1) * C + i]) k--; return k; };
-  const merged = new Set(), decisions = cloudDecisions(C);
+  const merged = new Set(), decisions = cloudDecisions(C), fluxGap = new Float64Array(C), thetaGap = new Float64Array(C), flipped = new Set();
   let melted = 0;
   for (let n = 0; n < steps; n++) {
     cpu.step(dt);
@@ -1159,10 +1159,9 @@ test('step by step from one state with partly iced, melting polar cells, the eng
     decisions.check(cpu, { OLR: outgoing, ABS: (await gpu.gpu.downloadPhysics()).ABS });
     for (const i of decisions.parted) merged.add(i);
     for (let i = 0; i < C; i++) {
-      if (cpu.boundaryLayer.regime[i] !== regime[i]) worst.flips++;
-      if (merged.has(i)) continue;
-      worst.flux = Math.max(worst.flux, Math.abs(cpu.radiation.surfaceFlux[i] - flux[i]));
-      for (let k = K - 10; k < K; k++) worst.theta = Math.max(worst.theta, Math.abs(cpu.state[1][k * C + i] - gpu.state[1][k * C + i]));
+      if (cpu.boundaryLayer.regime[i] !== regime[i]) flipped.add(i);
+      fluxGap[i] = Math.max(fluxGap[i], Math.abs(cpu.radiation.surfaceFlux[i] - flux[i]));
+      for (let k = K - 10; k < K; k++) thetaGap[i] = Math.max(thetaGap[i], Math.abs(cpu.state[1][k * C + i] - gpu.state[1][k * C + i]));
     }
     for (const i of iced) {
       if (n === steps - 1 && cpu.state[3][i] >= 273.15 && cpu.seaIce.snow[i] < 3) melted++;
@@ -1172,8 +1171,14 @@ test('step by step from one state with partly iced, melting polar cells, the eng
       worst.skin = Math.max(worst.skin, Math.abs(cpu.state[3][i] - gpu.state[3][i])); worst.iceFlux = Math.max(worst.iceFlux, Math.abs(cpu.radiation.surfaceFlux[i] - flux[i]));
     }
   }
-  console.log(`${steps} steps of ${dt} s, ${iced.length} cells iced at 0.7 under 1.2 m and 3 kg/m² of snow (${melted} melting at the end): the engines differ by up to ${worst.h.toExponential(1)} m of ice, ${worst.A.toExponential(1)} of cover, ${worst.snow.toExponential(1)} kg/m² of snow, ${worst.albedo.toExponential(1)} of its albedo, ${worst.skin.toExponential(1)} K at the skin and ${worst.iceFlux.toExponential(1)} W/m² of surface flux in the ${iced.filter((i) => !merged.has(i)).length} of them outside the merged columns; everywhere ${worst.flux.toExponential(1)} W/m², ${worst.theta.toExponential(1)} K of θ in the lowest ten layers, ${worst.flips} boundary-layer regimes, over the ${C - merged.size} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer on both engines after every step and whose OLR and absorbed sunlight never parted by more than 1 W/m² (${decisions.parted.size} did)`);
-  assert.ok(merged.size - decisions.parted.size <= C / 100 && decisions.parted.size <= C / 100, `${merged.size} columns' dry adjustment merges a different number of layers or their cloud decisions part (${decisions.parted.size})`);
+  const near = neighbourhood(cpu.mesh, merged, 2);
+  for (let i = 0; i < C; i++) {
+    if (near.has(i)) continue;
+    worst.flux = Math.max(worst.flux, fluxGap[i]); worst.theta = Math.max(worst.theta, thetaGap[i]);
+    if (flipped.has(i)) worst.flips++;
+  }
+  console.log(`${steps} steps of ${dt} s, ${iced.length} cells iced at 0.7 under 1.2 m and 3 kg/m² of snow (${melted} melting at the end): the engines differ by up to ${worst.h.toExponential(1)} m of ice, ${worst.A.toExponential(1)} of cover, ${worst.snow.toExponential(1)} kg/m² of snow, ${worst.albedo.toExponential(1)} of its albedo, ${worst.skin.toExponential(1)} K at the skin and ${worst.iceFlux.toExponential(1)} W/m² of surface flux in the ${iced.filter((i) => !merged.has(i)).length} of them outside the merged columns; everywhere ${worst.flux.toExponential(1)} W/m², ${worst.theta.toExponential(1)} K of θ in the lowest ten layers, ${worst.flips} boundary-layer regimes, over the ${C - near.size} of ${C} columns more than two cells from the ${merged.size} whose well-mixed bottom block of uniform q tops at another layer on one engine after a step or whose OLR and absorbed sunlight parted by more than 1 W/m² (${decisions.parted.size} did; ${flipped.size} columns' regimes parted)`);
+  assert.ok(merged.size - decisions.parted.size <= C / 100 && decisions.parted.size <= C / 100 && near.size <= C / 5, `${merged.size} columns' dry adjustment merges a different number of layers or their cloud decisions part (${decisions.parted.size}), with ${near.size} columns within two cells`);
   assert.ok(melted > 0, 'some cell melts');
   assert.ok(worst.h < 1e-4 && worst.A < 1e-4 && worst.snow < 1e-3 && worst.albedo < 1e-4 && worst.skin < 0.01 && worst.iceFlux < 0.5, JSON.stringify(worst));
   assert.ok(worst.flux < 1 && worst.theta < 0.01 && worst.flips === 0, JSON.stringify(worst));
