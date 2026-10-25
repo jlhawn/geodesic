@@ -220,11 +220,11 @@ test('a saturated, fog-filled lowest layer over a sea 3 K warmer counts its vapo
 
 const surfaceKinds = (model) => Array.from({ length: model.mesh.nCells }, (_, i) => (model.geography.land[i] ? 'land' : !(model.state[6][i] > 0) ? 'open sea' : model.seaIce.concentration[i] >= 1 ? 'full ice' : 'part ice'));
 
-test('seaHumidity takes the open water\'s share of the skin\'s saturation humidity: from one state the first step\'s evaporation, C_H and the fixed exchange\'s buoyancy flux are the default\'s to the bit over land and full ice, the evaporation falls over open water and partial ice and the fixed exchange\'s buoyancy flux over open water, and Ri_b takes 1 − (1 − seaHumidity)(1 − A) of q_s at concentration A', () => {
+test('seaHumidity takes the open water\'s share of the skin\'s saturation humidity: from one state the first step\'s evaporation, C_H and the fixed exchange\'s buoyancy flux are those of a factor of 1 to the bit over land and full ice, the evaporation falls over open water and partial ice and the fixed exchange\'s buoyancy flux over open water, and Ri_b takes 1 − (1 − seaHumidity)(1 − A) of q_s at concentration A', () => {
   const first = (surface) => { const model = prepare(createModel(new Grid(16), { topography, surface })), kind = surfaceKinds(model); model.step(900); return { model, kind }; };
   let rough = null;
   for (const fixed of [false, true]) {
-    const exchange = fixed ? { exchange: 'fixed' } : {}, { model: base, kind } = first(exchange), { model: salty } = first({ ...exchange, seaHumidity: 0.98 });
+    const exchange = fixed ? { exchange: 'fixed' } : {}, { model: base, kind } = first({ ...exchange, seaHumidity: 1 }), { model: salty } = first(exchange);
     const C = base.mesh.nCells, fall = {};
     for (let i = 0; i < C; i++) {
       const k = kind[i], e0 = base.radiation.evaporation[i], e1 = salty.radiation.evaporation[i], b0 = base.boundaryLayer.buoyancyFlux[i], b1 = salty.boundaryLayer.buoyancyFlux[i];
@@ -252,11 +252,11 @@ test('seaHumidity takes the open water\'s share of the skin\'s saturation humidi
   assert.throws(() => createModel(new Grid(16), { topography, surface: { seaHumidity: 0 } }), /seaHumidity must be in \(0, 1\]/);
 });
 
-test('both engines take seaHumidity alike: from one state the first step\'s evaporation over every surface and its fall from the default\'s agree, and with the fixed exchange so does the fall of the boundary layer\'s buoyancy flux', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both engines take seaHumidity alike: from one state the first step\'s evaporation over every surface and its fall from a factor of 1 agree, and with the fixed exchange so does the fall of the boundary layer\'s buoyancy flux', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   for (const fixed of [false, true]) {
     const exchange = fixed ? { exchange: 'fixed' } : {}, runs = [];
     let kind = null;
-    for (const surface of [exchange, { ...exchange, seaHumidity: 0.98 }]) {
+    for (const surface of [{ ...exchange, seaHumidity: 1 }, exchange]) {
       const cpu = prepare(createModel(new Grid(16), { topography, surface })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface }));
       kind = surfaceKinds(cpu);
       cpu.step(900); await gpu.step(900); await gpu.settle();

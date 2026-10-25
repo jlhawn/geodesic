@@ -5,6 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { saturationHumidity, LATENT_HEAT } from '../js/physics/moist.module.js';
 import { bulkFluxes, LOWEST_HEIGHT, WATTS_PER_MM_DAY } from '../explain/surfaceFluxes.module.js';
+import { PUBLISHED_SURFACE } from '../explain/published.module.js';
 
 const levels = sigmaInterfaces('bl36');
 const near = (a, b, rel, what) => assert.ok(Math.abs(a - b) <= rel * Math.max(Math.abs(a), Math.abs(b), 1e-30), `${what}: ${a} vs ${b}`);
@@ -33,8 +34,8 @@ const CASES = [];
 for (const seaT of [271.5, 288, 300, 304]) for (const airColder of [-2, 0, 1, 3]) for (const rh of [0.6, 0.8, 1]) for (const wind of [1, 3, 7, 12]) CASES.push({ seaT, airT: seaT - airColder, rh, wind });
 
 test('bulkFluxes gives the model\'s own C_H, E and sensible heat over the open sea, without the gust and with it', () => {
-  const still = createModel(new Grid(16), { ocean: false, levels, surface: { convectiveGust: false, gustiness: 0 }, radiation: { gustiness: 0 } });
-  const gusty = createModel(new Grid(16), { ocean: false, levels });
+  const still = createModel(new Grid(16), { ocean: false, levels, surface: { ...PUBLISHED_SURFACE, convectiveGust: false, gustiness: 0 }, radiation: { gustiness: 0 } });
+  const gusty = createModel(new Grid(16), { ocean: false, levels, surface: PUBLISHED_SURFACE });
   assert.ok(!still.exchange.gusty && gusty.exchange.gusty);
   let worst = 0;
   for (const c of CASES) for (const [model, depth] of [[still, 0], [gusty, 600]]) {
