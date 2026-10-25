@@ -49,17 +49,17 @@ const cpuFields = (ocean) => ({
   T: Float64Array.from(ocean.Q, (q, n) => q / Math.max(1e-9, ocean.h[n])), S: Float64Array.from(ocean.W, (w, n) => w / Math.max(1e-9, ocean.h[n])),
 });
 
-test('with mstarScheme rh18 the GPU hybrid ocean forms the surface buoyancy flux from the heat the surface gave it and the brine of the ice grown, and its boundary layer tracks the CPU\'s over twelve steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, RH18 = { ...HYBRID, mstarScheme: 'rh18' };
-  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...RH18 }), fixed = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID });
-  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: RH18 });
+async function parity(options, reference, moved) {
+  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, chosen = { ...HYBRID, ...options };
+  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...chosen }), other = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID, ...reference });
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: chosen });
   const gpu = gpuModel.oceanEngine, flux = new Float64Array(C);
-  for (const ocean of [cpu, fixed, gpu]) ocean.initialize(Float64Array.from(surfaceT), ice);
+  for (const ocean of [cpu, other, gpu]) ocean.initialize(Float64Array.from(surfaceT), ice);
   const forced = (n) => Float64Array.from(surfaceT, (t, i) => t + (mesh.latCell[i] > 0 ? 0.01 : -0.01) * (n + 1));
   const grown = (n) => Float64Array.from(ice, (v, i) => (mesh.latCell[i] < -1.2 ? 0.02 * (n + 1) : v));
   for (let n = 0; n < 12; n++) {
     cpu.advance(forced(n), grown(n), flux, stress, DT);
-    fixed.advance(forced(n), grown(n), flux, stress, DT);
+    other.advance(forced(n), grown(n), flux, stress, DT);
     await gpu.advance(forced(n), grown(n), stress, DT);
   }
   const final = await gpu.download(), { boundaryDepths } = await gpu.restartArrays(), wet = Array.from(cpu.h, (v) => v > 1), a = cpuFields(cpu), limit = { h: 1e-2, u: 2e-2, T: 1e-3, S: 1e-4, eta: 1e-2 };
@@ -69,9 +69,13 @@ test('with mstarScheme rh18 the GPU hybrid ocean forms the surface buoyancy flux
     assert.ok(r.rmsRel < limit[f], `${f} rms relative diff ${r.rmsRel} (largest ${r.maxDiff} at ${r.at})`);
   }
   let engines = 0, schemes = 0;
-  for (let i = 0; i < C; i++) if (wet[i]) { engines += Math.abs(boundaryDepths[i] - cpu.boundaryDepths[i]); schemes += Math.abs(fixed.boundaryDepths[i] - cpu.boundaryDepths[i]); }
-  console.log(`boundary depths: GPU against CPU ${engines.toFixed(2)} m summed, rh18 against fixed on the CPU ${schemes.toFixed(2)} m`);
-  assert.ok(schemes > 10, `the scheme moves the boundary layer: ${schemes} m`);
+  for (let i = 0; i < C; i++) if (wet[i]) { engines += Math.abs(boundaryDepths[i] - cpu.boundaryDepths[i]); schemes += Math.abs(other.boundaryDepths[i] - cpu.boundaryDepths[i]); }
+  console.log(`boundary depths: GPU against CPU ${engines.toFixed(2)} m summed, ${JSON.stringify(options)} against ${JSON.stringify(reference)} on the CPU ${schemes.toFixed(2)} m`);
+  assert.ok(schemes > moved, `the scheme moves the boundary layer: ${schemes} m`);
   assert.ok(engines < 0.1 * schemes, `the engines part by ${engines} m, the two schemes by ${schemes} m`);
   gpuModel.destroy();
-});
+}
+
+test('with mstarScheme rh18 the GPU hybrid ocean forms the surface buoyancy flux from the heat the surface gave it and the brine of the ice grown, and its boundary layer tracks the CPU\'s over twelve steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, () => parity({ mstarScheme: 'rh18' }, {}, 10));
+
+test('with langmuirScheme rescale the GPU hybrid ocean multiplies the m* of rh18 by the capped Langmuir enhancement of the wind\'s surface-layer Langmuir number, tapered by the ice, and its boundary layer tracks the CPU\'s over twelve steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, () => parity({ mstarScheme: 'rh18', langmuirScheme: 'rescale' }, { mstarScheme: 'rh18' }, 5));

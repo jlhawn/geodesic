@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
-import { boundaryLayer, mixColumn, columnScratch, surfaceBuoyancy, RH18_ENERGY, MSTAR_SCHEMES } from '../js/ocean/column.module.js';
+import { boundaryLayer, mixColumn, columnScratch, surfaceBuoyancy, langmuirInverse, RH18_ENERGY, MSTAR_SCHEMES, LANGMUIR_SCHEMES, LANGMUIR_RESCALE } from '../js/ocean/column.module.js';
 import { SEAWATER } from '../js/ocean/seawater.module.js';
 
 const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
@@ -69,4 +69,25 @@ test('the ocean keeps the heat and salt its surface gave it over the step, the l
   }
   assert.ok(warmed > 20 && cooled > 20 && brined > 5, `${warmed} warmed, ${cooled} cooled, ${brined} brined cells`);
   assert.throws(() => createOcean(mesh, { everySteps: 1, mstarScheme: 'bulk' }), /mstarScheme is one of fixed, rh18/);
+});
+
+test('with langmuirScheme rescale the energy is the rh18 m* times min(5, 1 + waves 0.447 La^-1.33) of the wind\'s surface-layer Langmuir number at the depth reached, and langmuir 0 or waves 0 leave the enhancement out', () => {
+  const run = (extra) => { const { h, T, S, kappa, scratch } = column(); return boundaryLayer({ h, T, S, K, ustar, f, dt, mstarScheme: 'rh18', ...extra }, kappa, scratch); };
+  const enhance = (depth, waves) => Math.min(LANGMUIR_RESCALE.cap, 1 + waves * LANGMUIR_RESCALE.coefficient * (1 / Math.sqrt(langmuirInverse(ustar, Math.max(depth, 1)))) ** LANGMUIR_RESCALE.exponent);
+  const plain = run({ langmuir: 0 }), off = run({ langmuir: 0, langmuirScheme: 'rescale' }), bare = run({ langmuirScheme: 'rescale', waves: 0 });
+  assert.equal(off.depth, plain.depth);
+  assert.equal(bare.depth, plain.depth);
+  for (const waves of [1, 0.5]) {
+    const layer = run({ langmuirScheme: 'rescale', waves }), factor = enhance(layer.depth, waves);
+    console.log(`waves ${waves}: ${layer.depth.toFixed(2)} m against ${plain.depth.toFixed(2)} m without, enhancement ${factor.toFixed(3)}`);
+    assert.ok(factor > 1 + 0.2 * waves && factor < LANGMUIR_RESCALE.cap, `the enhancement at ${layer.depth} m is ${factor}`);
+    close(layer.energy, energy(layer.depth, 0) * factor, 1e-9 * layer.energy, `energy at waves ${waves}`);
+    close(layer.work, layer.energy, 1e-4 * layer.energy, `the work of mixing equals the energy at waves ${waves}`);
+    assert.ok(layer.depth > plain.depth, `the enhancement deepens the layer: ${layer.depth} m against ${plain.depth} m`);
+  }
+  assert.ok(run({ langmuirScheme: 'rescale', waves: 0.5 }).depth < run({ langmuirScheme: 'rescale' }).depth);
+  assert.deepEqual(LANGMUIR_SCHEMES, ['factor', 'rescale']);
+  const mesh = buildMesh(new Grid(16));
+  assert.throws(() => createOcean(mesh, { everySteps: 1, langmuirScheme: 'rescale' }), /langmuirScheme 'rescale' multiplies the m\* of mstarScheme 'rh18'/);
+  assert.throws(() => createOcean(mesh, { everySteps: 1, mstarScheme: 'rh18', langmuirScheme: 'additive' }), /langmuirScheme is one of factor, rescale/);
 });
