@@ -171,9 +171,10 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
     enthalpyHigh = seaIce.skinHeatCapacity * (ICE_REMNANT.skinHigh - FREEZING_POINT);
   }
   const remnant = (a, v, s, e) => v > ICE_REMNANT.thickness * a || s > ICE_REMNANT.snow * a || e < enthalpyLow * a || e > enthalpyHigh * a;
-  function reset(saved = null) {
+  function reset(saved = null, savedSigma = null) {
     velocity.fill(0); spare.fill(0); sigma.fill(0); iceStress.fill(0); volumeFlux.fill(0); valid.fill(0); arrived.fill(0); calls = 0;
     if (saved && saved.length === E) velocity.set(saved);
+    if (savedSigma && savedSigma.length === C) sigma.set(savedSigma);
   }
 
   function prepare({ surfaceT, ice: thickness, concentration }) {

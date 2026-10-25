@@ -12,6 +12,7 @@ import { runoffOutlets } from '../js/ocean/layered.module.js';
 import { gridMesh, stateGrid } from '../js/stateGrid.module.js';
 import { DEFAULT_RELAX } from '../js/grid.module.js';
 import { syntheticTopography, createGeography, encodeLandIce, decodeLandIce, landIceUrl, geographyOptions, readTopography, savedGeography, geographyHeader, pickGeography, checkGeography, stateGeography, FRESH_GEOGRAPHY, LEGACY_GEOGRAPHY, ICE_DENSITY, SEAWATER_DENSITY } from '../js/geography.module.js';
+import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -19,7 +20,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 
 const topography = readTopography('etopo2022'), etopo1 = readTopography('etopo1');
 const landIce = decodeLandIce(readFileSync(landIceUrl));
-const observed = geographyOptions(FRESH_GEOGRAPHY, landIce);
+const observed = geographyOptions({ ...FRESH_GEOGRAPHY, iceShelves: 'land' }, landIce);
 const deg = 180 / Math.PI;
 const sparse = ({ rows, cols, points, count, thickness, floating = null, floatThickness = null, floatSurface = null, floatBed = null }) => {
   const index = Uint32Array.from(Array.from(count.keys()).filter((p) => count[p] > 0)), at = (field) => (p) => (field ? field[p] : 0);
@@ -118,7 +119,7 @@ test('a state records its geography where it differs from ETOPO1 and the rule, f
   assert.deepEqual(savedGeography({}), LEGACY_GEOGRAPHY);
   assert.deepEqual(savedGeography({ iceSheets: 'observed' }), { ...LEGACY_GEOGRAPHY, iceSheets: 'observed' });
   assert.deepEqual(geographyHeader(LEGACY_GEOGRAPHY), {});
-  assert.deepEqual(geographyHeader(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed' });
+  assert.deepEqual(geographyHeader(FRESH_GEOGRAPHY), { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity' });
   assert.deepEqual(pickGeography({ N: 16, topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'land' }), { topography: 'etopo2022', iceSheets: 'observed' });
   assert.throws(() => checkGeography({ topography: 'etopo5' }), /topography is etopo1 or etopo2022/);
   assert.throws(() => checkGeography({ iceSheets: 'bedrock' }), /iceSheets is rule or observed/);
@@ -186,7 +187,8 @@ function snowOnTheSheets(model) {
   const { state, core, geography, mesh } = model, { K } = core.diagnostics, C = mesh.nCells, kappa = R_DRY / CP_DRY;
   core.diagnose(state[0], state[1]);
   const exner = core.diagnostics.exnerLayer;
-  for (let k = K - 2; k < K; k++) for (let i = 0; i < C; i++) if (geography.iceSheet[i]) {
+  const levels = core.levels, top = PREVIOUS_LEVELS[PREVIOUS_LEVELS.length - 3];
+  for (let k = 0; k < K; k++) if (levels[k] + levels[k + 1] > 2 * top) for (let i = 0; i < C; i++) if (geography.iceSheet[i]) {
     const n = k * C + i;
     state[4][n] = 1.5 * saturationHumidity(state[1][n] * exner[n], P0 * exner[n] ** (1 / kappa));
   }

@@ -2,7 +2,8 @@
 /*
  * Writes data/subgrid_N<N>.bin (TOPOGRAPHY=etopo2022: the
  * subgrid_etopo2022_N<N>.bin of that raster's land mask and resolved
- * terrain), each land cell's subgrid orography from
+ * terrain; with MASK=n1024 as well, the subgrid_etopo2022_n1024_N<N>.bin
+ * of data/geography_n1024_N<N>.bin's), each land cell's subgrid orography from
  * GMTED2010's 30″ mean elevation as the IFS defines its fields (Cy47r3
  * Part IV §11.3.3–11.3.4), from the 2′30″ grids of
  * scripts/subgridTerrain.py's `filter` in the download cache:
@@ -20,7 +21,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
-import { readTopography, subgridOrography, encodeSubgrid, decodeSubgrid, subgridUrl } from '../js/geography.module.js';
+import { readTopography, subgridOrography, encodeSubgrid, decodeSubgrid, subgridUrl, geographyOptions, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { createModel } from '../js/model.module.js';
 
 export const FINE_ROWS = 4320, FINE_COLS = 8640, GRADIENT_SPACING = 5000;
@@ -64,11 +65,12 @@ function summary(N, model, fields) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const cache = process.argv[2] ?? new URL('../../geodesic-terrain-cache', import.meta.url).pathname;
   const Ns = process.argv.length > 3 ? process.argv.slice(3).map(Number) : [16, 32, 64, 128];
-  const topography = readTopography(process.env.TOPOGRAPHY ?? 'etopo1'), url = (N) => subgridUrl(N, topography.name);
+  const mask = process.env.MASK ?? 'raster', topography = readTopography(process.env.TOPOGRAPHY ?? 'etopo1'), url = (N) => subgridUrl(N, topography.name, mask);
+  const geography = mask === 'raster' ? {} : geographyOptions({ ...FRESH_GEOGRAPHY, topography: topography.name, mask }).geography;
   const h5 = readFine(cache, 'h5'), flt2 = readFine(cache, 'flt2');
   for (const N of Ns) {
     const start = performance.now();
-    const model = createModel(new Grid(N), { physics: false, topography });
+    const model = createModel(new Grid(N), { physics: false, topography, geography });
     const fields = { ...meshFields(model, h5, flt2), relax: model.mesh.relax };
     const bytes = encodeSubgrid(fields);
     writeFileSync(url(N), new Uint8Array(bytes));

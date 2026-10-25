@@ -8,6 +8,8 @@ import { divergence } from '../js/dynamics/operators.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
+import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
+import { CLIMATOLOGY_FILE, loadClimatology } from '../js/ocean/climatology.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -271,4 +273,33 @@ test('in single precision the GPU\'s ∇⁴ closure and boundary-layer mixing ke
     console.log(`GPU ${name}: ${show(mean(rows))} W/m² on average, ${show(largest(rows))} at most`);
     assert.ok(Math.abs(mean(rows)) < 2e-3 && largest(rows) < 5e-3, `${name}: ${mean(rows)} W/m² on average, ${largest(rows)} at most`);
   }
+});
+
+test('at N=32 FLake holds the n1024 lakes: dry to the ocean, finite for two days from a fresh start, each lake\'s heat changing by the surface flux it is given where nothing falls on it', async () => {
+  const n = 32, dt = 1350 * 16 / n, topography = readTopography('etopo2022'), sheets = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'n1024' });
+  const ocean = withCadence({ ocean: {} }, dt, n).ocean, radiation = withCadence({ radiation: { clearSkyPass: true } }, dt, n).radiation;
+  const climatology = await loadClimatology(new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname);
+  const model = createModel(new Grid(n), { topography, geography: sheets.geography, ocean: { ...ocean, climatology }, radiation, land: { ...sheets.land }, lake: { model: 'flake' } });
+  const { state, geography, lake } = model, C = model.mesh.nCells;
+  assert.ok(lake.cells.length >= 2, `${lake.cells.length} lake cells`);
+  for (const i of lake.cells) assert.deepEqual([geography.land[i], model.ocean.cellOcean[i]], [0, 0], `lake cell ${i}`);
+  initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
+  for (let i = 0; i < C; i++) if (geography.land[i]) state[6][i] = 0;
+  if (model.load) model.load();
+  model.ocean.initialize(state[3], state[6]);
+  model.land.initialize();
+  let checked = 0, worst = 0;
+  for (let s = 0; s < 2 * 86400 / dt; s++) {
+    const heat = lake.cells.map((i) => (lake.mean[i] === 0 ? null : lake.enthalpy(i))), water = lake.cells.map((i) => lake.passed[i]);
+    model.step(dt);
+    lake.cells.forEach((i, k) => {
+      if (heat[k] === null || lake.passed[i] - water[k] + model.radiation.evaporation[i] * dt > 1e-12) return;
+      checked++;
+      worst = Math.max(worst, Math.abs(lake.enthalpy(i) - heat[k] - model.radiation.surfaceFlux[i] * dt) / Math.max(1, Math.abs(model.radiation.surfaceFlux[i] * dt)));
+    });
+  }
+  const nonFinite = (fields) => Object.entries(fields).filter(([, v]) => ArrayBuffer.isView(v) && v.some((x) => !Number.isFinite(x))).map(([name]) => name);
+  assert.deepEqual([...nonFinite(Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].map((name, k) => [name, state[k]]))), ...nonFinite(lake.serialize())], []);
+  for (const i of lake.cells) assert.ok(state[3][i] > 240 && state[3][i] < 315 && lake.mixedDepth[i] > 0 && lake.mixedDepth[i] <= lake.depth[i], `lake cell ${i}: ${state[3][i]} K, mixed ${lake.mixedDepth[i]} of ${lake.depth[i]} m`);
+  assert.ok(checked > 0 && worst < 1e-9, `${checked} lake steps, worst relative heat-budget miss ${worst}`);
 });

@@ -1,7 +1,8 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
+import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
 import { oceanCells, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
-import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
+import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
 import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval } from '../physics/ice.module.js';
 import { iceDriftOptions, iceDriftPasses, ICE_REMNANT } from '../ocean/iceDrift.module.js';
@@ -46,7 +47,7 @@ export const OCEAN_DEFAULTS = {
   momentumDepth: 50, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, topDrag: 2.5e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: false,
   gustiness: 3,
-  generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
+  generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'fixed', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
   edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 20,
 };
@@ -149,7 +150,7 @@ ${arr('PVFLOORK', floors)}
 ${arr('BOUNDARY', boundaries.subarray(1, L))}
 const GEN: i32 = ${GENERATORS.indexOf(o.generator)};
 const LP1: i32 = ${L + 1};
-${constLine('HMIN', o.minimumLayer)} ${constLine('THINEDGE', 2 * o.minimumLayer)} ${constLine('MODEDEPTH', o.modeDepth)} ${constLine('MSTAR', o.mstar)} ${constLine('EKMANF', o.ekmanFactor)} ${constLine('RH18C2', RH18_NEUTRAL.c2)} ${constLine('RH18C3', RH18_NEUTRAL.c3)} ${constLine('ICEWAVES', ICE_WAVE_DAMPING)} ${constLine('NSTAR', o.nstar)}
+${constLine('HMIN', o.minimumLayer)} ${constLine('THINEDGE', 2 * o.minimumLayer)} ${constLine('MODEDEPTH', o.modeDepth)} ${constLine('MSTAR', o.mstar)} ${constLine('EKMANF', o.ekmanFactor)} ${constLine('RH18C2', RH18_NEUTRAL.c2)} ${constLine('RH18C3', RH18_NEUTRAL.c3)} ${constLine('ICEWAVES', ICE_WAVE_DAMPING)} ${constLine('NSTAR', o.nstar)}${o.mstarScheme === 'rh18' ? ` ${Object.keys(RH18_ENERGY).map((key) => constLine(`RH${key}`, RH18_ENERGY[key])).join(' ')}` : ''}
 ${constLine('BACKKAPPA', o.backgroundDiffusivity)} ${constLine('CONVKAPPA', o.convectiveDiffusivity)} ${constLine('VONK', 0.4)} ${constLine('BLFLOOR', 0.1)} ${constLine('DZFLOOR', 1e-3)} ${constLine('HNEGLECT', 1e-6)} ${constLine('MLEXCESS', 0.03)}
 ${constLine('BLTOL', 1e-6)} const BLITER: i32 = 24;
 fn eosA(t: f32, s: f32) -> f32 { return eos(t + TREF, s + SREF); }
@@ -169,8 +170,15 @@ fn crossing(qL: f32, d: f32, c: f32, b: f32) -> f32 {
   }
   return xi;
 }
-fn blEnergy(depth: f32, ustar: f32, f: f32, dt: f32, convective: f32, waves: ${o.langmuirIce === 'tanh' ? 'f32' : 'bool'}) -> f32 {
-${o.rotationLimit === 'rh18' ? `  let decay = select(0.0, exp(RH18C3 * depth * abs(f) / max(ustar, 1.0e-12)), ustar > 0.0);
+fn blEnergy(depth: f32, ustar: f32, f: f32, dt: f32, convective: f32, buoyancy: f32, waves: ${o.langmuirIce === 'tanh' ? 'f32' : 'bool'}) -> f32 {
+${o.mstarScheme === 'rh18' ? `  let factor = ${o.langmuir > 0 ? waveFactor(o) : '1.0'};
+  if (!(ustar > 0.0)) { return RHnstar * convective; }
+  let u3 = ustar * ustar * ustar; let absf = abs(f);
+  let decay = RHcN2 * exp(RHcN3 * depth * absf / ustar); let neutral = RHcN1 * decay / (1.0 + decay);
+  let loss = max(0.0, -buoyancy); let gain = max(0.0, buoyancy); let convecting = loss + 2.0 * neutral * u3 / depth;
+  let reduction = select(1.0, 1.0 - RHcC * loss / convecting, convecting > 0.0);
+  let stable = RHcS1 * pow(gain * gain * depth / (u3 * ustar * ustar * max(absf, 1.0e-20)), RHcS2);
+  return RHO0 * dt * min(RHcap, neutral * reduction + stable) * factor * u3 + RHnstar * convective;` : o.rotationLimit === 'rh18' ? `  let decay = select(0.0, exp(RH18C3 * depth * abs(f) / max(ustar, 1.0e-12)), ustar > 0.0);
   let factor = ${o.langmuir > 0 ? waveFactor(o) : '1.0'};
   return RHO0 * dt * MSTAR * factor * ustar * ustar * ustar * (1.0 + RH18C2) * decay / (1.0 + RH18C2 * decay) + NSTAR * convective;` : `  let rotation = select(1.0e30, 1.0 + (depth * f / (EKMANF * ustar)) * (depth * f / (EKMANF * ustar)), ustar > 0.0);
   let factor = ${o.langmuir > 0 ? waveFactor(o) : '1.0'};
@@ -224,7 +232,7 @@ ${edgeFlow(thickness, 'keptAfter += he * IN[uOff(k) + e]; keptDepth += he;')}  i
         let heatDown = dt * CK[k] * (nT - tBelow) / dz; let saltDown = dt * CK[k] * (nS - sBelow) / dz;
         raised += OGRAV * RHO0 * lift * (CA[k] * heatDown - CB[k] * saltDown);
       }
-      let supplied = blEnergy(depth, ustar, f, dt, convective, ${o.langmuirIce === 'tanh' ? 'waves' : '!capped'}); let worked = max(raised, 0.0);
+      let supplied = blEnergy(depth, ustar, f, dt, convective, ${o.mstarScheme === 'rh18' ? 'buoy' : '0.0'}, ${o.langmuirIce === 'tanh' ? 'waves' : '!capped'}); let worked = max(raised, 0.0);
       let excess = (worked - supplied) / (worked + supplied);
 `;
   return {
@@ -519,7 +527,8 @@ ${flush('true')}  }
   for (var m = 0; m < MAXE; m++) { sv += weights[m] * OD[O_STRESS + edges[m]] * normals[m]; vt += weights[m] * IN[uOff(0) + edges[m]] * normals[m]; }
   sv = sv / area; vt = vt / area;
   let capped = OD[O_SHELF + i] > 0.5; let ustar = select(sqrt(length(sv) / RHO0), sqrt(TOPDRAG) * length(vt), capped); let f = abs(OD[O_FCELL + i]);${o.langmuirIce === 'tanh' ? ' let waves = select(1.0 - tanh(ICEWAVES * select(0.0, select(1.0, PH[PH_CONC + i], PH[PH_CONC + i] > 0.0), OD[O_ICED + i] > 0.5)), 0.0, capped);' : ''}
-${o.shelfMelt ? `  var freezing = false;
+${o.mstarScheme === 'rh18' ? `  let buoy = select(OGRAV * (alphaT(CT[0] + TREF, CS[0] + SREF) * OD[O_HEATIN + i] - betaS(CT[0] + TREF, CS[0] + SREF) * OD[O_SALTIN + i]) / dt, 0.0, capped);
+` : ''}${o.shelfMelt ? `  var freezing = false;
   if (capped) {
 ${o.shelfMeltLayer > 0 ? `    var slab = 0.0; var sumT = 0.0; var sumS = 0.0;
     for (var k = 0; k < L; k++) { if (slab >= MELTLAYER) { break; } let part = min(CH[k], MELTLAYER - slab); sumT += part * CT[k]; sumS += part * CS[k]; slab += part; }
@@ -1116,7 +1125,10 @@ ${o.drift ? `  let arrived = OD[O_ARRIVED + i] > 0.5;
   // Open water adds the surface's change since PREVT0: reading T0 = Q/h back whole gains heat under fast-math division.
   if (iced) { IN[qOff(0) + i] = IN[hOff(0) + i] * (t0 - TREF); } else { IN[qOff(0) + i] += IN[hOff(0) + i] * (t0 - OD[O_PREVT0 + i]); }
 `}  let light = PH[PH_PEN + i];
-  if (light == 0.0) { return; }
+${o.mstarScheme === 'rh18' ? `  { let h0 = max(IN[hOff(0) + i], 1.0e-6); let s0 = IN[wOff(0) + i] / h0 + SREF;
+    OD[O_HEATIN + i] = h0 * (t0 - OD[O_PREVT0 + i]) + light / RHOCP;
+    OD[O_SALTIN + i] = s0 * OD[O_FRESH + i] / 1000.0 + (s0 - ICESAL) * (iceVolume(i) - OD[O_PREVVOL + i]) * ICEDENS / 1000.0; }
+` : ''}  if (light == 0.0) { return; }
   let taken = PH[PH_TRANS + i];
   var given = 0.0; var last = 0;
   if (taken > 0.0) {
@@ -1226,7 +1238,7 @@ ${o.penetration ? '  PH[PH_TRANS + i] = transmitted(IN[hOff(0) + i]);\n' : ''}  
       let shed = PH[PH_DISCHARGE + j]; let taken = OD[O_DISCHARGESEEN + j];
       calved += select(shed, shed - taken, shed >= taken) * OD[O_DRAINW + p];
       OD[O_DISCHARGESEEN + j] = shed;
-    }
+${o.lakes ? LAKE_DRAIN_WGSL : ''}    }
     OD[O_FRESH + i] += fresh;
     OD[O_CALVED + i] += calved;
   }
@@ -1296,6 +1308,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   if (!TRACER_ADVECTIONS.includes(o.tracerAdvection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${o.tracerAdvection}`);
   if (!EDGE_TRANSPORTS.includes(o.edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${o.edgeTransport}`);
   if (!ROTATION_LIMITS.includes(o.rotationLimit)) throw new Error(`rotationLimit is one of ${ROTATION_LIMITS.join(', ')}, not ${o.rotationLimit}`);
+  if (!MSTAR_SCHEMES.includes(o.mstarScheme)) throw new Error(`mstarScheme is one of ${MSTAR_SCHEMES.join(', ')}, not ${o.mstarScheme}`);
   if (!LANGMUIR_ICE.includes(o.langmuirIce)) throw new Error(`langmuirIce is one of ${LANGMUIR_ICE.join(', ')}, not ${o.langmuirIce}`);
   const given = !!o.iceDrift && typeof o.iceDrift === 'object' && o.iceDrift.airStress === 'given';
   const driftOptions = o.iceDrift ? iceDriftOptions(typeof o.iceDrift === 'object' ? Object.fromEntries(Object.entries(o.iceDrift).filter(([name]) => name !== 'airStress')) : o.iceDrift) : null;
@@ -1358,7 +1371,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     [['FLUX', 'LAPA', 'LAPB', 'EDDYV', 'TARGET', 'VISC'], L * E],
     [['HEDGE', 'EDDYQ'], L * E], [['AVORT', 'CURLS', 'PHI'], L * V], [['QE', 'EDDYW'], L * E], ['DIVS', L * C],
     ['BUOY', C], ['GRADETA', E], ['SLOW', E], ['DEPTHEDGE', E],
-    ['ETA', C], ['FRESH', C], ['PREVT0', C], ['PREVVOL', C], ['ICED', C], ['STRESS', E],
+    ['ETA', C], ['FRESH', C], ['PREVT0', C], ['PREVVOL', C], ['ICED', C], ['HEATIN', C], ['SALTIN', C], ['STRESS', E],
     ['SURFT', C], ['SURFICE', C], ['SURFCONC', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
     ['RUNOFFSEEN', C], ['DISCHARGESEEN', C], ['CALVED', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
@@ -1380,7 +1393,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const implicitStress = !!core.physics && core.physics.surfaceExchange === 'roughness' && !!core.physics.implicitDrag;
   const iceThermo = { skinHeatCapacity: core.physics?.skinHeatCapacity ?? 2e5, iceDensity: core.physics?.iceDensity ?? 917, latentHeatFusion: core.physics?.latentHeatFusion ?? 3.34e5, freshSnowAlbedo: core.physics?.freshSnowAlbedo ?? SNOW_AGEING.freshSnowAlbedo };
   const driftPlan = driftOptions ? { options: driftOptions, waterDensity: o.density, thermo: iceThermo, minimumConcentration: MINIMUM_CONCENTRATION, removal: seaIceRemoval(!!core.physics?.keepSmallIce), remnant: ICE_REMNANT, freezing: FREEZING_POINT, implicitStress, given } : null;
-  const kernels = oceanKernels({ ...o, restrat, table, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan });
+  const kernels = oceanKernels({ ...o, restrat, table, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined });
   const reduced = HYBRID_REDUCED;
   const OF = seq([['SST', C], ['SSS', C], ['H1', C], ['THD', C], ['ETA', C], ['CUR', 3 * C], ['CSPD', C], ['UPW', C], ['PART', reduced.length * reductionGroups(C)]]);
   kernels.oFrame = `${HYBRID_THERMOCLINE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -1860,8 +1873,10 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     device.queue.writeBuffer(ob.OD, 4 * OD.CMASK, Float32Array.from(cellOcean));
     device.queue.writeBuffer(ob.OD, 4 * OD.SHELF, Float32Array.from(shelf));
     device.queue.writeBuffer(ob.OD, 4 * OD.DRAFT, Float32Array.from(draft));
+    const restoredLoad = restart && [restart.shelfLoadRest, restart.shelfLoadT, restart.shelfLoadS].every((values) => values && values.length === C);
     const load = new Float32Array(C), loadT = new Float32Array(C), loadS = new Float32Array(C);
-    for (let i = 0; i < C; i++) {
+    if (restoredLoad) { load.set(restart.shelfLoadRest); loadT.set(restart.shelfLoadT); loadS.set(restart.shelfLoadS); }
+    else for (let i = 0; i < C; i++) {
       if (!shelf[i]) continue;
       loadT[i] = Math.fround(packed[OS.OQ + i] / packed[OS.OH + i]); loadS[i] = Math.fround(packed[OS.OW + i] / packed[OS.OH + i]);
       load[i] = shelfLoad[i] - seawaterDensity(loadT[i] + HEAT_REFERENCE, loadS[i] + SALT_REFERENCE) * draft[i];
@@ -1884,6 +1899,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     if (driftOptions) {
       device.queue.writeBuffer(ob.OD, 4 * OD.IDYN, driftMask);
       if (restart && restart.iceVelocity && restart.iceVelocity.length === E) device.queue.writeBuffer(ob.OD, 4 * OD.UICE, Float32Array.from(restart.iceVelocity));
+      if (restart && restart.iceSigma && restart.iceSigma.length === C) device.queue.writeBuffer(ob.OD, 4 * OD.SIGMA, Float32Array.from(restart.iceSigma));
       driftCalls = 0;
     }
     device.queue.writeBuffer(ob.OD, 4 * OD.MIXED, restart && restart.mixedDepths && restart.mixedDepths.length === C ? Float32Array.from(restart.mixedDepths) : mixedDepthsOf(h, Q, W));
@@ -2067,9 +2083,10 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
       readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }, { offset: PHL.PEN, length: C }]),
     ]);
     const transmission = o.penetration ? (await readRanges(device, buffers.PH, [{ offset: PHL.TRANS, length: C }]))[0] : null;
-    const iceVelocity = driftOptions ? (await readRanges(device, ob.OD, [{ offset: OD.UICE, length: E }]))[0] : null;
+    const [iceVelocity, iceSigma] = driftOptions ? await readRanges(device, ob.OD, [{ offset: OD.UICE, length: E }, { offset: OD.SIGMA, length: C }]) : [null, null];
     const mleDepths = restrat ? (await readRanges(device, ob.OD, [{ offset: OD.MLED, length: C }]))[0] : null;
-    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, calved, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}), ...(iceVelocity ? { iceVelocity } : {}), ...(mleDepths ? { mleDepths } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
+    const [shelfLoadRest, shelfLoadT, shelfLoadS] = hasShelves ? await readRanges(device, ob.OD, [{ offset: OD.LOAD, length: C }, { offset: OD.LOADT, length: C }, { offset: OD.LOADS, length: C }]) : [null, null, null];
+    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, calved, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}), ...(iceVelocity ? { iceVelocity, iceSigma } : {}), ...(mleDepths ? { mleDepths } : {}), ...(shelfLoadRest ? { shelfLoadRest, shelfLoadT, shelfLoadS } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
   function diagnosticsFrom(sums) {

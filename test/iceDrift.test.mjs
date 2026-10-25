@@ -337,6 +337,30 @@ test('the option validates, a running ocean keeps A at most 1 and V non-negative
   assert.equal('iceVelocity' in off.ocean.restartArrays(), false);
 });
 
+test('a cavitating drift restarted from its arrays steps on bit for bit: velocity, the internal stress σ1, the ice and the ocean', () => {
+  const setup = icePatch(-62, 10, 25, { A: 0.9, h: 0.5 }), wind = windOn(meshOf(16), [0.1, 0, 0]), drift = { rheology: 'cavitating', hemisphere: 'both' };
+  const whole = oceanRig(drift, setup), first = oceanRig(drift, setup);
+  for (let n = 0; n < 12; n++) whole.step(wind);
+  for (let n = 0; n < 6; n++) first.step(wind);
+  const saved = { ...first.ocean.serialize(), ...first.ocean.restartArrays(), flux: Float64Array.from(first.seaIce.oceanFlux) };
+  assert.ok(saved.iceSigma && saved.iceSigma.some((x) => x !== 0), 'the pack carries an internal stress');
+  const resume = (state) => {
+    const o = oceanRig(drift, setup);
+    for (const [name, values] of Object.entries(first.seaIce)) if (values instanceof Float64Array && values.length === o.C) o.seaIce[name].set(values);
+    o.surfaceT.set(first.surfaceT); o.ice.set(first.ice);
+    o.ocean.load(state, o.surfaceT, o.ice, o.concentration);
+    return o;
+  };
+  const again = resume(saved);
+  for (let n = 0; n < 6; n++) again.step(wind);
+  for (const [name, a, b] of [['velocity', whole.ocean.iceDrift.velocity, again.ocean.iceDrift.velocity], ['σ1', whole.ocean.iceDrift.sigma, again.ocean.iceDrift.sigma], ['ice', whole.ice, again.ice], ['concentration', whole.concentration, again.concentration], ['Q', whole.ocean.Q, again.ocean.Q], ['W', whole.ocean.W, again.ocean.W], ['u', whole.ocean.u, again.ocean.u]]) assert.ok(bits(a, b), name);
+  const { iceSigma, ...older } = saved, without = resume(older);
+  assert.ok(without.ocean.iceDrift.sigma.every((x) => x === 0), 'a state without σ1 starts it at zero');
+  for (let n = 0; n < 6; n++) without.step(wind);
+  const apart = (a, b) => a.reduce((m, x, n) => Math.max(m, Math.abs(x - b[n])), 0);
+  console.log(`restarted without σ1 (up to ${apart(saved.iceSigma, new Float64Array(saved.iceSigma.length)).toExponential(2)} N/m), six steps on: ice velocity ${apart(whole.ocean.iceDrift.velocity, without.ocean.iceDrift.velocity).toExponential(2)} m/s apart, thickness ${apart(whole.ice, without.ice).toExponential(2)} m, concentration ${apart(whole.concentration, without.concentration).toExponential(2)}`);
+});
+
 test('with its defaults the solver is within 3 percent of the converged solution on a compact pack from rest, and below its stability limit it is not', () => {
   for (const [N, dt] of [[16, 5400], [16, 1350], [32, 2700]]) {
     const reference = packSolve(N, dt, { alpha: 40, beta: 40, iterations: 3000 }), run = packSolve(N, dt, {});

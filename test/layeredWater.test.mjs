@@ -4,6 +4,7 @@ import { createOcean, LAYER_DENSITIES, LAYER_SALINITIES, runoffOutlets } from '.
 import { seawaterDensity, labelTemperature, thermalExpansion } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
+import { lakeWater } from '../js/physics/lake.module.js';
 import { DEG, mesh, C, E, totalHeatSalt } from './helpers/layered.mjs';
 
 test('the equation of state recovers each class label at its label salinity above the freezing point, and expands little near freezing', () => {
@@ -32,6 +33,30 @@ test('runoff reaches the coastal sea beside the land it ran off, freshening it b
     assert.ok(coastal, `sea cell ${i} receives runoff but touches no land`);
   }
   assert.ok(ranOff > 0 && Math.abs(delivered - ranOff) < 1e-9 * ranOff, `delivered ${delivered} of ${ranOff}`);
+});
+
+test('a lake FLake holds is dry to the ocean and runs on to the sea at its level, and a lake that loses water draws it from the sea its outlet reaches', () => {
+  const base = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.abs(lon) < 40 * DEG && lat > 12 * DEG && lat < 48 * DEG ? -4000 : 500)));
+  const lake = new Uint8Array(C), lakeLevel = new Float64Array(C), land = Uint8Array.from(base.land);
+  for (let i = 0; i < C; i++) if (base.land[i] && Math.abs(mesh.latCell[i] - 30 * DEG) < 6 * DEG && Math.abs(mesh.lonCell[i] - 60 * DEG) < 6 * DEG) { lake[i] = 1; land[i] = 0; lakeLevel[i] = 400; }
+  const geography = lakeWater(mesh, { ...base, land, lake, lakeLevel });
+  assert.ok(lake.some((l) => l), 'the lake has cells');
+  const ocean = createOcean(mesh, { everySteps: 1, geography });
+  for (let i = 0; i < C; i++) if (lake[i]) assert.equal(ocean.cellOcean[i], 0, `lake cell ${i} is not ocean`);
+  const runoff = Float64Array.from(base.land, (l, i) => (lake[i] ? -1 : l ? 2 : 0));
+  ocean.fresh.fill(0);
+  ocean.accumulate(null, null, 0, runoff);
+  let delivered = 0, given = 0;
+  for (let i = 0; i < C; i++) {
+    given += mesh.areaCell[i] * runoff[i];
+    delivered -= mesh.areaCell[i] * ocean.fresh[i];
+    if (ocean.fresh[i] !== 0) assert.ok(ocean.cellOcean[i], `cell ${i} receives water but is not ocean`);
+  }
+  assert.ok(Math.abs(delivered - given) < 1e-9 * Math.abs(given), `delivered ${delivered} of ${given}`);
+  const alone = Float64Array.from(lake, (l) => (l ? -1 : 0));
+  ocean.fresh.fill(0);
+  ocean.accumulate(null, null, 0, alone);
+  assert.ok(ocean.fresh.some((f) => f > 0), 'the lake\'s loss is drawn from a sea cell');
 });
 
 test('ice the land discharges melts in the sea it reaches: the outlet\'s top layer gives up the latent heat of fusion, and the water and salt are those of the same runoff as liquid', () => {
