@@ -158,7 +158,7 @@ function mappedReport(phNames, phArray, step) {
     const found = cpuArray(cpu, path);
     if (!found && path.startsWith('radiation.held.') && !cpu.radiation?.held) { lines.push(`| ${name} | ${path} | | | | | n/a (held radiation is off at this N) |`); continue; }
     if (!found) { fail(`MISSING CPU array ${path} for PH ${name}`); lines.push(`| ${name} | ${path} | | | | | MISSING |`); continue; }
-    const c = found.tail ? found.array.subarray(found.array.length - (region?.length ?? C)) : found.array;
+    const c = found.tail && region ? found.array.subarray(found.array.length - region.length) : found.array;
     const landless = path.startsWith('land.') && (!cpu.geography || !cpu.geography.land || !Array.from(cpu.geography.land).some(Boolean));
     let cNonzero = false; for (let x = 0; x < c.length; x++) if (c[x] !== 0) { cNonzero = true; break; }
     if (!region) { lines.push(`| ${name} | ${path} | | | | ${cNonzero ? '' : '0'} | ${cNonzero ? 'cpu nonzero' : 'CPU ALL ZERO'} |`); if (!cNonzero && !MAY_BE_ZERO.has(name) && !landless) failures++; continue; }

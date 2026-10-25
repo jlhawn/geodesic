@@ -74,7 +74,15 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * 'rh18' m* = mstar Λ (1 + c₂) e^(c₃x) / (1 + c₂ e^(c₃x)), x = h |f| / u*,
  * the rotational decay of Reichl and Hallberg's (2018) neutral m* fit to
  * large-eddy simulations (c₂ 8, c₃ −5, MOM6's RH18_MSTAR_CN2 and CN3)
- * scaled to mstar at x = 0. Λ − 1 is scaled by waves, the share of the
+ * scaled to mstar at x = 0. With mstarScheme 'rh18' the energy is instead
+ * ρ₀ dt Λ (m*_N C + m*_S) u*³ + n* E_c in the form of Reichl and Li's
+ * (2019) equations 14 and 15: m*_N = c_N1 c_N2 e^(c_N3x) / (1 + c_N2 e^(c_N3x))
+ * (RH18_ENERGY, MOM6's RH18_MSTAR_CN1 to CN3), C = 1 − c_C B⁻ / (B⁻ + 2 m*_N u*³/h)
+ * under a destabilizing surface buoyancy flux B⁻ (MSTAR_CONV_ADJ), and
+ * m*_S = c_S1 (B⁺² h / (u*⁵ |f|))^c_S2 under a stabilizing one B⁺, m* no more
+ * than 10 (MSTAR_CAP of the OM4 configuration) and n* 0.06. B is the
+ * buoyancy the surface gains over the step from the heat, light and salt it
+ * gives the top layer, g (α heat − β salt) / dt, in m²/s³. Λ − 1 is scaled by waves, the share of the
  * wave field the sea ice leaves: 1 − tanh(10 A) under cover A with the
  * ocean's langmuirIce 'tanh' (NEMO's nn_eice = 1; the POP and MOM6
  * couplers of CESM drop Λ above 5 % cover), else 1. The work is the potential
@@ -109,6 +117,7 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  */
 export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3, RETREAT_EKMAN = 0.7;
 export const ROTATION_LIMITS = ['algebraic', 'rh18'], RH18_NEUTRAL = { c2: 8, c3: -5 };
+export const MSTAR_SCHEMES = ['fixed', 'rh18'], RH18_ENERGY = { cN1: 0.275, cN2: 8, cN3: -5, cS1: 0.2, cS2: 0.4, cC: 0.667, nstar: 0.06, cap: 10 };
 export const LANGMUIR_ICE = ['none', 'tanh'], ICE_WAVE_DAMPING = 10;
 export function erfc(x) {
   const t = 1 / (1 + 0.3275911 * x);
@@ -466,7 +475,11 @@ export function convectiveAdjustment(h, T, S, K, scratch, { gravity = GRAVITY } 
   return { released, interior, depth };
 }
 
-export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, rotationLimit = 'algebraic', nstar = 0.2, langmuir = 2, waves = 1, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
+export function surfaceBuoyancy(T, S, heat, salt, dt, gravity = GRAVITY) {
+  return gravity * (thermalExpansion(T, S) * heat - halineContraction(T, S) * salt) / dt;
+}
+
+export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, rotationLimit = 'algebraic', mstarScheme = 'fixed', nstar = 0.2, langmuir = 2, waves = 1, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
   const { alpha, beta, trialT, trialS, gain } = scratch;
   let H = 0;
   for (let k = 0; k < K; k++) H += h[k];
@@ -479,6 +492,15 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, guess = 
   if (!(vstar > 0)) return { depth: 0, energy: 0, work: 0, velocity: 0 };
   const energy = (depth) => {
     const factor = ustar > 0 && langmuir > 0 ? 1 + (langmuirFactor(ustar, Math.max(depth, 1), langmuir) - 1) * waves : 1;
+    if (mstarScheme === 'rh18') {
+      if (!(ustar > 0)) return RH18_ENERGY.nstar * convective;
+      const { cN1, cN2, cN3, cS1, cS2, cC, cap } = RH18_ENERGY, u3 = ustar * ustar * ustar, absf = Math.abs(f);
+      const decay = cN2 * Math.exp(cN3 * depth * absf / ustar), neutral = cN1 * decay / (1 + decay);
+      const loss = Math.max(0, -buoyancy), gain = Math.max(0, buoyancy), convecting = loss + 2 * neutral * u3 / depth;
+      const reduction = convecting > 0 ? 1 - cC * loss / convecting : 1;
+      const stable = cS1 * (gain * gain * depth / (u3 * ustar * ustar * Math.max(absf, 1e-20))) ** cS2;
+      return rho0 * dt * Math.min(cap, neutral * reduction + stable) * factor * u3 + RH18_ENERGY.nstar * convective;
+    }
     if (rotationLimit === 'rh18') {
       const decay = ustar > 0 ? Math.exp(RH18_NEUTRAL.c3 * depth * Math.abs(f) / ustar) : 0;
       return rho0 * dt * mstar * factor * ustar * ustar * ustar * (1 + RH18_NEUTRAL.c2) * decay / (1 + RH18_NEUTRAL.c2 * decay) + nstar * convective;
@@ -582,9 +604,10 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
   nu[K - 1] = 0;
 }
 
-export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, type = 'IB', ustar, f, dt, capped = false, options = {} }, { kappa, nu }, scratch) {
+export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, buoyancy = null, type = 'IB', ustar, f, dt, capped = false, options = {} }, { kappa, nu }, scratch) {
   const { interfaces, shares, boundaryKappa, interiorKappa, interiorNu } = scratch;
   interfacesOf(h, K, interfaces);
+  const flux = buoyancy ?? (options.mstarScheme === 'rh18' ? surfaceBuoyancy(T[0], S[0], heat + light, salt, dt, options.gravity) : 0);
   if (light !== 0) {
     sunlightShares(interfaces, K, type, shares);
     for (let k = 0; k < K; k++) T[k] += light * shares[k] / h[k];
@@ -592,7 +615,7 @@ export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat =
   T[0] += heat / h[0];
   S[0] += salt / h[0];
   const convection = convectiveAdjustment(h, T, S, K, scratch, options);
-  const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: capped ? 0 : convection.released, ...options }, boundaryKappa, scratch);
+  const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: capped ? 0 : convection.released, buoyancy: flux, ...options }, boundaryKappa, scratch);
   interiorMixing({ h, T, S, u, v, shear, K, ...options }, interiorKappa, interiorNu, scratch);
   for (let k = 0; k < K; k++) { kappa[k] = boundaryKappa[k] + interiorKappa[k]; nu[k] = boundaryKappa[k] + interiorNu[k]; }
   if (anyMixing(kappa, K)) solveLayers(h, K, kappa, dt, scratch.gain, T, T, S, S);
