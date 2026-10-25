@@ -35,16 +35,21 @@ import { encodeState, decodeState } from './stateFile.module.js';
  *                                  under ice
  *   ice            cells  m        sea-ice thickness over the iced part
  *   concentration  cells  1        iced fraction of the cell
+ *   airStress      edges  N/m²     the air's normal stress on the ice and
+ *                                  water, as the ice drift read it each
+ *                                  ocean step; version 2, from runs whose
+ *                                  ice drifts
  *
  * `steps` atmosphere steps went into the cell means and `oceanSteps`
  * ocean steps into the stress.
  */
-export const FORCING_VERSION = 1;
+export const FORCING_VERSION = 2;
 export const FORCING_FIELDS = [
   ['stress', 'edges'], ['netFlux', 'cells'], ['shortwave', 'cells'], ['shortwaveDown', 'cells'], ['sensible', 'cells'],
   ['evaporation', 'cells'], ['rain', 'cells'], ['snowfall', 'cells'], ['runoff', 'cells'],
   ['surfaceT', 'cells'], ['sst', 'cells'], ['ice', 'cells'], ['concentration', 'cells'],
 ];
+const OPTIONAL_FIELDS = [['airStress', 'edges']];
 
 export const forcingName = (day) => `forcing-${String(day).padStart(4, '0')}.bin`;
 export function forcingDay(name) {
@@ -60,19 +65,20 @@ function check(N, fields) {
     if (!fields[name]) throw new Error(`forcing lacks ${name}`);
     if (fields[name].length !== expected[where]) throw new Error(`forcing ${name} has ${fields[name].length} values, not the ${expected[where]} ${where} of N=${N}`);
   }
+  for (const [name, where] of OPTIONAL_FIELDS) if (fields[name] && fields[name].length !== expected[where]) throw new Error(`forcing ${name} has ${fields[name].length} values, not the ${expected[where]} ${where} of N=${N}`);
 }
 
 export function encodeForcing({ N, grid = null, geography = null, day, time, seconds, steps, oceanSteps }, fields) {
   check(N, fields);
-  const arrays = Object.fromEntries(FORCING_FIELDS.map(([name]) => [name, fields[name]]));
+  const arrays = Object.fromEntries([...FORCING_FIELDS, ...OPTIONAL_FIELDS].filter(([name]) => fields[name]).map(([name]) => [name, fields[name]]));
   return encodeState({ kind: 'forcing', version: FORCING_VERSION, N, ...(grid ? { grid } : {}), ...(geography ? geographyHeader(geography) : {}), day, time, seconds, steps, oceanSteps, ...arrays });
 }
 
 export async function decodeForcing(bytes) {
   const { kind, version, N, grid = null, day, time, seconds, steps, oceanSteps, ...rest } = await decodeState(bytes);
   if (kind !== 'forcing') throw new Error('not a forcing file');
-  if (version !== FORCING_VERSION) throw new Error(`forcing version ${version}, not ${FORCING_VERSION}`);
-  const fields = Object.fromEntries(FORCING_FIELDS.map(([name]) => [name, rest[name]]));
+  if (version !== 1 && version !== FORCING_VERSION) throw new Error(`forcing version ${version}, not 1 or ${FORCING_VERSION}`);
+  const fields = Object.fromEntries([...FORCING_FIELDS, ...OPTIONAL_FIELDS].filter(([name]) => rest[name]).map(([name]) => [name, rest[name]]));
   check(N, fields);
   return { N, ...(grid ? { grid } : {}), ...pickGeography(rest), day, time, seconds, steps, oceanSteps, fields };
 }

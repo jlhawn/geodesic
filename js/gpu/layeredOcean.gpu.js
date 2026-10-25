@@ -1320,7 +1320,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['EDDYK', E],
     ['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C], ['SILL', E], ['SHELF', C], ['DRAFT', C], ['LOAD', C], ['LOADT', C], ['LOADS', C], ['LIQUIDUS', C], ['MELT', C], ['MELTSUM', C], ['DRAW', C], ['POOLS', 12],
     ...(third ? [['BEY', 2 * E], ['BED', 2 * E]] : []),
-    ...(driftOptions ? driftSections(C, E, given) : []),
+    ...(driftOptions ? driftSections(C, E) : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather

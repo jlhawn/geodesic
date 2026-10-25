@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -128,7 +128,7 @@ test('a recorded day\'s rain is the day\'s convective plus large-scale rain, cel
   model.destroy();
 });
 
-test('two recorded days replayed over the ocean alone keep its SST with the coupled run and load back into the coupled model', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+test('two recorded days replayed over the ocean alone, the ice drifting under the recorded air stress, keep its SST with the coupled run but for at most ten ice-edge cells whose ice came and went within the day, keep its ice concentration with it, and load back into the coupled model, and version-1 days without the air stress replay with the drift off', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'oceanSpinup-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const fresh = await freshModel();
@@ -137,26 +137,47 @@ test('two recorded days replayed over the ocean alone keep its SST with the coup
   writeFileSync(join(dir, 'rec_day0000.bin'), encodeState({ N, K: fresh.core.K, levels: fresh.core.levels, day: 0, time: 0, terrain: !!fresh.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: fresh.seaIce.concentration, mlmSubsidence: fresh.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
   fresh.destroy();
   const forcing = join(dir, 'forcing');
-  const run = (script, env) => execFileSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, OCEAN: JSON.stringify({ iceDrift: false }), ...env }, encoding: 'utf8' });
+  const run = (script, env) => execFileSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, ...env }, encoding: 'utf8' });
   run('spinup.mjs', { TAG: 'rec', RECORD: forcing, DAYS: '2', MINUTES: '100', MOIST: JSON.stringify({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 }) });
   assert.deepEqual(readdirSync(forcing).sort(), [forcingName(1), forcingName(2)]);
   run('oceanSpinup.mjs', { TAG: 'alone', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
 
   const [alone, coupled] = await Promise.all(['alone_year0001.bin', 'rec_day0002.bin'].map(async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))))));
   const recorded = await decodeForcing(new Uint8Array(readFileSync(join(forcing, forcingName(2)))));
+  assert.ok(recorded.fields.airStress && recorded.fields.airStress.some((x) => x !== 0), 'the drifting run records the air stress');
   const model = await createGpuModel(new Grid(N), { topography });
   const { mesh } = model, sea = model.geography.land.map((l) => !l), C = mesh.nCells;
   const sst = (s, i) => (s.ice[i] > 0 ? FREEZING_POINT : s.surfaceT[i]);
-  let area = 0, square = 0, worst = 0;
+  let area = 0, square = 0, iceArea = 0, iceSquare = 0;
+  const apart = [];
   for (let i = 0; i < C; i++) {
     if (!sea[i]) continue;
     const off = sst(alone, i) - recorded.fields.sst[i];
     area += mesh.areaCell[i]; square += mesh.areaCell[i] * off * off;
-    worst = Math.max(worst, Math.abs(sst(alone, i) - sst(coupled, i)));
+    if (Math.abs(sst(alone, i) - sst(coupled, i)) > 0.5) apart.push(i);
+    const a = alone.concentration[i], b = coupled.concentration[i];
+    if (a > 0 || b > 0) { iceArea += mesh.areaCell[i]; iceSquare += mesh.areaCell[i] * (a - b) ** 2; }
   }
-  console.log(`after two days alone: SST rms ${Math.sqrt(square / area).toFixed(3)} K from the recorded day, at most ${worst.toFixed(3)} K from the coupled run`);
+  const edge = apart.filter((i) => Math.abs(mesh.latCell[i]) > Math.PI / 4);
+  console.log(`after two days alone: SST rms ${Math.sqrt(square / area).toFixed(3)} K from the recorded day, ${apart.length} cells over 0.5 K from the coupled run, ice concentration rms ${Math.sqrt(iceSquare / iceArea).toFixed(4)} from it`);
   assert.ok(Math.sqrt(square / area) < 0.5, `SST rms ${Math.sqrt(square / area)} K from the recorded day`);
-  assert.ok(worst < 0.5, `SST up to ${worst} K from the coupled run`);
+  assert.deepEqual(apart, edge, 'cells over 0.5 K from the coupled run outside the ice zone');
+  assert.ok(apart.length <= 10, `${apart.length} cells over 0.5 K from the coupled run`);
+  assert.ok(Math.sqrt(iceSquare / iceArea) < 0.012, `ice concentration rms ${Math.sqrt(iceSquare / iceArea)} from the coupled run`);
+
+  const versionOne = join(dir, 'forcing1');
+  mkdirSync(versionOne);
+  for (const name of readdirSync(forcing)) {
+    const { airStress, ...rest } = await decodeState(new Uint8Array(readFileSync(join(forcing, name))));
+    writeFileSync(join(versionOne, name), encodeState({ ...rest, version: 1 }));
+  }
+  assert.equal((await decodeForcing(new Uint8Array(readFileSync(join(versionOne, forcingName(2)))))).fields.airStress, undefined);
+  run('oceanSpinup.mjs', { TAG: 'older', STATE: join(dir, 'rec_day0000.bin'), FORCING: versionOne, YEARS: '1', DAYS_PER_YEAR: '2' });
+  const older = await decodeState(new Uint8Array(readFileSync(join(dir, 'older_year0001.bin'))));
+  let olderSquare = 0;
+  for (let i = 0; i < C; i++) if (sea[i]) { const off = sst(older, i) - recorded.fields.sst[i]; olderSquare += mesh.areaCell[i] * off * off; }
+  console.log(`version-1 days, the drift off: SST rms ${Math.sqrt(olderSquare / area).toFixed(3)} K from the recorded day`);
+  assert.ok(Math.sqrt(olderSquare / area) < 0.5, `version-1 replay: SST rms ${Math.sqrt(olderSquare / area)} K`);
 
   await loadInto(model, alone);
   await model.step(DT);

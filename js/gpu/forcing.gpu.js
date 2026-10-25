@@ -53,6 +53,7 @@ ${names.map((n, b) => `@group(0) @binding(${b}) var<storage, read_write> ${n}: a
 ${constants}
 ${PHYSICS_FUNCTIONS}
 const O_STRESS: i32 = ${ocean.layout.OD.STRESS};
+${ocean.layout.OD.TAUA === undefined ? '' : `const O_TAUA: i32 = ${ocean.layout.OD.TAUA};`}
 ${Object.entries(offsets).filter(([k]) => k !== 'total').map(([k, v]) => `const ${prefix}${k}: i32 = ${v};`).join('\n')}
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x) + i32(id.y) * ${65535 * WORKGROUP};
@@ -79,10 +80,11 @@ export async function createForcingRecorder(model, from = null) {
   const C = mesh.nCells, E = mesh.nEdges, PH = gpu.layout.PH;
   const SUMMED = ['netFlux', 'shortwave', 'shortwaveDown', 'sensible', 'evaporation', 'surfaceT', 'sst', 'ice', 'concentration', 'snowfall', 'rain'];
   const PER_SECOND = new Set(['snowfall', 'rain']);
-  const A = seq([...SUMMED.map((name) => [name, C]), ['stress', E]]);
+  const drifting = ocean.layout.OD.TAUA !== undefined;
+  const A = seq([...SUMMED.map((name) => [name, C]), ['stress', E], ...(drifting ? [['airStress', E]] : [])]);
   const acc = emptyBuffer(device, 4 * A.total);
   const run = compile(model, 'recordForcing', `
-  if (n < E && P[0] > 0.5) { OUT[A_stress + n] += OD[O_STRESS + n]; }
+  if (n < E && P[0] > 0.5) { OUT[A_stress + n] += OD[O_STRESS + n];${drifting ? ' OUT[A_airStress + n] += OD[O_TAUA + n];' : ''} }
   if (n >= C) { return; }
   let i = n; let ice = IN[S_ICE + i]; let conc = PH[PH_CONC + i];
   OUT[A_netFlux + i] += PH[PH_SFLUX + i];
@@ -125,10 +127,11 @@ export async function createForcingRecorder(model, from = null) {
       };
     },
     async day(day) {
-      const views = await readRanges(device, acc, [...SUMMED.map((name) => ({ offset: A[name], length: C })), { offset: A.stress, length: E }]);
+      const views = await readRanges(device, acc, [...SUMMED.map((name) => ({ offset: A[name], length: C })), { offset: A.stress, length: E }, ...(drifting ? [{ offset: A.airStress, length: E }] : [])]);
       const seconds = model.time - timeBefore;
       const fields = Object.fromEntries(SUMMED.map((name, n) => [name, Float32Array.from(views[n], (x) => x / (PER_SECOND.has(name) ? seconds : steps))]));
       fields.stress = Float32Array.from(views[SUMMED.length], (x) => x / Math.max(1, oceanSteps));
+      if (drifting) fields.airStress = Float32Array.from(views[SUMMED.length + 1], (x) => x / Math.max(1, oceanSteps));
       fields.runoff = model.land ? Float32Array.from(model.land.runoff, (x, i) => (x - runoffBefore[i]) / seconds) : new Float32Array(C);
       const bytes = encodeForcing({ N: Math.round(Math.sqrt((C - 2) / 10)), ...gridHeader(mesh), geography: model.geographyRecord ?? null, day, time: model.time, seconds, steps, oceanSteps }, fields);
       device.queue.writeBuffer(acc, 0, new Float32Array(A.total));
@@ -173,6 +176,10 @@ export function createForcedOcean(model) {
      */
     setDay(fields, oceanDt) {
       for (const name of ['netFlux', 'shortwave', 'shortwaveDown', 'sst', 'snowfall', 'stress']) device.queue.writeBuffer(forcing, 4 * F[name], Float32Array.from(fields[name]));
+      if (ocean.iceDrift) {
+        if (!fields.airStress) throw new Error('a drifting ocean replays only forcing that records the air stress (version 2)');
+        ocean.setAirStress(fields.airStress);
+      }
       device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.EVAP, Float32Array.from(fields.evaporation));
       device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.RAIN, Float32Array.from(fields.rain, (x) => x * oceanDt));
       device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.RUNOFF, Float32Array.from(fields.runoff, (x) => x * oceanDt));
@@ -186,6 +193,7 @@ export function createForcedOcean(model) {
       ocean.forgetAccumulated('rain');
       ocean.forgetAccumulated('runoff');
       ocean.accumulateFreshwater(oceanDt);
+      if (ocean.iceDrift) ocean.driftStep(oceanDt);
       ocean.readSurfaceFromAtmosphere();
       const encoder = device.createCommandEncoder();
       encoder.copyBufferToBuffer(forcing, 4 * F.stress, ocean.buffers.OD, 4 * ocean.layout.OD.STRESS, 4 * E);

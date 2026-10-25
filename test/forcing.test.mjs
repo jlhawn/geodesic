@@ -14,6 +14,17 @@ test('a day of forcing comes back from its bytes as it went in', async () => {
   for (const [name] of FORCING_FIELDS) assert.deepEqual(back.fields[name], fields[name], name);
 });
 
+test('a day from a drifting run carries the air stress on the edges, and a version-1 day without it still decodes', async () => {
+  const airStress = Float32Array.from({ length: E }, (_, e) => Math.cos(0.11 * e));
+  const back = await decodeForcing(encodeForcing(header, { ...day(), airStress }));
+  assert.deepEqual(back.fields.airStress, airStress);
+  assert.throws(() => encodeForcing(header, { ...day(), airStress: new Float32Array(C) }), /airStress has 2562 values, not the 7680 edges/);
+  const older = await decodeForcing(encodeState({ kind: 'forcing', version: 1, ...header, ...day() }));
+  assert.equal(older.fields.airStress, undefined);
+  assert.deepEqual(older.fields.stress, day().stress);
+  await assert.rejects(decodeForcing(encodeState({ kind: 'forcing', version: 3, ...header, ...day() })), /forcing version 3, not 1 or 2/);
+});
+
 test('forcing files are named by the day they end', () => {
   assert.equal(forcingName(7), 'forcing-0007.bin');
   assert.equal(forcingDay(forcingName(1827)), 1827);

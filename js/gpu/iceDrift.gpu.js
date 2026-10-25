@@ -24,7 +24,7 @@ const constant = (name, value) => `const ${name}: f32 = ${lit(value)};`;
 
 export const DRIFT_EDGE_SECTIONS = ['UICE', 'UALT', 'ICESTRESS', 'VALID', 'IDYN', 'IACT', 'IUPD', 'IAE', 'IMU', 'IUW', 'IUWT', 'ITILT', 'ITAU', 'IUN', 'IFLX', 'IFA', 'IFV', 'IFS', 'IFE', 'IFSA'];
 export const DRIFT_CELL_SECTIONS = ['SIGMA', 'WATERT', 'ARRIVED', 'IA', 'IV', 'ISN', 'IEN', 'ISA', 'IMASS', 'IPRESS', 'IA0', 'IV0', 'ITOUCH'];
-export const driftSections = (C, E, given) => [...DRIFT_EDGE_SECTIONS.map((name) => [name, E]), ...(given ? [['TAUA', E]] : []), ...DRIFT_CELL_SECTIONS.map((name) => [name, C])];
+export const driftSections = (C, E) => [...DRIFT_EDGE_SECTIONS.map((name) => [name, E]), ['TAUA', E], ...DRIFT_CELL_SECTIONS.map((name) => [name, C])];
 
 /*
  * The thermodynamics' constants and the atmosphere stress the drift reads:
@@ -67,11 +67,12 @@ ${given ? '  return OD[O_TAUA + e];' : `${implicitStress ? '  if (PH[PH_STRESSOK
  */
 export const driftStressKernel = (K, idx) => `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  if (OD[O_EMASK + e] < 0.5) { OD[O_STRESS + e] = 0.0; return; }
+  if (OD[O_EMASK + e] < 0.5) { OD[O_STRESS + e] = 0.0; OD[O_TAUA + e] = 0.0; return; }
   let coverA = select(0.0, select(1.0, PH[PH_CONC + a], PH[PH_CONC + a] > 0.0), OD[O_ICED + a] > 0.5);
   let coverB = select(0.0, select(1.0, PH[PH_CONC + b], PH[PH_CONC + b] > 0.0), OD[O_ICED + b] > 0.5);
   let area = 0.5 * (coverA + coverB);
   let raw = rawStress(e, a, b);
+  OD[O_TAUA + e] = raw;
   let open = 1.0 - 0.5 * (OD[O_SHELF + a] + OD[O_SHELF + b]);
   OD[O_STRESS + e] = select(raw * (1.0 - area * (1.0 - TRANSMIT)), (1.0 - area) * raw + area * OD[O_ICESTRESS + e], OD[O_VALID + e] > 0.5) * open;
 }`;
