@@ -813,7 +813,7 @@ const columnKernel = (diagnose) => `@compute @workgroup_size(${WORKGROUP}) fn ma
 Object.assign(KERNELS, { column: columnKernel('diagnoseColumnMid'), columnLast: columnKernel('diagnoseColumn') });
 
 export const PHYSICS_DEFAULTS = {
-  solarConstant: 1362, orbit: 'circular', cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
+  solarConstant: 1362, orbit: 'circular', vaporShielding: 'none', cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
   mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'exponentialRandom', decorrelationLength: DECORRELATION_LENGTH, decorrelationSlope: DECORRELATION_SLOPE, prognosticHeight: true, deckRest: 'regime', deckSlab: 'fraction', deckReference: 'layer', deckInversion: 'grid', deckCloud: 'sigma', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false, radiationEvery: 1, dragEvery: 1,
@@ -945,7 +945,7 @@ export async function createGpuCore(mesh, {
   const buffers = {
     MI: storageBuffer(device, mi), MF: storageBuffer(device, mf), LV: storageBuffer(device, lv),
     S: emptyBuffer(device, 4 * L.S.total),
-    ...Object.fromEntries(['T', 'K1', 'K2', 'K3', 'K4'].map((name) => [name, emptyBuffer(device, 4 * Math.max(L.S.total, registerLength, name === 'K1' ? LONGWAVE_STASH_FLOATS(L.K, L.C) : 0))])),
+    ...Object.fromEntries(['T', 'K1', 'K2', 'K3', 'K4'].map((name) => [name, emptyBuffer(device, 4 * Math.max(L.S.total, registerLength, name === 'K1' ? LONGWAVE_STASH_FLOATS(L.K, L.C, phys.vaporShielding === 'cloudTop') : 0))])),
     D: emptyBuffer(device, 4 * L.D.total), P: storageBuffer(device, Float32Array.of(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)), PH: emptyBuffer(device, 4 * L.PH.total),
     FR: emptyBuffer(device, 4 * L.FR.total), FP: storageBuffer(device, new Float32Array(8)), PR: emptyBuffer(device, 32 * RING_SLOTS),
   };

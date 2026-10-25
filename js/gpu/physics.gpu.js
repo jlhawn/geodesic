@@ -84,6 +84,9 @@ fn skinStep(i: i32, iceBefore: f32, iceAfter: f32, nonSolar: f32, solar: f32, us
 }
 `;
 
+const NIR_SHIELDED_STUB = `fn nirShielded(i: i32, pi: f32, magnification: f32, top: i32, shieldAt: i32) -> vec4<f32> { return vec4<f32>(0.0, 0.0, 0.0, 0.0); }
+`;
+
 // nearInfrared 'bands' (js/physics/shortwaveGases.module.js's nearInfraredBands) unrolled, every band's
 // terms summed in scalars: solarGases's per-layer shares, nirBandsColumn's column total and the
 // reflected beam's climb in nearInfraredUpward, which takes the beam's magnification as down.x.
@@ -104,6 +107,37 @@ function nearInfraredWgsl(o) {
     ...par.w.map((w, j) => `${x(w)} * exp(-(${m} * (c${g}_${j}${self ? ` + c${g}_s` : ''}) + DIFFUSE_PATH * (c${g}_${j} - ${s(`${g}_${j}`)}${self ? ` + c${g}_s - ${s(`${g}_s`)}` : ''})))`)].join(' + '))).join(' * ');
   const sums = (band, prefix) => `${declare(band, prefix)}
     for (var k = 0; k < K; k++) { let a = nirAir(i, k, pi); ${increments(band)} ${add(band, prefix)} }`;
+  const through = (band, X) => gasesOf(band).map(({ gas, par, g, self, w0 }) => vapour(gas, [self ? `${x(w0)} * exp(-(${X(`${g}_s`)}))` : x(w0),
+    ...par.w.map((w, j) => `${x(w)} * exp(-(${X(`${g}_${j}`)}${self ? ` + ${X(`${g}_s`)}` : ''}))`)].join(' + '))).join(' * ');
+  const shielded = o.vaporShielding !== 'cloudTop' ? NIR_SHIELDED_STUB : `fn nirShielded(i: i32, pi: f32, magnification: f32, top: i32, shieldAt: i32) -> vec4<f32> {
+  var shieldA: array<f32, K>; var shieldB: array<f32, K>; var sums = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+${NEAR_INFRARED_BANDS.map((band) => `  {
+    ${declare(band, 'c')} ${declare(band, 't')}
+    for (var k = 0; k < K; k++) { let a = nirAir(i, k, pi); ${increments(band)} ${add(band, 'c')} if (k < top) { ${add(band, 't')} } }
+    ${declare(band, 's')}
+    var passedTop = 0.0; var tripTop = 0.0; var passedBefore = 1.0; var tripBefore = 1.0; var reflectedBefore = 1.0;
+    for (var l = 0; l <= K; l++) {
+      if (l > 0) { let a = nirAir(i, l - 1, pi); ${increments(band)} ${add(band, 's')} }
+      if (l >= top) {
+        let passed = ${through(band, (n) => `magnification * t${n} + DIFFUSE_PATH * (s${n} - t${n})`)};
+        let trip = ${through(band, (n) => `magnification * t${n} + DIFFUSE_PATH * (2.0 * c${n} - t${n} - s${n})`)};
+        if (l == top) { passedTop = passed; tripTop = trip; }
+        if (l > top) { shieldA[l - 1] += ${x(band.share)} * (passedBefore - passed); shieldB[l - 1] += ${x(band.share)} * (trip - tripBefore); }
+        passedBefore = passed; tripBefore = trip;
+      }
+      if (l <= top) {
+        let reflected = ${through(band, (n) => `magnification * t${n} + DIFFUSE_PATH * (t${n} - s${n})`)};
+        if (l > 0) { shieldA[l - 1] += ${x(band.share)} * (reflected - reflectedBefore); }
+        reflectedBefore = reflected;
+      }
+    }
+    let straight = ${through(band, (n) => `magnification * c${n}`)}; let climbed = ${through(band, (n) => `magnification * c${n} + DIFFUSE_PATH * (c${n} - t${n})`)};
+    sums += ${x(band.share)} * vec4<f32>(passedTop - straight, straight - climbed, passedTop - passedBefore, tripBefore - tripTop);
+  }`).join('\n')}
+  for (var k = 0; k < K; k++) { OUT[shieldAt + k * C + i] = shieldA[k]; OUT[shieldAt + (K + k) * C + i] = shieldB[k]; }
+  return sums;
+}
+`;
   return {
     down: NEAR_INFRARED_BANDS.map((band) => `  {
     ${declare(band, 's')}
@@ -143,12 +177,12 @@ ${NEAR_INFRARED_BANDS.map((band) => `  {
   for (var k = 0; k < K; k++) { OUT[upwardAt + k * C + i] = climb[k]; }
   return loss;
 }
-`,
+${shielded}`,
   };
 }
 
 // solarGases, solarGasTotals and nearInfraredUpward, with the near infrared of `nir` (nearInfraredWgsl) when given.
-const solarGasFunctions = (nir) => `fn solarGases(i: i32, pi: f32, mu: f32, layerOzoneAt: i32, ozoneTakenAt: i32, gasTakenAt: i32) -> vec4<f32> {
+const solarGasFunctions = (nir, shield) => `fn solarGases(i: i32, pi: f32, mu: f32, layerOzoneAt: i32, ozoneTakenAt: i32, gasTakenAt: i32, nirTakenAt: i32) -> vec4<f32> {
   let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
 ${nir ? `  var nir: array<f32, K>;\n${nir.down}\n` : ''}  var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
   for (var k = 0; k < K; k++) {
@@ -158,7 +192,7 @@ ${nir ? `  var nir: array<f32, K>;\n${nir.down}\n` : ''}  var ozone = 0.0; var v
     vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
     oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
     OUT[ozoneTakenAt + idx] = ozoneAbsorb(ozone);
-    OUT[gasTakenAt + idx] = VAPOR_ABS * visibleVapour(vapour) + ${nir ? 'nir[k]' : 'nearInfraredGases(vapour, oxygen, co2)'};
+    OUT[gasTakenAt + idx] = VAPOR_ABS * visibleVapour(vapour) + ${nir ? 'nir[k]' : 'nearInfraredGases(vapour, oxygen, co2)'};${nir && shield ? '\n    OUT[nirTakenAt + idx] = nir[k];' : ''}
   }
   return ${nir ? 'vec4<f32>(VAPOR_ABS * visibleVapour(vapour), magnification, 0.0, 0.0)' : 'vec4<f32>(VAPOR_ABS * visibleVapour(vapour), vapour, oxygen, co2)'};
 }
@@ -189,7 +223,7 @@ ${nir ? nir.functions : `fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>,
   }
   return loss;
 }
-`}`;
+${NIR_SHIELDED_STUB}`}`;
 
 export function physicsConstants(o) {
   if (o.plumeEntrainmentLaw !== 'ifs' && o.plumeEntrainmentLaw !== 'gregory') throw new Error(`plumeEntrainmentLaw must be 'ifs' or 'gregory', not ${o.plumeEntrainmentLaw}`);
@@ -251,6 +285,8 @@ export function physicsConstants(o) {
   if (o.longwaveOverlap !== 'exponentialRandom' && o.longwaveOverlap !== 'random') throw new Error(`longwaveOverlap must be 'exponentialRandom' or 'random', not ${o.longwaveOverlap}`);
   if (o.solarGases !== 'clirad' && o.solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${o.solarGases}`);
   if (o.nearInfrared !== 'clirad' && o.nearInfrared !== 'bands') throw new Error(`nearInfrared must be 'clirad' or 'bands', not ${o.nearInfrared}`);
+  if (o.vaporShielding !== 'none' && o.vaporShielding !== 'cloudTop') throw new Error(`vaporShielding must be 'none' or 'cloudTop', not ${o.vaporShielding}`);
+  const shielding = o.vaporShielding === 'cloudTop';
   const nir = o.nearInfrared === 'bands' ? nearInfraredWgsl(o) : null;
   if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from its climatology, not an ozoneProfile');
   if (o.ozone !== 'afgl' && o.ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${o.ozone}`);
@@ -259,8 +295,10 @@ export function physicsConstants(o) {
   const rayleigh = o.rayleighDepth != null ? [[1, o.rayleighDepth]] : o.rayleighBands;
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((sum, [w]) => sum + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
   const visibleSum = (term) => rayleigh.map(([w, tau]) => `${w} * ${term(`${tau / REFERENCE_PRESSURE} * light.y + light.z`)}`).join(' + ');
+  const scatters = rayleigh.some(([, tau]) => tau > 0) || o.nearInfraredRayleigh > 0 || o.landAerosol > 0 || o.seaAerosol > 0;
+  if (shielding && !(o.solarGases === 'clirad' && o.nearInfrared === 'bands' && o.upwardAbsorption && scatters && (o.cloudCover !== 'pdf' || o.cloudOverlap === 'exponentialRandom'))) throw new Error(`vaporShielding 'cloudTop' needs solarGases 'clirad', nearInfrared 'bands', upwardAbsorption, Rayleigh scattering or aerosol and, under cloudCover 'pdf', cloudOverlap 'exponentialRandom'`);
   return `
-${solarGasFunctions(nir)}fn visibleStreams(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> { return ${visibleSum((depth) => `stream(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
+${solarGasFunctions(nir, shielding)}fn visibleStreams(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> { return ${visibleSum((depth) => `stream(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 fn visibleEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `streamEscape(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 fn visibleReflection(cloudDepth: f32, keep: f32, mu: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `reflection(cloudDepth + ${depth}, keep, mu)`)}; }
 const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.threshold}; const CT_HMAX: f32 = ${cloudTop.maximumHeight}; const CT_PERT: f32 = ${cloudTop.perturbation}; const CT_PROFILE: f32 = ${cloudTop.profile}; const CT_EXCESS: f32 = ${cloudTop.excess}; const CT_TOLERANCE: f32 = ${cloudTop.tolerance}; const CT_CUMULUS: f32 = ${cloudTop.cumulusDepth}; const CT_CAPPED: bool = ${!!cloudTop.cumulusCapped};
@@ -309,7 +347,7 @@ const H2O_K: array<f32, 10> = ${f32(VAPOR_COEFFICIENTS)}; const H2O_W: array<f32
 const VIS_H2O_S: f32 = ${VISIBLE_VAPOR.share}; const VIS_H2O_K: f32 = ${VISIBLE_VAPOR.coefficient}; const VAP_STRENGTH: f32 = ${o.vaporStrength}; const VIS_STRENGTH: f32 = ${nir ? VISIBLE_VAPOR_BANDS : o.vaporStrength};
 const O2_SHARE: f32 = ${OXYGEN.share}; const O2_K: f32 = ${OXYGEN.coefficient}; const O2_PATH: f32 = ${OXYGEN.mixingRatio * STP_DEPTH}; const CO2_PATH: f32 = ${o.carbonDioxide * STP_DEPTH}; const CO2_SW_K: f32 = ${CO2_COEFFICIENT};
 const SCALE_P: f32 = ${SCALING_PRESSURE}; const SCALE_N: f32 = ${SCALING_EXPONENT};
-const SCATTER: bool = ${rayleigh.some(([, tau]) => tau > 0) || o.nearInfraredRayleigh > 0 || o.landAerosol > 0 || o.seaAerosol > 0}; const NIR_RAY: f32 = ${o.nearInfraredRayleigh / REFERENCE_PRESSURE}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
+const SHIELD: bool = ${shielding}; const SCATTER: bool = ${scatters}; const NIR_RAY: f32 = ${o.nearInfraredRayleigh / REFERENCE_PRESSURE}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo}; const ALB_ICEMELT: f32 = ${o.meltingIceAlbedo}; const ICE_MELTRANGE: f32 = ${o.iceMeltingRange};
 const AGEING: bool = ${!!o.snowAgeing}; const ALB_FRESH: f32 = ${o.freshSnowAlbedo}; const SNOW_COLDAGE: f32 = ${o.coldSnowAgeing}; const SNOW_MELTAGE: f32 = ${o.meltingSnowAgeing}; const SNOW_REFRESH: f32 = ${o.refreshSnowfall}; const WETSNOW: f32 = ${o.wetSnowRange}; const AGE_ACT: f32 = ${o.ageingActivation}; const ICE_SNOWFLOOR: f32 = ${o.iceSnowFloor};
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
@@ -671,6 +709,31 @@ fn deckedEscapes(resolved: f32, columns: vec3<f32>, deckDepth: f32, deck: f32, m
     esc += resolved * columnsEscapes(depth, columns.y + deck, (columns.z * columns.x * columns.x + SPREAD2 * deckDepth * deckDepth) / (depth * depth), mu, adir, adif, light);
   }
   return esc;
+}
+struct Shielded { sw: vec4<f32>, esc: vec3<f32>, split: vec4<f32> }
+fn shieldedShortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>, gap: vec4<f32>, scale: f32) -> Shielded {
+  let depth = cloudDepth + NIR_RAY * light.y;
+  let rest = stream(depth, keep, mu, adir * (1.0 - gap.x - gap.z), adif * (1.0 - gap.y - gap.w));
+  let direct = rest.z; let diffuse = rest.y - rest.z; let upward = rest.y - rest.x; let reflecting = adir * direct + adif * diffuse;
+  let passedDirect = (1.0 - gap.x) * direct; let passedDiffuse = (1.0 - gap.y) * diffuse; let weight = (1.0 - light.x) * scale;
+  let reflected = reflection(depth, keep, mu); let escaping = 1.0 - rest.x - reflected - rest.w;
+  var result: Shielded;
+  result.sw = light.x * visibleStreams(cloudDepth, keep, mu, adir, adif, light) + weight * vec4<f32>((1.0 - adir) * passedDirect + (1.0 - adif) * passedDiffuse, passedDirect + passedDiffuse, passedDirect, rest.w);
+  result.esc = vec3<f32>(light.x * visibleEscape(cloudDepth, keep, mu, adir, adif, light), 0.0, light.x * visibleReflection(cloudDepth, keep, mu, light));
+  result.split = vec4<f32>(direct, diffuse, reflected, select(0.0, escaping * reflecting / upward, reflecting > 0.0 && upward > 0.0));
+  return result;
+}
+fn shieldedColumns(depth: f32, path: f32, variance: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>, gap: vec4<f32>, scale: f32) -> Shielded {
+  if (!(variance > 0.0)) { return shieldedShortwave(depth, cloudKeep(path), mu, adir, adif, light, gap, scale); }
+  let s = sqrt(log(1.0 + variance)); let h = 0.5 * s * s;
+  let a = exp(-2.3344142183389778 * s - h); let b = exp(-0.7419637843027259 * s - h); let c = exp(0.7419637843027259 * s - h); let d = exp(2.3344142183389778 * s - h);
+  let ra = shieldedShortwave(depth * a, cloudKeep(path * a), mu, adir, adif, light, gap, scale); let rb = shieldedShortwave(depth * b, cloudKeep(path * b), mu, adir, adif, light, gap, scale);
+  let rc = shieldedShortwave(depth * c, cloudKeep(path * c), mu, adir, adif, light, gap, scale); let rd = shieldedShortwave(depth * d, cloudKeep(path * d), mu, adir, adif, light, gap, scale);
+  var result: Shielded;
+  result.sw = 0.0458758547680685 * (ra.sw + rd.sw) + 0.45412414523193156 * (rb.sw + rc.sw);
+  result.esc = 0.0458758547680685 * (ra.esc + rd.esc) + 0.45412414523193156 * (rb.esc + rc.esc);
+  result.split = 0.0458758547680685 * (ra.split + rd.split) + 0.45412414523193156 * (rb.split + rc.split);
+  return result;
 }
 fn columnMoments(cover: f32, inside: vec4<f32>, outside: vec4<f32>) -> vec3<f32> {
   let depth = inside.y + outside.y; let mean = depth / cover;
@@ -1152,10 +1215,11 @@ export const snowOnSea = (amount) => `if (IN[S_ICE + i] > 0.0) {
  * after it; and per column the scalars stash() numbers.
  */
 const LONGWAVE_STASH = `const LWS_CLOUD: i32 = 0; const LWS_SHARE: i32 = K * C; const LWS_OZONE: i32 = 2 * K * C; const LWS_FLUX: i32 = 3 * K * C; const LWS_ALPHA: i32 = 4 * K * C; const LWS_SCALAR: i32 = 5 * K * C;
+const LWS_SHIELD: i32 = 5 * K * C + 26 * C; const LWS_SHIELD_NIR: i32 = 7 * K * C + 26 * C;
 fn stashed(j: i32, i: i32) -> f32 { return OUT[LWS_SCALAR + j * C + i]; }
 fn stash(j: i32, i: i32, x: f32) { OUT[LWS_SCALAR + j * C + i] = x; }
 `;
-export const LONGWAVE_STASH_FLOATS = (K, C) => 5 * K * C + 26 * C;
+export const LONGWAVE_STASH_FLOATS = (K, C, shielding = false) => (shielding ? 8 : 5) * K * C + 26 * C;
 /*
  * The correlated longwave's sweeps with the g-points taken a chunk at a
  * time, each chunk's fluxes held in scalars: the chunk's code is unrolled
@@ -1265,7 +1329,7 @@ ${sweeps(false)}  }`;
 }
 const SOLAR_OPEN = `  var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0); var ozonePrev = 0.0;
   let solarOn = SOLAR_CLIRAD && mu > 0.0;
-  if (solarOn) { solar = solarGases(i, pi, mu, LWS_OZONE, LWS_CLOUD, LWS_SHARE); }
+  if (solarOn) { solar = solarGases(i, pi, mu, LWS_OZONE, LWS_CLOUD, LWS_SHARE, LWS_SHIELD_NIR); }
   let ozoneHeating = select(beam * OZONE_ABS, beam * select(0.0, OUT[LWS_CLOUD + (K - 1) * C + i], solarOn), SOLAR_CLIRAD);
   let visibleTaken = ozoneHeating + beam * solar.x;
 `;
@@ -1284,10 +1348,12 @@ const HELD_OPEN = `  var shone = 0.0; var weighted = 0.0;
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
 ${SOLAR_OPEN}`;
 const HELD_STORE = `  for (var k = 0; k < K; k++) { PH[PH_RADSW + k * C + i] = beforeBands[k]; }
-  let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating;
+  var atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating;
+  if (SHIELD && shieldOn) { atmosphereSolar += shieldHeating; }
   PH[PH_RADABS + i] = absorbed; PH[PH_RADEMIT + i] = surfaceEmission;
   PH[PH_RADSWDN + i] = incident * sw.y; PH[PH_RADDIR + i] = incident * sw.z;
   PH[PH_RADATM + i] = atmosphereSolar; PH[PH_RADTOA + i] = absorbed + atmosphereSolar; PH[PH_RADREFL + i] = incident - absorbed - cloudHeating - upwardHeating;
+  if (SHIELD && shieldOn) { PH[PH_RADREFL + i] = beam - absorbed - atmosphereSolar; }
   if (CLEAR_SKY) {
     let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
     var clearUp = 0.0;
@@ -1487,7 +1553,7 @@ ${held ? '' : `  let mu = stashed(2, i); let beam = stashed(3, i); let adir = st
   let replaced = select(K, i32(PH[PH_DECKFROM + i]), DECK_ABOVE && deck > 0.0);
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   let mixTop = PH[PH_MIXTOP + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
-  var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>; var chainF: array<f32, K>;
+  var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>; var chainF: array<f32, K>; var shieldLoss: array<f32, K>;
   var cloudPath = 0.0; var cloudDepth = 0.0; var deckUnit = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0); var layered = vec2<f32>(0.0, 0.0);
   var columnIn = vec4<f32>(0.0, 0.0, 0.0, 0.0); var columnOut = vec4<f32>(1.0, 0.0, 0.0, 0.0);
   var aboveCover = 0.0; var aboveIn = vec4<f32>(0.0, 0.0, 0.0, 0.0); var aboveOut = vec4<f32>(1.0, 0.0, 0.0, 0.0); var abovePath = 0.0; var aboveSolar = 0.0;
@@ -1523,6 +1589,7 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
     let ozoneNow = select(0.0, OUT[LWS_CLOUD + idx], solarOn);
     netFlux[k] = select(ozoneHeating * LV[L_OZ + k], beam * (ozoneNow - ozonePrev), SOLAR_CLIRAD);
     ozonePrev = ozoneNow;
+    if (SHIELD) { let spread = select(1.0, layered.x, PDF_COVER); shieldLoss[k] = select(0.0, spread * cloudDepth / (cloudDepth + 2.0 * mu * spread), cloudDepth > 0.0 && spread > 0.0); }
   }
   var incident = beam - ozoneHeating;
   var vaporHeating = 0.0; var path = 0.0;
@@ -1562,8 +1629,42 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
     overPath = abovePath; overSolar = aboveSolar; overMoments = columnMoments(seenAbove, aboveIn, aboveOut);
     overCover = select(0.0, seenAbove, COLUMNS && abovePath > 0.0 && overMoments.x > 0.0);
   }
+  var shieldOn = false; var shieldTop = K; var shieldGap = vec4<f32>(0.0, 0.0, 0.0, 0.0); var shieldScale = 1.0;
+  if (SHIELD && solarOn && cloudPath > 0.0 && incident > 0.0) {
+    let full = shieldLoss[K - 1];
+    var weighted = 0.0; var nirBefore = 0.0; var lossBefore = 0.0;
+    for (var k = 0; k < K; k++) {
+      let nirNow = OUT[LWS_SHIELD_NIR + k * C + i];
+      weighted += (nirNow - nirBefore) * 0.5 * (lossBefore + shieldLoss[k]);
+      nirBefore = nirNow; lossBefore = shieldLoss[k];
+    }
+    var top = K;
+    if (full > 0.0 && weighted > 0.0) {
+      var below = 0.0; var found = false;
+      for (var j = 0; j < K; j++) {
+        let k = K - 1 - j;
+        below += OUT[LWS_SHIELD_NIR + k * C + i] - select(0.0, OUT[LWS_SHIELD_NIR + max(k - 1, 0) * C + i], k > 0);
+        if (!found && full * below >= weighted) { top = k; found = true; }
+      }
+    }
+    if (top < K) {
+      let sums = nirShielded(i, pi, solar.y, top, LWS_SHIELD);
+      let restLight = (1.0 - light.x) * incident; let entering = restLight + beam * sums.x;
+      let lostDirect = beam * (sums.x + sums.y) / entering; let lostDiffuse = beam * (sums.z + sums.w) / entering;
+      if (restLight > 0.0 && lostDirect < 0.95 && lostDiffuse < 0.95) {
+        shieldOn = true; shieldTop = top; shieldScale = entering / restLight;
+        shieldGap = beam * vec4<f32>(sums.x, sums.z, sums.y, sums.w) / entering;
+      }
+    }
+  }
+  var shieldEsc = vec3<f32>(0.0, 0.0, 0.0); var shieldSplit = vec4<f32>(0.0, 0.0, 0.0, 0.0);
   var sw: vec4<f32>;
-  if (columns) { sw = columnsShortwave(moments.x, moments.y, moments.z, mu, adir, adif, light); }
+  if (shieldOn) {
+    var shielded: Shielded;
+    if (columns) { shielded = shieldedColumns(moments.x, moments.y, moments.z, mu, adir, adif, light, shieldGap, shieldScale); }
+    else { shielded = shieldedColumns(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudPath / columnCover, 0.0, mu, adir, adif, light, shieldGap, shieldScale); }
+    sw = shielded.sw; shieldEsc = shielded.esc; shieldSplit = shielded.split;
+  } else if (columns) { sw = columnsShortwave(moments.x, moments.y, moments.z, mu, adir, adif, light); }
   else { sw = shortwave(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudKeep(cloudPath / columnCover), mu, adir, adif, light); }
   if (PDF_COVER && columnCover < 1.0) { sw = columnCover * sw + (1.0 - columnCover) * shortwave(0.0, 1.0, mu, adir, adif, light); }
   var clearShare = select(0.0, incident * sw.w / cloudPath, cloudPath > 0.0);
@@ -1594,7 +1695,8 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
     let sunlit = beam - ozoneHeating;
     let restAfter = sunlit - max(0.0, VIS_FRAC * beam - visibleTaken) - vaporHeating;
     var esc: vec3<f32>;
-    if (columns) { esc = columnsEscapes(moments.x, moments.y, moments.z, mu, adir, adif, light); }
+    if (shieldOn) { esc = shieldEsc; }
+    else if (columns) { esc = columnsEscapes(moments.x, moments.y, moments.z, mu, adir, adif, light); }
     else { esc = escapes(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudKeep(cloudPath / columnCover), mu, adir, adif, light); }
     if (PDF_COVER && columnCover < 1.0) { esc = columnCover * esc + (1.0 - columnCover) * escapes(0.0, 1.0, mu, adir, adif, light); }
     if (deck > 0.0) {
@@ -1636,6 +1738,18 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
       upwardHeating += upwardOzone;
     }
   }
+  var shieldHeating = 0.0;
+  if (SHIELD && shieldOn) {
+    let weight = (1.0 - fraction) * columnCover;
+    var nirBefore = 0.0;
+    for (var k = 0; k < K; k++) {
+      let nirNow = OUT[LWS_SHIELD_NIR + k * C + i]; let downward = nirNow - nirBefore; nirBefore = nirNow;
+      let across = OUT[LWS_SHIELD + k * C + i]; let back = OUT[LWS_SHIELD + (K + k) * C + i]; let climb = OUT[LWS_FLUX + k * C + i];
+      let change = select(beam * (shieldSplit.z * across + shieldSplit.w * climb), beam * (shieldSplit.x * downward - downward + shieldSplit.y * across + adir * shieldSplit.x * climb + adif * shieldSplit.y * back), k >= shieldTop);
+      netFlux[k] += weight * change;
+      shieldHeating += weight * change;
+    }
+  }
   let absorbed = incident * sw.x;
   var beforeBands: array<f32, K>;
   if (MOIST_BL${held ? ' || true' : ''}) { for (var k = 0; k < K; k++) { beforeBands[k] = netFlux[k]; } }
@@ -1665,7 +1779,8 @@ ${held ? HELD_STORE : `  if (CLEAR_SKY) {
       PH[PH_OLRCLRSUM + i] += upVapor + upGas + WINDOW * surfaceEmission;
     }
   }
-  let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let reflectedSolar = incident - absorbed - cloudHeating - upwardHeating;
+  var atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; var absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; var reflectedSolar = incident - absorbed - cloudHeating - upwardHeating;
+  if (SHIELD && shieldOn) { atmosphereSolar += shieldHeating; absorbedSolar += shieldHeating; reflectedSolar = beam - absorbedSolar; }
   stash(14, i, absorbed); stash(15, i, incident * sw.y); stash(16, i, incident * sw.z); stash(17, i, atmosphereSolar); stash(18, i, absorbedSolar); stash(19, i, reflectedSolar);
 `}  stash(0, i, 1.0);
 }`;
