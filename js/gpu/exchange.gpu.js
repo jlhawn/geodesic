@@ -18,7 +18,7 @@ const XKARMAN: f32 = ${KARMAN}; const XGRAV: f32 = 9.81; const X_ITER: i32 = ${x
 const Z0_FOREST: f32 = ${r.forest[0]}; const ZH_FOREST: f32 = ${r.forest[1]}; const Z0_GRASS: f32 = ${r.grass[0]}; const ZH_GRASS: f32 = ${r.grass[1]}; const Z0_BARE: f32 = ${r.bare[0]}; const ZH_BARE: f32 = ${r.bare[1]}; const Z0_SNOW: f32 = ${r.snow};
 const CH_SLOPE: f32 = ${slope}; const CH_OFFSET: f32 = ${offset}; const CH_CEIL: f32 = ${ceiling}; const SMOOTH: f32 = ${x.smoothFlow}; const REF_CROP: f32 = ${x.referenceCrop}; const REF_KARMAN: f32 = ${FAO_KARMAN};
 const AND_SMOOTH: f32 = ${ANDREAS[0][0]}; const AND_TRANS: f32 = ${ANDREAS[1][0]};
-const X_GUSTY: bool = ${gusty}; const X_GUST_ITER: i32 = ${x.gustIterations}; const X_GUST_SEA: f32 = ${seaGust}; const X_GUST_LAND: f32 = ${landGust}; const X_GUST_FLOOR: f32 = ${gustFloor}; const X_WET_SURFACE: bool = ${x.landHumidity === 'wetness'};
+const X_GUSTY: bool = ${gusty}; const X_GUST_ITER: i32 = ${x.gustIterations}; const X_GUST_SEA: f32 = ${seaGust}; const X_GUST_LAND: f32 = ${landGust}; const X_GUST_FLOOR: f32 = ${gustFloor}; const X_WET_SURFACE: bool = ${x.landHumidity === 'wetness'}; const X_SEA_REDUCTION: f32 = ${1 - x.seaHumidity};
 fn xWind(i: i32, wind: f32) -> f32 { return select(max(wind, GUST), PH[PH_XWIND + i], X_GUSTY); }
 const AND0: vec3<f32> = vec3<f32>(${ANDREAS[0].slice(1).join(', ')}); const AND1: vec3<f32> = vec3<f32>(${ANDREAS[1].slice(1).join(', ')}); const AND2: vec3<f32> = vec3<f32>(${ANDREAS[2].slice(1).join(', ')});
 `;
@@ -87,7 +87,7 @@ fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, sn
   let exS = D[D_EXL + b];
   let airV = IN[S_TH + b] * (1.0 + VIRT * IN[S_Q + b]);
   let airQ = IN[S_Q + b];
-  let surfaceQ = select(qsat(skin, pi), select(airQ, airQ + wetness * max(0.0, qsat(skin, pi) - airQ), X_WET_SURFACE), onLand);
+  let surfaceQ = select(qsat(skin, pi) * (1.0 - X_SEA_REDUCTION * (1.0 - concentration)), select(airQ, airQ + wetness * max(0.0, qsat(skin, pi) - airQ), X_WET_SURFACE), onLand);
   let surfaceV = skin / exS * (1.0 + VIRT * surfaceQ);
   var ri = 0.0; var c = vec2<f32>(0.0, 0.0);
   var passes = 1;

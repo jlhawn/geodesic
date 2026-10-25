@@ -1401,7 +1401,7 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
     let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
     let exchange = min(rho * PH[PH_HEATX + i] * xWind(i, ws), pi * LV[L_DS + K - 1] / (GRAV * max(P[0], 1e-6)));
     let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
-    let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
+    let evap = wetness * max(0.0, exchange * (qsat(ts, pi) * (1.0 - X_SEA_REDUCTION * (1.0 - cover)) - IN[S_Q + bottom]));
     var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec3<f32>(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, continental);
     if (STRATUS_SOLAR && CLOUD_SW > 0.0) {
       var path = 0.0; var depth = 0.0; var unit = 0.0; var layer = 0.0; var shadeBlocks = vec3<f32>(0.0, 1.0, 0.0); var shadeLayered = vec2<f32>(0.0, 0.0);
@@ -1698,7 +1698,7 @@ ${held ? HELD_REST : `  let absorbed = stashed(14, i); let swdn = stashed(15, i)
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
   let exchange = min(rho * PH[PH_HEATX + i] * xWind(i, ws), pi * LV[L_DS + K - 1] / (GRAV * max(P[0], 1e-6)));
   let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
-  let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
+  let evap = wetness * max(0.0, exchange * (qsat(ts, pi) * (1.0 - X_SEA_REDUCTION * select(1.0 - cover, 0.0, onLand)) - IN[S_Q + bottom]));
   if (ROUGH) { PH[PH_BUOY + i] = GRAV / IN[S_TH + bottom] * (sensible / (rho * CP * D[D_EXM + bottom]) + 0.61 * IN[S_TH + bottom] * evap / rho); }
   let airQs = qsat(airT, pi); let airSlope = airQs * 4302.645 / ((airT - 29.65) * (airT - 29.65)); let conductance = PH[PH_REFX + i] * xWind(i, ws);
   let potential = (airSlope * (absorbed - surfaceEmission + back) + rho * CP * conductance * (airQs - IN[S_Q + bottom])) / (LHEAT * airSlope + CP * (1.0 + REF_RESIST * conductance));
@@ -2621,7 +2621,8 @@ fn blSeal(i: i32, pi: f32) {
   let h = top - zb;
   for (var k = KTOP; k < K; k++) { PH[PH_MIX + k * C + i] = 0.0; }
   PH[PH_ENTRAIN + i] = 0.0;
-  let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
+  let iceConc = PH[PH_CONC + i]; let seaOpen = 1.0 - select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
+  let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) * (1.0 - X_SEA_REDUCTION * seaOpen) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
   if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * xWind(i, speed); }
   if (FORM_DRAG && PH[PH_OFLT + i] > 0.0) {
     let sflt = PH[PH_OFLT + i];

@@ -16,7 +16,8 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * lowest layer the profile's velocity scale is the unstable one of
  * Holtslag and Boville (1993), u* (1 − 15 ζ)^¼ with ζ = 0.1 h / L from
  * the bulk surface buoyancy flux (virtual, with the saturation humidity
- * of a sea surface; dry over `land`) and floored at −2, so a convective
+ * of a sea surface times 1 − (1 − `seaHumidity`) o, o its `openSea` share
+ * or 1 without it; dry over `land`) and floored at −2, so a convective
  * marine boundary layer mixes momentum down to the surface; stable
  * columns keep the neutral profile. The interface coefficients ρK/Δz are
  * kept in a shared array so the cell units of the adjust phase can mix
@@ -169,7 +170,7 @@ export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, pertur
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, deckLayer = null, deckShare = null, deckEntrainment = null, stratiform = null, buffers = null,
+  dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, openSea = null, seaHumidity = 1, deckTop = null, deckGate = null, deckLayer = null, deckShare = null, deckEntrainment = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
@@ -263,7 +264,7 @@ export function createBoundaryLayer(mesh, core, {
       for (let k = kTop; k < K; k++) mixing[k * C + i] = 0;
       entrainmentVelocity[i] = 0;
       const base = bottom * C + i;
-      const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
+      const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) * (1 - (1 - seaHumidity) * (openSea ? openSea[i] : 1)) - q[base]) : 0;
       const buoyancy = givenBuoyancy ? givenBuoyancy[i] : g / theta[base] * heatCoefficient(i) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
       buoyancyFlux[i] = buoyancy;
       if (h <= 0) continue;
@@ -299,7 +300,7 @@ export function createBoundaryLayer(mesh, core, {
   function surfaceBuoyancy(i, pi, theta, surfaceT, q) {
     if (givenBuoyancy) return givenBuoyancy[i];
     const base = bottom * C + i;
-    const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
+    const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) * (1 - (1 - seaHumidity) * (openSea ? openSea[i] : 1)) - q[base]) : 0;
     return g / theta[base] * heatCoefficient(i) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
   }
 

@@ -637,7 +637,7 @@ export function createRadiation(mesh, core, {
   boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, varianceCover: varianceRule = 'water', buoyancyLength = 0.53, deckRegime = 'inversion', deckBypass = false,
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
-  exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, referenceCoefficients = null, surfaceLayer = false, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
+  exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, referenceCoefficients = null, surfaceLayer = false, seaHumidity = 1, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
   longwaveScheme = 'correlated', longwaveOverlap = 'exponentialRandom', longwaveLines = 'voigt', solarGases = 'clirad', nearInfrared = 'bands', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
   rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, nearInfraredRayleigh = NEAR_INFRARED_RAYLEIGH, upwardAbsorption = true, visibleFraction = VISIBLE_FRACTION, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, land = null, iceSheet = null, longwaveTable = null,
   liquidTemperature = CLOUD_OPTICS.liquidTemperature, iceTemperature = CLOUD_OPTICS.iceTemperature, seaDropletRadius = CLOUD_OPTICS.seaDropletRadius, landDropletRadius = CLOUD_OPTICS.landDropletRadius,
@@ -1242,7 +1242,7 @@ export function createRadiation(mesh, core, {
     // At most the bottom layer's mass a step: the explicit fluxes take the air to the surface's temperature and humidity, never past them.
     const exchange = Math.min(airDensity * exchangeCoefficientAt * Math.max(windSpeed, gustiness), dt > 0 ? pi * dSigma[bottom] / (g * dt) : Infinity);
     const sensible = surfaceLayer ? exchange * (cp * (surfaceT - airTemperature) - cp * thetaV[bottom * C + i] * (exnerLower[bottom * C + i] - exnerLayer[bottom * C + i])) : exchange * cp * (surfaceT - airTemperature);
-    const evaporation = qAir === null ? 0 : wetness * Math.max(0, exchange * (saturationHumidity(surfaceT, pi) - qAir));
+    const evaporation = qAir === null ? 0 : wetness * Math.max(0, exchange * (saturationHumidity(surfaceT, pi) * (1 - (1 - seaHumidity) * openSea) - qAir));
     budget.surfaceBuoyancy = g / theta[bottom * C + i] * (sensible / (airDensity * cp * exnerLayer[bottom * C + i]) + 0.61 * theta[bottom * C + i] * evaporation / airDensity);
     const mu = beam / solarConstant, lit = !clirad && vaporAbsorption > 0 && q !== null && mu > 0;
     let downPath = 0;
@@ -1640,7 +1640,10 @@ export function createRadiation(mesh, core, {
    * With surfaceLayer the sensible heat flux is that of the dry static
    * energy, ρ C_H U (c_p T_s − c_p T − g z) with z the lowest layer's
    * height (IFS Cy47r3 Part IV eq. 8.6), and the reference evaporation
-   * takes referenceCoefficients. Each cell's surface buoyancy flux from
+   * takes referenceCoefficients. The evaporation takes the saturation
+   * humidity at the skin times 1 − (1 − seaHumidity) o, o the cell's
+   * `openSea` share (seaHumidity 0.98: COARE's salinity factor over open
+   * water, Fairall et al. 2003). Each cell's surface buoyancy flux from
    * the sensible and latent fluxes, g/θ (H/(ρ c_p Π) + 0.61 θ E/ρ), goes
    * to `surfaceBuoyancy`.
    */

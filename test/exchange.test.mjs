@@ -217,3 +217,70 @@ test('a saturated, fog-filled lowest layer over a sea 3 K warmer counts its vapo
   assert.ok(Math.sqrt(speed * speed - 0.25) <= 2, `gust ${Math.sqrt(speed * speed - 0.25)} m/s`);
   assert.ok(ri < 0 && loaded < 1.3 * ri, `the loading would read Ri_b ${loaded} against ${ri}`);
 });
+
+const surfaceKinds = (model) => Array.from({ length: model.mesh.nCells }, (_, i) => (model.geography.land[i] ? 'land' : !(model.state[6][i] > 0) ? 'open sea' : model.seaIce.concentration[i] >= 1 ? 'full ice' : 'part ice'));
+
+test('seaHumidity takes the open water\'s share of the skin\'s saturation humidity: from one state the first step\'s evaporation, C_H and the fixed exchange\'s buoyancy flux are the default\'s to the bit over land and full ice, the evaporation falls over open water and partial ice and the fixed exchange\'s buoyancy flux over open water, and Ri_b takes 1 − (1 − seaHumidity)(1 − A) of q_s at concentration A', () => {
+  const first = (surface) => { const model = prepare(createModel(new Grid(16), { topography, surface })), kind = surfaceKinds(model); model.step(900); return { model, kind }; };
+  let rough = null;
+  for (const fixed of [false, true]) {
+    const exchange = fixed ? { exchange: 'fixed' } : {}, { model: base, kind } = first(exchange), { model: salty } = first({ ...exchange, seaHumidity: 0.98 });
+    const C = base.mesh.nCells, fall = {};
+    for (let i = 0; i < C; i++) {
+      const k = kind[i], e0 = base.radiation.evaporation[i], e1 = salty.radiation.evaporation[i], b0 = base.boundaryLayer.buoyancyFlux[i], b1 = salty.boundaryLayer.buoyancyFlux[i];
+      if (k === 'land' || k === 'full ice') assert.ok(e1 === e0 && b1 === b0 && salty.exchange.heat[i] === base.exchange.heat[i], `${k} cell ${i}: evaporation ${e1} against ${e0}, buoyancy flux ${b1} against ${b0}`);
+      else {
+        assert.ok(e0 > 0 ? e1 < e0 : e1 === 0, `${k} cell ${i}: evaporation ${e1} against ${e0}`);
+        if (fixed && k === 'open sea') assert.ok(b1 < b0, `cell ${i}: the fixed exchange's buoyancy flux ${b1} against ${b0}`);
+        const a = base.mesh.areaCell[i], f = (fall[k] ??= { area: 0, base: 0, salty: 0 });
+        f.area += a; f.base += a * e0; f.salty += a * e1;
+      }
+    }
+    console.log(`${fixed ? 'fixed' : 'roughness'} exchange, seaHumidity 0.98: ${Object.entries(fall).map(([k, f]) => `${k} evaporation ${(2.5e6 * f.base / f.area).toFixed(1)} → ${(2.5e6 * f.salty / f.area).toFixed(1)} W/m² (−${(100 * (1 - f.salty / f.base)).toFixed(1)} %)`).join(', ')}`);
+    assert.ok(fall['open sea'].salty < (1 - 0.02) * fall['open sea'].base && fall['part ice'].salty < fall['part ice'].base, `the mean evaporation falls by at least the factor's 2 % over open sea (${fall['open sea'].salty / fall['open sea'].base}) and falls over partial ice (${fall['part ice'].salty / fall['part ice'].base})`);
+    if (!fixed) rough = { salty, kind };
+  }
+  const { salty: { exchange, state, core, mesh }, kind } = rough, C = mesh.nCells, b = (core.K - 1) * C;
+  const { exnerLayer, exnerLower, g } = core.diagnostics;
+  const i = [...Array(C).keys()].find((n) => kind[n] === 'open sea' && Math.abs(mesh.latCell[n]) < 0.5);
+  const pi = state[0][i], skin = state[1][b + i] * exnerLayer[b + i] + 3, airV = state[1][b + i] * (1 + VIRTUAL_FACTOR * state[4][b + i]);
+  for (const A of [0, 0.5, 1]) {
+    const { z, ri } = { ...exchange.cell(i, state[0], state[1], state[4], state[5], skin, 0.5, A, 0, 0, 0, 0, 800) };
+    const speed = exchange.wind[i], surfaceV = skin / exnerLower[b + i] * (1 + VIRTUAL_FACTOR * saturationHumidity(skin, pi) * (1 - (1 - 0.98) * (1 - A)));
+    close(ri, g * z * (airV - surfaceV) / (0.5 * (airV + surfaceV) * speed * speed), 1e-12, `Ri_b at concentration ${A}`);
+  }
+  assert.throws(() => createModel(new Grid(16), { topography, surface: { seaHumidity: 0 } }), /seaHumidity must be in \(0, 1\]/);
+});
+
+test('both engines take seaHumidity alike: from one state the first step\'s evaporation over every surface and its fall from the default\'s agree, and with the fixed exchange so does the fall of the boundary layer\'s buoyancy flux', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const fixed of [false, true]) {
+    const exchange = fixed ? { exchange: 'fixed' } : {}, runs = [];
+    let kind = null;
+    for (const surface of [exchange, { ...exchange, seaHumidity: 0.98 }]) {
+      const cpu = prepare(createModel(new Grid(16), { topography, surface })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface }));
+      kind = surfaceKinds(cpu);
+      cpu.step(900); await gpu.step(900); await gpu.settle();
+      const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells;
+      const [evaporation, buoyancy] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['EVAP', 'BUOY'].map((name) => ({ offset: PH[name], length: C })));
+      runs.push({ cpuE: Float64Array.from(cpu.radiation.evaporation), gpuE: Float64Array.from(evaporation), cpuB: Float64Array.from(cpu.boundaryLayer.buoyancyFlux), gpuB: Float64Array.from(buoyancy) });
+    }
+    const [d, s] = runs, worst = {};
+    for (let i = 0; i < kind.length; i++) {
+      const w = (worst[kind[i]] ??= { cells: 0, evaporation: 0, fall: 0, meanFall: 0, buoyancyFall: 0, buoyancyScale: 0, buoyancyFallScale: 0 });
+      const cpuFall = d.cpuE[i] - s.cpuE[i], gpuFall = d.gpuE[i] - s.gpuE[i];
+      w.cells++;
+      w.meanFall += 2.5e6 * cpuFall;
+      w.evaporation = Math.max(w.evaporation, 2.5e6 * (Math.abs(s.gpuE[i] - s.cpuE[i]) - 1e-5 * Math.abs(s.cpuE[i])));
+      w.fall = Math.max(w.fall, 2.5e6 * (Math.abs(gpuFall - cpuFall) - 2e-5 * Math.abs(d.cpuE[i])));
+      w.buoyancyFall = Math.max(w.buoyancyFall, Math.abs((d.gpuB[i] - s.gpuB[i]) - (d.cpuB[i] - s.cpuB[i])));
+      w.buoyancyScale = Math.max(w.buoyancyScale, Math.abs(d.cpuB[i]));
+      w.buoyancyFallScale = Math.max(w.buoyancyFallScale, Math.abs(d.cpuB[i] - s.cpuB[i]));
+    }
+    for (const [k, w] of Object.entries(worst)) {
+      console.log(`${fixed ? 'fixed' : 'roughness'} exchange, ${k}: ${w.cells} cells, the evaporation falls ${(w.meanFall / w.cells).toFixed(2)} W/m² in the mean; engines apart by ${w.evaporation.toExponential(1)} W/m² in the evaporation and ${w.fall.toExponential(1)} W/m² in its fall beyond 1e-5 of it${fixed ? `, ${w.buoyancyFall.toExponential(1)} m²/s³ in the buoyancy flux's fall (largest fall ${w.buoyancyFallScale.toExponential(1)})` : ''}`);
+      assert.ok(w.evaporation < 0.05 && w.fall < 0.05, `${k} evaporation ${w.evaporation}, its fall ${w.fall} W/m²`);
+      if (fixed) assert.ok(w.buoyancyFall <= 1e-3 * w.buoyancyScale + 1e-2 * w.buoyancyFallScale, `${k} buoyancy flux's fall apart by ${w.buoyancyFall}`);
+    }
+    for (const k of ['open sea', 'part ice']) assert.ok(worst[k].meanFall > 0, `${k}: the evaporation falls`);
+  }
+});

@@ -40,7 +40,10 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  * Ri_b = g z (θv − θv_s) / (θ̄v U²) by `iterations` steps (fixed point
  * when unstable, Newton in ln ζ when stable). θv_s is the surface's
  * virtual potential temperature, with the saturation humidity at the skin
- * over sea and sea ice, and over land (landHumidity 'wetness') the
+ * over sea and sea ice (over the open water times `seaHumidity`, 1 by
+ * default and 0.98 for seawater's salinity in COARE, Fairall et al. 2003,
+ * so a cell iced at concentration A takes 1 − (1 − seaHumidity)(1 − A)
+ * of it), and over land (landHumidity 'wetness') the
  * humidity the evaporation implies, q₁ + w max(0, q_s(T_s) − q₁) with w
  * the land's wetness (`wetness`, 1 under snow), so that Ri_b has the sign
  * and size of the surface's moist buoyancy flux; 'air' takes q₁. The
@@ -76,7 +79,7 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
 export const KARMAN = 0.4;
 export const FAO_KARMAN = 0.41;
 export const ROUGHNESS = { forest: [2.0, 2.0], grass: [0.1, 1e-3], bare: [0.013, 1.3e-4], snow: 1.3e-3 };
-export const EXCHANGE_DEFAULTS = { roughness: ROUGHNESS, snowCover: 30, blendingHeight: 10, charnock: [0.0017, -0.005, 19], smoothFlow: 0.11, iterations: 5, referenceCrop: 0.12, convectiveGust: [1.2, 1, 0.2], gustIterations: 4, landHumidity: 'wetness' };
+export const EXCHANGE_DEFAULTS = { roughness: ROUGHNESS, snowCover: 30, blendingHeight: 10, charnock: [0.0017, -0.005, 19], smoothFlow: 0.11, iterations: 5, referenceCrop: 0.12, convectiveGust: [1.2, 1, 0.2], gustIterations: 4, landHumidity: 'wetness', seaHumidity: 1 };
 export const ANDREAS = [[0.135, 1.25, 0, 0], [2.5, 0.149, -0.55, 0], [Infinity, 0.317, -0.565, -0.183]];
 const GRAVITY = 9.81;
 const STABLE = { a: 1, b: 2 / 3, c: 5, d: 0.35 };
@@ -92,6 +95,7 @@ export function exchangeMode(surface = {}, land = {}) {
 export function exchangeOptions(surface = {}) {
   const o = { ...EXCHANGE_DEFAULTS, ...Object.fromEntries(Object.keys(EXCHANGE_DEFAULTS).filter((key) => surface[key] !== undefined).map((key) => [key, surface[key]])) };
   if (o.landHumidity !== 'wetness' && o.landHumidity !== 'air') throw new Error(`landHumidity must be 'wetness' or 'air', not ${o.landHumidity}`);
+  if (!(o.seaHumidity > 0 && o.seaHumidity <= 1)) throw new Error(`seaHumidity must be in (0, 1], not ${o.seaHumidity}`);
   return { ...o, roughness: { ...ROUGHNESS, ...o.roughness } };
 }
 
@@ -217,7 +221,7 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
   const heat = fixed ? drag : new Float64Array(heatBuffer), reference = fixed ? drag : new Float64Array(referenceBuffer);
   const o = exchangeOptions(options);
   const { roughness: { forest, grass, bare, snow: snowRoughness }, snowCover, iterations, convectiveGust, gustIterations } = o;
-  const gusty = !fixed && !!convectiveGust, wetSurface = o.landHumidity === 'wetness';
+  const gusty = !fixed && !!convectiveGust, wetSurface = o.landHumidity === 'wetness', seaReduction = 1 - o.seaHumidity;
   if (!(buffers && buffers.drag)) {
     for (let i = 0; i < C; i++) {
       drag[i] = landMask && landMask[i] ? landDrag : seaDrag;
@@ -245,7 +249,7 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
     const viscosity = airViscosity(theta[b] * exnerLayer[b] - 273.15);
     const exS = exnerLower[b];
     const airV = theta[b] * (1 + VIRTUAL_FACTOR * (q ? q[b] : 0));
-    const surfaceQ = !q ? 0 : !onLand ? saturationHumidity(skin, pi[i]) : wetSurface ? q[b] + wetness * Math.max(0, saturationHumidity(skin, pi[i]) - q[b]) : q[b];
+    const surfaceQ = !q ? 0 : !onLand ? saturationHumidity(skin, pi[i]) * (1 - seaReduction * (1 - concentration)) : wetSurface ? q[b] + wetness * Math.max(0, saturationHumidity(skin, pi[i]) - q[b]) : q[b];
     const surfaceV = skin / exS * (1 + VIRTUAL_FACTOR * surfaceQ);
     let ri = 0;
     for (let pass = 0, passes = gusty ? gustIterations + 1 : 1; pass < passes; pass++) {
