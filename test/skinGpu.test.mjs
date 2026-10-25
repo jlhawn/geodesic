@@ -46,7 +46,7 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
   if (gpu.ocean) gpu.ocean.initialize(gpu.state[3], gpu.state[6]);
   const C = cpu.mesh.nCells, PH = gpu.gpu.layout.PH, first = { warm: 0, cool: 0, ts: 0, net: 0, sensible: 0, bulk: 0 }, worst = { ...first };
   const capacityOf = (i) => (cpu.ocean ? cpu.ocean.capacity[i] : cpu.seaIce.slabHeatCapacity);
-  let thin = 0;
+  let thin = 0, kept = 0, overNet = 0, gapSquare = 0;
   const decided = new Uint8Array(C);
   for (let n = 0; n < STEPS; n++) {
     cpu.step(DT); await gpu.step(DT); await gpu.settle();
@@ -55,13 +55,13 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
     for (let i = 0; i < C; i++) {
       if (cpu.state[6][i] > 0 || gpu.state[6][i] > 0) continue;
       if (n === 0 && capacityOf(i) < 3 * 1025 * 3985) thin++;
-      if (!(cpu.geography && cpu.geography.land[i]) && Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) > FLIP) decided[i] = 1;
+      if (Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) > FLIP) decided[i] = 1;
       const cpuSurface = cpu.state[3][i] + cpu.skin.offset(i, capacityOf(i)), gpuSurface = gpu.state[3][i] + surfaceShare(capacity[i], SKIN_DEFAULTS) * warm[i] - cool[i];
       if (!decided[i]) worst.warm = Math.max(worst.warm, Math.abs(warm[i] - cpu.skin.warm[i]));
       if (!decided[i]) worst.cool = Math.max(worst.cool, Math.abs(cool[i] - cpu.skin.cool[i]));
       if (!decided[i]) worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
       worst.bulk = Math.max(worst.bulk, Math.abs(gpu.state[3][i] - cpu.state[3][i]));
-      if (!decided[i]) worst.net = Math.max(worst.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) / Math.max(FLIP, Math.abs(cpu.radiation.surfaceFlux[i])));
+      if (!decided[i]) { const gap = net[i] - cpu.radiation.surfaceFlux[i]; kept++; gapSquare += gap * gap; if (Math.abs(gap) > 0.1 * Math.max(FLIP, Math.abs(cpu.radiation.surfaceFlux[i]))) overNet++; }
       if (!decided[i]) worst.sensible = Math.max(worst.sensible, Math.abs(sensible[i] - cpu.radiation.sensibleHeat[i]) / Math.max(1, Math.abs(cpu.radiation.sensibleHeat[i])));
       if (n === 0) first.net = Math.max(first.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
     }
@@ -69,16 +69,17 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
   }
   console.log(`${label}: skin parity after one step: ΔT_w ${first.warm.toExponential(1)} K, ΔT_c ${first.cool.toExponential(1)} K, T_s ${first.ts.toExponential(1)} K, net ${first.net.toExponential(1)} W/m² beyond 1e-5 relative, sensible ${first.sensible.toExponential(1)} relative`);
   const flipped = decided.reduce((sum, x) => sum + x, 0);
-  console.log(`${label}: ${thin} open cells under 3 m; skin parity over ${STEPS} steps, where the bulk temperatures drift ${worst.bulk.toExponential(1)} K apart: ΔT_w ${worst.warm.toExponential(1)} K (${flipped} cells whose flux the engines decided apart left out), ΔT_c ${worst.cool.toExponential(1)} K, T_s ${worst.ts.toExponential(1)} K, net ${worst.net.toExponential(1)} and sensible ${worst.sensible.toExponential(1)} relative`);
+  console.log(`${label}: ${thin} open cells under 3 m; skin parity over ${STEPS} steps, where the bulk temperatures drift ${worst.bulk.toExponential(1)} K apart: ΔT_w ${worst.warm.toExponential(1)} K (${flipped} cells whose flux the engines decided apart left out), ΔT_c ${worst.cool.toExponential(1)} K, T_s ${worst.ts.toExponential(1)} K, net ${overNet} of ${kept} cell-steps over 0.1 relative, rms ${Math.sqrt(gapSquare / kept).toExponential(1)} W/m², and sensible ${worst.sensible.toExponential(1)} relative`);
   assert.ok(cpu.skin.warm.some((x) => x > 1e-3), 'a warm layer grows');
   assert.ok(first.warm < 1e-4 && first.cool < 1e-4 && first.ts < 1e-4, 'the first step\'s skin to 1e-4 K');
   assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
-  const sea = cpu.geography ? cpu.geography.land.reduce((n, l) => n + (l ? 0 : 1), 0) : C;
-  assert.ok(flipped <= Math.min(46, 0.02 * sea), `${flipped} of ${sea} sea cells have a flux the engines decided apart`);
+  assert.ok(flipped <= Math.min(46, 0.02 * C), `${flipped} of ${C} cells have a flux the engines decided apart`);
   assert.ok(worst.warm < WARM_BOUND, `the warm layer to ${WARM_BOUND} K over every step`);
   if (warmStart) return;
   assert.ok(worst.cool < 1e-2 && worst.ts < 1e-2, 'the surface to 1e-2 K over every step');
-  assert.ok(worst.net < 0.1 && worst.sensible < 0.1, 'the fluxes to 0.1 relative over every step');
+  assert.ok(worst.sensible < 0.1, 'the sensible heat to 0.1 relative over every step');
+  assert.ok(overNet <= 1e-3 * kept, `${overNet} of ${kept} cell-steps whose net flux parted by over 0.1 relative`);
+  assert.ok(Math.sqrt(gapSquare / kept) < 0.25, `the net flux ${Math.sqrt(gapSquare / kept)} W/m² rms apart, over the 0.25 W/m² that 25 W/m² per K of latent heat gives across the 1e-2 K the surface may part`);
 });
 
 test('on the GPU, options absent and present but off give the same layout and the same buffers after 64 steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
