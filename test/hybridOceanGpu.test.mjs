@@ -22,7 +22,7 @@ const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js')
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const HYBRID = { vertical: 'hybrid', everySteps: 1 };
-const RESTRAT = { ...HYBRID, mixedLayerRestratification: { coefficient: 50 } };
+const RESTRAT = { ...HYBRID, iceDrift: false, mixedLayerRestratification: { coefficient: 50 } };
 const N = 16, DT = 1350;
 
 function stats(cpu, gpu, mask = null) {
@@ -384,6 +384,7 @@ test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes
     }
   }
   cpu.boundaryDepths.fill(100);
+  cpu.phases.regrid(Infinity);
   const zeros = new Float64Array(C);
   await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths }, Float64Array.from(surfaceT), ice);
   cpu.readSurface(Float64Array.from(surfaceT), ice); cpu.setStress(stress, ice);
