@@ -125,7 +125,7 @@ ${NEAR_INFRARED_BANDS.map((band) => `  {
   }`).join('\n')}
   return total;
 }
-fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, array<f32, K>>) -> f32 {
+fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upwardAt: i32) -> f32 {
   let magnification = down.x; var climb: array<f32, K>; var loss = 0.0;
 ${NEAR_INFRARED_BANDS.map((band) => `  {
     ${sums(band, 'c')}
@@ -140,7 +140,7 @@ ${NEAR_INFRARED_BANDS.map((band) => `  {
     }
     loss += ${x(band.share)} * (before - start);
   }`).join('\n')}
-  for (var k = 0; k < K; k++) { (*upward)[k] = climb[k]; }
+  for (var k = 0; k < K; k++) { OUT[upwardAt + k * C + i] = climb[k]; }
   return loss;
 }
 `,
@@ -148,17 +148,17 @@ ${NEAR_INFRARED_BANDS.map((band) => `  {
 }
 
 // solarGases, solarGasTotals and nearInfraredUpward, with the near infrared of `nir` (nearInfraredWgsl) when given.
-const solarGasFunctions = (nir) => `fn solarGases(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>, ozoneTaken: ptr<function, array<f32, K>>, gasTaken: ptr<function, array<f32, K>>) -> vec4<f32> {
+const solarGasFunctions = (nir) => `fn solarGases(i: i32, pi: f32, mu: f32, layerOzoneAt: i32, ozoneTakenAt: i32, gasTakenAt: i32) -> vec4<f32> {
   let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
 ${nir ? `  var nir: array<f32, K>;\n${nir.down}\n` : ''}  var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
   for (var k = 0; k < K; k++) {
     let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
     let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * max(0.0, 1.0 - q);
-    ozone += (*layerOzone)[k] * magnification;
+    ozone += OUT[layerOzoneAt + idx] * magnification;
     vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
     oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
-    (*ozoneTaken)[k] = ozoneAbsorb(ozone);
-    (*gasTaken)[k] = VAPOR_ABS * visibleVapour(vapour) + ${nir ? 'nir[k]' : 'nearInfraredGases(vapour, oxygen, co2)'};
+    OUT[ozoneTakenAt + idx] = ozoneAbsorb(ozone);
+    OUT[gasTakenAt + idx] = VAPOR_ABS * visibleVapour(vapour) + ${nir ? 'nir[k]' : 'nearInfraredGases(vapour, oxygen, co2)'};
   }
   return ${nir ? 'vec4<f32>(VAPOR_ABS * visibleVapour(vapour), magnification, 0.0, 0.0)' : 'vec4<f32>(VAPOR_ABS * visibleVapour(vapour), vapour, oxygen, co2)'};
 }
@@ -174,7 +174,7 @@ fn solarGasTotals(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32,
   }
   return vec3<f32>(VAPOR_ABS * visibleVapour(vapour), ozoneAbsorb(ozone), VAPOR_ABS * visibleVapour(vapour) + ${nir ? 'nirBandsColumn(i, pi, magnification)' : 'nearInfraredGases(vapour, oxygen, co2)'});
 }
-${nir ? nir.functions : `fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, array<f32, K>>) -> f32 {
+${nir ? nir.functions : `fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upwardAt: i32) -> f32 {
   var vapour = down.x; var oxygen = down.y; var co2 = down.z;
   var before = nearInfraredGases(vapour, oxygen, co2); var loss = 0.0;
   for (var k = K - 1; k >= 0; k--) {
@@ -183,7 +183,7 @@ ${nir ? nir.functions : `fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>,
     vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
     oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
     let through = nearInfraredGases(vapour, oxygen, co2);
-    (*upward)[k] = through - before;
+    OUT[upwardAt + idx] = through - before;
     loss += through - before;
     before = through;
   }
@@ -415,22 +415,25 @@ fn edgeWind(edges: ptr<function, array<i32, MAXE>>, i: i32, k: i32) -> vec3<f32>
   }
   return w / MF[F_AREA + i];
 }
-fn band(fraction: f32, eps: ptr<function, array<f32, K>>, temperature: ptr<function, array<f32, K>>, netFlux: ptr<function, array<f32, K>>, surfaceEmission: f32) -> vec2<f32> {
+struct Band { up: f32, down: f32, flux: array<f32, K> }
+fn band(fraction: f32, eps: array<f32, K>, temperature: array<f32, K>, netFlux: array<f32, K>, surfaceEmission: f32) -> Band {
+  var net = netFlux;
   var down = 0.0;
   for (var k = 0; k < K; k++) {
-    let t = (*temperature)[k]; let e = (*eps)[k];
+    let t = temperature[k]; let e = eps[k];
     let emitted = fraction * e * STEFAN * t * t * t * t;
-    (*netFlux)[k] += e * down - 2.0 * emitted;
+    net[k] += e * down - 2.0 * emitted;
     down = down * (1.0 - e) + emitted;
   }
   var up = fraction * surfaceEmission;
-  for (var k = K - 1; k >= 0; k--) {
-    let t = (*temperature)[k]; let e = (*eps)[k];
+  for (var m = 0; m < K; m++) {
+    let k = K - 1 - m;
+    let t = temperature[k]; let e = eps[k];
     let emitted = fraction * e * STEFAN * t * t * t * t;
-    (*netFlux)[k] += e * up;
+    net[k] += e * up;
     up = up * (1.0 - e) + emitted;
   }
-  return vec2<f32>(up, down);
+  return Band(up, down, net);
 }
 fn ozoneAbsorb(path: f32) -> f32 {
   var a = 0.0;
@@ -1259,6 +1262,12 @@ ${each(G, (g) => (chain ? `      outgoing += up0_${g} + up1_${g}; clearOutgoing 
 ${sweeps(true)}  } else if (LW_CORRELATED) {
 ${sweeps(false)}  }`;
 }
+const SOLAR_OPEN = `  var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0); var ozonePrev = 0.0;
+  let solarOn = SOLAR_CLIRAD && mu > 0.0;
+  if (solarOn) { solar = solarGases(i, pi, mu, LWS_OZONE, LWS_CLOUD, LWS_SHARE); }
+  let ozoneHeating = select(beam * OZONE_ABS, beam * select(0.0, OUT[LWS_CLOUD + (K - 1) * C + i], solarOn), SOLAR_CLIRAD);
+  let visibleTaken = ozoneHeating + beam * solar.x;
+`;
 // The kernels' held variants hold the radiation between full calls as radiation.module.js's applyHeld does.
 const HELD_GATE = `  if (!(PH[PH_RADP] > 0.5 || !(PH[PH_RADEMIT + i] > 0.0))) { stash(0, i, 0.0); return; }
 `;
@@ -1272,11 +1281,7 @@ const HELD_OPEN = `  var shone = 0.0; var weighted = 0.0;
   PH[PH_RADMU + i] = mu;
   let waterDir = openWaterAlbedo(mu); let iceDir = surfaceAlbedo(ice, waterDir, snow0, skin, PH[PH_SNOWALB + i]);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
-  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-  if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &layerOzone, &ozoneTaken, &gasTaken); }
-  let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
-  let visibleTaken = ozoneHeating + beam * solar.x;
-`;
+${SOLAR_OPEN}`;
 const HELD_STORE = `  for (var k = 0; k < K; k++) { PH[PH_RADSW + k * C + i] = beforeBands[k]; }
   let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating;
   PH[PH_RADABS + i] = absorbed; PH[PH_RADEMIT + i] = surfaceEmission;
@@ -1289,7 +1294,7 @@ const HELD_STORE = `  for (var k = 0; k < K; k++) { PH[PH_RADSW + k * C + i] = b
     PH[PH_RADCLRSW + i] = incident * (clearSw.x + clearUp) + ozoneHeating + vaporHeating + aerosolHeating;
   }
 `;
-const HELD_GRAY = `    let outgoing = v.x + g.x + w.x; let back = v.y + g.y + w.y;
+const HELD_GRAY = `    let outgoing = v.up + g.up + w.up; let back = v.down + g.down + w.down;
     var through = vec3<f32>(VAPOR_FRAC, GAS_FRAC, WINDOW);
     for (var k = K - 1; k >= 0; k--) {
       PH[PH_RADDF + k * C + i] = through.x * vaporE[k] + through.y * mixedE[k] + through.z * cloudE[k];
@@ -1476,8 +1481,6 @@ ${held ? HELD_GATE : ''}  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ic
 ${held ? '' : `  let mu = stashed(2, i); let beam = stashed(3, i); let adir = stashed(25, i);
 `}  let cover = stashed(4, i); let adif = stashed(8, i); let ts = stashed(9, i); let surfaceEmission = stashed(13, i);
   let landAlbedo = stashed(22, i); let stratiform = stashed(23, i); let ozoneColumn = stashed(24, i);
-  var layerOzone: array<f32, K>;
-  for (var k = 0; k < K; k++) { layerOzone[k] = OUT[LWS_OZONE + k * C + i]; }
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let tau0 = PH[PH_TAU + i]; let deck = PH[PH_DECK + i]; let fraction = PH[PH_DECKF + i]; let deckK = select(STRATUS_K, i32(PH[PH_DECKK + i]), DECK_TOP);
   let replaced = select(K, i32(PH[PH_DECKFROM + i]), DECK_ABOVE && deck > 0.0);
@@ -1487,11 +1490,7 @@ ${held ? '' : `  let mu = stashed(2, i); let beam = stashed(3, i); let adir = st
   var cloudPath = 0.0; var cloudDepth = 0.0; var deckUnit = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0); var layered = vec2<f32>(0.0, 0.0);
   var columnIn = vec4<f32>(0.0, 0.0, 0.0, 0.0); var columnOut = vec4<f32>(1.0, 0.0, 0.0, 0.0);
   var aboveCover = 0.0; var aboveIn = vec4<f32>(0.0, 0.0, 0.0, 0.0); var aboveOut = vec4<f32>(1.0, 0.0, 0.0, 0.0); var abovePath = 0.0; var aboveSolar = 0.0;
-${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-  if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &layerOzone, &ozoneTaken, &gasTaken); }
-  let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
-  let visibleTaken = ozoneHeating + beam * solar.x;
-`}${held ? HELD_OPEN : ''}  for (var k = 0; k < K; k++) {
+${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
     if (DECK_ABOVE && k == replaced) { aboveCover = layered.x; aboveIn = columnIn; aboveOut = columnOut; abovePath = cloudPath; aboveSolar = cloudDepth; }
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
@@ -1520,13 +1519,15 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
     vaporE[k] = 1.0 - (1.0 - eps) * clear;
     mixedE[k] = 1.0 - (1.0 - LV[L_GASE + k]) * clear;
     temperature[k] = IN[S_TH + idx] * D[D_EXM + idx];
-    netFlux[k] = select(ozoneHeating * LV[L_OZ + k], beam * (ozoneTaken[k] - select(0.0, ozoneTaken[max(k - 1, 0)], k > 0)), SOLAR_CLIRAD);
+    let ozoneNow = select(0.0, OUT[LWS_CLOUD + idx], solarOn);
+    netFlux[k] = select(ozoneHeating * LV[L_OZ + k], beam * (ozoneNow - ozonePrev), SOLAR_CLIRAD);
+    ozonePrev = ozoneNow;
   }
   var incident = beam - ozoneHeating;
   var vaporHeating = 0.0; var path = 0.0;
   if (SOLAR_CLIRAD) {
     var taken = 0.0;
-    for (var k = 0; k < K; k++) { netFlux[k] += beam * (gasTaken[k] - taken); taken = gasTaken[k]; }
+    for (var k = 0; k < K; k++) { let gasNow = select(0.0, OUT[LWS_SHARE + k * C + i], solarOn); netFlux[k] += beam * (gasNow - taken); taken = gasNow; }
     vaporHeating = beam * taken;
     incident -= vaporHeating;
   } else if (VAPOR_ABS > 0.0 && mu > 0.0) {
@@ -1602,12 +1603,11 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
       esc = fraction * deckedEsc + (1.0 - fraction) * esc;
     }
     if (SOLAR_CLIRAD && restAfter > 0.0) {
-      var upGas: array<f32, K>;
-      restLoss = beam * nearInfraredUpward(i, pi, solar.yzw, &upGas) / restAfter;
+      restLoss = beam * nearInfraredUpward(i, pi, solar.yzw, LWS_FLUX) / restAfter;
       let scale = select(1.0, 1.0 / restLoss, restLoss > 1.0);
       restLoss = min(restLoss, 1.0);
       let rest = incident * esc.y;
-      for (var k = 0; k < K; k++) { netFlux[k] += rest * scale * beam * upGas[k] / restAfter; }
+      for (var k = 0; k < K; k++) { netFlux[k] += rest * scale * beam * OUT[LWS_FLUX + k * C + i] / restAfter; }
       upwardHeating = rest * restLoss;
     } else if (VAPOR_ABS > 0.0 && restAfter > 0.0) {
       let start = 2.9 * path / (pow(1.0 + 141.5 * path, 0.635) + 5.925 * path);
@@ -1631,7 +1631,6 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
     upwardHeating += upwardAerosol;
     if (ozoneLoss > 0.0) {
       let upwardOzone = incident * (esc.x * (1.0 - aerosolLoss) + esc.z) * ozoneLoss;
-      // reads OUT, not layerOzone: after solarGases has read layerOzone through a pointer, Apple M5's Metal compiler reads it back here as zeros
       for (var k = 0; k < K; k++) { netFlux[k] += upwardOzone * OUT[LWS_OZONE + k * C + i] / ozoneColumn; }
       upwardHeating += upwardOzone;
     }
@@ -1642,10 +1641,11 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
   if (LW_CORRELATED) {
     for (var k = 0; k < K; k++) { let idx = k * C + i; OUT[LWS_CLOUD + idx] = cloudE[k]; OUT[LWS_SHARE + idx] = chainF[k];${held ? '' : ' OUT[LWS_FLUX + idx] = netFlux[k];'} }
   } else {
-    let v = band(VAPOR_FRAC, &vaporE, &temperature, &netFlux, surfaceEmission);
-    let g = band(GAS_FRAC, &mixedE, &temperature, &netFlux, surfaceEmission);
-    let w = band(WINDOW, &cloudE, &temperature, &netFlux, surfaceEmission);
-${held ? HELD_GRAY : `    stash(20, i, v.y + g.y + w.y); stash(21, i, v.x + g.x + w.x);
+    let v = band(VAPOR_FRAC, vaporE, temperature, netFlux, surfaceEmission);
+    let g = band(GAS_FRAC, mixedE, temperature, v.flux, surfaceEmission);
+    let w = band(WINDOW, cloudE, temperature, g.flux, surfaceEmission);
+    netFlux = w.flux;
+${held ? HELD_GRAY : `    stash(20, i, v.down + g.down + w.down); stash(21, i, v.up + g.up + w.up);
     for (var k = 0; k < K; k++) { OUT[LWS_FLUX + k * C + i] = netFlux[k]; }
     if (MOIST_BL) { for (var k = 0; k < K; k++) { PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; } }
 `}  }
