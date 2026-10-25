@@ -17,14 +17,17 @@ const FORM_DRAG: bool = ${!!o.formDrag}; const TOFD_SCALE: f32 = ${formDragScale
 `;
 }
 
+const interfaceAt = (k) => `oroInterface(${k}, z[0], z[1], z[clamp(${k}, 0, K - 1)], z[clamp((${k}) - 1, 0, K - 1)])`;
+const n2At = (k) => `oroN2(th[(${k}) - 1], th[${k}], z[(${k}) - 1], z[${k}])`;
+
 export const OROGRAPHY_KERNELS = {
-  orography: `fn oroN2(k: i32, z: ptr<function, array<f32, K>>, th: ptr<function, array<f32, K>>) -> f32 {
-  return GRAV * ((*th)[k - 1] - (*th)[k]) / (0.5 * ((*th)[k - 1] + (*th)[k]) * ((*z)[k - 1] - (*z)[k]));
+  orography: `fn oroN2(thUp: f32, thLow: f32, zUp: f32, zLow: f32) -> f32 {
+  return GRAV * (thUp - thLow) / (0.5 * (thUp + thLow) * (zUp - zLow));
 }
-fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
+fn oroInterface(k: i32, z0: f32, z1: f32, here: f32, above: f32) -> f32 {
   if (k >= K) { return 0.0; }
-  if (k <= 0) { return 2.0 * (*z)[0] - 0.5 * ((*z)[0] + (*z)[1]); }
-  return 0.5 * ((*z)[k] + (*z)[k - 1]);
+  if (k <= 0) { return 2.0 * z0 - 0.5 * (z0 + z1); }
+  return 0.5 * (here + above);
 }
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
@@ -40,24 +43,23 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
   let ex = vec3<f32>(-xc.y, xc.x, 0.0) / length(xc.xy);
   let ny = cross(xc, ex);
   var z: array<f32, K>; var p: array<f32, K>; var rho: array<f32, K>; var th: array<f32, K>; var ue: array<f32, K>; var vn: array<f32, K>;
-  var edges = edgesOf(i);
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     z[k] = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
     p[k] = pi * LV[L_SM + k];
     th[k] = IN[S_TH + idx];
     rho[k] = p[k] / (RGAS * th[k] * D[D_EXM + idx]);
-    let w = edgeWind(&edges, i, k);
+    let w = edgeWind(i, k);
     ue[k] = dot(w, ex); vn[k] = dot(w, ny);
   }
   var weight = 0.0; var uL = 0.0; var vL = 0.0; var rhoL = 0.0; var nL2 = 0.0;
   for (var k = bottom; k >= 0; k--) {
-    let lo = oroInterface(k + 1, &z); let hi = oroInterface(k, &z);
+    let lo = ${interfaceAt('k + 1')}; let hi = ${interfaceAt('k')};
     let overlap = min(hi, 2.0 * mu) - max(lo, mu);
     if (overlap > 0.0) {
       let w = rho[k] * overlap;
       var nk = 0.0;
-      if (k == 0) { nk = oroN2(1, &z, &th); } else if (k == bottom) { nk = oroN2(bottom, &z, &th); } else { nk = 0.5 * (oroN2(k, &z, &th) + oroN2(k + 1, &z, &th)); }
+      if (k == 0) { nk = ${n2At('1')}; } else if (k == bottom) { nk = ${n2At('bottom')}; } else { nk = 0.5 * (${n2At('k')} + ${n2At('k + 1')}); }
       weight += w; uL += w * ue[k]; vL += w * vn[k]; rhoL += w * rho[k]; nL2 += w * nk;
     }
     if (lo >= 2.0 * mu) { break; }
@@ -84,7 +86,7 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
     if (k <= bottom) { lower = z[k]; }
     if (lower >= upper) { continue; }
     let kk = max(1, min(bottom, k));
-    let nk = sqrt(max(0.0, oroN2(kk, &z, &th)));
+    let nk = sqrt(max(0.0, ${n2At('kk')}));
     var up = along[bottom];
     if (k <= bottom) { if (k > 0) { up = 0.5 * (along[k] + along[k - 1]); } else { up = along[0]; } }
     if (!(up > 0.0)) { blocking = upper; break; }
@@ -113,11 +115,11 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
   for (var k = 0; k <= K; k++) { tau[k] = 0.0; }
   tau[K] = launch;
   var first = bottom;
-  while (first > 0 && oroInterface(first, &z) <= blocking) { tau[first] = launch; first--; }
+  while (first > 0 && ${interfaceAt('first')} <= blocking) { tau[first] = launch; first--; }
   var breakTop = blocking; var phase = 0.0;
   for (var k = bottom; k >= 1; k--) {
     if (z[k - 1] <= blocking) { continue; }
-    let lower = max(z[k], blocking); let nk = sqrt(max(0.0, oroN2(k, &z, &th))); let up = 0.5 * (along[k] + along[k - 1]);
+    let lower = max(z[k], blocking); let nk = sqrt(max(0.0, ${n2At('k')})); let up = 0.5 * (along[k] + along[k - 1]);
     if (!(up > 0.0)) { breakTop = z[k - 1]; break; }
     let step = nk / up * (z[k - 1] - lower);
     if (phase + step >= 1.5707963) { breakTop = lower + (1.5707963 - phase) / (nk / up); break; }
@@ -126,7 +128,7 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
   breakTop = max(breakTop, 4.0 * mu);
   var current = launch;
   for (var k = first; k >= 1; k--) {
-    let N2 = oroN2(k, &z, &th); let V = 0.5 * (plane[k] + plane[k - 1]); let rhoI = 0.5 * (rho[k] + rho[k - 1]);
+    let N2 = ${n2At('k')}; let V = 0.5 * (plane[k] + plane[k - 1]); let rhoI = 0.5 * (rho[k] + rho[k - 1]);
     if (!(V > 0.0) || !(current > 0.0) || !(N2 > 0.0)) { current = 0.0; tau[k] = 0.0; continue; }
     let N = sqrt(N2); let S = abs(plane[k - 1] - plane[k]) / (z[k - 1] - z[k]);
     let dz = height * sqrt(current / launch * flux0 / (rhoI * N * V)); let alpha = N * dz / V;
@@ -138,7 +140,7 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
   }
   tau[0] = 0.0;
   var kb = first;
-  while (kb > 0 && oroInterface(kb, &z) <= breakTop) { kb--; }
+  while (kb > 0 && ${interfaceAt('kb')} <= breakTop) { kb--; }
   if (kb < first && tau[kb] < launch) {
     var pBlock = pi * LV[L_SL + bottom];
     if (blocking > 0.0) {
