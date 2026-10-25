@@ -61,7 +61,7 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
       if (!decided[i]) worst.cool = Math.max(worst.cool, Math.abs(cool[i] - cpu.skin.cool[i]));
       if (!decided[i]) worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
       worst.bulk = Math.max(worst.bulk, Math.abs(gpu.state[3][i] - cpu.state[3][i]));
-      if (!decided[i]) worst.net = Math.max(worst.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) / Math.max(1, Math.abs(cpu.radiation.surfaceFlux[i])));
+      if (!decided[i]) worst.net = Math.max(worst.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) / Math.max(FLIP, Math.abs(cpu.radiation.surfaceFlux[i])));
       if (!decided[i]) worst.sensible = Math.max(worst.sensible, Math.abs(sensible[i] - cpu.radiation.sensibleHeat[i]) / Math.max(1, Math.abs(cpu.radiation.sensibleHeat[i])));
       if (n === 0) first.net = Math.max(first.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
     }
