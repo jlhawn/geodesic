@@ -276,3 +276,56 @@ test('with the kepler orbit what the radiation absorbs and reflects makes the st
     }
   }
 });
+
+function columnOn(orbit) {
+  const model = createModel(new Grid(16), { ocean: false, radiation: { orbit } });
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  const { core, radiation } = model, { K, C } = core.diagnostics, [pi, theta, , surfaceT, q] = model.state, qc = new Float64Array(K * C);
+  for (let i = 0; i < C; i++) core.diagnoseColumn(i, pi, theta, q, qc);
+  const call = (i, sunlight) => {
+    radiation.column(i, pi[i], theta, surfaceT[i], 5, undefined, sunlight, q[(K - 1) * C + i], q, qc, 0.07, 0.07);
+    return { ...radiation.budget };
+  };
+  return { radiation, call, C };
+}
+
+test('a column given a sun reads its cosine from that sun, so a beam and a cosine give the same budget on any date of either orbit', () => {
+  const circular = columnOn('circular'), kepler = columnOn('kepler'), cosines = [1, 0.4, 0.05];
+  for (const day of [0, 100, 200.7, 290]) {
+    circular.radiation.setTime(day * DAY); kepler.radiation.setTime(day * DAY);
+    assert.ok(Math.abs(sunDistance(day * DAY, 'kepler') - 1) > 1e-3, `the distance factor at day ${day}`);
+    for (const i of [0, 7, 30]) {
+      const absorbed = cosines.map((mu) => {
+        const sunlight = { beam: SOLAR_CONSTANT * mu, mu }, fromCircular = circular.call(i, sunlight);
+        assert.deepEqual(kepler.call(i, sunlight), fromCircular, `day ${day}, cell ${i}, cosine ${mu}`);
+        return fromCircular.atmosphereSolar / sunlight.beam;
+      });
+      assert.ok(absorbed[2] > 1.05 * absorbed[0], `day ${day}, cell ${i}: the cosine sets the path, the share absorbed at 0.05 is ${absorbed[2]} against ${absorbed[0]} overhead`);
+    }
+  }
+});
+
+test('a column left to its own sun is the column given that sun, and by night the column given 0', () => {
+  const { radiation, call, C } = columnOn('kepler');
+  for (const day of [0, 100, 200.7, 290]) {
+    radiation.setTime(day * DAY + 3600);
+    let lit = 0;
+    for (let i = 0; i < C; i += 5) {
+      const own = call(i, undefined), beam = radiation.insolation(i), given = call(i, beam > 0 ? { beam, mu: radiation.cosZenith(i) } : 0);
+      for (const key of Object.keys(given)) {
+        if (Number.isNaN(given[key])) assert.ok(Number.isNaN(own[key]), `day ${day}, cell ${i}: ${key}`);
+        else close(own[key], given[key], 1e-9 * (1 + Math.abs(given[key])), `day ${day}, cell ${i}: ${key}`);
+      }
+      if (beam > 0) lit++; else assert.equal(own.absorbedSolar, 0, `day ${day}, cell ${i} by night`);
+    }
+    assert.ok(lit > C / 20, `day ${day}: ${lit} lit cells sampled`);
+  }
+});
+
+test('a column takes its sun as undefined, 0 or { beam, mu }, and refuses a bare beam, whose cosine it would have to guess', () => {
+  const { call } = columnOn('kepler');
+  for (const sunlight of [undefined, 0, { beam: 0, mu: 0 }, { beam: 340.5, mu: 0.25 }]) call(0, sunlight);
+  for (const sunlight of [340.5, 1, -1, NaN, null, '0', true, {}, { beam: 340.5 }, { mu: 0.25 }, { beam: -1, mu: 0.25 }, { beam: 340.5, mu: NaN }]) {
+    assert.throws(() => call(0, sunlight), /column takes sunlight/, JSON.stringify(sunlight));
+  }
+});

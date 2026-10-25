@@ -28,7 +28,7 @@ test('over a black surface the clear column reflects the two-stream value of its
   let checked = 0, worst = 0;
   for (const i of [0, 1]) for (const mu of [1, 0.5, 0.15]) {
     const beam = SOLAR_CONSTANT * mu;
-    radiation.column(i, pi[i], theta, 290, 5, undefined, beam, null, dry, null, 0, 0);
+    radiation.column(i, pi[i], theta, 290, 5, undefined, { beam, mu }, null, dry, null, 0, 0);
     const b = radiation.budget, aerosol = land[i] ? LAND_AEROSOL : SEA_AEROSOL;
     const ozone = 0.03 * beam, visible = VISIBLE_FRACTION * beam - ozone, nearInfrared = NEAR_INFRARED_RAYLEIGH * pi[i] / REFERENCE_PRESSURE;
     const taken = visible * (1 - Math.exp(-0.05 * aerosol * 35 / Math.sqrt(1224 * mu * mu + 1)));
@@ -60,7 +60,7 @@ test('in every column of a state with real geography, cloud, deck and cumulus, t
     const mu = radiation.cosZenith(i), beam = radiation.insolation(i);
     const onLand = model.geography.land[i], area = onLand ? 0 : model.seaIce.cover(i, ice[i]);
     const direct = onLand ? model.land.albedo(i) : model.seaIce.albedo(ice[i], mu, model.seaIce.snow[i], area), diffuse = onLand ? direct : model.seaIce.albedo(ice[i], null, model.seaIce.snow[i], area);
-    radiation.column(i, pi[i], theta, surfaceT[i], 5, undefined, beam, q[bottom + i], q, qc, direct, diffuse, 1, undefined, onLand ? 0 : 1 - area, model.boundaryLayer.depth[i] - geopotential[bottom + i] / g, 0, model.boundaryLayer.mixingTop[i] - geopotential[bottom + i] / g);
+    radiation.column(i, pi[i], theta, surfaceT[i], 5, undefined, undefined, q[bottom + i], q, qc, direct, diffuse, 1, undefined, onLand ? 0 : 1 - area, model.boundaryLayer.depth[i] - geopotential[bottom + i] / g, 0, model.boundaryLayer.mixingTop[i] - geopotential[bottom + i] / g);
     const b = radiation.budget;
     if (!(beam > 0)) continue;
     lit++;
@@ -152,7 +152,7 @@ test('the light the surface reflects loses to vapour what the path it crossed co
   for (const m of [on, off, hazy, hazyOff]) for (let i = 0; i < C; i++) m.core.diagnoseColumn(i, pi, theta, q, null);
   let worst = 0, worstAerosol = 0, largest = 0;
   for (const i of [0, 1]) for (const mu of [1, 0.4, 0.1]) for (const albedo of [0.3, 0.8]) {
-    const beam = SOLAR_CONSTANT * mu, run = (m) => { m.radiation.column(i, pi[i], theta, 290, 5, undefined, beam, q[bottom + i], q, null, albedo, albedo); return { ...m.radiation.budget }; };
+    const beam = SOLAR_CONSTANT * mu, run = (m) => { m.radiation.column(i, pi[i], theta, 290, 5, undefined, { beam, mu }, q[bottom + i], q, null, albedo, albedo); return { ...m.radiation.budget }; };
     const a = run(on), b = run(off);
     let path = 0;
     for (let k = 0; k < K; k++) path += q[k * C + i] * pi[i] * dSigma[k] / g * Math.sqrt(sigmaMid[k]) * 0.1;

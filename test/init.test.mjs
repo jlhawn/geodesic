@@ -24,7 +24,7 @@ test('the radiative-convective equilibrium column is stable, warm at the ground,
   core.diagnoseColumn(0, pi, theta);
   const airT = profile[K - 1] * exnerLayer[(K - 1) * C];
   assert.ok(surfaceT - airT > 0 && surfaceT - airT < 20);
-  radiation.column(0, P0, theta, surfaceT, 3, radiation.opticalDepth(Math.asin(Math.sqrt(1 / 3))), SOLAR_CONSTANT / 4);
+  radiation.column(0, P0, theta, surfaceT, 3, radiation.opticalDepth(Math.asin(Math.sqrt(1 / 3))), { beam: SOLAR_CONSTANT / 4, mu: 1 / 4 });
   let column = 0, scale = 0;
   for (let k = 0; k < K; k++) { column += radiation.layerFlux[k]; scale += Math.abs(radiation.layerFlux[k]); }
   const longer = equilibriumProfile(model, { surfaceT, days: 2400 });

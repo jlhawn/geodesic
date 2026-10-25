@@ -25,7 +25,7 @@ export function equilibriumProfile(model, { surfaceT = REFERENCE_SURFACE_T, days
   const meanOpticalDepth = radiation.opticalDepth(Math.asin(Math.sqrt(1 / 3)));
   for (let n = 0; n < steps; n++) {
     core.diagnoseColumn(0, pi, theta);
-    radiation.column(0, p0, theta, surfaceT, windSpeed, meanOpticalDepth, SOLAR_CONSTANT / 4);
+    radiation.column(0, p0, theta, surfaceT, windSpeed, meanOpticalDepth, { beam: SOLAR_CONSTANT / 4, mu: 1 / 4 });
     for (let k = 0; k < K; k++) {
       const massPerArea = p0 * dSigma[k] / g;
       theta[k * C] += dt * radiation.layerFlux[k] / (cp * massPerArea) / exnerLayer[k * C];

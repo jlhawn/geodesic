@@ -813,7 +813,7 @@ export function createRadiation(mesh, core, {
     held.share = new Float64Array(heldBuffer, 8 * (HELD_FIELDS.length + K) * C, K * C);
     if (!(buffers && buffers.held)) held.step.fill(-1);
   }
-  const liftShare = new Float64Array(K), callSun = [];
+  const liftShare = new Float64Array(K), callSun = [], callSunlight = { beam: 0, mu: 0 };
   let now = 0, callKey = null;
   let boundaryRegime = null, boundaryTop = null, boundaryBuoyancy = null;
   const lowCover = new Float64Array(C), lowWater = new Float64Array(C);
@@ -1273,7 +1273,18 @@ export function createRadiation(mesh, core, {
     return Math.min(1, Math.max(coverFloor, (excess + bound) / (2 * bound)));
   }
 
-  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient, openSea = 0, mixedDepth = 0, dt = 0, mixingDepth = 0, part = 'all') {
+  /*
+   * `sunlight` is undefined for the cell's own sun, 0 for night, or { beam, mu }:
+   * the flux on a horizontal surface at the top of the air and the cosine of the
+   * zenith angle it comes from, given together because a beam carries the sun's
+   * distance factor and its cosine cannot be read back from it.
+   */
+  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], sunlight, qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient, openSea = 0, mixedDepth = 0, dt = 0, mixingDepth = 0, part = 'all') {
+    let beam, mu;
+    if (sunlight === undefined) { beam = insolation(i); mu = beam / strength; }
+    else if (sunlight === 0) { beam = 0; mu = 0; }
+    else if (sunlight !== null && typeof sunlight === 'object' && sunlight.beam >= 0 && sunlight.mu >= 0) { beam = sunlight.beam; mu = sunlight.mu; }
+    else throw new Error(`column takes sunlight undefined (the cell's own), 0 or { beam, mu }, not ${JSON.stringify(sunlight)}`);
     const clirad = solarGases === 'clirad' && q !== null, correlated = longwaveScheme === 'correlated' && q !== null;
     let ozoneColumnAmount = 0;
     if ((clirad || correlated) && !ozoneProfile && ozone === 'afgl') {
@@ -1282,7 +1293,7 @@ export function createRadiation(mesh, core, {
       for (let k = 0; k < K; k++) { const below = climatologyAbove(pi * levels[k + 1], ozoneWeight); layerOzone[k] = below - above; above = below; }
     }
     if (clirad || correlated) for (let k = 0; k < K; k++) { if (ozoneProfile || ozone !== 'afgl') layerOzone[k] = ozoneProfile ? ozoneProfile[k] : ozoneCell[i] * ozoneShare[k]; ozoneColumnAmount += layerOzone[k]; }
-    const solarPaths = clirad && beam > 0 ? solarGasPaths(i, pi, theta, q, beam / strength) : null;
+    const solarPaths = clirad && beam > 0 ? solarGasPaths(i, pi, theta, q, mu) : null;
     const ozoneHeating = clirad ? (solarPaths ? beam * ozoneTaken[K - 1] : 0) : beam * ozoneAbsorption;
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
     const coupled = vaporCoupling > 0 && q !== null;
@@ -1294,7 +1305,7 @@ export function createRadiation(mesh, core, {
     const sensible = surfaceLayer ? exchange * (cp * (surfaceT - airTemperature) - cp * thetaV[bottom * C + i] * (exnerLower[bottom * C + i] - exnerLayer[bottom * C + i])) : exchange * cp * (surfaceT - airTemperature);
     const evaporation = qAir === null ? 0 : wetness * Math.max(0, exchange * (saturationHumidity(surfaceT, pi) * (1 - (1 - seaHumidity) * openSea) - qAir));
     budget.surfaceBuoyancy = g / theta[bottom * C + i] * (sensible / (airDensity * cp * exnerLayer[bottom * C + i]) + 0.61 * theta[bottom * C + i] * evaporation / airDensity);
-    const mu = beam / strength, lit = !clirad && vaporAbsorption > 0 && q !== null && mu > 0;
+    const lit = !clirad && vaporAbsorption > 0 && q !== null && mu > 0;
     let downPath = 0;
     if (lit) {
       const magnification = 35 / Math.sqrt(1224 * mu * mu + 1);
@@ -1705,7 +1716,7 @@ export function createRadiation(mesh, core, {
     if (totals) for (const name of ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', 'sensibleHeat', 'evaporation', 'insolation', 'reflectedSolar']) totals[name] = 0;
     if (holding) { applyHeld(state, out, windSpeed, totals, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, wetness, openSea, depth, dt, callAlbedo); return; }
     for (let i = iFrom; i < iTo; i++) {
-      surfaceFlux[i] = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null, q && dQ ? q : null, q && dQ ? qc : null, surfaceAlbedo ? surfaceAlbedo[i] : albedo, diffuseAlbedo ? diffuseAlbedo[i] : surfaceAlbedo ? surfaceAlbedo[i] : albedo, wetness ? wetness[i] : 1, exchangeCoefficients ? exchangeCoefficients[i] : exchangeCoefficient, openSea ? openSea[i] : 0, depth ? depth[i] - geopotential[bottom + i] / g : 0, dt, boundaryTop ? boundaryTop[i] - geopotential[bottom + i] / g : 0);
+      surfaceFlux[i] = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], undefined, q && dQ ? q[bottom + i] : null, q && dQ ? q : null, q && dQ ? qc : null, surfaceAlbedo ? surfaceAlbedo[i] : albedo, diffuseAlbedo ? diffuseAlbedo[i] : surfaceAlbedo ? surfaceAlbedo[i] : albedo, wetness ? wetness[i] : 1, exchangeCoefficients ? exchangeCoefficients[i] : exchangeCoefficient, openSea ? openSea[i] : 0, depth ? depth[i] - geopotential[bottom + i] / g : 0, dt, boundaryTop ? boundaryTop[i] - geopotential[bottom + i] / g : 0);
       outgoing[i] = budget.outgoingLongwave;
       stratusPath[i] = budget.stratus;
       stratusCover[i] = budget.stratusFraction;
@@ -1779,7 +1790,7 @@ export function createRadiation(mesh, core, {
     for (let i = iFrom; i < iTo; i++) {
       const qAir = q && dQ ? q[bottom + i] : null, direct = surfaceAlbedo ? surfaceAlbedo[i] : albedo, diffuse = diffuseAlbedo ? diffuseAlbedo[i] : surfaceAlbedo ? surfaceAlbedo[i] : albedo;
       const args = [i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i]], rest = [wetness ? wetness[i] : 1, exchangeCoefficients ? exchangeCoefficients[i] : exchangeCoefficient, openSea ? openSea[i] : 0, depth ? depth[i] - geopotential[bottom + i] / g : 0, dt, boundaryTop ? boundaryTop[i] - geopotential[bottom + i] / g : 0];
-      column(...args, insolation(i), qAir, q && dQ ? q : null, q && dQ ? qc : null, direct, diffuse, ...rest, 'deck');
+      column(...args, undefined, qAir, q && dQ ? q : null, q && dQ ? qc : null, direct, diffuse, ...rest, 'deck');
       stratusPath[i] = budget.stratus;
       stratusCover[i] = budget.stratusFraction;
       stabilityIndex[i] = budget.stabilityIndex;
@@ -1801,7 +1812,8 @@ export function createRadiation(mesh, core, {
       const emission = STEFAN_BOLTZMANN * surfaceT[i] * surfaceT[i] * surfaceT[i] * surfaceT[i];
       if (!(held.step[i] >= start && held.step[i] <= index)) {
         const mu = callCosZenith(i, dt);
-        column(...args, strength * mu, qAir, q && dQ ? q : null, q && dQ ? qc : null, callAlbedo ? callAlbedo[i] : direct, diffuse, ...rest, 'radiation');
+        callSunlight.beam = strength * mu; callSunlight.mu = callSunlight.beam / strength;
+        column(...args, callSunlight, qAir, q && dQ ? q : null, q && dQ ? qc : null, callAlbedo ? callAlbedo[i] : direct, diffuse, ...rest, 'radiation');
         held.step[i] = index; held.mu[i] = mu * distance; held.emission[i] = emission;
         held.absorbed[i] = budget.surfaceSolar; held.back[i] = budget.downwardLongwave; held.outgoing[i] = budget.outgoingLongwave; held.escape[i] = budget.escape;
         held.down[i] = budget.surfaceShortwave; held.direct[i] = budget.surfaceDirect;

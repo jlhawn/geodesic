@@ -270,7 +270,7 @@ test('with cloudCover: pdf a cloudy layer covers the part of a uniform total-wat
   q[idx] = qs; qc[idx] = 0.02 * qs;
   const height = (geopotential[idx] - geopotential[(K - 1) * C + noon]) / g;
   const run = (r, depth, water = qc) => {
-    const flux = r.column(noon, P0, theta, surfaceT[noon], 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[(K - 1) * C + noon], q, water, 0.07, 0.07, 1, 1.5e-3, 0, depth);
+    const flux = r.column(noon, P0, theta, surfaceT[noon], 5, r.opticalDepth(mesh.latCell[noon]), undefined, q[(K - 1) * C + noon], q, water, 0.07, 0.07, 1, 1.5e-3, 0, depth);
     let layers = 0;
     for (let n = 0; n < K; n++) layers += r.layerFlux[n];
     return { ...r.budget, closure: Math.abs(layers + flux + LATENT_HEAT * r.budget.evaporation - (r.budget.absorbedSolar - r.budget.outgoingLongwave)) };
@@ -302,7 +302,7 @@ function cloudColumn(seed, options) {
     return -Math.expm1(-qc[idx] * P0 * dSigma[k] / g / VISIBLE_PATH);
   };
   const cover = (r = radiation) => {
-    r.column(noon, P0, theta, surfaceT[noon], 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[(K - 1) * C + noon], q, qc, 0.07, 0.07, 1, 1.5e-3, 0, 0);
+    r.column(noon, P0, theta, surfaceT[noon], 5, r.opticalDepth(mesh.latCell[noon]), undefined, q[(K - 1) * C + noon], q, qc, 0.07, 0.07, 1, 1.5e-3, 0, 0);
     return r.budget.cloudCover;
   };
   return { radiation, noon, pi, theta, q, qc, saturation, cloud, cover };
@@ -378,7 +378,7 @@ test('the surface sees the direct beam in clear sky and diffuse light under thic
   let day = -1;
   for (let i = 0; i < C; i++) if (radiation.insolation(i) > 300) { day = i; break; }
   const absorbed = (direct, diffuse) => {
-    radiation.column(day, pi[day], theta, surfaceT[day], 5, radiation.opticalDepth(mesh.latCell[day]), radiation.insolation(day), q[(K - 1) * C + day], q, qc, direct, diffuse);
+    radiation.column(day, pi[day], theta, surfaceT[day], 5, radiation.opticalDepth(mesh.latCell[day]), undefined, q[(K - 1) * C + day], q, qc, direct, diffuse);
     return radiation.budget.absorbedSolar;
   };
   const clearBright = absorbed(0.3, 0.06), clearDark = absorbed(0.06, 0.06);
@@ -432,11 +432,11 @@ test('cloud water absorbs 1 − exp(−0.4 m²/kg × W) of the sunlight that mee
   const overcast = (path) => {
     qc.fill(0);
     for (const [k, share] of shares) qc[k * C + noon] = share * path / (P0 * dSigma[k] / g);
-    const run = (r, sun) => {
-      const surface = r.column(noon, P0, theta, 290, 5, r.opticalDepth(mesh.latCell[noon]), sun, 0, q, qc, 0.07);
+    const run = (r, dark) => {
+      const surface = r.column(noon, P0, theta, 290, 5, r.opticalDepth(mesh.latCell[noon]), dark ? 0 : undefined, 0, q, qc, 0.07);
       return { surface, layers: Array.from(r.layerFlux), ...r.budget };
     };
-    const day = run(radiation, beam), night = run(radiation, 0), scattered = run(scattering, beam);
+    const day = run(radiation), night = run(radiation, true), scattered = run(scattering);
     const heating = day.layers.map((f, k) => f - scattered.layers[k]);
     const atmosphere = day.layers.reduce((a, f, k) => a + f - night.layers[k], 0), surface = day.surface - night.surface;
     return { ...day, heating, absorbed: heating.reduce((a, b) => a + b, 0), closure: Math.abs(beam - day.reflectedSolar - atmosphere - surface) / beam, scattered };
@@ -470,7 +470,7 @@ function deckColumns(options = {}) {
   const withStability = (lts) => { const theta = Float64Array.from(unstable); theta[top] = theta[bottom] + lts; return theta; };
   const run = (r, theta, surfaceT, openSea, depth = 1200, cloud = qc) => {
     core.diagnose(pi, theta, q, cloud);
-    const flux = r.column(noon, P0, theta, surfaceT, 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[bottom], q, cloud, 0.07, 0.06, 1, 1.5e-3, openSea, depth);
+    const flux = r.column(noon, P0, theta, surfaceT, 5, r.opticalDepth(mesh.latCell[noon]), undefined, q[bottom], q, cloud, 0.07, 0.06, 1, 1.5e-3, openSea, depth);
     let layers = 0, scale = 0;
     for (let k = 0; k < K; k++) { layers += r.layerFlux[k]; scale += Math.abs(r.layerFlux[k]); }
     const latent = LATENT_HEAT * r.budget.evaporation;
@@ -645,7 +645,7 @@ function mixedLayerColumn(sinking = 0.4) {
 
 function mixedLayerRun(r, noon, column, openSea = 1, dt = 900, air = column.theta) {
   const { q, qc, mixedDepth } = column, bottom = (K - 1) * C + noon;
-  const flux = r.column(noon, P0, air, 292, 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[bottom], q, qc, 0.07, 0.06, 1, 1.5e-3, openSea, mixedDepth(noon), dt);
+  const flux = r.column(noon, P0, air, 292, 5, r.opticalDepth(mesh.latCell[noon]), undefined, q[bottom], q, qc, 0.07, 0.06, 1, 1.5e-3, openSea, mixedDepth(noon), dt);
   let layers = 0, scale = 0;
   for (let k = 0; k < K; k++) { layers += r.layerFlux[k]; scale += Math.abs(r.layerFlux[k]); }
   const latent = LATENT_HEAT * r.budget.evaporation;
@@ -977,7 +977,7 @@ test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer
 });
 
 function evaluate(radiation, i, pi, theta, surfaceT, q, qc) {
-  const flux = radiation.column(i, pi[i], theta, surfaceT[i], 5, radiation.opticalDepth(mesh.latCell[i]), radiation.insolation(i), q[(K - 1) * C + i], q, qc, 0.07);
+  const flux = radiation.column(i, pi[i], theta, surfaceT[i], 5, radiation.opticalDepth(mesh.latCell[i]), undefined, q[(K - 1) * C + i], q, qc, 0.07);
   let layers = 0, scale = 0;
   for (let k = 0; k < K; k++) { layers += radiation.layerFlux[k]; scale += Math.abs(radiation.layerFlux[k]); }
   const latent = LATENT_HEAT * radiation.budget.evaporation;

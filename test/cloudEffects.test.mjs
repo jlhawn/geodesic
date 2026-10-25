@@ -93,7 +93,7 @@ test('uniformCloud is the model\'s own condensation and the radiation\'s own cov
     q[k * C] = humidity * cloudSaturation(temperature, pressure, true, 273.15, 235.15, {}).qs;
     model.core.diagnoseColumn(0, pi, theta, q, qc);
     model.moist.condenseColumn(0, pi, theta, q, qc);
-    model.radiation.column(0, pi[0], theta, MLS.groundTemperature, 5, undefined, 340.5, null, q, qc, 0.07, 0.06, 1, 0, 0, 0, 0, 0, 'radiation');
+    model.radiation.column(0, pi[0], theta, MLS.groundTemperature, 5, undefined, { beam: 340.5, mu: 0.25 }, null, q, qc, 0.07, 0.06, 1, 0, 0, 0, 0, 0, 'radiation');
     const cloud = uniformCloud({ temperature, pressure, surfacePressure: pi[0], humidity, mass: pi[0] * dSigma[k] / g });
     close(cloud.condensate, qc[k * C], 1e-18, `condensate at layer ${k}, humidity ${humidity}`);
     close(cloud.vapor, q[k * C], 1e-18, `vapor left at layer ${k}, humidity ${humidity}`);
@@ -128,7 +128,7 @@ test('the cloud a layer\'s humidity makes, blended by its cover, is the model\'s
   const call = (water) => {
     qc.fill(0);
     if (water) qc[water.k * C] = water.condensate;
-    pdf.column(0, ps, theta, MLS.groundTemperature, 5, undefined, 340.5, null, q, qc, 0.07, 0.07, 1, 0, 0, 0, 0, 0, 'radiation');
+    pdf.column(0, ps, theta, MLS.groundTemperature, 5, undefined, { beam: 340.5, mu: 2 / 3 }, null, q, qc, 0.07, 0.07, 1, 0, 0, 0, 0, 0, 'radiation');
     return { ...pdf.budget, cover: water ? pdf.layerCover[water.k] : 0 };
   };
   for (const [k, humidity] of [[26, 0.95], [26, 1], [26, 1.1], [22, 1], [17, 1], [17, 1.12], [HIGHEST, 1]]) {

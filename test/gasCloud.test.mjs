@@ -37,7 +37,7 @@ function cloudColumn(radiation, { T, path, humid, sigma }) {
   qc[k * C + i] = path * core.diagnostics.g / (pi[i] * core.diagnostics.dSigma[k]);
   core.diagnoseColumn(i, pi, theta, q, qc);
   const beam = SOLAR_CONSTANT * 0.5, surfaceT = 290;
-  const run = (water) => { rad.column(i, pi[i], theta, surfaceT, 5, undefined, beam, q[(K - 1) * C + i], q, water, 0, 0); return { ...rad.budget }; };
+  const run = (water) => { rad.column(i, pi[i], theta, surfaceT, 5, undefined, { beam, mu: 0.5 }, q[(K - 1) * C + i], q, water, 0, 0); return { ...rad.budget }; };
   const cloudy = run(qc), clear = run(none);
   return { model, i, k, q, beam, surfaceT, cloudy, clear };
 }

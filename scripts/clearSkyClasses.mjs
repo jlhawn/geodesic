@@ -100,8 +100,8 @@ export function clearSkyClasses(model, { day, times = 48 }) {
     const r = target.get(key);
     for (const t of TERMS) r[t] += weight * values[t];
   };
-  const run = (i, beam, adir, adif) => {
-    radiation.column(i, pi[i], theta, surfaceT[i], 5, undefined, beam, q[bottom + i], q, null, adir, adif, 1, undefined, 0, 0, 0, 0);
+  const run = (i, adir, adif) => {
+    radiation.column(i, pi[i], theta, surfaceT[i], 5, undefined, undefined, q[bottom + i], q, null, adir, adif, 1, undefined, 0, 0, 0, 0);
     return { ...radiation.budget };
   };
   const terms = (beam, all, black, adir) => ({
@@ -131,12 +131,12 @@ export function clearSkyClasses(model, { day, times = 48 }) {
       let adir, adif;
       if (geography.land[i]) adir = adif = land.albedo(i);
       else { const h = ice[i], area = seaIce.cover(i, h), snowy = seaIce.snowAlbedo ? seaIce.snowAlbedo[i] : undefined; adir = seaIce.albedo(h, mu, seaIce.snow[i], area, surfaceT[i], snowy); adif = seaIce.albedo(h, null, seaIce.snow[i], area, surfaceT[i], snowy); }
-      const black = run(i, beam, 0, 0), all = run(i, beam, adir, adif), cell = terms(beam, all, black, adir);
+      const black = run(i, 0, 0), all = run(i, adir, adif), cell = terms(beam, all, black, adir);
       for (const t of TERMS) cells[i][t] += cell[t];
       const list = cellParts[i];
       for (const p of list) {
         const [pd, pf] = p.albedo(mu);
-        const values = list.length === 1 ? cell : terms(beam, run(i, beam, pd, pf), black, pd);
+        const values = list.length === 1 ? cell : terms(beam, run(i, pd, pf), black, pd);
         const w = mesh.areaCell[i] * p.share;
         accumulate(classes, p.name, w, values);
         accumulate(types, p.type, w, values);
