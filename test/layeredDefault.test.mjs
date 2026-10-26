@@ -1,11 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { gunzipSync, constants } from 'node:zlib';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { DEFAULT_SHORTWAVE, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { withCadence } from '../js/cadence.module.js';
+import { DEFAULT_RUNS } from '../js/defaultRun.module.js';
 import { PREVIOUS_SHORTWAVE, PREVIOUS_BERGERON, PREVIOUS_RADIATION, PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
@@ -62,6 +65,20 @@ test('the drivers hold the default radiation 45 minutes and the sequential one 1
   const [kept, previousKept, forced] = [coldLiquid({}), coldLiquid(PREVIOUS_BERGERON), coldLiquid({ bergeronAutoconversion: true })];
   assert.equal(kept, forced, 'the default converts the cold liquid with the factor');
   assert.ok(kept < previousKept, `the cold liquid left in the layer, ${kept} against ${previousKept} with the factor off`);
+});
+
+test('the page\'s default states record no shortwave scheme and no Bergeron option, so the defaults apply on load and set the drivers\' cadence', () => {
+  const root = new URL('..', import.meta.url).pathname;
+  for (const [N, manifest] of Object.entries(DEFAULT_RUNS)) {
+    const { parts } = JSON.parse(readFileSync(root + manifest, 'utf8'));
+    const head = gunzipSync(readFileSync(root + manifest.replace(/[^/]*$/, '') + parts[0].file), { finishFlush: constants.Z_SYNC_FLUSH });
+    assert.equal(String.fromCharCode(...head.subarray(0, 4)), 'GCMS');
+    const { options = {} } = JSON.parse(new TextDecoder().decode(head.subarray(8, 8 + head.readUInt32LE(4))));
+    assert.equal(options.radiation?.shortwave, undefined, `${manifest} records no shortwave scheme`);
+    assert.equal(options.moist?.bergeronAutoconversion, undefined, `${manifest} records no Bergeron option`);
+    const every = withCadence({ radiation: options.radiation ?? {} }, 1350 * 16 / Number(N), Number(N)).radiation.radiationEvery;
+    assert.equal(every, { 64: 8, 128: 16, 192: 24 }[N], `the page's radiation cadence at N = ${N}`);
+  }
 });
 
 test('the GPU engine takes the same defaults: PHYSICS_DEFAULTS names the layered shortwave and the Bergeron factor, and a model asked for the previous options keeps them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

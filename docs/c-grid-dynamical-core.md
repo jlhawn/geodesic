@@ -1049,6 +1049,12 @@ closure still holds exactly (with the latent heat of evaporation
 counted as leaving the surface). The cloud–albedo, cloud–longwave and
 ice–albedo feedbacks are all live from here.
 
+This is the `sequential` shortwave, which the explainers keep. The model's
+default solves the cloudy part of each column layer by layer (`shortwave:
+'layered'`, docs/cloud-gas-overlap.md), cloud water absorbing there by the
+single scattering albedo of its band, so `cloudSolarAbsorption` acts only on
+the sequential scheme.
+
 Marine stratocumulus is diagnosed, not condensed. By default
 (`mixedLayerDeck`) each ice-free sea column starts the bulk mixed-layer
 model of `js/physics/mixedLayer.module.js` (Lilly 1968; Bretherton &

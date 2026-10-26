@@ -50,6 +50,9 @@
 // saved a whole day.
 // Whole-day names alone count towards KEEP, and only whole-day names match
 // the day patterns of the shell drivers.
+// The header records the radiation's shortwave scheme and the moist physics'
+// bergeronAutoconversion, with the RADIATION and MOIST given, as the options
+// the page starts the state with (scripts/stateOptions.mjs).
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}';

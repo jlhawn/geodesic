@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
+import { PREVIOUS_SHORTWAVE } from './helpers/previousDefaults.mjs';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
@@ -41,11 +42,11 @@ function stats(cpu, gpu) {
 }
 
 async function pair(radiation, { steps = 4, day = 100 } = {}) {
-  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus: true, clearSkyPass: true, ...radiation }, surface: { exchange: 'roughness' } });
+  const model = createModel(new Grid(N), { ocean: false, radiation: { ...PREVIOUS_SHORTWAVE, stratus: true, clearSkyPass: true, ...radiation }, surface: { exchange: 'roughness' } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   cloudier(model);
   model.time = day * DAY;
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: true, clearSkyPass: true, ...radiation } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...PREVIOUS_SHORTWAVE, stratus: true, clearSkyPass: true, ...radiation } });
   gpu.upload(model.state);
   gpu.uploadPhysics({});
   const times = Array.from({ length: steps }, (_, n) => model.time + n * DT);
