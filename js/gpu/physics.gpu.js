@@ -162,13 +162,13 @@ ${nir ? `  var nir: array<f32, K>;\n${nir.down}\n` : ''}  var ozone = 0.0; var v
   }
   return ${nir ? 'vec4<f32>(VAPOR_ABS * visibleVapour(vapour), magnification, 0.0, 0.0)' : 'vec4<f32>(VAPOR_ABS * visibleVapour(vapour), vapour, oxygen, co2)'};
 }
-fn solarGasTotals(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>) -> vec3<f32> {
+fn solarGasTotals(i: i32, pi: f32, mu: f32, layerOzoneAt: i32) -> vec3<f32> {
   let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
   var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
   for (var k = 0; k < K; k++) {
     let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
     let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * max(0.0, 1.0 - q);
-    ozone += (*layerOzone)[k] * magnification;
+    ozone += OUT[layerOzoneAt + idx] * magnification;
     vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
     oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
   }
@@ -402,15 +402,10 @@ fn cellWind(i: i32, k: i32) -> vec3<f32> {
   }
   return w / MF[F_AREA + i];
 }
-fn edgesOf(i: i32) -> array<i32, MAXE> {
-  var e: array<i32, MAXE>;
-  for (var m = 0; m < MAXE; m++) { e[m] = MI[EOC + MAXE * i + m]; }
-  return e;
-}
-fn edgeWind(edges: ptr<function, array<i32, MAXE>>, i: i32, k: i32) -> vec3<f32> {
+fn edgeWind(i: i32, k: i32) -> vec3<f32> {
   var w = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
-    let e = (*edges)[m];
+    let e = MI[EOC + MAXE * i + m];
     let s = abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * IN[S_U + k * E + e];
     w += s * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
   }
@@ -463,10 +458,10 @@ fn ozoneAboveAt(p: f32, w: array<f32, 5>) -> f32 {
   for (var r = 0; r < 5; r++) { let b = r * OZ_N + j; column += w[r] * (OZ_TABLE[b] + (OZ_TABLE[b + 1] - OZ_TABLE[b]) * t); }
   return column;
 }
-fn columnOzone(i: i32, pi: f32, layers: ptr<function, array<f32, K>>) -> f32 {
-  if (!OZ_AFGL) { let column = ozoneColumnAt(i); for (var k = 0; k < K; k++) { (*layers)[k] = column * LV[L_OZS + k]; } return column; }
+fn columnOzone(i: i32, pi: f32, layersAt: i32) -> f32 {
+  if (!OZ_AFGL) { let column = ozoneColumnAt(i); for (var k = 0; k < K; k++) { OUT[layersAt + k * C + i] = column * LV[L_OZS + k]; } return column; }
   let w = ozoneWeightsAt(i); var above = 0.0;
-  for (var k = 0; k < K; k++) { let below = ozoneAboveAt(pi * LV[L_SL + k], w); (*layers)[k] = below - above; above = below; }
+  for (var k = 0; k < K; k++) { let below = ozoneAboveAt(pi * LV[L_SL + k], w); OUT[layersAt + k * C + i] = below - above; above = below; }
   return above;
 }
 fn planckShare(g: i32, t: f32) -> f32 {
@@ -713,31 +708,6 @@ fn relaxedFraction(x: f32) -> f32 {
 }
 // both forms, no branch: the longwave's neighbouring columns straddle the cutoff often enough that branching costs more
 fn relaxedFractionBoth(x: f32) -> f32 { return select(1.0 - exp(-x), relaxedSeries(x), x < 1e-2); }
-// the back-substitutions count up: Apple M5's Metal compiler miscompiles a constant-bounds down-counting loop over private arrays under Tint's index clamps
-fn thomas(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, array<f32, K>>, rhs: ptr<function, array<f32, K>>) {
-  var gain: array<f32, K>;
-  var denominator = 1.0 + (*upper)[0] + (*lower)[0];
-  gain[0] = -(*lower)[0] / denominator;
-  (*rhs)[0] = (*rhs)[0] / denominator;
-  for (var j = 1; j < n; j++) {
-    denominator = 1.0 + (*upper)[j] + (*lower)[j] + (*upper)[j] * gain[j - 1];
-    gain[j] = -(*lower)[j] / denominator;
-    (*rhs)[j] = ((*rhs)[j] + (*upper)[j] * (*rhs)[j - 1]) / denominator;
-  }
-  for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
-}
-fn thomasRate(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, array<f32, K>>, own: ptr<function, array<f32, K>>, rhs: ptr<function, array<f32, K>>, dt: f32) {
-  var gain: array<f32, K>;
-  var denominator = 1.0 + (*upper)[0] + (*lower)[0] + dt * (*own)[0];
-  gain[0] = -(*lower)[0] / denominator;
-  (*rhs)[0] = (*rhs)[0] / denominator;
-  for (var j = 1; j < n; j++) {
-    denominator = 1.0 + (*upper)[j] + (*lower)[j] + dt * (*own)[j] + (*upper)[j] * gain[j - 1];
-    gain[j] = -(*lower)[j] / denominator;
-    (*rhs)[j] = ((*rhs)[j] + (*upper)[j] * (*rhs)[j - 1]) / denominator;
-  }
-  for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
-}
 `;
 
 /*
@@ -1384,9 +1354,9 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
   let wetness = select(1.0, select(landWet, 1.0, snow0 > ${TRACE_SNOW}), onLand);
   let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= ${TRACE_SNOW});
-  var gases = vec3<f32>(0.0, 0.0, 0.0); var layerOzone: array<f32, K>;
-  let ozoneColumn = columnOzone(i, pi, &layerOzone);
-  if (SOLAR_CLIRAD && mu > 0.0) { gases = solarGasTotals(i, pi, mu, &layerOzone); }
+  var gases = vec3<f32>(0.0, 0.0, 0.0);
+  let ozoneColumn = columnOzone(i, pi, LWS_OZONE);
+  if (SOLAR_CLIRAD && mu > 0.0) { gases = solarGasTotals(i, pi, mu, LWS_OZONE); }
   let ozoneHeating = select(beam * OZONE_ABS, beam * gases.y, SOLAR_CLIRAD);
   let visibleTaken = ozoneHeating + beam * gases.x;
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
@@ -1463,7 +1433,6 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
   }
   PH[PH_DECK + i] = deck; PH[PH_DECKF + i] = fraction;
   PH[PH_MLMCOVER + i] = mlmCover; PH[PH_MLMWATER + i] = mlmWater; PH[PH_MLMENT + i] = mlmEntrainment; PH[PH_MLMTOP + i] = mlmTop; PH[PH_MLMK + i] = mlmLayer; PH[PH_MLMM + i] = mlmShare; PH[PH_DECKK + i] = deckHome; PH[PH_DECKFROM + i] = deckFrom;
-  for (var k = 0; k < K; k++) { OUT[LWS_OZONE + k * C + i] = layerOzone[k]; }
   stash(1, i, ws); stash(2, i, mu); stash(3, i, beam); stash(4, i, cover); stash(5, i, waterDir); stash(6, i, iceDif); stash(7, i, iceDir); stash(8, i, adif);
   stash(9, i, ts); stash(10, i, warmth); stash(11, i, wetness); stash(12, i, bareShare); stash(13, i, surfaceEmission);
   stash(22, i, landAlbedo); stash(23, i, stratiform); stash(24, i, ozoneColumn); stash(25, i, adir);
@@ -1792,6 +1761,24 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
 ${seaSkin ? '  if (!onLand) { skinStep(i, ice, h, net - absorbed, absorbed, sqrt(PH[PH_DRAG + i]) * xWind(i, ws), rho, T, capacity, dt); }\n' : ''}  IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`;
 
+// the back-substitutions count up: Apple M5's Metal compiler miscompiles a constant-bounds down-counting loop over private arrays under Tint's index clamps
+function thomasSolve(upper, lower, rhs) {
+  return `{
+    var gain: array<f32, K>;
+    var denominator = 1.0 + ${upper}[0] + ${lower}[0];
+    var gainBelow = -${lower}[0] / denominator;
+    var rhsBelow = ${rhs}[0] / denominator;
+    gain[0] = gainBelow; ${rhs}[0] = rhsBelow;
+    for (var j = 1; j < n; j++) {
+      denominator = 1.0 + ${upper}[j] + ${lower}[j] + ${upper}[j] * gainBelow;
+      gainBelow = -${lower}[j] / denominator;
+      rhsBelow = (${rhs}[j] + ${upper}[j] * rhsBelow) / denominator;
+      gain[j] = gainBelow; ${rhs}[j] = rhsBelow;
+    }
+    var next = rhsBelow;
+    for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; next = ${rhs}[j] - gain[j] * next; ${rhs}[j] = next; }
+  }`;
+}
 const ADJUST_FUNCTIONS = `fn upperInterface(i: i32, k: i32) -> f32 {
   let idx = k * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + k] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
@@ -2413,8 +2400,8 @@ fn mixConserved(i: i32, pi: f32, dt: f32, wet: bool) {
     level[j] = staticEnergy(k, i, reference, wet);
     total[j] = IN[S_Q + idx] + IN[S_QC + idx];
   }
-  thomas(n, &upper, &lower, &level);
-  if (wet) { thomas(n, &upper, &lower, &total); }
+  ${thomasSolve('upper', 'lower', 'level')}
+  if (wet) ${thomasSolve('upper', 'lower', 'total')}
   for (var j = 0; j < n; j++) {
     let k = KTOP + j;
     if ((j > 0 && PH[PH_MIX + (k - 1) * C + i] > 0.0) || (k < K - 1 && PH[PH_MIX + k * C + i] > 0.0)) {
@@ -2435,7 +2422,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     lower[j] = select(0.0, dt * PH[PH_MIX + k * C + i] / mass, k < K - 1);
     rhs[j] = IN[fieldOff + k * C + i];
   }
-  thomas(n, &upper, &lower, &rhs);
+  ${thomasSolve('upper', 'lower', 'rhs')}
   for (var j = 0; j < n; j++) { IN[fieldOff + (KTOP + j) * C + i] = rhs[j]; }
 }`;
 
@@ -2600,8 +2587,7 @@ fn blSeal(i: i32, pi: f32) {
   let i = i32(id.x); if (i >= C) { return; }
   diagnoseColumnMid(i);
   let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
-  var edges = edgesOf(i);
-  let bottomWind = edgeWind(&edges, i, K - 1);
+  let bottomWind = edgeWind(i, K - 1);
   let speed = length(bottomWind);
   let friction = sqrt(PH[PH_DRAG + i]) * xWind(i, speed);
   let zb = (D[D_GEO + base] + LV[L_GABS + K - 1]) / GRAV;
@@ -2610,7 +2596,7 @@ fn blSeal(i: i32, pi: f32) {
     if (found) { continue; }
     let idx = k * C + i;
     let z = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
-    let dw = edgeWind(&edges, i, k) - bottomWind;
+    let dw = edgeWind(i, k) - bottomWind;
     let shear = dot(dw, dw) + 100.0 * friction * friction;
     let ri = GRAV * (D[D_THV + idx] - D[D_THV + base]) * (z - zb) / (D[D_THV + base] * shear);
     if (ri > RIC) { depth = zPrev + (z - zPrev) * (RIC - riPrev) / (ri - riPrev); found = true; }
@@ -2630,7 +2616,7 @@ fn blSeal(i: i32, pi: f32) {
     for (var k = KTOP; k < K; k++) {
       var rate = 0.0;
       let z = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
-      if (sflt > 0.0 && z > 0.0) { rate = TOFD_SCALE * sflt * sflt * exp(-pow(z / TOFD_DECAY, 1.5)) * pow(z, -1.2) * length(edgeWind(&edges, i, k)); }
+      if (sflt > 0.0 && z > 0.0) { rate = TOFD_SCALE * sflt * sflt * exp(-pow(z / TOFD_DECAY, 1.5)) * pow(z, -1.2) * length(edgeWind(i, k)); }
       PH[PH_TOFD + (k - KTOP) * C + i] = rate;
     }
   }
@@ -2949,17 +2935,18 @@ fn transportEdge(e: i32, a: i32, b: i32) {
 fn mixOwn(j: i32, a: i32, b: i32) -> f32 { return 0.5 * (PH[PH_TOFD + j * C + a] + PH[PH_TOFD + j * C + b]); }
 /*
  * The share of the dissipated kinetic energy layer j takes, its own change
- * and the shear against its neighbours, from the mixed winds in rhs and
- * the winds still in the state; summed over the column it is the whole.
+ * and the shear against its neighbours, from the mixed winds above, here
+ * and below and the winds still in the state; summed over the column it is
+ * the whole.
  */
-fn mixShare(j: i32, n: i32, e: i32, a: i32, b: i32, columnMass: f32, dt: f32, surfaceDrag: f32, forming: bool, rhs: ptr<function, array<f32, K>>) -> f32 {
+fn mixShare(j: i32, n: i32, e: i32, a: i32, b: i32, columnMass: f32, dt: f32, surfaceDrag: f32, forming: bool, above: f32, here: f32, below: f32) -> f32 {
   let k = KTOP + j; let mass = columnMass * LV[L_DS + k] / GRAV;
-  let change = (*rhs)[j] - IN[S_U + k * E + e];
+  let change = here - IN[S_U + k * E + e];
   var share = mass * change * change;
-  if (j > 0) { let shear = (*rhs)[j - 1] - (*rhs)[j]; share += dt * 0.5 * (PH[PH_MIX + (k - 1) * C + a] + PH[PH_MIX + (k - 1) * C + b]) * shear * shear; }
-  if (j < n - 1) { let shear = (*rhs)[j] - (*rhs)[j + 1]; share += dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) * shear * shear; }
-  if (IMPLICIT_DRAG && j == n - 1) { share += dt * surfaceDrag * (*rhs)[j] * (*rhs)[j]; }
-  if (forming) { share += dt * columnMass * LV[L_DS + k] / GRAV * mixOwn(j, a, b) * (*rhs)[j] * (*rhs)[j]; }
+  if (j > 0) { let shear = above - here; share += dt * 0.5 * (PH[PH_MIX + (k - 1) * C + a] + PH[PH_MIX + (k - 1) * C + b]) * shear * shear; }
+  if (j < n - 1) { let shear = here - below; share += dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) * shear * shear; }
+  if (IMPLICIT_DRAG && j == n - 1) { share += dt * surfaceDrag * here * here; }
+  if (forming) { share += dt * columnMass * LV[L_DS + k] / GRAV * mixOwn(j, a, b) * here * here; }
   return share;
 }
 /*
@@ -2994,7 +2981,6 @@ fn mixEdge(e: i32, a: i32, b: i32) {
     gain[j] = -lower / denominator;
     mixAbove = mixHere;
   }
-  // counts up, as in thomas()
   for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; rhs[j] -= gain[j] * rhs[j + 1]; }
   if (IMPLICIT_DRAG) { PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1]; PH[PH_STRESSOK] = 1.0; }
   if (forming) {
@@ -3002,16 +2988,20 @@ fn mixEdge(e: i32, a: i32, b: i32) {
     for (var j = 0; j < n; j++) { formed += columnMass * LV[L_DS + KTOP + j] / GRAV * mixOwn(j, a, b) * rhs[j]; }
     PH[PH_FSTRESS + e] = formed;
   }
-  var loss = 0.0; var total = 0.0;
+  var loss = 0.0; var total = 0.0; var above = 0.0;
   for (var j = 0; j < n; j++) {
     let k = KTOP + j; let mass = columnMass * LV[L_DS + k] / GRAV; let before = IN[S_U + k * E + e];
+    let here = rhs[j]; let below = rhs[min(j + 1, n - 1)];
     loss += mass * (before * before - rhs[j] * rhs[j]);
-    total += mixShare(j, n, e, a, b, columnMass, dt, surfaceDrag, forming, &rhs);
+    total += mixShare(j, n, e, a, b, columnMass, dt, surfaceDrag, forming, above, here, below);
+    above = here;
   }
   if (total > 0.0) {
+    above = 0.0;
     for (var j = 0; j < n; j++) {
-      let k = KTOP + j;
-      D[D_DISS + k * E + e] += loss * mixShare(j, n, e, a, b, columnMass, dt, surfaceDrag, forming, &rhs) / (total * columnMass * LV[L_DS + k] / GRAV);
+      let k = KTOP + j; let here = rhs[j]; let below = rhs[min(j + 1, n - 1)];
+      D[D_DISS + k * E + e] += loss * mixShare(j, n, e, a, b, columnMass, dt, surfaceDrag, forming, above, here, below) / (total * columnMass * LV[L_DS + k] / GRAV);
+      above = here;
     }
   }
   for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
