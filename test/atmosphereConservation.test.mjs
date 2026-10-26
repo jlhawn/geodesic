@@ -35,6 +35,16 @@ function spunUp() {
   return model;
 }
 
+let spunBergeron = null;
+function spunUpBergeron() {
+  if (spunBergeron) return spunBergeron;
+  const model = createModel(new Grid(N), { ...OPTIONS, moist: { bergeronAutoconversion: true } });
+  initializeState(model).forEach((values, s) => model.state[s].set(values));
+  for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
+  spunBergeron = model;
+  return model;
+}
+
 /*
  * The spun-up air over a layered ocean started under it.
  */
@@ -87,7 +97,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
+for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
