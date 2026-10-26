@@ -13,7 +13,8 @@
 // --test-concurrency at most its slots. A run inside another run's CMD goes
 // ahead at once on the outer run's slots. GPU_WHO and CPU_JOB (one line on
 // what CMD is) label a run; `status` lists the runs holding slots and those
-// waiting.
+// waiting. A shared GPU test file of scripts/gpuQueue.mjs takes one slot
+// through holdSlots, without waiting when it holds the GPU.
 // Each slot is an O_EXLOCK flock on <dir>/slot-<i>. A waiter takes slots
 // only while it holds the flock on <dir>/door, so a run waiting for many is
 // never overtaken by smaller ones. CMD inherits the slots from fd 20 on, so a
@@ -145,34 +146,54 @@ export async function run(cfg, logArg, argv) {
     return rc;
   }
 
-  fs.mkdirSync(cfg.runs, { recursive: true });
   const entry = {
     pid: process.pid, want, log, command: quote(argv), cwd: process.cwd(),
     who: cfg.who || undefined, what: cfg.what || undefined, queued: Date.now(),
   };
-  save(cfg, entry);
+  const slots = await holdSlots(cfg, entry);
+  const waited = Math.round((entry.started - entry.queued) / 1000);
+  say(`start ${clock(entry.started)}, ${want} of ${cfg.total} CPU slots${waited ? ` after ${waited} s waiting` : ''}`);
+  const rc = await launch(argv, log, slots.fds, want, (child) => slots.child(child.pid));
+  say(`exit ${rc} ${clock()}`);
+  slots.release();
+  return rc;
+}
+
+export async function holdSlots(cfg, entry, { wait = true } = {}) {
+  fs.mkdirSync(cfg.runs, { recursive: true });
+  if (wait) save(cfg, entry);
   const held = new Map();
   let door;
-  while ((door = tryLock(cfg.door)) === null) await sleep(cfg.tick);
+  while ((door = tryLock(cfg.door)) === null) {
+    if (!wait) return null;
+    await sleep(cfg.tick);
+  }
   for (;;) {
-    for (let i = 0; i < cfg.total && held.size < want; i++) {
+    for (let i = 0; i < cfg.total && held.size < entry.want; i++) {
       if (held.has(i)) continue;
       const fd = tryLock(path.join(cfg.dir, `slot-${i}`));
       if (fd !== null) held.set(i, fd);
     }
-    if (held.size === want) break;
+    if (held.size === entry.want) break;
+    if (!wait) {
+      for (const fd of [...held.values(), door]) fs.closeSync(fd);
+      return null;
+    }
     await sleep(cfg.tick);
   }
   fs.closeSync(door);
   entry.slots = [...held.keys()];
   entry.started = Date.now();
-  const waited = Math.round((entry.started - entry.queued) / 1000);
-  say(`start ${clock(entry.started)}, ${want} of ${cfg.total} CPU slots${waited ? ` after ${waited} s waiting` : ''}`);
-  const rc = await launch(argv, log, [...held.values()], want, (child) => { entry.child = child.pid; save(cfg, entry); });
-  say(`exit ${rc} ${clock()}`);
-  for (const fd of held.values()) fs.closeSync(fd);
-  fs.rmSync(path.join(cfg.runs, `${process.pid}.json`), { force: true });
-  return rc;
+  save(cfg, entry);
+  return {
+    fds: [...held.values()],
+    child(pid) { entry.child = pid; save(cfg, entry); },
+    release() {
+      for (const fd of held.values()) fs.closeSync(fd);
+      held.clear();
+      fs.rmSync(path.join(cfg.runs, `${entry.pid}.json`), { force: true });
+    },
+  };
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {

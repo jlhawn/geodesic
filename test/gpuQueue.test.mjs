@@ -13,6 +13,8 @@ import { config, gpuUsers, parseLsof, parseIoreg, gpuShares, gpuRecorder, gpuHis
 const script = fileURLToPath(new URL('../scripts/gpuQueue.mjs', import.meta.url));
 const wrapper = fileURLToPath(new URL('../scripts/gpuQueue.zsh', import.meta.url));
 const skip = process.platform !== 'darwin' && 'the GPU queue is macOS-only';
+const LANE = 'Shared lane: 2 at a time, not used yet';
+const OPENING = 'Shared lane: 2 at a time since \\d\\d:\\d\\d:\\d\\d; 3 once a day has passed with no aborts and 20 shared runs have overlapped another';
 
 const JOB = `import fs from 'node:fs';
 const [name, ms, gpu] = process.argv.slice(2);
@@ -23,6 +25,12 @@ if (ms === 'gate') while (!fs.existsSync(\`\${process.env.TRACE}.\${name}\`)) aw
 else await new Promise((resolve) => setTimeout(resolve, Number(ms)));
 fs.appendFileSync(process.env.TRACE, \`end \${name} \${Date.now()}\\n\`);
 if (gpu === '1') fs.rmSync(mark);
+`;
+const TEST_FILE = `${JOB.replace('process.argv.slice(2)', '[process.env.JOB_NAME, process.env.JOB_MS, process.env.JOB_GPU]')}if (process.env.JOB_ABORT) {
+  const t = new Date(), pad = (n, k = 2) => String(n).padStart(k, '0');
+  const stamp = \`\${t.getFullYear()}-\${pad(t.getMonth() + 1)}-\${pad(t.getDate())} \${pad(t.getHours())}:\${pad(t.getMinutes())}:\${pad(t.getSeconds())}.\${pad(t.getMilliseconds(), 3)}\`;
+  fs.appendFileSync(process.env.JOB_ABORT, \`\${stamp} E  node[\${process.pid}:2ae9c7] [com.apple.Metal:Device] Execution of the command buffer was aborted due to an error during execution.\\n\`);
+}
 `;
 const DEVICE = `import fs from 'node:fs';
 export async function getDevice() {
@@ -138,11 +146,13 @@ function bench(t, extra = {}) {
   const gpu = path.join(dir, 'gpu');
   fs.mkdirSync(gpu);
   fs.writeFileSync(path.join(dir, 'job.mjs'), JOB);
+  fs.writeFileSync(path.join(dir, 'job.test.mjs'), TEST_FILE);
   fs.writeFileSync(path.join(dir, 'device.mjs'), DEVICE);
   const env = {
     ...process.env, GPU_QUEUE_DIR: path.join(dir, 'queue'), GPU_QUEUE_TICK_MS: '20', GPU_QUEUE_PORT: '0',
     GPU_QUEUE_PROBE: `ls '${gpu}'`, GPU_QUEUE_IOREG: 'true', GPU_QUEUE_DEVICE: path.join(dir, 'device.mjs'), GPU_QUEUE_ABORTS: 'off',
     GPU_QUEUE_NODE: process.execPath, GPU_QUEUE_COURTESY_MS: '', GPU_QUEUE_HELD: '', GPU_WHO: '', GPU_JOB: '', GPU_PRIORITY: '',
+    CPU_QUEUE_DIR: path.join(dir, 'cpu'), CPU_QUEUE_SLOTS: '4', CPU_QUEUE_TICK_MS: '20', CPU_QUEUE_HELD: '', NODE_TEST_CONTEXT: undefined,
     FAKE_GPU: gpu, TRACE: path.join(dir, 'trace'), ...extra,
   };
   const spawned = [];
@@ -160,6 +170,10 @@ function bench(t, extra = {}) {
   return {
     dir, env, gpu, read,
     run: (log, argv, opts) => start(process.execPath, [script, 'run', path.join(dir, log), ...argv], opts),
+    share: (log, name, ms, opts = {}) => start(process.execPath,
+      [script, 'share', path.join(dir, log), process.execPath, '--test', '--test-concurrency=1', path.join(dir, 'job.test.mjs')],
+      { ...opts, env: { JOB_NAME: name, JOB_MS: String(ms), JOB_GPU: '1', ...opts.env } }),
+    lane: (...args) => spawnSync('/bin/zsh', ['-c', `source '${wrapper}'; gpu_lane ${args.join(' ')}`], { env, encoding: 'utf8' }),
     foreign: (argv) => start(argv[0], argv.slice(1)),
     job: (name, ms, gpuUser = true) => [process.execPath, path.join(dir, 'job.mjs'), name, String(ms), gpuUser ? '1' : '0'],
     open: (name) => fs.writeFileSync(path.join(dir, `trace.${name}`), ''),
@@ -318,6 +332,8 @@ test('the status file names the holder and each waiter by who and what, in order
     `- pid ${holder.pid}, took the lock at \\d\\d:\\d\\d:\\d\\d, idle device open`,
     '- log \\S+/hold\\.log',
     '',
+    LANE,
+    '',
     'Queue:',
     '1\\. \\*\\*beta-123abc\\*\\*, node …/gpu-queue-[^/]+/job\\.mjs first 50 1',
     `   - level 3, queued since \\d\\d:\\d\\d:\\d\\d, pid ${first.pid}`,
@@ -332,7 +348,7 @@ test('the status file names the holder and each waiter by who and what, in order
   assert.match(b.read('first.log'), new RegExp(`^queued \\d\\d:\\d\\d:\\d\\d behind pid ${holder.pid} \\(alpha, N=128 page check\\)$`, 'm'));
   assert.match(b.read('second.log'), new RegExp(`^queued \\d\\d:\\d\\d:\\d\\d behind pid ${holder.pid} \\(alpha, N=128 page check\\) and 1 waiting$`, 'm'));
   assert.deepEqual(await Promise.all([holder.exited, first.exited, second.exited]), [0, 0, 0]);
-  assert.match(b.file(), /^# GPU queue at .*\n\nHolder: none\n\nQueue: empty\n\nOutside the queue: none\n$/);
+  assert.match(b.file(), new RegExp(`^# GPU queue at .*\\n\\nHolder: none\\n\\n${LANE}\\n\\nQueue: empty\\n\\nOutside the queue: none\\n$`));
 });
 
 test('records without labels show their worktree and command, and each run rewrites the file as it moves', { skip }, async (t) => {
@@ -358,6 +374,8 @@ test('records without labels show their worktree and command, and each run rewri
     '- level 3, waiting for the page server on port 8000 \\(pid 4242\\)',
     `- pid ${holder.pid}, took the lock at \\d\\d:\\d\\d:\\d\\d, idle device open`,
     '- log \\S+/holder\\.log',
+    '',
+    LANE,
     '',
     'Queue:',
     "1\\. \\*\\*plain\\*\\*, bash …/figures/snapshot\\.sh 'N=6 ETOPO 2022 check'",
@@ -385,7 +403,7 @@ test('records without labels show their worktree and command, and each run rewri
   const running = at(/^Holder: \*\*newcomer\*\*, N=16 parity test\n- level 3, running since \d\d:\d\d:\d\d\n/m);
   assert.ok(taken > 0, 'the file did not show the new holder taking the lock');
   assert.ok(running > taken, 'the file did not show the job start');
-  assert.match(versions.at(-1), /\n\nHolder: none\n\nQueue: empty\n/);
+  assert.match(versions.at(-1), new RegExp(`\\n\\nHolder: none\\n\\n${LANE}\\n\\nQueue: empty\\n`));
   for (const version of versions) assert.equal(version.match(/^# GPU queue at /gm)?.length, 1);
 });
 
@@ -494,9 +512,9 @@ test("the driver's GPU time parses per process, and two samples give each proces
   const record = { pid: 900, start: 'Sun Oct 25 18:00:00 2026', who: 'alpha', what: 'timing' };
   const steps = [[1000, times, record], [3000, later, record], [5000, later, null], [69000, later, null]];
   let step = null;
-  const recorder = gpuRecorder({ useKeep: 3600000 }, { read: () => step[1], table: () => table, record: () => step[2], now: () => step[0] });
+  const recorder = gpuRecorder({ useKeep: 3600000 }, { read: () => step[1], table: () => table, records: () => (step[2] ? [step[2]] : []), now: () => step[0] });
   for (step of steps) recorder.sample();
-  assert.deepEqual(recorder.samples.map((x) => [x.since, x.until, x.holder?.who ?? null, x.users.map((u) => [u.pid, u.queued])]),
+  assert.deepEqual(recorder.samples.map((x) => [x.since, x.until, x.holders[0]?.who ?? null, x.users.map((u) => [u.pid, u.queued])]),
     [[1000, 3000, 'alpha', [[900, true], [902, false], [414, false]]], [3000, 5000, null, []]]);
   assert.deepEqual(gpuHistory(recorder.samples), {
     times: [3000, 5000],
@@ -506,7 +524,7 @@ test("the driver's GPU time parses per process, and two samples give each proces
       { key: '902 node', pid: 902, name: 'node', what: 'node', outside: true, shares: [0.25, null] },
     ],
   });
-  const crowd = [0, 1, 2].map((i) => ({ since: i, until: i + 1, holder: null,
+  const crowd = [0, 1, 2].map((i) => ({ since: i, until: i + 1, holders: [],
     users: Array.from({ length: 9 }, (_, k) => ({ pid: 100 + k, name: `p${k}`, what: `p${k}`, share: i === 1 && k === 8 ? 0 : 0.02 * (k + 1), queued: false })).filter((u) => u.share) }));
   const crowded = gpuHistory(crowd);
   assert.deepEqual(crowded.lines.map((line) => line.key), ['103 p3', '104 p4', '105 p5', '106 p6', '107 p7', '108 p8', 'other']);
@@ -532,7 +550,7 @@ test('the monitor serves its page and the status as JSON', { skip }, async (t) =
   const s = JSON.parse(status.body);
   assert.ok(Math.abs(s.now - Date.now()) < 5000);
   const { gpu, gpuHistory: use, ...rest } = s;
-  assert.deepEqual({ ...rest, now: 0 }, { now: 0, holder: null, exited: null, lock: [], queue: [], outside: [], port: null, dir: path.join(b.dir, 'queue'), history: [] });
+  assert.deepEqual({ ...rest, now: 0 }, { now: 0, holder: null, shared: [], lane: { limit: 2, since: null, text: LANE }, exited: null, lock: [], queue: [], outside: [], port: null, dir: path.join(b.dir, 'queue'), history: [] });
   assert.ok(gpu.users === null || gpu.users.length === 0, JSON.stringify(gpu));
   assert.deepEqual([use.lines, use.holder.jobs], [[], []]);
   assert.equal((await get(url, { host: 'gpu.example.com' })).status, 403);
@@ -796,6 +814,8 @@ test("the status, its JSON, the page and the history show each run's level", { s
     `- pid ${pid('alpha')}, took the lock at \\d\\d:\\d\\d:\\d\\d, idle device open`,
     '- log \\S+/alpha\\.log',
     '',
+    LANE,
+    '',
     'Queue:',
     ...[['beta', 1], ['gamma', 3], ['epsilon', 5]].flatMap(([name, level], i) => [
       `${i + 1}\\. \\*\\*${name}\\*\\*, ${name}'s job`,
@@ -831,4 +851,190 @@ test('a GPU_PRIORITY outside 1-5 is refused before the run queues', { skip }, (t
   assert.equal(fs.existsSync(path.join(b.dir, 'queue')), false, 'a refused run touched the queue');
   assert.equal(fs.existsSync(path.join(b.dir, 'bad.log')), false);
   assert.equal(b.read('trace'), '');
+});
+
+test("test files share the GPU up to the lane's limit, each on a CPU slot, and a third takes the first slot freed", { skip }, async (t) => {
+  const b = bench(t);
+  const url = await b.monitor();
+  const one = b.share('one.log', 'one', 'gate', { env: { GPU_WHO: 'alpha', GPU_JOB: 'first file' } });
+  await waitFor(() => b.trace().start.one);
+  const two = b.share('two.log', 'two', 'gate', { env: { GPU_WHO: 'beta', GPU_JOB: 'second file' } });
+  await waitFor(() => b.trace().start.two);
+  const three = b.share('three.log', 'three', 50, { env: { GPU_WHO: 'gamma', GPU_JOB: 'third file' } });
+  await waitFor(() => /^queued /m.test(b.read('three.log')));
+  assert.match(b.status(), new RegExp([
+    '^Holders: 2 test files sharing the GPU',
+    '- \\*\\*alpha\\*\\*, first file',
+    `  - level 3, running since \\d\\d:\\d\\d:\\d\\d, pid ${one.pid}, idle device open`,
+    '  - log \\S+/one\\.log',
+    '- \\*\\*beta\\*\\*, second file',
+    `  - level 3, running since \\d\\d:\\d\\d:\\d\\d, pid ${two.pid}, idle device open`,
+    '  - log \\S+/two\\.log',
+    '',
+    `${OPENING} \\(0 so far\\)`,
+    '',
+    'Queue:',
+    '1\\. \\*\\*gamma\\*\\*, third file',
+    `   - level 3, to share, queued since \\d\\d:\\d\\d:\\d\\d, pid ${three.pid}`,
+    '   - log \\S+/three\\.log',
+    '',
+    'Outside the queue: none',
+  ].join('\n'), 'm'));
+  const cpu = path.join(b.dir, 'cpu', 'runs');
+  assert.deepEqual(fs.readdirSync(cpu).filter((name) => /^\d+\.json$/.test(name)).map((name) => JSON.parse(fs.readFileSync(path.join(cpu, name), 'utf8'))).map((r) => [r.what, r.slots.length]).sort(),
+    [['shared GPU test file: first file', 1], ['shared GPU test file: second file', 1]]);
+  const s = await until(async () => { const x = await json(`${url}status.json`); return x.shared.length === 2 && x.queue.length === 1 && x; });
+  assert.equal(s.holder, null);
+  assert.deepEqual(s.shared.map((r) => [r.who, r.pid, r.priority, r.state]), [['alpha', one.pid, 3, 'running'], ['beta', two.pid, 3, 'running']]);
+  assert.deepEqual([s.queue[0].who, s.queue[0].shared, s.lane.limit], ['gamma', true, 2]);
+  const shown = await renderPage((await get(url)).body, s);
+  assert.match(shown.holder, new RegExp(`^Sharing 2 test files share the GPU; no other job runs beside them\\. Running alpha pid ${one.pid} first file .* Running beta pid ${two.pid} second file .* ${OPENING} \\(0 so far\\)$`));
+  assert.match(shown.queue[0], /^1 level 3 to share gamma /);
+  b.open('one');
+  await waitFor(() => b.trace().start.three);
+  assert.equal(b.trace().end.two, undefined, 'the third file waited for both');
+  b.open('two');
+  assert.deepEqual(await Promise.all([one.exited, two.exited, three.exited]), [0, 0, 0]);
+  const { start, end } = b.trace();
+  assert.ok(start.two < end.one && start.three >= end.one);
+  assert.match(b.read('one.log'), /^start \d\d:\d\d:\d\d, sharing the GPU in slot 1 of 2$/m);
+  assert.match(b.read('two.log'), /^start \d\d:\d\d:\d\d, sharing the GPU in slot 2 of 2$/m);
+  assert.match(b.read('three.log'), new RegExp(`^queued \\d\\d:\\d\\d:\\d\\d to share behind pid ${one.pid} \\(alpha, first file\\)\\nstart \\d\\d:\\d\\d:\\d\\d, sharing the GPU in slot 1 of 2\\n`));
+  for (const name of ['one', 'two', 'three']) {
+    assert.doesNotMatch(b.read(`${name}.log`), /^(overlap|waiting) /m, `${name} took a shared file for an outside GPU user`);
+    assert.match(b.read(`${name}.log`), /\nexit 0 \d\d:\d\d:\d\d\n$/);
+  }
+  const done = await until(async () => { const x = await json(`${url}status.json`); return x.history.length === 3 && x; });
+  assert.ok(done.history.every((r) => r.shared === true && r.rc === 0));
+  assert.deepEqual((await renderPage((await get(url)).body, done)).history.map((cells) => cells[1]).filter((what) => !what.endsWith(' · shared')), []);
+  assert.deepEqual(fs.readdirSync(cpu), []);
+});
+
+test('a gpu_run job waits for the shared files, and files that arrive behind it wait for it', { skip }, async (t) => {
+  const b = bench(t);
+  const one = b.share('one.log', 'one', 'gate');
+  await waitFor(() => b.trace().start.one);
+  const solo = b.run('solo.log', b.job('solo', 300));
+  await waitFor(() => /^queued /m.test(b.read('solo.log')));
+  const two = b.share('two.log', 'two', 300);
+  await waitFor(() => /^queued /m.test(b.read('two.log')));
+  await sleep(400);
+  assert.deepEqual([b.trace().start.solo, b.trace().start.two], [undefined, undefined]);
+  b.open('one');
+  assert.deepEqual(await Promise.all([one.exited, solo.exited, two.exited]), [0, 0, 0]);
+  const { start, end } = b.trace();
+  assert.ok(start.solo >= end.one, 'the gpu_run job started beside a shared file');
+  assert.ok(start.two >= end.solo, 'a shared file started beside the gpu_run job');
+  assert.match(b.read('solo.log'), new RegExp(`^queued \\d\\d:\\d\\d:\\d\\d behind pid ${one.pid} \\(`, 'm'));
+  assert.match(b.read('two.log'), /^queued \d\d:\d\d:\d\d to share behind pid \d+ \(.*\) and 1 waiting$/m);
+});
+
+test("an older copy's exclusive lock keeps shared files out until it ends", { skip }, async (t) => {
+  const b = bench(t);
+  const queue = path.join(b.dir, 'queue');
+  fs.writeFileSync(path.join(b.dir, 'unlabeled.mjs'), UNLABELED);
+  const holder = b.foreign([process.execPath, path.join(b.dir, 'unlabeled.mjs'), 'holder', queue, b.dir, 'node old.mjs']);
+  await waitFor(() => fs.existsSync(path.join(queue, 'holder.json')));
+  const one = b.share('one.log', 'one', 50);
+  await waitFor(() => /^queued /m.test(b.read('one.log')));
+  await sleep(400);
+  assert.equal(b.trace().start.one, undefined);
+  const killed = Date.now();
+  process.kill(holder.pid, 'SIGKILL');
+  assert.equal(await one.exited, 0);
+  assert.ok(b.trace().start.one >= killed);
+});
+
+test('a command-buffer abort fails every file sharing the GPU with status 75 and drops the lane to one at a time until a reset', { skip }, async (t) => {
+  const b = bench(t, { GPU_QUEUE_ABORTS: 'cat "$FAKE_GPU/../aborts.log" 2>/dev/null || true' });
+  const aborts = path.join(b.dir, 'aborts.log');
+  const one = b.share('one.log', 'one', 'gate', { env: { GPU_WHO: 'alpha', GPU_JOB: 'bystander' } });
+  await waitFor(() => b.trace().start.one);
+  const two = b.share('two.log', 'two', 'gate', { env: { GPU_WHO: 'beta', GPU_JOB: 'aborted file', JOB_ABORT: aborts } });
+  await waitFor(() => b.trace().start.two);
+  b.open('two');
+  assert.equal(await two.exited, 75);
+  b.open('one');
+  assert.equal(await one.exited, 75);
+  assert.match(b.read('two.log'), /\naborted 1\n.* E {2}node\[\d+:2ae9c7\] .*command buffer was aborted.*\n1 GPU command-buffer abort in node during the job: the run fails with status 75, and the shared lane falls back to one at a time\nexit 75 \d\d:\d\d:\d\d\n$/);
+  assert.match(b.read('one.log'), /\n1 GPU command-buffer abort in node during the job: the run fails with status 75\nexit 75 \d\d:\d\d:\d\d\n$/);
+  for (const name of ['one', 'two']) assert.doesNotMatch(b.read(`${name}.log`), /^exit 0/m);
+  const lane = JSON.parse(b.read('queue/lane.json'));
+  assert.deepEqual([lane.limit, lane.fallback.aborts, lane.fallback.who, lane.fallback.what, lane.fallback.log], [1, 1, 'beta', 'aborted file', path.join(b.dir, 'two.log')]);
+  const fallen = new RegExp(`^Shared lane: one at a time since \\d\\d:\\d\\d:\\d\\d, after 1 GPU command-buffer abort in beta, aborted file \\(\\S+/two\\.log\\); gpu_lane reset reopens it$`, 'm');
+  assert.match(b.status(), fallen);
+  assert.match(b.lane().stdout, fallen);
+
+  fs.rmSync(aborts);
+  const three = b.share('three.log', 'three', 'gate');
+  await waitFor(() => b.trace().start.three);
+  const four = b.share('four.log', 'four', 50);
+  await waitFor(() => /^queued /m.test(b.read('four.log')));
+  b.open('three');
+  assert.deepEqual(await Promise.all([three.exited, four.exited]), [0, 0]);
+  assert.ok(b.trace().start.four >= b.trace().end.three, 'a second file shared the GPU after the fallback');
+  assert.match(b.read('four.log'), /^start \d\d:\d\d:\d\d, sharing the GPU in slot 1 of 1$/m);
+
+  const bad = b.lane('open');
+  assert.deepEqual([bad.status, bad.stderr], [2, 'gpu_lane: not a lane command: open; use gpu_lane, or gpu_lane reset\n']);
+  const reset = b.lane('reset');
+  assert.equal(reset.status, 0);
+  assert.match(reset.stdout, new RegExp(`^${OPENING} \\(0 so far\\)\\n$`));
+  assert.equal(JSON.parse(b.read('queue/lane.json')).limit, 2);
+});
+
+test('after a day with no aborts in which 20 shared runs overlapped another, the lane allows 3 at a time', { skip }, async (t) => {
+  const b = bench(t);
+  const queue = path.join(b.dir, 'queue');
+  fs.mkdirSync(queue, { recursive: true });
+  const since = Date.now() - 25 * 3600e3;
+  fs.writeFileSync(path.join(queue, 'lane.json'), JSON.stringify({ limit: 2, since }));
+  const pair = (k) => [0, 1].map((i) => ({ who: 'old', what: 'file', priority: 3, log: '/dev/null', pid: 1000 + 2 * k + i, queued: since + 3600e3 * k,
+    started: since + 3600e3 * k + 1000 * i, ended: since + 3600e3 * k + 60000, rc: 0, aborts: 0, shared: true }));
+  const history = (n) => fs.writeFileSync(path.join(queue, 'history.jsonl'), Array.from({ length: n }, (_, k) => pair(k)).flat().map((r) => `${JSON.stringify(r)}\n`).join(''));
+  history(9);
+  assert.equal((await b.share('early.log', 'early', 50).exited), 0);
+  assert.doesNotMatch(b.read('early.log'), /now allows/);
+  assert.equal(JSON.parse(b.read('queue/lane.json')).limit, 2);
+  assert.match(b.lane().stdout, new RegExp(`^${OPENING.replace(' since \\d\\d:\\d\\d:\\d\\d', ' since .+')} \\(18 so far\\)\\n$`));
+  history(10);
+  assert.equal((await b.share('late.log', 'late', 50).exited), 0);
+  assert.match(b.read('late.log'), /\nthe shared lane now allows 3 at a time, after a day with no aborts\nexit 0 \d\d:\d\d:\d\d\n$/);
+  assert.equal(JSON.parse(b.read('queue/lane.json')).limit, 3);
+  assert.match(b.lane().stdout, /^Shared lane: 3 at a time since \d\d:\d\d:\d\d\n$/);
+  const runs = ['a', 'b', 'c'].map((name) => b.share(`${name}.log`, name, 'gate'));
+  await waitFor(() => ['a', 'b', 'c'].every((name) => b.trace().start[name]));
+  for (const name of ['a', 'b', 'c']) b.open(name);
+  assert.deepEqual(await Promise.all(runs.map((r) => r.exited)), [0, 0, 0]);
+  assert.deepEqual(['a', 'b', 'c'].map((name) => /sharing the GPU in slot (\d) of 3/.exec(b.read(`${name}.log`))?.[1]).sort(), ['1', '2', '3']);
+});
+
+test('gpu_share runs one node --test file and refuses anything else before it queues', { skip }, (t) => {
+  const b = bench(t);
+  const file = path.join(b.dir, 'job.test.mjs');
+  for (const argv of [b.job('bad', 50), [process.execPath, '--test', file, path.join(b.dir, 'other.test.mjs')], ['/bin/zsh', '-c', `node --test ${file}`], [process.execPath, file]]) {
+    const refused = spawnSync(process.execPath, [script, 'share', path.join(b.dir, 'bad.log'), ...argv], { env: b.env, encoding: 'utf8' });
+    assert.equal(refused.status, 2, argv.join(' '));
+    assert.equal(refused.stderr, 'gpu_share: a shared run is one GPU test file, node --test [FLAG...] FILE.test.mjs; run anything else with gpu_run\n');
+  }
+  assert.equal(fs.existsSync(path.join(b.dir, 'queue')), false, 'a refused run touched the queue');
+  assert.equal(fs.existsSync(path.join(b.dir, 'bad.log')), false);
+});
+
+test('a shared file that finds no CPU slot leaves the GPU to the queue until it has one', { skip }, async (t) => {
+  const b = bench(t, { CPU_QUEUE_SLOTS: '1' });
+  const hog = b.foreign([process.execPath, fileURLToPath(new URL('../scripts/cpuQueue.mjs', import.meta.url)), 'run', path.join(b.dir, 'hog.log'), ...b.job('hog', 'gate', false)]);
+  await waitFor(() => b.trace().start.hog);
+  const one = b.share('one.log', 'one', 50);
+  await waitFor(() => /^waiting \d\d:\d\d:\d\d for a CPU slot, with the GPU left to the queue$/m.test(b.read('one.log')));
+  const solo = b.run('solo.log', b.job('solo', 'gate'));
+  await waitFor(() => b.trace().start.solo);
+  b.open('hog');
+  await waitFor(() => b.read('one.log').match(/^queued /gm)?.length === 1);
+  assert.equal(b.trace().start.one, undefined);
+  b.open('solo');
+  assert.deepEqual(await Promise.all([hog.exited, solo.exited, one.exited]), [0, 0, 0]);
+  const { start, end } = b.trace();
+  assert.ok(start.one >= end.solo && start.one >= end.hog);
+  assert.match(b.read('one.log'), /^waiting \d\d:\d\d:\d\d for a CPU slot, with the GPU left to the queue\nqueued \d\d:\d\d:\d\d to share behind pid \d+ \(.*\)\nstart \d\d:\d\d:\d\d, sharing the GPU in slot 1 of 2\n/);
 });

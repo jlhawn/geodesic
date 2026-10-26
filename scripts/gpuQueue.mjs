@@ -1,23 +1,27 @@
 // One GPU job at a time on this Mac, by level and then in order of arrival,
 // for every session: macOS aborts the command buffers of node WebGPU models
-// that share the GPU, and Dawn never reports it.
+// that share the GPU, and Dawn never reports it. Only test files, which keep
+// the GPU busy a few percent of their time, may share it, a few at once.
 //   node scripts/gpuQueue.mjs run LOG CMD [ARG...]
+//   node scripts/gpuQueue.mjs share LOG node --test [FLAG...] FILE.test.mjs
+//   node scripts/gpuQueue.mjs lane [reset]
 //   node scripts/gpuQueue.mjs status
 //   node scripts/gpuQueue.mjs serve [PORT]
-// gpuQueue.zsh wraps them as gpu_run, gpu_status, gpu_serve. `run` waits its
-// turn, holds the queue's lock for the whole of CMD (so a driver's gaps
-// between segments stay covered), appends CMD's output to LOG between a
-// "start HH:MM:SS" and an "exit RC HH:MM:SS" line, then counts the GPU
-// command-buffer aborts the system log recorded meanwhile, and exits with
-// CMD's status. A LOG that already holds "exit 0" is skipped. A run from
-// inside the holder's own process tree goes ahead at once. Before CMD
-// starts, the holder waits while a node process outside the queue holds the
-// Metal driver or a page server listens on port 8000. From before CMD starts
-// until the next holder has one of its own, it holds an idle WebGPU device,
-// so the polling gates of older scripts see the GPU busy throughout, gaps
-// and handoffs included. The holder and CMD run with GPU_QUEUE_HELD=1 in
-// their environment, without which js/gpu/device.module.js opens no GPU on
-// this Mac. CPU-only jobs do not use the queue and never wait for it.
+// gpuQueue.zsh wraps them as gpu_run, gpu_share, gpu_lane, gpu_status,
+// gpu_serve. `run` waits its turn, holds the queue's lock for the whole of
+// CMD (so a driver's gaps between segments stay covered), appends CMD's
+// output to LOG between a "start HH:MM:SS" and an "exit RC HH:MM:SS" line,
+// then counts the GPU command-buffer aborts the system log recorded
+// meanwhile, and exits with CMD's status. A LOG that already holds "exit 0"
+// is skipped. A run from inside the holder's own process tree goes ahead at
+// once. Before CMD starts, the holder waits while a node process outside the
+// queue holds the Metal driver or a page server listens on port 8000. From
+// before CMD starts until the next holder has one of its own, it holds an
+// idle WebGPU device, so the polling gates of older scripts see the GPU busy
+// throughout, gaps and handoffs included. The holder and CMD run with
+// GPU_QUEUE_HELD=1 in their environment, without which
+// js/gpu/device.module.js opens no GPU on this Mac. CPU-only jobs do not use
+// the queue and never wait for it.
 // GPU_PRIORITY (1-5, default 3) sets a run's level, 1 the highest. A waiter
 // tries the lock only when no live ticket is ahead of it in (level, seq, ms,
 // pid) order: a level waits until every higher one is empty, runs in order
@@ -26,6 +30,17 @@
 // ticket arriving ahead of it meanwhile, so neither takes the GPU in the gap
 // between another session's runs; a finished holder keeps its idle device
 // for a waiter of levels 1-3 only.
+// `share` runs one GPU test file and nothing else. Up to the lane's limit of
+// shared runs hold the GPU together, never beside a `run`, in the same order
+// of arrival; a shared run joining others takes the GPU at once, whatever
+// its level, and treats their processes as its own. Each also takes one CPU
+// slot of scripts/cpuQueue.mjs, unless it runs inside a cpu_run, and gives
+// the GPU back to the queue while it waits for one. The lane allows 2 at
+// once, then 3 after a day with no aborts in which at least 20 shared runs
+// overlapped another. A shared run writes its "exit" line only after its
+// abort scan: a command-buffer abort in a node process during its job fails
+// it with status 75 and drops the lane to one at a time until `lane reset`.
+// `lane` prints the lane.
 // GPU_WHO (a short name for the session) and GPU_JOB (one line on what CMD
 // is) label a run. <dir>/status.md lists the holder and the queue in order,
 // each with its level, by these labels, or by worktree and command for a run
@@ -45,9 +60,14 @@
 // ticket or a GPU device and writes nothing, so no run ever waits on it.
 // The lock is an O_EXLOCK flock on <dir>/lock, which the kernel drops when
 // its holders exit; CMD inherits it as fd 19, so a job outliving a killed
-// holder keeps it. Waiters hold flocks on their tickets in <dir>/queue, named
-// p<level>-<seq>-<ms>-<pid>.json; a ticket named <seq>-<ms>-<pid>.json is
-// level 3.
+// holder keeps it. A shared run holds an O_SHLOCK on it instead and an
+// O_EXLOCK on one of <dir>/share-<i>, i below the limit, which its job
+// inherits too, with its CPU slot. Its record is <dir>/shared/<pid>.json,
+// and holder.json mirrors one shared record for runs of older copies of this
+// script, which take the lock exclusively and so wait for every shared run.
+// The lane is <dir>/lane.json. Waiters hold flocks on their tickets in
+// <dir>/queue, named p<level>-<seq>-<ms>-<pid>.json; a ticket named
+// <seq>-<ms>-<pid>.json is level 3.
 // GPU_QUEUE_DIR (~/.cache/webgcm-gpu-queue), GPU_QUEUE_TICK_MS (200; every
 // wait is a multiple of it), GPU_QUEUE_PORT (8000; 0 for none),
 // GPU_QUEUE_PROBE (a shell command that prints the pids using the GPU, in
@@ -55,7 +75,8 @@
 // in for js/gpu/device.module.js), GPU_QUEUE_COURTESY_MS (15000,60000: how
 // long levels 4 and 5 wait for the lock to stay free), GPU_QUEUE_IOREG (a
 // shell command whose output stands in for ioreg's) and GPU_QUEUE_ABORTS
-// (off) serve tests.
+// (off, or a shell command whose output stands in for the system log's)
+// serve tests.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -63,15 +84,18 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { config as cpuConfig, holdSlots } from './cpuQueue.mjs';
 
-const O_EXLOCK = 0x20;
+const O_SHLOCK = 0x10, O_EXLOCK = 0x20;
 const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL, O_NONBLOCK } = fs.constants;
 const INHERITED_FD = 19;
 const AGENT = /(^|[\s/])gpuQueue\.mjs run\b/;
 const TICKET = /^(?:p([1-5])-)?(\d+)-(\d+)-(\d+)\.json$/;
 const LEVELS = [1, 2, 3, 4, 5], DEFAULT_LEVEL = 3, COURTESY_MS = [15000, 60000];
 const LSTART = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/;
-const USAGE = 'usage: gpuQueue.mjs run LOG CMD [ARG...] | gpuQueue.mjs status | gpuQueue.mjs serve [PORT]';
+const USAGE = 'usage: gpuQueue.mjs run LOG CMD [ARG...] | gpuQueue.mjs share LOG node --test [FLAG...] FILE.test.mjs | gpuQueue.mjs lane [reset] | gpuQueue.mjs status | gpuQueue.mjs serve [PORT]';
+const LANE_START = 2, LANE_MOST = 3, LANE_DAY_MS = 24 * 3600e3, LANE_OVERLAPS = 20, ABORTED = 75;
+const ABORT_LINE = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?:\.(\d+))?\s+\S+\s+(.+?)\[(\d+):/;
 const PAGE = new URL('./gpuQueue.html', import.meta.url);
 const LOCAL_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
 const SERVE_PORT = 8008, RESERVED_PORTS = [8000, 8001];
@@ -98,11 +122,13 @@ export function config(env = process.env) {
   const courtesy = String(env.GPU_QUEUE_COURTESY_MS ?? '').split(',').map((ms) => (ms.trim() ? Number(ms) : NaN));
   return {
     dir, lock: path.join(dir, 'lock'), holder: path.join(dir, 'holder.json'), queue: path.join(dir, 'queue'),
+    shared: path.join(dir, 'shared'), lane: path.join(dir, 'lane.json'),
     status: path.join(dir, 'status.md'), statusLock: path.join(dir, 'status.lock'), history: path.join(dir, 'history.jsonl'),
     tick, recheck: 10 * tick, cache: 10 * tick, settle: 15 * tick, grace: 100 * tick, linger: 100 * tick, useEvery: 25 * tick, useKeep: 18000 * tick,
     monitor: 150 * tick, nestedEvery: 25, refreshEvery: 150, stale: 300 * tick,
     port: env.GPU_QUEUE_PORT ? Number(env.GPU_QUEUE_PORT) : env.GPU_QUEUE_PORT === '' ? 0 : 8000,
     probe: env.GPU_QUEUE_PROBE || '', ioreg: env.GPU_QUEUE_IOREG || '', device, aborts: env.GPU_QUEUE_ABORTS !== 'off',
+    abortLog: env.GPU_QUEUE_ABORTS && env.GPU_QUEUE_ABORTS !== 'off' ? env.GPU_QUEUE_ABORTS : '',
     who: oneLine(env.GPU_WHO), what: oneLine(env.GPU_JOB), priority: oneLine(env.GPU_PRIORITY) || String(DEFAULT_LEVEL),
     courtesy: courtesy.length === 2 && courtesy.every((ms) => ms >= 0) ? courtesy : COURTESY_MS,
   };
@@ -149,6 +175,17 @@ export function shortCommand(command = '') {
     .map((a) => a.replace(/^([^/]*=)?\/[^=]*?\/([^/=]+\/[^/=]+)$/, '$1…/$2'))
     .map((a) => (!a || /[\s'"\\]/.test(a) ? `'${a.replace(/'/g, `'\\''`)}'` : a))
     .join(' '), 120);
+}
+
+export function sharedTestFile(argv) {
+  let args = argv;
+  if (path.basename(args[0] || '') === 'env') {
+    args = args.slice(1);
+    while (args.length > 1 && /^[A-Za-z_]\w*=/.test(args[0])) args = args.slice(1);
+  }
+  if (path.basename(args[0] || '') !== 'node' || !args.includes('--test')) return null;
+  const files = args.filter((a) => /\.test\.m?js$/.test(a));
+  return files.length === 1 ? files[0] : null;
 }
 
 const labels = (info) => ({ who: oneLine(info.who) || whoFrom(info.cwd), what: oneLine(info.what) || shortCommand(info.command) });
@@ -238,15 +275,16 @@ export function gpuShares(before, after, table, family = new Set()) {
   return users.sort((a, b) => b.share - a.share || a.pid - b.pid);
 }
 
-export function gpuRecorder(cfg, { read = () => gpuTimes(cfg), table = processes, record = () => readRecord(cfg), now = Date.now } = {}) {
+export function gpuRecorder(cfg, { read = () => gpuTimes(cfg), table = processes, records = (procs) => agents(cfg, procs), now = Date.now } = {}) {
   const samples = [];
   let before = null;
   const sample = () => {
-    const at = now(), procs = table(), r = record();
-    const holder = r?.start && procs.get(r.pid)?.start === r.start ? { pid: r.pid, ...labels(r) } : null;
+    const at = now(), procs = table();
+    const holders = records(procs).filter((r) => r?.start && procs.get(r.pid)?.start === r.start).map((r) => ({ pid: r.pid, ...labels(r) }));
     const after = { at, times: read() };
     if (before && at > before.at && at - before.at <= USE_WINDOW_MS) {
-      samples.push({ since: before.at, until: at, holder, users: gpuShares(before, after, procs, familyOf(procs, holder)) });
+      const family = new Set(holders.flatMap((h) => [...familyOf(procs, h)]));
+      samples.push({ since: before.at, until: at, holders, users: gpuShares(before, after, procs, family) });
       while (samples[0].until < at - cfg.useKeep) samples.shift();
     }
     before = after;
@@ -258,12 +296,12 @@ const thousandths = (x) => Math.round(x * 1000) / 1000;
 
 export function gpuHistory(samples) {
   const n = samples.length;
-  const holder = { shares: samples.map((s) => (s.holder ? thousandths(s.users.reduce((sum, u) => sum + (u.queued ? u.share : 0), 0)) : null)), jobs: [] };
-  samples.forEach((s, i) => {
-    const job = holder.jobs.at(-1);
-    if (job && s.holder?.pid === job.pid && job.to === i - 1) job.to = i;
-    else if (s.holder) holder.jobs.push({ from: i, to: i, ...s.holder });
-  });
+  const holder = { shares: samples.map((s) => (s.holders.length ? thousandths(s.users.reduce((sum, u) => sum + (u.queued ? u.share : 0), 0)) : null)), jobs: [] };
+  samples.forEach((s, i) => s.holders.forEach((h) => {
+    const job = holder.jobs.findLast((j) => j.pid === h.pid);
+    if (job && job.to === i - 1) job.to = i;
+    else holder.jobs.push({ from: i, to: i, ...h });
+  }));
   const found = new Map();
   samples.forEach((s, i) => s.users.forEach((u) => {
     if (u.queued) return;
@@ -288,13 +326,26 @@ export function gpuHistory(samples) {
 const listeners = (port) => (port ? pidList(output('/usr/sbin/lsof', ['-w', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'])) : []);
 const lockHolders = (cfg) => pidList(output('/usr/sbin/lsof', ['-w', '-t', '--', cfg.lock]));
 
-function tryLock(file) {
+function tryLock(file, mode = O_EXLOCK) {
   try {
-    return fs.openSync(file, O_RDONLY | O_CREAT | O_EXLOCK | O_NONBLOCK, 0o644);
+    return fs.openSync(file, O_RDONLY | O_CREAT | mode | O_NONBLOCK, 0o644);
   } catch (error) {
     if (error.code === 'EAGAIN') return null;
     throw error;
   }
+}
+
+function takeShare(cfg) {
+  const { limit } = laneOf(cfg);
+  for (let i = 0; i < limit; i++) {
+    const slot = tryLock(path.join(cfg.dir, `share-${i}`));
+    if (slot === null) continue;
+    const lock = tryLock(cfg.lock, O_SHLOCK);
+    if (lock !== null) return { lockFd: lock, slot: { fd: slot, index: i } };
+    fs.closeSync(slot);
+    break;
+  }
+  return { lockFd: null, slot: null };
 }
 
 function inheritsLock(cfg) {
@@ -333,7 +384,8 @@ function waiting(cfg, file) {
 
 function sweep(cfg) {
   const leftovers = (dir, pattern) => { try { return fs.readdirSync(dir).filter((n) => pattern.test(n)).map((n) => path.join(dir, n)); } catch { return []; } };
-  for (const file of [...leftovers(cfg.queue, /^\./), ...leftovers(cfg.dir, /^(holder\.json|\.status\.md|\.history\.jsonl)\.\d+$/)]) {
+  const dead = readShared(cfg).filter(({ record }) => !liveRecord(record)).map((r) => r.file);
+  for (const file of [...leftovers(cfg.queue, /^\./), ...leftovers(cfg.dir, /^(holder\.json|lane\.json|\.status\.md|\.history\.jsonl)\.\d+$/), ...leftovers(cfg.shared, /\.json\.\d+$/), ...dead]) {
     try { if (Date.now() - fs.statSync(file).mtimeMs > cfg.stale) fs.unlinkSync(file); } catch {}
   }
 }
@@ -368,9 +420,93 @@ function writeRecord(cfg, record) {
   fs.renameSync(temp, cfg.holder);
 }
 
+function readShared(cfg) {
+  let names = [];
+  try { names = fs.readdirSync(cfg.shared).filter((name) => /^\d+\.json$/.test(name)); } catch { return []; }
+  return names.map((name) => ({ file: path.join(cfg.shared, name), record: readJson(path.join(cfg.shared, name)) })).filter((r) => r.record);
+}
+
+function sharedRecords(cfg, table = null) {
+  return readShared(cfg).map((r) => r.record)
+    .filter((record) => record.start && (table?.get(record.pid)?.start ?? startOf(record.pid)) === record.start)
+    .sort((a, b) => a.acquired - b.acquired || a.pid - b.pid);
+}
+
+function writeShared(cfg, record) {
+  serialized(cfg, () => {
+    fs.mkdirSync(cfg.shared, { recursive: true });
+    const file = path.join(cfg.shared, `${record.pid}.json`), temp = `${file}.${process.pid}`;
+    fs.writeFileSync(temp, JSON.stringify(record));
+    fs.renameSync(temp, file);
+    const mirror = readRecord(cfg);
+    if (!mirror || mirror.pid === record.pid || !liveRecord(mirror)) writeRecord(cfg, record);
+  });
+}
+
+function dropShared(cfg, pid) {
+  serialized(cfg, () => {
+    fs.rmSync(path.join(cfg.shared, `${pid}.json`), { force: true });
+    const mirror = readRecord(cfg);
+    if (mirror && mirror.pid !== pid && liveRecord(mirror)) return;
+    const next = sharedRecords(cfg)[0];
+    if (next) writeRecord(cfg, next);
+    else fs.rmSync(cfg.holder, { force: true });
+  });
+}
+
+function agents(cfg, table) {
+  const record = readRecord(cfg);
+  if (record && !record.shared && record.start && (table.get(record.pid)?.start ?? startOf(record.pid)) === record.start) return [record];
+  return sharedRecords(cfg, table);
+}
+
+function laneOf(cfg) {
+  const lane = readJson(cfg.lane);
+  return lane && [1, LANE_START, LANE_MOST].includes(lane.limit) ? lane : { limit: LANE_START, since: null };
+}
+
+function editLane(cfg, edit) {
+  return serialized(cfg, () => {
+    const lane = edit(laneOf(cfg));
+    if (!lane) return null;
+    const temp = `${cfg.lane}.${process.pid}`;
+    fs.writeFileSync(temp, JSON.stringify(lane));
+    fs.renameSync(temp, cfg.lane);
+    return lane;
+  });
+}
+
+const overlapping = (runs) => runs.filter((a) => runs.some((b) => b !== a && a.started < b.ended && b.started < a.ended)).length;
+const sharedRuns = (cfg, since) => allRuns(cfg).filter((r) => r.shared && r.started >= since && r.ended);
+
+function promote(cfg, now = Date.now()) {
+  return editLane(cfg, (lane) => {
+    if (lane.limit !== LANE_START || lane.fallback || !lane.since || now - lane.since < LANE_DAY_MS) return null;
+    return overlapping(sharedRuns(cfg, lane.since)) >= LANE_OVERLAPS ? { ...lane, limit: LANE_MOST, promoted: now } : null;
+  });
+}
+
+export function laneText(cfg = config()) {
+  const lane = laneOf(cfg), f = lane.fallback;
+  if (f) return `Shared lane: one at a time since ${when(f.at)}, after ${f.aborts} GPU command-buffer abort${f.aborts === 1 ? '' : 's'} in ${f.who}, ${f.what} (${f.log}); gpu_lane reset reopens it`;
+  if (!lane.since) return `Shared lane: ${lane.limit} at a time, not used yet`;
+  if (lane.limit === LANE_START) {
+    return `Shared lane: ${LANE_START} at a time since ${when(lane.since)}; ${LANE_MOST} once a day has passed with no aborts and ${LANE_OVERLAPS} shared runs have overlapped another (${overlapping(sharedRuns(cfg, lane.since))} so far)`;
+  }
+  return `Shared lane: ${lane.limit} at a time since ${when(lane.promoted ?? lane.since)}`;
+}
+
+export function lane(cfg, args = []) {
+  if (args.length === 1 && args[0] === 'reset') editLane(cfg, () => ({ limit: LANE_START, since: Date.now(), reset: Date.now() }));
+  else if (args.length) throw refused(`not a lane command: ${args.join(' ')}; use gpu_lane, or gpu_lane reset`);
+  return laneText(cfg);
+}
+
 function holderAbove(cfg, line, probe) {
   const record = readRecord(cfg);
   if (record && line.get(record.pid) === record.start) return record.pid;
+  const shared = readShared(cfg).find(({ record: r }) => line.get(r.pid) === r.start);
+  if (shared) return shared.record.pid;
   const inherits = inheritsLock(cfg);
   if (!inherits) {
     if (liveRecord(record)) return 0;
@@ -381,10 +517,11 @@ function holderAbove(cfg, line, probe) {
   return [...line.keys()].reverse().find((pid) => holders.has(pid)) || (inherits ? process.pid : 0);
 }
 
-function survey(cfg, self) {
+function survey(cfg, self, share = false) {
   const users = gpuUsers(cfg);
   const table = processes();
-  const family = new Set([...lineage(table, self).keys(), ...descendants(table, self)]);
+  const others = share ? sharedRecords(cfg, table).map((r) => r.pid).filter((pid) => pid !== self) : [];
+  const family = new Set([...lineage(table, self).keys(), ...descendants(table, self), ...others.flatMap((pid) => [pid, ...descendants(table, pid)])]);
   const outside = [], queue = [];
   for (const pid of users) {
     const proc = table.get(pid);
@@ -440,11 +577,12 @@ function snapshot(cfg, net = {}, how = probing) {
   const record = readRecord(cfg);
   const listed = tickets(cfg).map((t) => ({ ...t, info: readJson(t.file) }));
   const table = net.table || processes();
-  const holder = record?.start && (table.get(record.pid)?.start ?? startOf(record.pid)) === record.start ? record : null;
+  const live = agents(cfg, table);
+  const holder = live[0] && !live[0].shared ? live[0] : null, shared = holder ? [] : live;
   const queue = listed.filter((t) => how.waiting(cfg, t, table) && t.info)
-    .map((t) => ({ ...labels(t.info), priority: t.priority, pid: t.pid, since: t.ms, log: t.info.log, command: t.info.command, cwd: t.info.cwd }));
-  const lock = holder ? [] : how.holders(cfg, record, queue).filter((pid) => table.has(pid)).map((pid) => described(table.get(pid)));
-  const family = familyOf(table, holder);
+    .map((t) => ({ ...labels(t.info), priority: t.priority, pid: t.pid, since: t.ms, log: t.info.log, command: t.info.command, cwd: t.info.cwd, shared: t.info.shared || undefined }));
+  const lock = live.length ? [] : how.holders(cfg, record, queue).filter((pid) => table.has(pid)).map((pid) => described(table.get(pid)));
+  const family = new Set([...familyOf(table, holder), ...shared.flatMap((r) => [r.pid, ...descendants(table, r.pid)])]);
   const outside = [...(net.users || gpuUsers(cfg))].map((pid) => table.get(pid))
     .filter((p) => p && !family.has(p.pid) && !AGENT.test(p.command))
     .map((p) => ({ ...described(p), start: Date.parse(p.start) }));
@@ -452,7 +590,9 @@ function snapshot(cfg, net = {}, how = probing) {
   return {
     now,
     holder: holder && { ...holder, ...labels(holder), priority: levelOf(holder) },
-    exited: !holder && record ? { pid: record.pid, ...labels(record) } : null,
+    shared: shared.map((r) => ({ ...r, ...labels(r), priority: levelOf(r) })),
+    lane: { ...laneOf(cfg), text: laneText(cfg) },
+    exited: !live.length && record ? { pid: record.pid, ...labels(record) } : null,
     lock, queue, outside,
     port: cfg.port ? { port: cfg.port, listening: listening.map((pid) => (table.has(pid) ? described(table.get(pid)) : { pid, command: null, short: null })) } : null,
   };
@@ -465,15 +605,20 @@ function statusText(cfg, net) {
   if (h) {
     out.push(`Holder: **${h.who}**, ${h.what}`, `- level ${h.priority}, ${holderState(h)}`,
       `- pid ${h.pid}, took the lock at ${when(h.acquired)}${h.deviceReady ? ', idle device open' : ''}`, `- log ${h.log}`);
+  } else if (s.shared.length) {
+    out.push(`Holders: ${s.shared.length} test file${s.shared.length === 1 ? '' : 's'} sharing the GPU`);
+    for (const r of s.shared) {
+      out.push(`- **${r.who}**, ${r.what}`, `  - level ${r.priority}, ${holderState(r)}, pid ${r.pid}${r.deviceReady ? ', idle device open' : ''}`, `  - log ${r.log}`);
+    }
   } else if (!s.lock.length) out.push('Holder: none');
   else {
     out.push(`Holder: no live agent; the lock is held by ${s.lock.map((p) => `pid ${p.pid} (${p.short})`).join(', ')}`);
     if (s.exited) out.push(`- the recorded holder, pid ${s.exited.pid} (${s.exited.who}, ${s.exited.what}), has exited`);
   }
-  out.push('', s.queue.length ? 'Queue:' : 'Queue: empty');
+  out.push('', s.lane.text, '', s.queue.length ? 'Queue:' : 'Queue: empty');
   s.queue.forEach((t, i) => {
     const indent = ' '.repeat(`${i + 1}. `.length);
-    out.push(`${i + 1}. **${t.who}**, ${t.what}`, `${indent}- level ${t.priority}, queued since ${when(t.since)}, pid ${t.pid}`, `${indent}- log ${t.log}`);
+    out.push(`${i + 1}. **${t.who}**, ${t.what}`, `${indent}- level ${t.priority}${t.shared ? ', to share' : ''}, queued since ${when(t.since)}, pid ${t.pid}`, `${indent}- log ${t.log}`);
   });
   out.push('', s.outside.length ? 'Outside the queue:' : 'Outside the queue: none');
   for (const p of s.outside) out.push(`- pid ${p.pid} since ${when(p.start)}: ${p.short}`);
@@ -521,24 +666,28 @@ export function appendHistory(cfg, entry) {
   });
 }
 
-export function recentRuns(cfg, count = HISTORY_SHOWN) {
+function allRuns(cfg) {
   let text;
   try { text = fs.readFileSync(cfg.history, 'utf8'); } catch { return []; }
   const runs = [];
-  for (const line of text.split('\n').reverse()) {
+  for (const line of text.split('\n')) {
     try { if (line) runs.push(JSON.parse(line)); } catch {}
   }
-  return runs.sort((a, b) => (b.ended || 0) - (a.ended || 0)).slice(0, count);
+  return runs;
+}
+
+export function recentRuns(cfg, count = HISTORY_SHOWN) {
+  return allRuns(cfg).reverse().sort((a, b) => (b.ended || 0) - (a.ended || 0)).slice(0, count);
 }
 
 export function finished(log) {
   try { return /^exit 0\b/m.test(fs.readFileSync(log, 'utf8')); } catch { return false; }
 }
 
-function launch(argv, log, extra) {
+function launch(argv, log, fds) {
   const out = fs.openSync(log, 'a');
   const stdio = ['ignore', out, out];
-  if (extra !== null) stdio.push(...Array(INHERITED_FD - 3).fill('ignore'), extra);
+  if (fds.length) stdio.push(...Array(INHERITED_FD - 3).fill('ignore'), ...fds);
   const child = spawn(argv[0], argv.slice(1), { stdio });
   fs.closeSync(out);
   const done = new Promise((resolve) => {
@@ -548,19 +697,30 @@ function launch(argv, log, extra) {
   return { child, done };
 }
 
-function scanAborts(since) {
+function abortEntry(line) {
+  const m = ABORT_LINE.exec(line);
+  if (!m) return { at: null, process: null, line };
+  const [, y, mo, d, h, mi, s, frac = '0'] = m;
+  return { at: new Date(+y, mo - 1, +d, +h, +mi, +s, Number(frac.slice(0, 3).padEnd(3, '0'))).getTime(), process: m[8], line };
+}
+
+const sharedAborts = (scan, started, ended) => scan.entries
+  .filter((e) => (e.process ?? 'node') === 'node' && (e.at === null || (e.at >= started - 1000 && e.at <= ended + 2000))).length;
+
+function scanAborts(cfg, since) {
   const from = new Date(since - 5000);
   const stamp = `${from.getFullYear()}-${pad(from.getMonth() + 1)}-${pad(from.getDate())} ${clock(from.getTime())}`;
   return new Promise((resolve) => {
-    const child = spawn('/usr/bin/log', ['show', '--style', 'compact', '--start', stamp, '--predicate', 'eventMessage CONTAINS "command buffer was aborted" AND process != "log"'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = cfg.abortLog ? spawn('/bin/sh', ['-c', cfg.abortLog], { stdio: ['ignore', 'pipe', 'ignore'] })
+      : spawn('/usr/bin/log', ['show', '--style', 'compact', '--start', stamp, '--predicate', 'eventMessage CONTAINS "command buffer was aborted" AND process != "log"'], { stdio: ['ignore', 'pipe', 'ignore'] });
     let text = '';
     child.stdout.on('data', (chunk) => { text += chunk; });
     const timer = setTimeout(() => child.kill(), 15 * 60 * 1000);
     const finish = (code) => {
       clearTimeout(timer);
       const lines = text.split('\n').filter((l) => l.includes('command buffer was aborted'));
-      resolve(code === 0 ? { count: lines.length, lines: [`aborted ${lines.length}`, ...lines.slice(-3).map((l) => cut(l, 300))] }
-        : { count: null, lines: [`aborted ? (log show exited ${code})`] });
+      resolve(code === 0 ? { count: lines.length, lines: [`aborted ${lines.length}`, ...lines.slice(-3).map((l) => cut(l, 300))], entries: lines.map(abortEntry) }
+        : { count: null, lines: [`aborted ? (log show exited ${code})`], entries: [] });
     };
     child.on('error', () => finish(-1));
     child.on('close', finish);
@@ -582,10 +742,14 @@ async function linger(cfg, device) {
   try { device.destroy(); } catch {}
 }
 
-export async function run(cfg, logArg, argv) {
+export async function run(cfg, logArg, argv, { share = false } = {}) {
   if (!logArg || !argv.length) { console.error(USAGE); return 2; }
   if (!/^[1-5]$/.test(cfg.priority)) {
     console.error(`gpu_run: GPU_PRIORITY is '${cfg.priority}'; use 1, 2, 3, 4 or 5 (1 runs first, 3 is the default)`);
+    return 2;
+  }
+  if (share && !sharedTestFile(argv)) {
+    console.error('gpu_share: a shared run is one GPU test file, node --test [FLAG...] FILE.test.mjs; run anything else with gpu_run');
     return 2;
   }
   const priority = Number(cfg.priority);
@@ -597,15 +761,24 @@ export async function run(cfg, logArg, argv) {
   const line = lineage(processes(), process.pid);
   const self = {
     pid: process.pid, start: line.get(process.pid) || startOf(process.pid), log, command: quote(argv), cwd: process.cwd(),
-    since: Date.now(), who: cfg.who || undefined, what: cfg.what || undefined, priority,
+    since: Date.now(), who: cfg.who || undefined, what: cfg.what || undefined, priority, shared: share || undefined,
   };
 
-  let phase = 'queued', ticket = null, lockFd = null, device = null, job = null, rc = 0, remember = null;
-  const release = () => {
-    if (lockFd === null) return;
-    fs.rmSync(cfg.holder, { force: true });
-    fs.closeSync(lockFd);
+  let phase = 'queued', ticket = null, lockFd = null, slot = null, cpu = null, device = null, job = null, rc = 0, remember = null;
+  const letGo = () => {
+    if (lockFd !== null) fs.closeSync(lockFd);
+    if (slot) fs.closeSync(slot.fd);
     lockFd = null;
+    slot = null;
+  };
+  const release = () => {
+    if (lockFd !== null) {
+      if (share) dropShared(cfg, process.pid);
+      else fs.rmSync(cfg.holder, { force: true });
+      letGo();
+    }
+    cpu?.release();
+    cpu = null;
   };
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(signal, () => {
@@ -623,18 +796,18 @@ export async function run(cfg, logArg, argv) {
     });
   }
 
-  let above = holderAbove(cfg, line, true);
-  if (!above) {
+  const waitTurn = async () => {
     ticket = enqueue(cfg, self);
     const delay = delayOf(cfg, priority);
-    const at = priority === DEFAULT_LEVEL ? '' : ` at level ${priority}`;
+    const at = `${priority === DEFAULT_LEVEL ? '' : ` at level ${priority}`}${share ? ' to share' : ''}`;
     let freeSince = 0;
     for (let n = 1; ; n++) {
       const ahead = tickets(cfg).filter((t) => order(t, ticket) < 0 && waiting(cfg, t.file));
-      const free = !ahead.length && (lockFd = tryLock(cfg.lock)) !== null;
+      if (!ahead.length) ({ lockFd, slot } = share ? takeShare(cfg) : { lockFd: tryLock(cfg.lock), slot: null });
+      const free = lockFd !== null;
       if (!free) freeSince = 0;
-      else if (Date.now() - (freeSince ||= Date.now()) >= delay) break;
-      else { fs.closeSync(lockFd); lockFd = null; }
+      else if ((share && sharedRecords(cfg).length) || Date.now() - (freeSince ||= Date.now()) >= delay) return 0;
+      else letGo();
       if (n === 1) {
         const holder = liveRecord(readRecord(cfg));
         const parts = [holder && `pid ${holder.pid} (${named(holder)})`, ahead.length && `${ahead.length} waiting`].filter(Boolean);
@@ -642,16 +815,36 @@ export async function run(cfg, logArg, argv) {
           : `queued ${clock()}${at} behind ${parts.join(' and ') || "the lock's holder"}`);
       }
       if (n % cfg.refreshEvery === 1) refresh(cfg);
-      if (n % cfg.nestedEvery === 0 && (above = holderAbove(cfg, line, false))) break;
+      const nested = n % cfg.nestedEvery === 0 && holderAbove(cfg, line, false);
+      if (nested) return nested;
       await sleep(cfg.tick);
+    }
+  };
+  let above = holderAbove(cfg, line, true) || await waitTurn();
+  const cpuCfg = cpuConfig();
+  if (!above && share && !/^\d+$/.test(cpuCfg.held)) {
+    const entry = {
+      pid: process.pid, want: 1, log, command: self.command, cwd: self.cwd, who: self.who, queued: Date.now(),
+      what: `shared GPU test file${self.what ? `: ${self.what}` : ''}`,
+    };
+    cpu = await holdSlots(cpuCfg, entry, { wait: false });
+    if (!cpu) {
+      letGo();
+      dequeue(ticket);
+      refresh(cfg);
+      say(`waiting ${clock()} for a CPU slot, with the GPU left to the queue`);
+      cpu = await holdSlots(cpuCfg, entry);
+      above = await waitTurn();
     }
   }
   process.env.GPU_QUEUE_HELD = '1';
   if (above) {
     if (ticket) { dequeue(ticket); refresh(cfg); }
+    cpu?.release();
+    cpu = null;
     phase = 'running';
     say(`start ${clock()} nested in pid ${above}`);
-    job = launch(argv, log, inheritsLock(cfg) ? INHERITED_FD : null);
+    job = launch(argv, log, inheritsLock(cfg) ? [INHERITED_FD] : []);
     rc = await job.done;
     phase = 'done';
     say(`exit ${rc} ${clock()}`);
@@ -659,23 +852,25 @@ export async function run(cfg, logArg, argv) {
   }
 
   phase = 'holding';
-  const record = { ...self, acquired: Date.now(), deviceReady: false };
+  const record = { ...self, acquired: Date.now(), deviceReady: false, slot: slot?.index };
+  const write = () => (share ? writeShared(cfg, record) : writeRecord(cfg, record));
   const enter = (state, extra = {}) => {
     if (record.state !== state) record.stateSince = Date.now();
     Object.assign(record, { state, blockers: undefined }, extra);
-    writeRecord(cfg, record);
+    write();
   };
   enter('checking');
   dequeue(ticket);
+  if (share) editLane(cfg, (lane) => (lane.since ? null : { ...lane, since: Date.now() }));
 
   let opening = null, clearSince = 0, said = '';
   for (;;) {
-    const net = survey(cfg, process.pid);
+    const net = survey(cfg, process.pid, share);
     if (cfg.device && !opening && net.outside.every((u) => u.age >= cfg.grace)) {
       opening = openDevice(cfg).then((d) => {
         device = d;
         record.deviceReady = true;
-        writeRecord(cfg, record);
+        write();
       }, (error) => say(`device ${clock()} unavailable: ${error.message}`));
     }
     if (!net.outside.length && !net.port.length) {
@@ -700,13 +895,15 @@ export async function run(cfg, logArg, argv) {
 
   const started = Date.now();
   enter('running', { started });
-  say(`start ${clock(started)}`);
+  say(`start ${clock(started)}${share ? `, sharing the GPU in slot ${slot.index + 1} of ${laneOf(cfg).limit}` : ''}`);
   phase = 'running';
-  job = launch(argv, log, lockFd);
+  if (cpu) process.env.CPU_QUEUE_HELD = '1';
+  job = launch(argv, log, share ? [lockFd, ...(cpu?.fds ?? []), slot.fd] : [lockFd]);
+  if (cpu && job.child.pid) cpu.child(job.child.pid);
   refresh(cfg);
   const seen = new Set();
   const monitor = setInterval(() => {
-    const net = survey(cfg, process.pid);
+    const net = survey(cfg, process.pid, share);
     for (const u of net.outside) {
       if (!seen.has(u.pid)) { seen.add(u.pid); say(`overlap ${clock()} pid ${u.pid}: ${shortCommand(u.command)}`); }
     }
@@ -719,13 +916,23 @@ export async function run(cfg, logArg, argv) {
   phase = 'done';
   remember = (aborts) => {
     remember = null;
-    try { appendHistory(cfg, { ...labels(self), priority, log, pid: process.pid, queued: self.since, started, ended, rc, aborts }); } catch {}
+    try { appendHistory(cfg, { ...labels(self), priority, log, pid: process.pid, queued: self.since, started, ended, rc, aborts, shared: share || undefined }); } catch {}
   };
   release();
-  say(`exit ${rc} ${clock()}`);
+  if (!share) say(`exit ${rc} ${clock()}`);
   refresh(cfg);
-  const [, scan] = await Promise.all([linger(cfg, device), cfg.aborts ? scanAborts(started) : { count: null, lines: [] }]);
+  const [, scan] = await Promise.all([linger(cfg, device), cfg.aborts ? scanAborts(cfg, started) : { count: null, lines: [], entries: [] }]);
   for (const text of scan.lines) say(text);
+  if (share) {
+    const caught = sharedAborts(scan, started, ended);
+    if (caught) {
+      const failed = rc === 0 ? ` with status ${ABORTED}` : '';
+      if (rc === 0) rc = ABORTED;
+      const fell = editLane(cfg, (lane) => (lane.fallback ? null : { ...lane, limit: 1, fallback: { at: Date.now(), aborts: caught, ...labels(self), log } }));
+      say(`${caught} GPU command-buffer abort${caught === 1 ? '' : 's'} in node during the job: the run fails${failed}${fell ? ', and the shared lane falls back to one at a time' : ''}`);
+    } else if (promote(cfg)) say(`the shared lane now allows ${LANE_MOST} at a time, after a day with no aborts`);
+    say(`exit ${rc} ${clock()}`);
+  }
   remember(scan.count);
   return rc;
 }
@@ -796,7 +1003,10 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(file
     process.exit(2);
   }
   if (command === 'run') process.exit(await run(config(), rest[0], rest.slice(1)));
-  else if (command === 'status') console.log(status());
+  else if (command === 'share') process.exit(await run(config(), rest[0], rest.slice(1), { share: true }));
+  else if (command === 'lane') {
+    try { console.log(lane(config(), rest)); } catch (error) { console.error(`gpu_lane: ${error.message}`); process.exit(2); }
+  } else if (command === 'status') console.log(status());
   else if (command === 'serve') {
     const cfg = config();
     try {
