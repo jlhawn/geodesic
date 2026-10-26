@@ -387,7 +387,11 @@ the water put the sequential scheme 3 to 16 W/m² above CERES.
 The layer 250-450 hPa (-38 to -15 C) holds 25.6 g/m² of condensate in the
 tropical mean against ERA5's 9.8, and 10.2 g/m² of it as liquid against about 1.
 ERA5's cloud ice excludes snow, which the model lumps with its ice, so the
-liquid is the like-for-like number. Four things keep it there.
+liquid is the like-for-like number. The layer holds half of the model's excess
+condensate; taking it to ERA5's amount moves the layered scheme's absorbed sunlight
+by 1.2 W/m² and the sequential scheme's by 0.5 (the table above; the whole
+tropical profile at ERA5's gives the layered scheme 5.1). It matters more for the
+longwave, the rain and the heating of the troughs. Four things keep the liquid there.
 
 - One phase rule. `liquidFraction` (linear in temperature from 273.15 K to
   235.15 K, 44 % liquid at -21 C) splits the condensate for the saturation mix,
@@ -578,6 +582,51 @@ plus reflected sunlight to the insolation apply to them as to the sequential
 scheme's (the CPU and GPU tests hold both). What the hold cannot follow is the
 change of the heating's shape with the zenith angle and the change of the
 clouds and the humidity between calls.
+
+## What the layered scheme costs, and what a slower cadence takes back
+
+The page loop (`scripts/pageLoop.mjs`: 60 s of wall time after a warm-up frame, the
+page's options, one job at a time through the GPU queue, alternating repeats) on an
+M1 Max from sixteen128_day0730 (N = 128, 48 layers, steps of 168.75 s, 512 a day) and
+fourteen64_day1825 (N = 64, 60 layers, 337.5 s, 256 a day), in seconds per model day
+with milliseconds per step in parentheses and the repeats in the last column:
+
+| N, radiation every | sequential | cloudTop | layered | layered less sequential | repeats, sequential and layered |
+|---|---|---|---|---|---|
+| 128, 4th (page) | 40.8 (79.7) | 41.0 (80.2) | 54.5 (106.4) | +26.8 ms, +34 % | 42.1, 39.5 and 57.3, 51.7 |
+| 128, 8th | 40.0 (78.0) | | 49.5 (96.6) | +18.6 ms, +24 % | 38.9, 41.0 and 50.6, 48.3 |
+| 128, 16th | 40.3 (78.7) | | 45.5 (88.8) | +10.1 ms, +13 % | 40.6, 40.0 and 46.1, 44.8 |
+| 64, 2nd (page) | 6.7 (26.2) | 6.95 (27.1) | 11.5 (44.9) | +18.8 ms, +72 % | 6.9, 6.5 and 11.5, 11.5 |
+
+Repeats of one configuration differ by up to 5 s per day, so the differences between
+cadences of one scheme are within the noise except for the layered scheme's. The cost
+is the layered pass and how often it is called. Profiled with the radiation called
+every step (every dispatch timed in a pass of its own, two repeats), the layered pass
+takes 108 and 118 ms per call at N = 128 and 36.1 and 36.2 ms at N = 64, against
+6 to 9 ms for the radiation kernel and 6 to 9 ms for the longwave at N = 128 (1.7 and
+2.1 ms at N = 64); `cloudTop` adds 2 to 5 ms to the radiation kernel at N = 128 and 1.5
+to 1.8 ms at N = 64. The pass over the cadence is 28 ms a step at N = 128 and 18 ms at
+N = 64, which are the page loop's differences.
+
+The held radiation's error depends on the interval between calls in minutes, so the
+N = 128 cadences of 4, 8 and 16 steps are intervals of 11.25, 22.5 and 45 minutes, and
+N = 64 runs of 2, 4, 8 and 16 steps give the same intervals and 90 minutes. Four days
+from fourteen64's day 1825 at N = 64, the day means with the radiation every 2nd step
+(11.25 minutes) taken from the same days with every 4th, 8th and 16th (the range over
+days 1 to 4, W/m²; surface temperature in K):
+
+| interval | scheme | absorbed sunlight | atmosphere's | SW cloud effect | surface T |
+|---|---|---|---|---|---|
+| 22.5 min | sequential | -0.03 to -0.15 | -0.02 to -0.04 | -0.04 to -0.16 | +0.001 to +0.004 |
+| 22.5 min | layered | -0.08 to +0.03 | -0.03 | -0.08 to +0.02 | +0.001 to +0.005 |
+| 45 min | sequential | -0.15 to -0.23 | -0.11 to -0.14 | -0.19 to -0.27 | +0.003 to +0.004 |
+| 45 min | layered | -0.13 to -0.02 | -0.11 | -0.06 to -0.18 | +0.004 to +0.006 |
+| 90 min | sequential | -0.25 to -0.46 | -0.35 to -0.38 | -0.45 to -0.67 | +0.008 to +0.012 |
+| 90 min | layered | -0.08 to -0.19 | -0.30 | -0.29 to -0.39 | +0.008 to +0.013 |
+
+The brightening of the layered scheme is not a cadence effect: its absorbed sunlight
+less the sequential scheme's is -8.50 and -7.88 W/m² (days 1 and 4) with the radiation
+every step and -8.35 and -7.69 with it every 16th.
 
 ## Cheaper layered variants (offline, not options)
 
