@@ -17,6 +17,7 @@ import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { savedGeography, checkGeography, readTopography, geographyOptions } from '../js/geography.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS } from '../js/physics/regrid.module.js';
+import { placeCumulus } from '../js/physics/moist.module.js';
 import { withCadence } from '../js/cadence.module.js';
 
 const FILE = process.argv[2], OUT = process.argv[3], TIMES = Number(process.env.TIMES ?? 8), PASS = process.env.PASS ?? 'all';
@@ -42,7 +43,7 @@ if (saved.mixingTop) bl.mixingTop.set(saved.mixingTop);
 if (saved.boundaryRegime) bl.regime.set(saved.boundaryRegime);
 if (saved.boundaryBuoyancy) bl.buoyancyFlux.set(saved.boundaryBuoyancy);
 if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
-for (const field of ['cumulusCover', 'cumulusWater']) if (saved[field] && saved[field].length === model.moist[field].length) model.moist[field].set(saved[field]);
+placeCumulus(model, saved);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual);
 land.load(saved.land);
 for (let i = 0; i < C; i++) core.diagnoseColumn(i, pi, theta, q, qc);
