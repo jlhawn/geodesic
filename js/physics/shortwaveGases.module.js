@@ -153,3 +153,75 @@ export function nearInfraredBands(air, m, D, mixing, vaporFactor, taken, upward,
   }
   return loss;
 }
+
+let shieldedScratch = null;
+
+/*
+ * The near infrared's gases around a cloud top at level `top` (the interface
+ * above layer `top`, 0 to K), by the k-distributions of nearInfraredBands, for
+ * the radiation option vaporShielding 'cloudTop': light crosses the layers above
+ * the top along the beam's path m and the layers below along the diffuse path D.
+ * Fills, as shares of the beam, for each layer k at or below the top, down[k], the
+ * share absorbed in k by light that has passed the cloud, and up[k], the share
+ * absorbed in k by that light once the surface has reflected it whole and it
+ * climbs back to the cloud's base, and for each layer k above the top, climb[k],
+ * the share absorbed in k by light the cloud has reflected whole, climbing along D.
+ */
+export function nearInfraredShielded(air, m, D, mixing, vaporFactor, top, shielded) {
+  const { K, vapour, dry, p, T, e } = air;
+  if (!shieldedScratch || shieldedScratch.passed.length < K + 1) shieldedScratch = { passed: new Float64Array(K + 1), round: new Float64Array(K + 1), reflected: new Float64Array(K + 1), increments: new Float64Array(8 * K), total: new Float64Array(8), above: new Float64Array(8), sum: new Float64Array(8) };
+  const { passed, round, reflected, increments, total, above, sum } = shieldedScratch;
+  const { down, up, climb } = shielded;
+  down.fill(0, 0, K);
+  up.fill(0, 0, K);
+  climb.fill(0, 0, K);
+  for (const band of NEAR_INFRARED_BANDS) {
+    passed.fill(1, 0, K + 1);
+    round.fill(1, 0, K + 1);
+    reflected.fill(1, 0, K + 1);
+    for (const gas in band.gases) {
+      const par = band.gases[gas], J = par.w.length, isVapor = gas === 'h2o', self = isVapor ? par.self : 0;
+      let w0 = 1;
+      for (let j = 0; j < J; j++) w0 -= par.w[j];
+      total.fill(0);
+      above.fill(0);
+      for (let k = 0; k < K; k++) {
+        const u = isVapor ? vapour[k] : mixing[gas] * dry[k], lnV = Math.log(Math.sqrt(p[k] * p[k] + par.pD * par.pD) / NEAR_INFRARED_P_REF), dT = T[k] - 250;
+        for (let j = 0; j < J; j++) increments[j * K + k] = par.k[j] * u * Math.exp(par.n[j] * lnV + par.t[j] * dT);
+        increments[J * K + k] = self > 0 ? self * u * e[k] / NEAR_INFRARED_P_REF * Math.exp(par.selfT * Math.log(296 / T[k])) : 0;
+        for (let j = 0; j <= J; j++) {
+          total[j] += increments[j * K + k];
+          if (k < top) above[j] += increments[j * K + k];
+        }
+      }
+      const SA = above[J], ST = total[J];
+      sum.fill(0);
+      for (let l = 0; l <= K; l++) {
+        if (l > 0) for (let j = 0; j <= J; j++) sum[j] += increments[j * K + l - 1];
+        const S = sum[J];
+        if (l >= top) {
+          let through = w0 * Math.exp(-(m * SA + D * (S - SA))), back = w0 * Math.exp(-(m * SA + D * (2 * ST - SA - S)));
+          for (let j = 0; j < J; j++) {
+            through += par.w[j] * Math.exp(-(m * (above[j] + SA) + D * (sum[j] - above[j] + S - SA)));
+            back += par.w[j] * Math.exp(-(m * (above[j] + SA) + D * (2 * total[j] - above[j] - sum[j] + 2 * ST - SA - S)));
+          }
+          if (isVapor) { through = 1 - vaporFactor * (1 - through); back = 1 - vaporFactor * (1 - back); }
+          passed[l] *= through;
+          round[l] *= back;
+        }
+        if (l <= top) {
+          let climbing = w0 * Math.exp(-(m * SA + D * (SA - S)));
+          for (let j = 0; j < J; j++) climbing += par.w[j] * Math.exp(-(m * (above[j] + SA) + D * (above[j] - sum[j] + SA - S)));
+          if (isVapor) climbing = 1 - vaporFactor * (1 - climbing);
+          reflected[l] *= climbing;
+        }
+      }
+    }
+    for (let k = 0; k < K; k++) {
+      if (k >= top) {
+        down[k] += band.share * (passed[k] - passed[k + 1]);
+        up[k] += band.share * (round[k + 1] - round[k]);
+      } else climb[k] += band.share * (reflected[k + 1] - reflected[k]);
+    }
+  }
+}

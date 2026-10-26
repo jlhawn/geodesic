@@ -5,7 +5,8 @@ import { REGIME } from './boundaryLayer.module.js';
 import { SEA_DRAG } from './surface.module.js';
 import { longwaveTableFor, longwaveCores, LONGWAVE_CORES, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from './longwave.module.js';
 import { ozoneWeights, ozoneAbove as climatologyAbove } from './ozone.module.js';
-import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptivity, oxygenAbsorptivity, carbonDioxideAbsorptivity, nearInfraredBands, NEAR_INFRARED_MOLAR, VISIBLE_VAPOR_BANDS, pressureScaling, vaporScaling, OXYGEN, OZONE_CM_ATM, STP_DEPTH, OZONE_SHARES, OZONE_COEFFICIENTS, VAPOR_STRENGTH } from './shortwaveGases.module.js';
+import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptivity, oxygenAbsorptivity, carbonDioxideAbsorptivity, nearInfraredBands, nearInfraredShielded, NEAR_INFRARED_MOLAR, VISIBLE_VAPOR_BANDS, pressureScaling, vaporScaling, OXYGEN, OZONE_CM_ATM, STP_DEPTH, OZONE_SHARES, OZONE_COEFFICIENTS, VAPOR_STRENGTH, VISIBLE_VAPOR } from './shortwaveGases.module.js';
+import { createLayered } from './layeredShortwave.module.js';
 export const STEFAN_BOLTZMANN = 5.670374419e-8;
 export const SOLAR_CONSTANT = 1362;
 export const AXIAL_TILT = 23.44 * Math.PI / 180;
@@ -156,6 +157,44 @@ export function seasonTimes(orbit = DEFAULT_ORBIT) {
  * 3.9 % at 100 g/m² and 15 % at 400 g/m² (Stephens 1978) — and what it
  * absorbs heats the cloudy layers in proportion to their water, the
  * deck's layer counting the deck's water in the overcast column.
+ *
+ * The beam crosses the whole column's gases before the cloud acts, so a
+ * cloud shields nothing below it. With `vaporShielding` 'cloudTop' (it needs
+ * solarGases 'clirad', nearInfrared 'bands' and upwardAbsorption, and under
+ * cloudCover 'pdf' cloudOverlap 'exponentialRandom') the cloudy part of the column,
+ * its cover outside the deck, takes one cloud top, as Lacis and Hansen (1974)
+ * set a cloud inside the absorbing column: the interface above which the
+ * clear sky's near-infrared absorption per layer, weighted by the cover times
+ * the two-stream reflectance τ' / (τ' + 2μ) of the stack above it (cover and
+ * depth as the overlap sums them down the layers), is what that reflectance at the
+ * stack's full depth would shield below it. Above the top the layers absorb
+ * the beam as a clear column's do and the light the cloud reflects, climbing along the
+ * path 5/3; below it they absorb the light the cloud transmits, along the
+ * beam's path for what it passes unscattered and along 5/3 for the rest, and
+ * the light the surface reflects, climbing to the cloud's base along 5/3
+ * (nearInfraredShielded). Only the stream that is not visible light passes
+ * through those gases: it is solved with the albedos cut by their round trip,
+ * and what they take is not reflected to space, so absorbed plus reflected
+ * sunlight still makes the insolation. The visible vapor, aerosol and ozone
+ * stay above the cloud, and the deck's stream and the clear-sky pass are as
+ * without the option.
+ *
+ * With `shortwave` 'layered' (it needs solarGases 'clirad', nearInfrared 'bands', a
+ * scattering atmosphere, vaporShielding 'none', no gray cloudScattering and a
+ * vaporAbsorption of 1) the cloudy part of the column, its cover outside the deck,
+ * is solved layer by layer in 32 near-infrared g-points and two visible slices
+ * (layeredShortwave.module.js): every layer holds the slice's gases, Rayleigh
+ * scattering, aerosol and cloud, and the delta-Eddington two-stream adds the layers
+ * over the surface, the cloud's depth taking the four lognormal nodes of cloudColumns.
+ * The column's sunlight is the sequential scheme's clear column, bit for bit, plus
+ * the cover times what the cloudy region's solution adds to the clear region's: the
+ * layers' heating, the surface's absorption and fluxes (kept at no less than nothing,
+ * where a low sun makes the two clear regions differ by more than a thick cloud
+ * leaves) and the top's reflection. Every gas meets the cloud where it stands, the
+ * cloud's own absorption is the single scattering albedo of its band
+ * (`cloudSolarAbsorption` does not act on it), and absorbed plus reflected sunlight
+ * still makes the insolation. The deck's stream and the clear-sky pass are as
+ * without the option.
  *
  * With cloudCover 'pdf' (the default) a layer's resolved cloud covers
  * the fraction f of the layer that a uniform distribution of its total
@@ -600,6 +639,7 @@ export const GREENHOUSE_GASES = { carbonDioxide: 388.75e-6, methane: 1798.93e-9,
 export const OZONE_COLUMN = [0.26, 0.35];
 const VISIBLE_OZONE = (OZONE_SHARES[6] * OZONE_COEFFICIENTS[6] + OZONE_SHARES[7] * OZONE_COEFFICIENTS[7]) / (OZONE_SHARES[6] + OZONE_SHARES[7]);
 const SHORTWAVE_KEYS = ['absorbed', 'down', 'direct', 'reflectance', 'cloud', 'visibleEscape', 'restEscape', 'visibleReflectance'];
+const SHIELD_SPLIT = ['direct', 'diffuse', 'reflected', 'escape', 'upDirect', 'upDiffuse'], UNIT_NODE = [[1, 1]];
 export const SUMMED = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', 'insolation', 'reflectedSolar'];
 export const CLEAR_SUMMED = ['clearAbsorbedSolar', 'clearOutgoingLongwave'];
 const HELD_FIELDS = ['step', 'mu', 'absorbed', 'back', 'emission', 'outgoing', 'escape', 'down', 'direct', 'atmosphere', 'top', 'reflected', 'clearAbsorbed', 'clearOutgoing', 'clearEscape'];
@@ -678,7 +718,7 @@ function coreDepth(row, paths, k) {
 }
 
 export function createRadiation(mesh, core, {
-  solarConstant = SOLAR_CONSTANT, orbit = DEFAULT_ORBIT, albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
+  solarConstant = SOLAR_CONSTANT, orbit = DEFAULT_ORBIT, vaporShielding = 'none', shortwave: shortwaveScheme = 'sequential', albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
   prognosticHeight = true, deckRest = 'regime', deckSlab = 'fraction', deckReference = 'layer', deckInversion = 'grid', deckCloud = 'sigma', deckResolved = mixedLayerDeck && prognosticHeight ? 'above' : 'added', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'exponentialRandom', decorrelationLength = DECORRELATION_LENGTH, decorrelationSlope = DECORRELATION_SLOPE, cloudColumns = cloudCover === 'pdf' && cloudOverlap === 'exponentialRandom', cloudSpread = cloudColumns ? 0.75 : 0,
   boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, varianceCover: varianceRule = 'water', buoyancyLength = 0.53, deckRegime = 'inversion', deckBypass = false,
@@ -722,6 +762,9 @@ export function createRadiation(mesh, core, {
   const bandMixing = { co2: carbonDioxide * NEAR_INFRARED_MOLAR.co2, ch4: methane * NEAR_INFRARED_MOLAR.ch4, o2: OXYGEN.mixingRatio * NEAR_INFRARED_MOLAR.o2 };
   const bandUpward = new Float64Array(K), bandSplit = { h2o: 0, co2: 0, ch4: 0, o2: 0 };
   let bandLoss = 0;
+  const shieldLoss = new Float64Array(K), shieldedGas = { down: new Float64Array(K), up: new Float64Array(K), climb: new Float64Array(K) };
+  const shield = { active: false, top: K, scale: 1, directDown: 0, diffuseDown: 0, directUp: 0, diffuseUp: 0, reflected: 0, escape: 0, direct: 0, diffuse: 0, upDirect: 0, upDiffuse: 0 };
+  const restStream = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, cloudSplit = { direct: 0, diffuse: 0, reflected: 0, escape: 0, upDirect: 0, upDiffuse: 0 };
   const rayleigh = rayleighDepth !== null ? [[1, rayleighDepth]] : rayleighBands;
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((s, [w]) => s + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
   const scatters = rayleigh.some(([, tau]) => tau > 0) || nearInfraredRayleigh > 0 || landAerosol > 0 || seaAerosol > 0;
@@ -780,6 +823,9 @@ export function createRadiation(mesh, core, {
   if (cloudOverlap !== 'maximum' && cloudOverlap !== 'maximumRandom' && cloudOverlap !== 'exponentialRandom') throw new Error(`cloudOverlap must be 'maximum', 'maximumRandom' or 'exponentialRandom', not ${cloudOverlap}`);
   const exponential = cloudOverlap === 'exponentialRandom';
   if (cloudColumns && !(exponential && cloudCover === 'pdf')) throw new Error(`cloudColumns needs cloudCover 'pdf' and cloudOverlap 'exponentialRandom', not ${cloudCover} and ${cloudOverlap}`);
+  if (vaporShielding !== 'none' && vaporShielding !== 'cloudTop') throw new Error(`vaporShielding must be 'none' or 'cloudTop', not ${vaporShielding}`);
+  const shielding = vaporShielding === 'cloudTop';
+  if (shielding && !(solarGases === 'clirad' && bands && upwardAbsorption && scatters && (cloudCover !== 'pdf' || exponential))) throw new Error(`vaporShielding 'cloudTop' needs solarGases 'clirad', nearInfrared 'bands', upwardAbsorption, Rayleigh scattering or aerosol and, under cloudCover 'pdf', cloudOverlap 'exponentialRandom'`);
   if (!(cloudSpread >= 0) || (cloudSpread > 0 && !cloudColumns)) throw new Error(`cloudSpread must be a fractional standard deviation of at least 0, and needs cloudColumns, not ${cloudSpread}`);
   const spreadNodes = lognormalNodes(cloudSpread * cloudSpread);
   const decorrelation = Float64Array.from({ length: C }, (_, i) => decorrelationLength - decorrelationSlope * Math.abs(mesh.latCell[i]) * 180 / Math.PI);
@@ -824,17 +870,25 @@ export function createRadiation(mesh, core, {
   const temperature = new Float64Array(K);
   const optics = { liquidTemperature, iceTemperature, seaDropletRadius, landDropletRadius, liquidInfrared, diffusivity, iceFitWarmest, iceFitColdest };
   const graySolar = cloudScattering !== null, grayInfrared = cloudAbsorption !== null;
+  if (shortwaveScheme !== 'sequential' && shortwaveScheme !== 'layered') throw new Error(`shortwave must be 'sequential' or 'layered', not ${shortwaveScheme}`);
+  const layering = shortwaveScheme === 'layered';
+  if (layering && !(solarGases === 'clirad' && bands && scatters && !shielding && !graySolar && vaporAbsorption === 1)) throw new Error(`shortwave 'layered' needs solarGases 'clirad', nearInfrared 'bands', Rayleigh scattering or aerosol, vaporShielding 'none', no gray cloudScattering and vaporAbsorption 1`);
+  const layered = layering ? createLayered(K, { rayleighBands: rayleigh, nearInfraredScale: nearInfraredRayleigh / NEAR_INFRARED_RAYLEIGH, visibleVaporStrength: visibleStrength, visibleVaporCoefficient: VISIBLE_VAPOR.coefficient, aerosolAlbedo, aerosolAsymmetry }) : null;
+  const layerLiquid = new Float64Array(K), layerIceRadius = new Float64Array(K), layeredVaporPath = new Float64Array(K), layeredHeat = new Float64Array(K), cloudyLayers = new Int32Array(K);
+  const layeredStep = { active: false, surface: 0, reflected: 0, down: 0, direct: 0 };
   const continental = Uint8Array.from({ length: C }, (_, i) => (land && land[i] && !(iceSheet && iceSheet[i]) ? 1 : 0));
   const solarDepth = new Float64Array(K), infrared = new Float64Array(K), layerOptics = { liquid: 0, visible: 0, solar: 0, infrared: 0 };
   let cloudMask = null;
   const cloudWater = new Float64Array(K);
+  const layeredCloud = { cover: 1, count: 0, layers: cloudyLayers, water: cloudWater, liquid: layerLiquid, reIce: layerIceRadius, reLiquid: 0, nodes: UNIT_NODE };
+  const layeredColumn = { airmass: 0, air: bandAir, mixing: bandMixing, dSigma, pressureScale: 0, ozone: layerOzone, vaporPath: layeredVaporPath, aerosol: 0, aerosolFraction, surfaceAlbedo: 0, diffuseAlbedo: 0, cloud: layeredCloud };
   const aboveCover = new Float64Array(K), aboveDepth = new Float64Array(K), aboveSquare = new Float64Array(K), aboveColumn = new Float64Array(K), abovePath = new Float64Array(K), aboveSolar = new Float64Array(K);
   const vaporTaken = new Float64Array(K);
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]), ozoneWeight = new Float64Array(5);
   let yearFraction = 0, distance = 1, strength = solarConstant;
-  const budget = { absorbedSolar: 0, atmosphereSolar: 0, aerosolSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceBuoyancy: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, mlmThetaL: NaN, mlmTotalWater: NaN, mlmThetaLAbove: NaN, mlmTotalWaterAbove: NaN, stratiform: 0, ozoneSolar: 0, vaporSolar: 0, oxygenSolar: 0, carbonDioxideSolar: 0, methaneSolar: 0, upwardGasSolar: 0, downwardLongwave: 0 };
+  const budget = { absorbedSolar: 0, atmosphereSolar: 0, aerosolSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceBuoyancy: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, mlmThetaL: NaN, mlmTotalWater: NaN, mlmThetaLAbove: NaN, mlmTotalWaterAbove: NaN, stratiform: 0, ozoneSolar: 0, vaporSolar: 0, oxygenSolar: 0, carbonDioxideSolar: 0, methaneSolar: 0, upwardGasSolar: 0, shieldedGasSolar: 0, downwardLongwave: 0 };
   const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0, visibleReflectance: 0 }, decked = { ...sky }, probe = { ...sky }, columnLight = { ...sky };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, depth: 0, layer: 0, clear: 0, rate: 0, unit: 0 };
   const jump = { layer: -1, share: 0, height: 0, thetaL: 0, qt: 0 };
@@ -1227,6 +1281,53 @@ export function createRadiation(mesh, core, {
     out.cloud = (1 - keep) * (1 + upward / (1 - diffuseAlbedo * returned));
   }
 
+  /*
+   * shortwave() for a cloudy column under vaporShielding: the near infrared's
+   * stream meets the surface through the gases between the cloud and the
+   * ground, which take the shares of the light entering the cloud that
+   * shield.directDown, diffuseDown, directUp and diffuseUp give, and the
+   * visible streams do not. The stream is solved with the albedos cut by the
+   * gases' round trip, so that its upward flux is the flux the cloud's base
+   * receives; the surface then takes the light the gases pass, and what they
+   * take on the way down and up is the rest. restEscape stays 0: the light
+   * that escapes the cloud's top is the climb of shield.escape and
+   * shield.reflected through the layers above, found with the heating.
+   */
+  function shieldedShortwave(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo) {
+    stream(restStream, cloudDepth + nearInfraredRayleigh * light.pressure, keep, mu, surfaceAlbedo * (1 - shield.directDown - shield.directUp), diffuseAlbedo * (1 - shield.diffuseDown - shield.diffuseUp));
+    const direct = restStream.direct, diffuse = restStream.down - restStream.direct, upward = restStream.down - restStream.absorbed, reflecting = surfaceAlbedo * direct + diffuseAlbedo * diffuse;
+    const passedDirect = (1 - shield.directDown) * direct, passedDiffuse = (1 - shield.diffuseDown) * diffuse, weight = (1 - light.share) * shield.scale;
+    out.absorbed = weight * ((1 - surfaceAlbedo) * passedDirect + (1 - diffuseAlbedo) * passedDiffuse);
+    out.down = weight * (passedDirect + passedDiffuse);
+    out.direct = weight * passedDirect;
+    out.reflectance = weight * restStream.reflectance;
+    out.cloud = weight * restStream.cloud;
+    out.restEscape = 0; out.visibleEscape = 0; out.visibleReflectance = 0;
+    for (const [bandWeight, depth] of rayleigh) {
+      stream(visibleLight, cloudDepth + depth * light.pressure + light.aerosol, keep, mu, surfaceAlbedo, diffuseAlbedo);
+      const share = light.share * bandWeight;
+      for (const key of ['absorbed', 'down', 'direct', 'reflectance', 'cloud']) out[key] += share * visibleLight[key];
+      out.visibleEscape += share * (1 - visibleLight.absorbed - visibleLight.reflectance - visibleLight.cloud);
+      out.visibleReflectance += share * visibleLight.reflectance;
+    }
+    cloudSplit.direct = direct;
+    cloudSplit.diffuse = diffuse;
+    cloudSplit.upDirect = surfaceAlbedo * direct;
+    cloudSplit.upDiffuse = diffuseAlbedo * diffuse;
+    cloudSplit.reflected = restStream.reflectance;
+    cloudSplit.escape = reflecting > 0 && upward > 0 ? (1 - restStream.absorbed - restStream.reflectance - restStream.cloud) * reflecting / upward : 0;
+  }
+
+  function shieldedSky(nodes, depth, path, mu, surfaceAlbedo, diffuseAlbedo) {
+    for (const key of SHORTWAVE_KEYS) sky[key] = 0;
+    for (const key of SHIELD_SPLIT) shield[key] = 0;
+    for (const [x, w] of nodes) {
+      shieldedShortwave(columnLight, depth * x, Math.exp(-cloudSolarAbsorption * path * x), mu, surfaceAlbedo, diffuseAlbedo);
+      for (const key of SHORTWAVE_KEYS) sky[key] += w * columnLight[key];
+      for (const key of SHIELD_SPLIT) shield[key] += w * cloudSplit[key];
+    }
+  }
+
   function deckAbsorption(liquidWaterPath) {
     const water = Math.min(stratusWaterMax, liquidWaterPath);
     if (!(water > 0) || !(deckLight.incident > 0)) return 0;
@@ -1339,6 +1440,7 @@ export function createRadiation(mesh, core, {
         cloudOptics(theta[idx] * exnerLayer[idx], continental[i] === 1, optics, layerOptics);
         solarDepth[k] = graySolar ? cloudScattering : layerOptics.solar;
         infrared[k] = grayInfrared ? cloudAbsorption : layerOptics.infrared;
+        if (layering) { layerLiquid[k] = layerOptics.liquid; layerIceRadius[k] = iceRadius(theta[idx] * exnerLayer[idx], optics); }
       }
       layerCover[k] = 1;
       if (cloudCover === 'pdf' && q !== null && cloudWater[k] > 0 && boundaryCover === 'variance' && (geopotential[idx] - geopotential[bottom * C + i]) / g < mixingDepth) {
@@ -1398,6 +1500,10 @@ export function createRadiation(mesh, core, {
         if (seen > 0) lowBlock = Math.max(lowBlock, seen);
         if (lowBlock > 0 && (!(seen > 0) || k === K - 1)) { lowClear *= 1 - lowBlock; lowMaximum = Math.max(lowMaximum, lowBlock); lowBlock = 0; }
       }
+      if (shielding) {
+        const spread = cloudCover === 'pdf' ? cumulative : 1;
+        shieldLoss[k] = cloudDepth > 0 && spread > 0 ? spread * cloudDepth / (cloudDepth + 2 * mu * spread) : 0;
+      }
     }
     if (cloudOverlap === 'maximumRandom' && cloudCover === 'pdf') columnCover = 1 - clearColumn;
     if (exponential && cloudCover === 'pdf') columnCover = cumulative;
@@ -1435,10 +1541,69 @@ export function createRadiation(mesh, core, {
         }
       }
     }
+    shield.active = false;
+    if (shielding && solarPaths && cloudPath > 0 && incident > 0 && part !== 'deck') {
+      const full = shieldLoss[K - 1];
+      let weighted = 0, taken = 0, before = 0, top = K;
+      for (let k = 0; k < K; k++) {
+        weighted += (nearInfraredTaken[k] - taken) * 0.5 * (before + shieldLoss[k]);
+        taken = nearInfraredTaken[k];
+        before = shieldLoss[k];
+      }
+      if (full > 0 && weighted > 0) {
+        let below = 0;
+        for (let k = K - 1; k >= 0; k--) {
+          below += nearInfraredTaken[k] - (k > 0 ? nearInfraredTaken[k - 1] : 0);
+          if (full * below >= weighted) { top = k; break; }
+        }
+      }
+      if (top < K) {
+        nearInfraredShielded(bandAir, 35 / Math.sqrt(1224 * mu * mu + 1), DIFFUSE_PATH, bandMixing, vaporAbsorption, top, shieldedGas);
+        let directDown = 0, diffuseDown = 0, directUp = 0, diffuseUp = 0;
+        for (let k = top; k < K; k++) {
+          directDown += nearInfraredTaken[k] - (k > 0 ? nearInfraredTaken[k - 1] : 0);
+          diffuseDown += shieldedGas.down[k];
+          directUp += bandUpward[k];
+          diffuseUp += shieldedGas.up[k];
+        }
+        const rest = (1 - light.share) * incident, entering = rest + beam * directDown;
+        const lostDirect = beam * (directDown + directUp) / entering, lostDiffuse = beam * (diffuseDown + diffuseUp) / entering;
+        if (rest > 0 && lostDirect < 0.95 && lostDiffuse < 0.95) {
+          shield.active = true;
+          shield.top = top;
+          shield.scale = entering / rest;
+          shield.directDown = beam * directDown / entering;
+          shield.diffuseDown = beam * diffuseDown / entering;
+          shield.directUp = beam * directUp / entering;
+          shield.diffuseUp = beam * diffuseUp / entering;
+        }
+      }
+    }
     const columns = cloudColumns && cloudPath > 0 && (depthIn + depthOut) / columnCover > COLUMN_DEPTH_FLOOR;
     const columnDepth = columns ? (depthIn + depthOut) / columnCover : 0, columnPath = columns ? (pathIn + pathOut) / columnCover : 0;
     const columnVariance = columns ? Math.min(COLUMN_VARIANCE_CAP, Math.max(0, (squareIn + squareOut) / (depthIn + depthOut) / columnDepth - 1)) : 0;
-    if (columns) cloudyColumns(sky, lognormalNodes(columnVariance), columnDepth, columnPath, mu, surfaceAlbedo, diffuseAlbedo, 1);
+    layeredStep.active = false;
+    if (layering && solarPaths && cloudPath > 0 && incident > 0 && part !== 'deck') {
+      let count = 0;
+      for (let k = 0; k < K; k++) {
+        layeredVaporPath[k] = Math.max(0, q[k * C + i]) * pi * dSigma[k] / g * 0.1 * vaporScaling(bandAir.p[k], bandAir.T[k]);
+        if (cloudWater[k] > 0) cloudyLayers[count++] = k;
+      }
+      layeredColumn.airmass = 35 / Math.sqrt(1224 * mu * mu + 1); layeredColumn.pressureScale = light.pressure; layeredColumn.aerosol = aerosolCell[i];
+      layeredColumn.surfaceAlbedo = surfaceAlbedo; layeredColumn.diffuseAlbedo = diffuseAlbedo;
+      layeredCloud.count = count; layeredCloud.cover = columnCover; layeredCloud.reLiquid = continental[i] === 1 ? landDropletRadius : seaDropletRadius;
+      layeredCloud.nodes = columns ? lognormalNodes(columnVariance) : UNIT_NODE;
+      layered.solve(layeredColumn);
+      const { clear, cloudy } = layered;
+      for (let k = 0; k < K; k++) layeredHeat[k] = cloudy.heat[k] - clear.heat[k];
+      layeredStep.surface = cloudy.surface - clear.surface; layeredStep.reflected = cloudy.reflected - clear.reflected; layeredStep.down = cloudy.down - clear.down; layeredStep.direct = cloudy.direct - clear.direct;
+      layeredStep.active = true;
+    }
+    if (shield.active) {
+      const inCloud = cloudPath / columnCover;
+      if (columns) shieldedSky(lognormalNodes(columnVariance), columnDepth, columnPath, mu, surfaceAlbedo, diffuseAlbedo);
+      else shieldedSky(UNIT_NODE, graySolar ? cloudScattering * inCloud : cloudDepth / columnCover, inCloud, mu, surfaceAlbedo, diffuseAlbedo);
+    } else if (columns) cloudyColumns(sky, lognormalNodes(columnVariance), columnDepth, columnPath, mu, surfaceAlbedo, diffuseAlbedo, 1);
     else {
       const inCloud = cloudPath / columnCover;
       shortwave(sky, graySolar ? cloudScattering * inCloud : cloudDepth / columnCover, Math.exp(-cloudSolarAbsorption * inCloud), mu, surfaceAlbedo, diffuseAlbedo);
@@ -1521,6 +1686,11 @@ export function createRadiation(mesh, core, {
         taken = through;
       }
     }
+    if (layeredStep.active) {
+      shortwave(clearSky, 0, 1, mu, surfaceAlbedo, diffuseAlbedo);
+      for (const key of SHORTWAVE_KEYS) sky[key] = clearSky[key];
+      clearShare = 0;
+    }
     if (deck > 0) {
       const over = replaced < K, path = over ? abovePath[replaced] : cloudPath, total = path + deck, deckDepth = (graySolar ? cloudScattering : solarDepth[deckK]) * deck;
       if (cloudColumns) {
@@ -1567,7 +1737,31 @@ export function createRadiation(mesh, core, {
       if (upwardOzoneHeating > 0) for (let k = 0; k < K; k++) netFlux[k] += upwardOzoneHeating * layerOzone[k] / ozoneColumnAmount;
       upwardHeating = rest * restLoss + upwardAerosol + upwardOzoneHeating;
     }
-    const absorbedSolar = incident * sky.absorbed;
+    let shieldHeating = 0;
+    if (shield.active) {
+      const weight = (1 - fraction) * columnCover;
+      for (let k = 0; k < K; k++) {
+        const downward = nearInfraredTaken[k] - (k > 0 ? nearInfraredTaken[k - 1] : 0);
+        const change = k >= shield.top
+          ? beam * (shield.direct * downward - downward + shield.diffuse * shieldedGas.down[k] + shield.upDirect * bandUpward[k] + shield.upDiffuse * shieldedGas.up[k])
+          : beam * (shield.reflected * shieldedGas.climb[k] + shield.escape * bandUpward[k]);
+        netFlux[k] += weight * change;
+        shieldHeating += weight * change;
+      }
+    }
+    let layeredHeating = 0, layeredClouds = 0, layeredSurface = 0, layeredDown = 0, layeredDirect = 0, layeredReflected = 0;
+    if (layeredStep.active) {
+      const weight = beam * (1 - fraction) * columnCover;
+      for (let k = 0; k < K; k++) {
+        const change = weight * layeredHeat[k];
+        netFlux[k] += change;
+        layeredHeating += change;
+        if (cloudWater[k] > 0) layeredClouds += change;
+      }
+      layeredSurface = Math.max(weight * layeredStep.surface, -incident * sky.absorbed); layeredDown = Math.max(weight * layeredStep.down, -incident * sky.down);
+      layeredDirect = Math.max(weight * layeredStep.direct, -incident * sky.direct); layeredReflected = weight * layeredStep.reflected;
+    }
+    const absorbedSolar = incident * sky.absorbed + layeredSurface;
     beforeBands.set(netFlux);
     let outgoing = 0, back = 0, clearOutgoing = 0, escape = 0, clearEscape = 0;
     if (part === 'radiation') liftShare.fill(0);
@@ -1644,21 +1838,30 @@ export function createRadiation(mesh, core, {
     budget.carbonDioxideSolar = solarPaths ? beam * gasSplit.co2 : 0;
     budget.methaneSolar = solarPaths ? beam * gasSplit.methane : 0;
     budget.upwardGasSolar = (restLoss > 0 ? incident * sky.restEscape * restLoss : 0) + upwardOzoneHeating;
+    budget.shieldedGasSolar = shieldHeating;
+    if (shield.active) {
+      budget.absorbedSolar += shieldHeating;
+      budget.atmosphereSolar += shieldHeating;
+    }
+    if (layeredStep.active) {
+      budget.absorbedSolar += layeredHeating;
+      budget.atmosphereSolar += layeredHeating;
+    }
     budget.downwardLongwave = back;
     budget.surfaceSolar = absorbedSolar;
     budget.escape = escape;
     budget.clearEscape = clearEscape;
-    budget.cloudSolar = cloudHeating;
+    budget.cloudSolar = cloudHeating + layeredClouds;
     budget.outgoingLongwave = outgoing;
     budget.sensibleHeat = sensible;
     budget.evaporation = evaporation;
     budget.potentialEvaporation = qAir === null ? 0 : referenceEvaporation(absorbedSolar - surfaceEmission + back, airTemperature, qAir, pi, airDensity, (referenceCoefficients ? referenceCoefficients[i] : exchangeCoefficientAt) * Math.max(windSpeed, gustiness), cp, latentHeat);
     budget.surfaceFlux = net;
     budget.insolation = beam;
-    budget.reflectedSolar = incident - absorbedSolar - cloudHeating - upwardHeating;
-    budget.surfaceShortwave = incident * sky.down;
-    budget.surfaceDirect = incident * sky.direct;
-    budget.cloudReflectance = sky.reflectance;
+    budget.reflectedSolar = shield.active || layeredStep.active ? beam - budget.absorbedSolar : incident - absorbedSolar - cloudHeating - upwardHeating;
+    budget.surfaceShortwave = incident * sky.down + layeredDown;
+    budget.surfaceDirect = incident * sky.direct + layeredDirect;
+    budget.cloudReflectance = sky.reflectance + (layeredStep.active ? layeredReflected / incident : 0);
     budget.cloudCover = cloudPath > 0 ? columnCover : 0;
     const lowResolved = cloudCover !== 'pdf' ? (lowPath > 0 ? 1 : 0) : exponential ? lowCumulative : cloudOverlap === 'maximumRandom' ? 1 - lowClear : lowMaximum;
     budget.lowCover = 1 - (1 - lowResolved) * (1 - fraction);
