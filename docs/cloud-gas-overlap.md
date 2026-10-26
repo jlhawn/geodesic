@@ -9,6 +9,8 @@ December of year 5, eight times of day each) and r18flux's days 91 and 183, on
 the single columns of `test/vaporShielding.test.mjs` and
 `test/layeredShortwave.test.mjs`, on CIRC Phase I's cases 6 and 7, and against
 ESA Cloud_cci retrievals of MODIS-Aqua and AVHRR NOAA-18 and ERA5's cloud water.
+The cost of the schemes and the fixed-sea-temperature arms of the mixed-phase
+section ran on the GPU engine (an M1 Max) on 2026-10-25 and 26.
 
 ## The question
 
@@ -394,7 +396,7 @@ tropical profile at ERA5's gives the layered scheme 5.1). It matters more for th
 longwave, the rain and the heating of the troughs. Four things keep the liquid there.
 
 - One phase rule. `liquidFraction` (linear in temperature from 273.15 K to
-  235.15 K, 44 % liquid at -21 C) splits the condensate for the saturation mix,
+  235.15 K, 45 % liquid at -21 C) splits the condensate for the saturation mix,
   the plume's liquid-ice static energy, the Kessler conversion, the melting of
   falling ice and the radiation; the moist module takes the radiation's two
   temperatures unless its own options name others. Nothing in the resolved cloud
@@ -458,6 +460,79 @@ The converted liquid leaves as rain without freezing aloft or melting at 0 C; at
 +0.1 mm/day in the tropical mean (the table's 3.29 to 3.40) that is 0.4 W/m² of
 fusion heat (3.34e5 J/kg times 0.1 kg/m² per day over 86400 s), which a rule that
 froze the water where it forms and melted the snow would move. It is not built.
+
+### Paired arms
+
+`scripts/fixedSst.mjs`, the atmosphere alone over the sea held at WOA23's August
+temperature (N = 128, the 48-layer bl48 levels, fifteen128_day0872, 20 days, a save every
+two days, the Kepler orbit), three seeds (the first unperturbed, the others with the initial θ
+scaled by 1 + 1e-5 u, u uniform in ±1/2),
+with the sequential shortwave (K) or the layered (KL), each with the option on (KM, KLM).
+K and KL are the bl48 session's runs; this tree with the option off reproduces both
+at day 874 bit for bit (all 45 arrays of the saved state), and the option on ran two
+clean days before the arms. Means of the three seeds' saves of days 882 to 892 (days 10
+to 20), W/m² unless stated; CERES is the August and September EBAF climatology
+interpolated to each save, GPCP its August mean, ERA5 the pressure-level cloud water of the
+earlier tables and, for the trough, its 12 UTC August fields; the trough is 10-20N 120-170E, and its radiation is the offline radiation of
+each arm's own states split into atmosphere and surface (the bl48 session's readers):
+
+| | K | KM | KL | KLM | reference |
+|---|---|---|---|---|---|
+| 250-450 hPa condensate, tropics, g/m² (liquid) | 28.0 (11.3) | 14.9 (5.3) | 21.3 (7.4) | 13.2 (3.9) | ERA5 9.3 (1.1) |
+| optical depth, tropical grid-mean (in-cloud) | 13.3 (27.4) | 11.4 (23.9) | 11.3 (23.4) | 10.3 (21.5) | MODIS 4.0 (6.9), AVHRR 4.8 (8.8), ERA5 8.4 |
+| global absorbed sunlight | 244.4 | 245.5 | 236.4 | 238.4 | CERES annual 240.9 |
+| global SWCRE | -44.8 | -43.8 | -52.8 | -50.8 | -43.3 |
+| 30S-30N absorbed sunlight | 305.2 | 306.3 | 295.7 | 297.6 | 304.0 |
+| 30S-30N SWCRE | -47.8 | -46.8 | -57.4 | -55.5 | -43.2 |
+| 30S-30N OLR (LWCRE) | 262.2 (25.4) | 262.5 (24.9) | 259.2 (25.2) | 260.0 (24.7) | 264.5 (26.0) |
+| 10S-10N SWCRE | -56.7 | -55.0 | -70.6 | -67.3 | -49.5 |
+| trough SWCRE | -62.2 | -58.3 | -42.4 | -44.2 | -70.5 |
+| trough LWCRE | 62.4 | 58.8 | 31.1 | 33.1 | 60.2 |
+| trough rain, mm/day | 8.61 | 7.59 | 3.99 | 4.14 | GPCP 7.84 |
+| trough ω at 500 hPa, hPa/day | -36.0 | -31.3 | -7.6 | -7.9 | ERA5 -44.7 |
+| trough atmosphere's SW cloud effect | 18.4 | 13.4 | 1.9 | 1.8 | ERA5 1.7, CERES 1.3 |
+| trough atmosphere's cloud effect, SW + LW | 72.7 | 64.2 | 26.4 | 28.7 | ERA5 47.3, CERES 51.2 |
+| trough column radiation R, SW + LW | -49.6 | -57.0 | -93.8 | -90.9 | ERA5 -68.2, CERES -73.5 |
+| T500 40-60N less ERA5, sea (land), K | +2.57 (+3.54) | +2.37 (+3.42) | +1.17 (+1.90) | +1.35 (+2.30) | |
+| rain, global (Indian Ocean 3S-3N 60-90E), mm/day | 2.96 (12.4) | 2.95 (14.3) | 2.87 (13.4) | 2.91 (12.3) | GPCP 2.72 (5.9) |
+
+The option takes out what it is aimed at. In the sequential scheme the tropical
+250-450 hPa condensate falls by 47 % and its liquid by 53 % (14.9 and 5.3 g/m² against
+ERA5's 9.3 and 1.1), 450-700 hPa loses 11 % and 700-1000 hPa 4 %, the grid-mean optical
+depth falls by 14 % and the global SWCRE comes to CERES's (-43.8), the absorbed
+sunlight rising by 1.1 ± 0.2 W/m² and the global rain staying put. In the trough the
+condensate between 450 and 250 hPa falls from 70.8 g/m² (2.1 times ERA5's 33.4) to 33.5
+and the liquid in it from 28.3 to 11.7 (ERA5 5.7), the column's from 183 to 118 (ERA5 115).
+The T500 bias at 40-60N does not move (-0.20 ± 0.31 K over sea, -0.12 ± 0.63 over land), and
+the option costs nothing measurable (32.0 to 34.5 s per model day with it, 33.1 to 33.8
+without; 46.9 to 47.0 with the layered scheme and the option, 47.0 to 47.9 without it).
+
+The trough is the structural test. K's trough rain matches GPCP (8.61 against 7.84)
+by the wrong means: its clouds add 18.4 W/m² of absorbed sunlight to the column
+against 1.3 to 1.7 observed and heat it by 72.7 W/m² against 47 to 51 in all, so the
+column cools by 49.6 where 68 to 73 is observed. The layered scheme has the absorption
+right (1.9) and loses the trough: rain 4.0, ω at 500 hPa -7.6 (ERA5 -44.7), cloud
+heating 26 (the cloud that heated it is gone) and a column cooling of 94, too strong
+by 20 to 25 W/m². The Indian Ocean's rain, 2 times GPCP's in all four columns,
+does not fall with it. The option moves the sequential trough a third of the way to the
+observed cooling (R -49.6 to -57.0, the cloud heating 72.7 to 64.2, its shortwave part
+18.4 to 13.4) and costs it 12 % of its rain (7.59, -1.0 ± 0.4 mm/day) and 13 % of
+its ω500 (-31.3). It does not restore the layered scheme's trough: KLM absorbs 2.0 ±
+0.1 W/m² more sunlight than KL in the global mean and its SWCRE is still 7.5 W/m²
+stronger than CERES's (K+option: 0.5), with the trough as collapsed as KL's (rain 4.1,
+R -90.9). The 40-60N T500 bias is halved only with the layered scheme (+2.6 and +3.5 K
+over sea and land to +1.2 and +1.9; +1.4 and +2.3 K with the option), which is why the
+layered scheme stays in view.
+
+What remains in the layer is the ramp. The liquid left in 250-450 hPa, 5.3 of the 14.9
+g/m² (ERA5: 1.1 of 9.3), is the ramp's share of the condensate at the layer's
+temperatures, 0 % at -38 C, 45 % at -21 C and 61 % at -15 C; the cloud-top phase
+of the retrievals fixes the ramp to within 6 points, not the mass beneath the top.
+Taking the ramp to ERA5's mass shares is worth 0.9 (layered) and 0.5 W/m² (sequential)
+of absorbed sunlight in the offline table above, and the arms show no bias that
+needs it. A prognostic phase with an explicit deposition rate (Rotstayn et al. 2000;
+Forbes and Ahlgrimm 2014) is the change that would remove the residual; it is a much
+larger one, and it is the next question only if the liquid mass itself matters.
 
 ## Single columns, tropical atmosphere, % of the beam
 
@@ -691,6 +766,9 @@ the surface's sunlight under a thick cloud is held at no less than nothing.
   large-scale precipitation.
 - ECMWF, 2003: IFS Documentation Cycle CY25r1, Part IV: Physical processes,
   chapter 6, Clouds and large-scale precipitation (equations 6.49 to 6.53).
+- Forbes, R. M., and M. Ahlgrimm, 2014: On the representation of high-latitude
+  boundary layer mixed-phase cloud in the ECMWF global model. Mon. Wea. Rev., 142,
+  3425-3445.
 - Heymsfield, A. J., and L. J. Donner, 1990: A scheme for parameterizing ice-cloud
   water content in general circulation models. J. Atmos. Sci., 47, 1865-1877.
 - Hogan, R. J., and A. J. Illingworth, 2000: Deriving cloud overlap statistics
@@ -713,6 +791,9 @@ the surface's sunlight under a thick cloud is held at no less than nothing.
 - Platnick, S., et al., 2017: The MODIS cloud optical and microphysical products:
   Collection 6 updates and examples from Terra and Aqua. IEEE Trans. Geosci.
   Remote Sens., 55, 502-525.
+- Rotstayn, L. D., B. F. Ryan and J. J. Katzfey, 2000: A scheme for calculation of
+  the liquid fraction in mixed-phase stratiform clouds in large-scale models. Mon.
+  Wea. Rev., 128, 1070-1088.
 - Shonk, J. K. P., R. J. Hogan, J. M. Edwards and G. G. Mace, 2010: Effect of
   improving representation of horizontal and vertical cloud structure on the
   Earth's global radiation budget. Part I: Review and parametrization. Q. J. R.
