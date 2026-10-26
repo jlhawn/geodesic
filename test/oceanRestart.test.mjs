@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
-import { createOcean } from '../js/ocean/layered.module.js';
+import { createOcean, HEAT_REFERENCE, SALT_REFERENCE } from '../js/ocean/layered.module.js';
 import { createGeography, decodeLandIce, geographyOptions, landIceUrl, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { zonalWindOnEdges } from './helpers/layered.mjs';
 import { createModel } from '../js/model.module.js';
@@ -46,4 +46,19 @@ test(`at N=${N} a model's ocean saves the heat its top layer hands the sea ice, 
   resumed.seaIce.load(resumed.state[6], run.seaIce.concentration);
   resumed.ocean.load(saved, resumed.state[3], resumed.state[6]);
   assert.deepEqual(Array.from(resumed.seaIce.oceanFlux), Array.from(run.seaIce.oceanFlux));
+});
+
+test(`at N=${N} a model's ocean loaded from a GPU save, whose contents are stored as Qref and Wref beside float32 T and S, takes its heat and salt from Qref and Wref`, () => {
+  const options = { ocean: { everySteps: 1 } };
+  const prepare = (model) => { initializeState(model, {}).forEach((values, a) => model.state[a].set(values)); model.ocean.initialize(model.state[3], model.state[6]); return model; };
+  const run = prepare(createModel(new Grid(N), options));
+  for (let n = 0; n < 2; n++) run.step(1350);
+  const { Q, W, ...rest } = run.ocean.restartArrays(), served = run.ocean.serialize(), h = served.h;
+  const Qref = Float32Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), Wref = Float32Array.from(W, (w, n) => w - SALT_REFERENCE * h[n]);
+  const saved = { ...served, T: Float32Array.from(served.T), S: Float32Array.from(served.S), ...rest, Qref, Wref };
+  const resumed = createModel(new Grid(N), options);
+  resumed.state.forEach((array, a) => array.set(run.state[a]));
+  resumed.ocean.load(saved, resumed.state[3], resumed.state[6]);
+  const at = (n) => [Qref[n] + HEAT_REFERENCE * h[n], Wref[n] + SALT_REFERENCE * h[n]];
+  for (let n = 0; n < Q.length; n++) assert.deepEqual([resumed.ocean.Q[n], resumed.ocean.W[n]], at(n), `layer cell ${n}`);
 });

@@ -104,6 +104,8 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth, { 
   return out;
 }
 
+// Float32 values, so the host's conversions use the numbers the GPU kernels do.
+export const HEAT_REFERENCE = Math.fround(273.15), SALT_REFERENCE = Math.fround(35);
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, RESTORE_TOLERANCE = 0.01;
 
 export { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited };
@@ -1553,6 +1555,7 @@ export function createOcean(mesh, {
       h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
       for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
       if (saved.Q && saved.Q.length === L * C && saved.W && saved.W.length === L * C) { Q.set(saved.Q); W.set(saved.W); }
+      else if (saved.Qref && saved.Qref.length === L * C && saved.Wref && saved.Wref.length === L * C) for (let n = 0; n < L * C; n++) { Q[n] = saved.Qref[n] + HEAT_REFERENCE * h[n]; W[n] = saved.Wref[n] + SALT_REFERENCE * h[n]; }
     } else convertSlab(saved, classes);
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } eta[i] = 0; continue; }
