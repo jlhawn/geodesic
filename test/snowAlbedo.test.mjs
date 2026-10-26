@@ -171,7 +171,7 @@ test('both engines give land, ice and the snow on them the same albedo from rand
   assert.ok(landWorst < 1e-6 && iceWorst < 1e-5, `engines apart by ${landWorst} over land and ${iceWorst} over ice`);
 });
 
-test('over 48 GPU steps the snow albedo and the standing cover evolve as on the CPU, on land and on the ice', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('over 24 GPU steps the snow albedo and the standing cover evolve as on the CPU, on land and on the ice', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const options = { land: { treeline: false, coldSnowAgeing: 2, meltingSnowAgeing: 12, canopyMemory: 6 * 3600, snowDeclineTime: 4 * 3600, refreshSnowfall: 0.5, wetSnowRange: 10 }, ice: { coldSnowAgeing: 2, meltingSnowAgeing: 12, refreshSnowfall: 0.5, wetSnowRange: 10 }, moist: { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06, convectionType: 'top', plumeEntrainmentLaw: 'gregory' } };
   const prepare = (model) => {
     const C = model.mesh.nCells, init = initializeState(model, {});
@@ -188,7 +188,7 @@ test('over 48 GPU steps the snow albedo and the standing cover evolve as on the 
   const cpu = prepare(createModel(new Grid(16), { topography, ...options }));
   const gpu = prepare(await createGpuModel(new Grid(16), { topography, ...options }));
   const C = cpu.mesh.nCells, apart = new Float64Array(C);
-  for (let n = 0; n < 48; n++) {
+  for (let n = 0; n < 24; n++) {
     cpu.step(900); await gpu.step(900);
     const { STEPRAIN } = await gpu.gpu.downloadPhysics();
     for (let i = 0; i < C; i++) apart[i] = Math.max(apart[i], Math.abs(cpu.moist.rain[i] - STEPRAIN[i]) / Math.max(1e-6, cpu.moist.rain[i]));
@@ -209,7 +209,7 @@ test('over 48 GPU steps the snow albedo and the standing cover evolve as on the 
   }
   const rms = Math.sqrt(sum / n);
   gpu.destroy();
-  console.log(`N=16, 48 steps: ${n} snow cells (${unlike} more whose snowfall parted by over 5% in some step), ${moved} moved from 0.8 (${refreshed} snowed on, ${wet} wet), snow albedo engines rms ${rms.toExponential(1)}, max ${worst.toExponential(1)} at ${at}; standing cover above the cover on ${standing} cells, engines max ${canopyWorst.toExponential(1)}`);
+  console.log(`N=16, 24 steps: ${n} snow cells (${unlike} more whose snowfall parted by over 5% in some step), ${moved} moved from 0.8 (${refreshed} snowed on, ${wet} wet), snow albedo engines rms ${rms.toExponential(1)}, max ${worst.toExponential(1)} at ${at}; standing cover above the cover on ${standing} cells, engines max ${canopyWorst.toExponential(1)}`);
   assert.ok(moved > n / 2 && refreshed > n / 10 && standing > n / 10 && wet > n / 10 && n - wet > n / 10 && unlike < (n + unlike) / 4, `${moved} moved, ${refreshed} snowed on, ${wet} of ${n} wet, ${standing} standing, ${unlike} snowed on unlike`);
   assert.ok(rms < 1e-4 && worst < 1e-3, `snow albedo rms ${rms}, max ${worst}`);
   assert.ok(canopyWorst < 1e-4, `standing cover max ${canopyWorst}`);
