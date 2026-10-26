@@ -44,6 +44,10 @@ layered solution adds to the clear region's, so a column without cloud is
 the sequential scheme's bit for bit; `cloudSolarAbsorption` does not act on
 it.
 
+The layered scheme is the default, and so is `moist.bergeronAutoconversion` (below): "The defaults"
+has the radiation cadence, the pace, the parity of the engines and a coupled year against the
+sequential scheme without the option.
+
 ## The folded k-distribution
 
 The near-infrared table (`js/physics/nearInfraredTable.module.js`, fitted to
@@ -861,6 +865,183 @@ scheme every 16th and every 8th, the cadence the layered default runs at: its co
 at N = 128 (45.5 s a day against the sequential page's 41.4) and +4 % at N = 64 (7.0 against 6.7). The four days
 include the divergence of two runs, so the error of the later days is an upper bound; on day 1
 alone the 45-minute interval is 0.19 (sequential) and 0.12 (layered).
+
+## The defaults
+
+`radiation.shortwave` is `'layered'` and `moist.bergeronAutoconversion` `true` by default on both
+engines (stage-3, October 26): `DEFAULT_SHORTWAVE` in `js/physics/radiation.module.js`, which the CPU
+radiation, the GPU's `PHYSICS_DEFAULTS` and its shader builder take, and `MOIST_DEFAULTS`, which the
+GPU's defaults spread. `model.radiation.shortwave` names the scheme a model runs. The drivers' radiation
+cadence follows the scheme from N = 64 up (`withCadence`, `js/cadence.module.js`): 45 minutes with the
+layered shortwave, every 16th step at N = 128, 8th at N = 64, 24th at N = 192 and 32nd at N = 256, where
+the held error of the table above is at most 0.18 W/m², and 11.25 minutes (every 4th and 2nd) with an
+explicit `'sequential'`; grids below N = 64 and the engines' own defaults step the radiation every time.
+
+The previous values are `PREVIOUS_SHORTWAVE` and `PREVIOUS_BERGERON` in `test/helpers/previousDefaults.mjs`
+(also inside `PREVIOUS_RADIATION` and `PREVIOUS_MOIST`), and the explainers keep them
+(`explain/published.module.js`). Asked for them, this tree reproduces stage-3's states on the GPU bit for
+bit: the GPU half of `scripts/compareEngines.mjs` at the N = 64 page state (fourteen64_day1825, 60 layers),
+dumped at 0, 1, 2, 8 and 32 steps, is identical in all 164 arrays of each dump to the stage-3 tree's on its
+defaults, and the tree on its own defaults differs after 32 steps (40902 of 40962 surface pressures, the
+first by 0.35 Pa), from the layered scheme's different heating.
+
+A saved state's header names the options its run was made with (`options`, by group), and the page
+starts it with them. The page's default states (`runs/fourteen64_day1825.parts.json`,
+`runs/fourteen128_day1825.parts.json`, `runs/twelve192_day0020.parts.json`) record cloudColumns and
+the other options of their spin-ups and neither a shortwave scheme nor the Bergeron option, so the defaults
+apply on loading them (`test/layeredDefault.test.mjs` reads their headers). `scripts/spinup.mjs`
+writes the scheme and the option, with the RADIATION and MOIST it was given, in the header of every
+state it saves, and `scripts/splitState.mjs` adds them to the options it stamps
+(`scripts/stateOptions.mjs`), so that a state made now starts on the page as it was made when the
+defaults move again.
+
+CPU and GPU against each other, at the N = 64 page state with the drivers' cadence (the layered scheme
+held 8 steps) and the stage-3 tree on its defaults (the sequential scheme held 2 steps), the CPU model
+against the GPU's after 1, 2, 8 and 32 steps (`scripts/compareEngines.mjs`, relative rms over the cells):
+
+| | stage-3 | layered default |
+|---|---|---|
+| surface pressure, 32 steps | 4.2e-6 | 5.2e-6 |
+| θ, 32 steps | 1.3e-5 | 1.6e-5 |
+| wind, 32 steps | 1.4e-3 | 1.9e-3 |
+| PH regions past the tool's bound of 1e-3 after 1 step | 0 | 1 (COND, 4.7e-3) |
+| after 8 steps | 30 | 15 |
+| after 32 steps | 38 | 38 |
+| decision shares past their bounds, 32 steps | STEPRAIN, FOG | DEPTH, RAIN, STEPRAIN, MIXTOP, CUWATER, FOG |
+
+The stage-3 tree already misses the tool's bound of 1e-3 in 38 of its rows after 32 steps on this
+M5 Max, as the layered default does, so the 32-step rows do not separate them. The share of cells whose
+regime, plume or cloud-top decision parted between the engines is 1.1 % of the 2562 cells (29 columns) in
+the iced-cells test of `test/gpuModel.test.mjs` with the defaults and 28 with the Bergeron option on and
+the sequential shortwave, and under 1 % with the option off; the columns where any discrete decision parted
+number 30 (defaults), 17 (sequential with the option), 16 (layered without it) and 7 (the previous defaults,
+as at stage-3). The Bergeron factor, which makes the cold liquid rain out up to three times faster, is what
+moves them, and that test's bounds are now 2 % of the cells and a quarter for their neighbours.
+
+The suite on this tree: the CPU files in three jobs (873 tests), every GPU file at level 1 and
+`atmosphereConservation` and `gpuModel` at level 3. Tests of the sequential scheme, of cloudTop, of the
+gray and the unscattered atmospheres and of the Bergeron option name the schemes and the option they
+compare; the explainers' columns and `scripts/radiationBenchmark.mjs` keep the settings they were made
+with, and the audit's copy of the rain's conversion in `scripts/tropicalHeating.mjs` has the factor (without it
+the replay's heat budget stayed open by 1 K a step). No digest or state pin moved. Two parity bounds were
+not what the defaults give: the 20-step skin parity of `test/skinGpu.test.mjs`, which runs on the previous
+cloud settings as it tests the skin, and the decision counts above.
+
+The page loop (`scripts/pageLoop.mjs`, 60 s of wall time after a warm-up frame, the page's options, the
+stage-3 tree and this one alternated, two repeats each, GPU level 2) on the M5 Max, seconds per model
+day with the repeats:
+
+| state | stage-3 | layered default | cost |
+|---|---|---|---|
+| N = 64, fourteen64_day1825 (60 layers) | 6.25 (6.2, 6.3) | 7.1 (7.1, 7.1) | +13.6 % |
+| N = 128, sixteen128_day0730 (48 layers) | 38.25 (38.1, 38.4) | 40.95 (40.6, 41.3) | +7.1 % |
+| N = 128, fourteen128_day1825 (60 layers) | 46.6 (45.1, 48.0) | 50.5 (50.9, 50.1) | +8.5 % |
+
+The cost table above is the M1 Max's (+4 % at N = 64, +10 % at N = 128, the layered scheme at its
+cadence against the sequential at the old one). At N = 64 the GPU time of a step is 24.2 ms before and
+27.2 ms after (`scripts/profileGpu.mjs`, 32 steps, two repeats alternated), the group of passes that holds
+the radiation 3.3 and 6.4 ms of it: the layered scheme at its cadence adds 3.1 ms a step on the M5, 3.7 on the M1,
+and the sequential scheme's longer hold gives back less on the M5.
+
+### The coupled year
+
+A year of the coupled N = 64 model (the hybrid ocean, the sea ice and the land) from day 365 of the
+orchestrator's E10 fix run (`e10f_day0365.bin`, October 24) to day 730, in two arms, one on the defaults and one with
+`shortwave: 'sequential'` and `bergeronAutoconversion: false` (`scripts/spinup.mjs` in twelve segments of about
+a month on the frozen tree of the flip commit, GPU level 3, 4 and 6 seconds a model day). The start is the
+latest native-bl48 N = 64 state and the one closest to the stage-3 defaults: the page's default states are 60-layer
+states of the fourteen spin-up, the land-mask session's native 48-layer states are seven days old, and E10 fix is the
+newest of the one-year runs on 48 layers, a fresh start at the March equinox on WOA23's March ocean and the observed
+March ice with the ocean options that are now the defaults (the rh18 rotation limit, `langmuirIce: 'tanh'`,
+`shelfMeltLayer` 20, the cavitating ice drift, cavity ice shelves) and the cloudColumns and moist options that
+the page's fourteen states record. Day 365 is a March equinox, so the pair covers a seasonal cycle. It lacks the n1024 land mask,
+the stage-3 fresh-start default, and its atmosphere is that of October 24's tree, which the first days adjust; both
+arms start from the same file. It is also a young state: its open sea is 1.3 K colder than WOA23 at the start and
+both arms warm toward it, so the drift below is the recovery of the start with the effect of the defaults on it.
+
+The references are monthly climatologies interpolated to the date of each save: CERES EBAF Ed4.2.1 (2001-2024: rsut,
+rlut, rsdt, rstcre, rltcre), GPCP v2.3 (1991-2020), WOA23's monthly sea surface temperature
+(`data/woa_sst_monthly_1deg.bin`), the NSIDC Sea Ice Index v4 (1991-2020 monthly extents) and ERA5's temperature at
+500 hPa at 12 UTC on the 15th of each month of 2018 and 2019 (ARCO-ERA5), the saves being at 12 UTC. The global
+means are those of the daily lines of the spin-up logs over the 365 days, the regional means those of the last day of
+each of the twelve monthly saves.
+
+Annual means of the model days of the log (days 366 to 730), W/m² unless stated; the observed values are CERES EBAF Ed4.2.1 (2001-2024) and GPCP v2.3 (1991-2020) monthly climatologies weighted by days:
+
+| global | previous | new | new less previous | observed |
+|---|---|---|---|---|
+| absorbed sunlight | 244.1 | 237.7 | -6.4 | 241.6 |
+| outgoing longwave | 237.2 | 235.1 | -2.0 | 240.5 |
+| shortwave cloud effect | -48.2 | -54.2 | -6.0 | -45.2 |
+| longwave cloud effect | 25.5 | 24.9 | -0.6 | 25.7 |
+| rain, mm/day | 2.76 | 2.76 | +0.00 | 2.69 |
+| surface temperature, °C | 15.58 | 15.04 | -0.54 | |
+
+Regional means over the twelve monthly saves (the last day of each save, 12 UTC), model less observation in the same phase of the year:
+
+| region, quantity | previous | new | new less previous | previous less observed | new less observed | observed |
+|---|---|---|---|---|---|---|
+| 30S-30N absorbed sunlight | 302.5 | 294.3 | -8.1 | -3.3 | -11.4 | 305.7 |
+| 30S-30N outgoing longwave | 257.4 | 253.9 | -3.5 | -3.1 | -6.6 | 260.5 |
+| 30S-30N shortwave cloud effect | -49.8 | -57.8 | -8.0 | -7.2 | -15.2 | -42.6 |
+| 30S-30N longwave cloud effect | 25.8 | 26.9 | +1.1 | -1.7 | -0.6 | 27.4 |
+| 30S-30N rain, mm/day | 3.29 | 3.22 | -0.08 | +0.24 | +0.16 | 3.06 |
+| 20S-20N absorbed sunlight | 309.2 | 300.2 | -9.0 | -4.3 | -13.3 | 313.5 |
+| 20S-20N outgoing longwave | 254.7 | 250.7 | -4.0 | -2.8 | -6.8 | 257.5 |
+| 20S-20N shortwave cloud effect | -53.6 | -62.4 | -8.8 | -8.8 | -17.7 | -44.7 |
+| 20S-20N longwave cloud effect | 28.5 | 30.6 | +2.0 | -2.0 | +0.1 | 30.5 |
+| 20S-20N rain, mm/day | 3.86 | 3.78 | -0.08 | +0.27 | +0.19 | 3.59 |
+| 40-60N absorbed sunlight | 190.0 | 183.3 | -6.7 | +7.3 | +0.6 | 182.7 |
+| 40-60N outgoing longwave | 220.4 | 217.7 | -2.7 | -2.1 | -4.8 | 222.6 |
+| 40-60N shortwave cloud effect | -46.8 | -52.6 | -5.8 | +2.8 | -3.0 | -49.7 |
+| 40-60N longwave cloud effect | 27.2 | 25.6 | -1.5 | +3.2 | +1.7 | 23.9 |
+| 40-60N rain, mm/day | 2.68 | 2.49 | -0.19 | +0.14 | -0.05 | 2.54 |
+
+Temperature at 500 hPa less ERA5 (K, 12 UTC of the 15th of each month, 2018 and 2019), mean over the twelve saves, and over the first save (the start):
+
+| region | previous | new | new less previous | start |
+|---|---|---|---|---|
+| 20S-20N | -1.38 | -2.42 | -1.04 | -1.85 |
+| 40-60N | +1.10 | -1.12 | -2.22 | -0.32 |
+
+Sea surface temperature of the ice-free open sea less WOA23 (K), at the start, at the last save (the same phase of the year) and the mean of the twelve saves:
+
+| region | start | previous, last | new, last | previous, mean | new, mean |
+|---|---|---|---|---|---|
+| global | -1.33 | -0.02 | -0.46 | -0.54 | -0.71 |
+| 20S-20N | -1.87 | -0.87 | -1.28 | -1.46 | -1.43 |
+| 40-60N | +0.16 | +0.67 | +0.29 | +1.05 | +0.58 |
+| 40-60S | -1.01 | +0.89 | +0.40 | +0.07 | -0.06 |
+
+Sea ice extent (Mkm², cells with 15 % cover), monthly means of the log against NSIDC Sea Ice Index v4 (1991-2020):
+
+| month | Arctic previous | Arctic new | Arctic NSIDC | Antarctic previous | Antarctic new | Antarctic NSIDC |
+|---|---|---|---|---|---|---|
+| Jan | 12.0 | 12.7 | 14.0 | 0.1 | 0.1 | 5.0 |
+| Feb | 13.3 | 13.7 | 14.9 | 0.0 | 0.0 | 3.1 |
+| Mar | 13.4 | 13.6 | 15.0 | 0.1 | 0.1 | 4.1 |
+| Apr | 12.4 | 12.5 | 14.3 | 1.1 | 1.0 | 7.0 |
+| May | 11.1 | 11.4 | 12.9 | 2.6 | 2.9 | 10.3 |
+| Jun | 8.5 | 9.0 | 11.3 | 4.5 | 5.1 | 13.5 |
+| Jul | 3.0 | 3.9 | 8.8 | 6.8 | 7.7 | 16.1 |
+| Aug | 0.0 | 0.3 | 6.4 | 9.0 | 10.1 | 17.8 |
+| Sep | 0.0 | 0.0 | 5.6 | 10.4 | 11.4 | 18.6 |
+| Oct | 0.3 | 1.6 | 7.5 | 10.4 | 11.6 | 18.2 |
+| Nov | 5.1 | 6.8 | 10.1 | 7.6 | 8.6 | 15.9 |
+| Dec | 9.5 | 10.6 | 12.4 | 1.9 | 3.0 | 10.4 |
+
+The layered default makes the planet brighter and the model colder. The global absorbed sunlight falls by 6.4 W/m²
+(244.1 to 237.7, from 2.5 W/m² above CERES's to 3.9 below), the shortwave cloud effect strengthens by 6.0
+(-48.2 to -54.2 against -45.2) and the outgoing longwave falls by 2.0; between 30S and 30N the absorbed sunlight is
+8.1 less and the cloud effect 8.0 stronger, 15 W/m² beyond CERES's -42.6 (7 W/m² before). The rain does not move
+(2.76 mm/day; GPCP 2.69). The surface air is 0.5 K cooler in the mean of the year and the open sea 0.2 K (global;
+0.5 K at 40-60N); the temperature at 500 hPa is 1.0 K colder at 20S-20N (-1.4 to -2.4 against ERA5) and 2.2 K
+colder at 40-60N (+1.1 to -1.1), which takes the northern midlatitudes' warm bias past zero. The sea ice grows by
+0.6 Mkm² in each hemisphere's annual mean (north 7.3 to 8.0, NSIDC 11.1; south 4.6 to 5.2, NSIDC 11.7); the Arctic
+is ice free in August and September in both, the Antarctic maximum is 10.9 and 11.9 Mkm² against 18.6, and the
+Antarctic summer ice is gone. The open sea's drift against WOA23 from the start to the same day of the next year is
++1.31 and +0.87 K (global), +1.00 and +0.59 K (20S-20N) and +0.51 and +0.13 K (40-60N) for the previous and the new
+defaults: the cooler planet leaves the sea nearer the cold start, and the 20S-20N bias stays at -0.9 to -1.3 K.
 
 ## Cheaper layered variants (offline, not options)
 
