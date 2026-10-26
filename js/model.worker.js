@@ -6,6 +6,7 @@ import { withCadence } from './cadence.module.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
+import { CUMULUS_FIELDS, placeCumulus } from './physics/moist.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, decodeMask, decodeLandIce, landIceUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
@@ -344,7 +345,7 @@ function placeDeck(model, saved, N) {
   for (const name of Object.keys(DECK_FIELDS)) model.radiation[name].set(savedDeckField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   for (const name of Object.keys(MOIST_FIELDS)) model.moist[name].set(savedMoistField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   for (const name of Object.keys(RADIATION_FIELDS)) model.radiation[name].set(savedRadiationField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
-  placeCumulus(model, saved, N);
+  placeCumulus(model, saved && saved.N === N ? saved : null);
   if (model.skin) model.skin.load(saved && saved.N === N ? saved : null);
 }
 
@@ -359,24 +360,6 @@ function placeLake(model, saved, N) {
   model.lake.load(Object.fromEntries([...LAKE_FIELDS, 'passed'].map((name) => [name, saved[lakeName(name)]]).filter(([, values]) => values)));
 }
 
-/*
- * The cumulus cloud's cover and water are saved in the GPU's layout, the
- * plume layers from cumulusK0 down, (K − K0) × C; the CPU keeps K × C.
- * A run at another resolution starts without them, as a fresh start does.
- */
-const CUMULUS_FIELDS = ['cumulusCover', 'cumulusWater'];
-function placeCumulus(model, saved, N) {
-  const C = model.mesh.nCells, K = model.core.K, K0 = model.moist.cumulusK0 ?? 0;
-  for (const name of CUMULUS_FIELDS) {
-    const target = model.moist[name];
-    if (!target) continue;
-    target.fill(0);
-    const values = saved && saved.N === N ? saved[name] : null;
-    if (!values) continue;
-    if (values.length === target.length) target.set(values);
-    else if (values.length === (K - K0) * C && target.length === K * C) target.set(values, K0 * C);
-  }
-}
 function savedCumulus(model) {
   const C = model.mesh.nCells, K = model.core.K, K0 = model.moist.cumulusK0 ?? 0, out = {};
   for (const name of CUMULUS_FIELDS) {

@@ -37,6 +37,7 @@ import { decodeForcing } from '../js/forcing.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
+import { placeCumulus } from '../js/physics/moist.module.js';
 
 const FLOAT32_TOLERANCE = 2 ** -21, SECTION_MIN_THICKNESS = 0.1, NET_FRACTION = 0.1;
 const N = 16, DAY = 86400, STEP = 450, GRID = 'bl36', FRAME_DAYS = 5, SPINUP_FRAMES = 60, BINS = 36, CAP_STEP = 5, UPWELLING_DEPTH = 50, CELSIUS = 273.15;
@@ -120,7 +121,8 @@ if (resumed) {
   model.surface.windSpeed.set(resumed.windSpeed); model.radiation.evaporation.set(resumed.evaporation);
   if (model.exchange && resumed.exchangeHeat && !model.exchange.fixed) model.exchange.heat.set(resumed.exchangeHeat);
   if (model.exchange && resumed.exchangeWind) model.exchange.wind.set(resumed.exchangeWind);
-  for (const field of ['cumulusCover', 'cumulusWater', 'subcloudVirtual']) model.moist[field].set(resumed[field]);
+  placeCumulus(model, resumed);
+  model.moist.subcloudVirtual.set(resumed.subcloudVirtual);
   if (model.skin) model.skin.load(resumed);
   model.time = resumed.time;
   model.load({ ocean: false });

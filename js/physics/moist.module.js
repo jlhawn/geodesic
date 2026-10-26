@@ -1529,3 +1529,24 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     shared: { momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, fogPrecipitation: fogBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer, subcloudVirtual: subcloudBuffer },
   };
 }
+
+export const CUMULUS_FIELDS = ['cumulusCover', 'cumulusWater'];
+
+/*
+ * The cumulus cloud's cover and water are K × C on the CPU and only the plume layers from
+ * `cumulusK0` down, (K − K0) × C, on the GPU; a saved state holds either. placeCumulus puts a
+ * saved run's fields into the model's arrays, whichever layout each has, layer for layer, and
+ * leaves an array zero where the field was saved in neither layout or not at all.
+ */
+export function placeCumulus(model, saved) {
+  const C = model.mesh.nCells, K = model.core.K, K0 = model.moist.cumulusK0 ?? 0, whole = K * C, plume = (K - K0) * C;
+  for (const name of CUMULUS_FIELDS) {
+    const target = model.moist[name], values = saved ? saved[name] : null;
+    if (!target) continue;
+    target.fill(0);
+    if (!values) continue;
+    if (values.length === target.length) target.set(values);
+    else if (values.length === plume && target.length === whole) target.set(values, K0 * C);
+    else if (values.length === whole && target.length === plume) target.set(values.subarray(K0 * C));
+  }
+}
