@@ -46,10 +46,10 @@ function windStress(mesh) {
  * the ocean initialized on the CPU and uploaded to the device with the ice in
  * the atmosphere's buffers.
  */
-async function scenario(drift, { global = false, velocity = null, stress = null, keep = iceDriftMoves(drift) } = {}) {
-  const gpuModel = await createGpuModel(new Grid(N), { topography, ice: { keepSmallIce: keep }, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false } });
+async function scenario(drift, { global = false, velocity = null, stress = null, keep = iceDriftMoves(drift), ocean: options = {} } = {}) {
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ice: { keepSmallIce: keep }, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false, ...options } });
   const mesh = gpuModel.mesh, geography = gpuModel.geography, C = mesh.nCells, E = mesh.nEdges, gpu = gpuModel.gpu, ocean = gpuModel.oceanEngine;
-  const cpu = createOcean(mesh, { geography, vertical: 'hybrid', everySteps: 1, iceDrift: drift });
+  const cpu = createOcean(mesh, { geography, vertical: 'hybrid', everySteps: 1, iceDrift: drift, ...options });
   const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity, keepSmallIce: keep });
   cpu.useSeaIce(seaIce.concentration, seaIce);
   const surfaceT = new Float64Array(C).fill(280), ice = new Float64Array(C);
@@ -144,10 +144,10 @@ test('the hemisphere switch keeps the other hemisphere\'s ice still on the devic
   }
 });
 
-test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the ocean under it follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+async function cavitating(options) {
   const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), stress = windStress(probe.mesh);
   probe.destroy();
-  const s = await scenario({ rheology: 'cavitating' }, { stress });
+  const s = await scenario({ rheology: 'cavitating' }, { stress, ocean: options });
   for (let n = 0; n < 20; n++) { s.stepCpu(); await s.stepGpu(); }
   await compareVelocity('twenty coupled calls', s, 2e-2);
   await compareIce('twenty coupled calls', s, { A: 2e-3, V: 2e-3, S: 2e-3, E: 1e-2 });
@@ -156,10 +156,13 @@ test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the 
   const top = (a, b) => stats(a.subarray(0, s.C), b.subarray(0, s.C));
   const rT = top(T, fields.T), rS = top(W, fields.S);
   console.log(`ocean top layer after twenty coupled calls: T rms ${rT.rmsRel.toExponential(2)} max ${rT.maxDiff.toExponential(2)} K, S rms ${rS.rmsRel.toExponential(2)} max ${rS.maxDiff.toExponential(2)} psu`);
-  assert.ok(rT.rmsRel < 1e-3 && rS.rmsRel < 1e-3 && wet.length > 0);
+  assert.ok(rT.rmsRel < 1e-4 && rS.rmsRel < 1e-4 && wet.length > 0);
   for (const f of [fields.h, fields.u, fields.T, fields.S]) for (const v of f) assert.ok(Number.isFinite(v));
+  assert.ok(rT.maxDiff < 0.1 && rS.maxDiff < 0.02, `the top layer parts by up to ${rT.maxDiff} K and ${rS.maxDiff} psu`);
   s.gpuModel.destroy();
-});
+}
+test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mixedLayerRestratification: false }));
+test('twenty coupled calls with the cavitating fluid, mstarScheme rh18 and langmuirScheme rescale: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mstarScheme: 'rh18', langmuirScheme: 'rescale', mixedLayerRestratification: false }));
 
 test('inside the model\'s own step every rheology takes the atmosphere\'s stress, validates on the device and keeps the ice finite and below the speed limit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createModel } = await import('../js/model.module.js'), { initializeState } = await import('../js/physics/init.module.js');

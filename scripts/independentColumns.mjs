@@ -22,7 +22,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { CLOUD_OPTICS, cloudOptics, overlapped, DECORRELATION_LENGTH, DECORRELATION_SLOPE, LOW_CLOUD_PRESSURE } from '../js/physics/radiation.module.js';
+import { CLOUD_OPTICS, cloudOptics, overlapped, sunDistance, SOLAR_CONSTANT, DECORRELATION_LENGTH, DECORRELATION_SLOPE, LOW_CLOUD_PRESSURE } from '../js/physics/radiation.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2], M = Number(process.env.M ?? 128), FSD = Number(process.env.FSD ?? 0);
@@ -58,7 +58,7 @@ for (let i = 0; i < C; i++) {
 radiation.setTime(model.time);
 const sun = radiation.sun, dec = Math.asin(sun[2]);
 const cuCover = moist.cumulusCover, cuWater = moist.cumulusWater;
-const S0 = 1362, HOURS = 24, ABS = 0.4, DIFFUSE_MU = 0.6;
+const S0 = SOLAR_CONSTANT * sunDistance(model.time), HOURS = 24, ABS = 0.4, DIFFUSE_MU = 0.6;
 function toa(tau, path, mu, a) {
   if (!(mu > 0)) return 0;
   const keep = Math.exp(-ABS * path);

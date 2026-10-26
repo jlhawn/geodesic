@@ -44,14 +44,14 @@ function gasesOf(column) {
 }
 
 // One column: longwave by night (beam 0) and shortwave at the given beam.
-export function runColumn(options, column, { beam = 0, albedo = 0.2, solarConstant = 1360.85 } = {}) {
+export function runColumn(options, column, { beam = 0, albedo = 0.2, solarConstant = 1360.85, mu = beam / solarConstant } = {}) {
   const radiation = createRadiation(mesh, core, { ...CLEAN, solarConstant, ...gasesOf(column), ...options });
   const pi = new Float64Array(C).fill(column.ps), theta = new Float64Array(K * C).fill(280), q = new Float64Array(K * C), qc = new Float64Array(K * C);
   core.diagnose(pi, theta);
   const { exnerLayer } = core.diagnostics;
   for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) { theta[k * C + i] = column.T[k] / exnerLayer[k * C + i]; q[k * C + i] = column.q[k]; }
   core.diagnose(pi, theta, q, qc);
-  radiation.column(0, column.ps, theta, column.Ts, 5, undefined, beam, q[(K - 1) * C], q, qc, albedo, albedo, 0, 0, 0, 0, 0, 0);
+  radiation.column(0, column.ps, theta, column.Ts, 5, undefined, beam > 0 ? { beam, mu } : 0, q[(K - 1) * C], q, qc, albedo, albedo, 0, 0, 0, 0, 0, 0);
   const b = { ...radiation.budget };
   const lw = Array.from({ length: K }, (_, k) => radiation.longwave[k * C]);
   const sw = Array.from({ length: K }, (_, k) => radiation.layerFlux[k] - lw[k]);

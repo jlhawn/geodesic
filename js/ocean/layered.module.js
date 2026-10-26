@@ -104,6 +104,8 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth, { 
   return out;
 }
 
+// Float32 values, so the host's conversions use the numbers the GPU kernels do.
+export const HEAT_REFERENCE = Math.fround(273.15), SALT_REFERENCE = Math.fround(35);
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, RESTORE_TOLERANCE = 0.01;
 
 export { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited };
@@ -428,10 +430,10 @@ export function createOcean(mesh, {
   momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
-  vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'fixed', langmuirScheme = 'factor', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
+  vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'rh18', langmuirScheme = 'rescale', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
-  iceDrift = false, mixedLayerRestratification = false,
+  iceDrift = false, mixedLayerRestratification = true,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -1175,6 +1177,8 @@ export function createOcean(mesh, {
       lightIn[i] = penetrated[i];
       if (penetrated[i] !== 0) depositLight(i);
     }
+    measureIce(ice, concentration, iceVolume);
+    surfaceInputs();
   }
   function depositLight(i) {
     const light = penetrated[i];
@@ -1285,8 +1289,6 @@ export function createOcean(mesh, {
       drift.advance({ surfaceT, ice, concentration, stress: totalStress, waterU: u, eta, dt: dtOcean });
     }
     readSurface(surfaceT, ice, concentration);
-    measureIce(ice, concentration, iceVolume);
-    surfaceInputs();
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dtOcean);
     regrid(dtOcean); columnPhysics(dtOcean);
@@ -1553,6 +1555,7 @@ export function createOcean(mesh, {
       h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
       for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
       if (saved.Q && saved.Q.length === L * C && saved.W && saved.W.length === L * C) { Q.set(saved.Q); W.set(saved.W); }
+      else if (saved.Qref && saved.Qref.length === L * C && saved.Wref && saved.Wref.length === L * C) for (let n = 0; n < L * C; n++) { Q[n] = saved.Qref[n] + HEAT_REFERENCE * h[n]; W[n] = saved.Wref[n] + SALT_REFERENCE * h[n]; }
     } else convertSlab(saved, classes);
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } eta[i] = 0; continue; }
@@ -1579,6 +1582,7 @@ export function createOcean(mesh, {
       if (saved.calved && saved.calved.length === C) calved.set(saved.calved);
       if (saved.boundaryDepths && saved.boundaryDepths.length === C) boundaryDepths.set(saved.boundaryDepths);
       if (drift && saved.iceVelocity) drift.reset(saved.iceVelocity, saved.iceSigma);
+      if (seaFlux) seaFlux.set(saved.flux);
     }
     if (restrat) {
       mleDepths.set(boundaryDepths);
@@ -1587,6 +1591,7 @@ export function createOcean(mesh, {
     counter = 0;
     initialised = true;
   }
+  let seaFlux = null;
   function restartArrays() {
     const copy = (values) => Float64Array.from(values);
     return {
@@ -1594,6 +1599,7 @@ export function createOcean(mesh, {
       ...(penetration ? { transmission: copy(transmission) } : {}),
       ...(drift ? { iceVelocity: copy(drift.velocity), iceSigma: copy(drift.sigma) } : {}),
       ...(restrat ? { mleDepths: copy(mleDepths) } : {}),
+      ...(seaFlux ? { flux: copy(seaFlux) } : {}),
     };
   }
 
@@ -1647,5 +1653,5 @@ export function createOcean(mesh, {
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
   Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, heatIn: heatIn.buffer, saltIn: saltIn.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer , ...(restrat ? { mleDepths: mleDepths.buffer, mleThickness: mleThickness.buffer, mleBuoyancy: mleBuoyancy.buffer, mleUstar: mleUstar.buffer } : {}) });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells };
+  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; seaFlux = seaIce ? seaIce.oceanFlux : null; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells };
 }

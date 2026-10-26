@@ -215,9 +215,9 @@ export function makeColumn(options = {}) {
 
   function radiate(part) {
     refresh();
-    const [direct, diffuse] = albedos(), { beam } = settings, Ts = column.Ts;
+    const [direct, diffuse] = albedos(), { beam } = settings, Ts = column.Ts, sunlight = beam > 0 ? { beam, mu: settings.mu } : 0;
     const qAir = latent && settings.evaporation && settings.humidity ? q[(K - 1) * C] : null;
-    const call = (water) => radiation.column(0, settings.surfacePressure, theta, Ts, settings.wind, undefined, beam, qAir, q, water, direct, diffuse, 1, sensible ? SEA_DRAG : 0, 0, 0, 0, 0, part);
+    const call = (water) => radiation.column(0, settings.surfacePressure, theta, Ts, settings.wind, undefined, sunlight, qAir, q, water, direct, diffuse, 1, sensible ? SEA_DRAG : 0, 0, 0, 0, 0, part);
     const f = column.cloudLayer >= 0 ? Math.min(1, settings.cloud.cover) : 0;
     let net, b = radiation.budget;
     if (f > 0) {

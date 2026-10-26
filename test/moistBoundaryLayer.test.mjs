@@ -8,6 +8,7 @@ import { varianceCover } from '../js/physics/radiation.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity, LATENT_HEAT, R_VAPOR, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { sigmaInterfaces, VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
+import { PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -268,7 +269,7 @@ test('with deckRegime \'boundaryLayer\' the deck runs where the boundary layer i
 async function moistEngines(options = {}, moist = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: options, moist, surface: { exchange: 'fixed' } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: options, moist, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
   const { core: c, mesh: m, state, radiation: r, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer: ex, sigmaMid: mid, kappa: kap, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -300,7 +301,7 @@ async function moistEngines(options = {}, moist = {}) {
   c.diagnose(pi, theta, q, qc);
   const { piSigmaDot, exnerLower } = c.diagnostics;
   for (let k = 1; k < nK; k++) for (let i = 0; i < nC; i++) piSigmaDot[k * nC + i] = Math.fround(0.6 * (random() - 0.4));
-  const gpu = await createGpuCore(m, { levels, physics: { ...options, ...moist, surfaceExchange: 'fixed' } });
+  const gpu = await createGpuCore(m, { levels, physics: { ...options, ...moist, surfaceExchange: 'fixed', exchangeOptions: PREVIOUS_SURFACE } });
   const { device, buffers, kernels, layout } = gpu, dt = 900;
   gpu.upload(state);
   device.queue.writeBuffer(buffers.D, 4 * layout.D.PSD, Float32Array.from(piSigmaDot));

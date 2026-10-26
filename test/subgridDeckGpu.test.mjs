@@ -8,7 +8,7 @@ const LEVELS = ['bl60', ...(SIGMA_GRIDS.includes('bl48') ? ['bl48'] : [])];
 import { deckProfile } from './helpers/deckProfile.mjs';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, radiationTraces } from './helpers/decisions.mjs';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
-import { PREVIOUS_RADIATION, PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -43,9 +43,9 @@ function columnEnergy(after, C, K, held) {
 
 async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...options } = {}) {
   const physics = { ...PREVIOUS_RADIATION, mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options }, sigma = sigmaInterfaces(levels);
-  const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence }, surface: { exchange: 'roughness' } });
+  const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence }, surface: { exchange: 'roughness', ...PREVIOUS_SURFACE } });
   const { ambiguous } = deckProfile(model), traces = radiationTraces(model);
-  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, turbulence, surfaceExchange: 'roughness', exchangeOptions: {} } });
+  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, turbulence, surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   const C = model.mesh.nCells, K = model.core.K, decisions = decisionTracker(K, C), runs = new Set();

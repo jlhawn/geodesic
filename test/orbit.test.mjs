@@ -5,7 +5,8 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore } from '../js/dynamics/sigmaCore.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { createRadiation, sunDirection, sunDistance, SOLAR_CONSTANT, AXIAL_TILT, ECCENTRICITY, PERIHELION, DAY, YEAR } from '../js/physics/radiation.module.js';
+import { createRadiation, sunDirection, sunDistance, seasonTimes, orbitOf, DEFAULT_ORBIT, SOLAR_CONSTANT, AXIAL_TILT, ECCENTRICITY, PERIHELION, DAY, YEAR } from '../js/physics/radiation.module.js';
+import { seasonPhrase } from '../js/levels.module.js';
 
 const D = Math.PI / 180;
 const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
@@ -57,7 +58,7 @@ test('the kepler sun\'s declination and distance are those of the area law, with
   const out = new Float64Array(3), circle = new Float64Array(3);
   for (let n = 0; n < 150; n++) {
     const t = n * 2.43 * DAY + n * 3671;
-    sunDirection(t, out, 'kepler'); sunDirection(t, circle);
+    sunDirection(t, out, 'kepler'); sunDirection(t, circle, 'circular');
     const lambda = law.longitude(t % YEAR);
     close(out[2], Math.sin(AXIAL_TILT) * Math.sin(lambda), 1e-9, `sin δ, t = ${t}`);
     close(Math.hypot(out[0], out[1], out[2]), 1, 1e-14, `unit vector, t = ${t}`);
@@ -65,8 +66,40 @@ test('the kepler sun\'s declination and distance are those of the area law, with
     close(Math.atan2(out[1], out[0]), Math.atan2(circle[1], circle[0]), 1e-12, `hour angle, t = ${t}`);
   }
   close(sunDirection(0, undefined, 'kepler')[2], 0, 1e-12, 'spring equinox');
-  assert.equal(sunDistance(123456), 1);
   assert.equal(sunDistance(123456, 'circular'), 1);
+});
+
+test('the kepler orbit is the default: of the sun functions, of the radiation and of the page\'s options', () => {
+  assert.equal(DEFAULT_ORBIT, 'kepler');
+  assert.equal(orbitOf(undefined), 'kepler');
+  assert.equal(orbitOf({}), 'kepler');
+  assert.equal(orbitOf({ radiation: {} }), 'kepler');
+  assert.equal(orbitOf({ radiation: { orbit: 'circular' } }), 'circular');
+  assert.equal(orbitOf({ radiation: { orbit: 'kepler' }, moist: {} }), 'kepler');
+  const defaulted = new Float64Array(3), kepler = new Float64Array(3);
+  for (const t of [0, 30 * DAY + 77, 100.3 * DAY, 250 * DAY]) {
+    sunDirection(t, defaulted); sunDirection(t, kepler, 'kepler');
+    assert.deepEqual(defaulted, kepler, `sun at ${t}`);
+    assert.equal(sunDistance(t), sunDistance(t, 'kepler'));
+  }
+  const mesh = buildMesh(new Grid(16)), core = createSigmaCore(mesh), plain = createRadiation(mesh, core), explicit = createRadiation(mesh, core, { orbit: 'kepler' }), undecided = createRadiation(mesh, core, { orbit: undefined });
+  for (const t of [0, 40.5 * DAY, 200.2 * DAY]) {
+    plain.setTime(t); explicit.setTime(t); undecided.setTime(t);
+    for (let i = 0; i < mesh.nCells; i += 7) { assert.equal(plain.insolation(i), explicit.insolation(i)); assert.equal(undecided.insolation(i), explicit.insolation(i)); }
+  }
+  const model = createModel(new Grid(16), { ocean: false, surface: { exchange: 'roughness' } }), C = model.mesh.nCells;
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  model.time = 150 * DAY;
+  model.step(900);
+  model.radiation.setTime(150 * DAY);
+  const f = sunDistance(150 * DAY, 'kepler');
+  let checked = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(model.radiation.cosZenith(i) > 0)) continue;
+    close(model.radiation.summed.insolation[i], SOLAR_CONSTANT * f * model.radiation.cosZenith(i), 1e-9, `cell ${i}`);
+    checked++;
+  }
+  assert.ok(checked > C / 3, `${checked} cells lit`);
 });
 
 test('the June solstice falls on day 92.697, the September equinox on 186.282 and the December solstice on 276.064 of the 365-day year, perihelion on day 288.715 and aphelion on 106.215', () => {
@@ -77,6 +110,8 @@ test('the June solstice falls on day 92.697, the September equinox on 186.282 an
   close(days.december, 276.064, 0.002, 'December solstice');
   close(days.perihelion, 288.715, 0.002, 'perihelion');
   close(days.aphelion, 106.215, 0.002, 'aphelion');
+  seasonTimes('kepler').forEach((at, k) => close(at / DAY, [0, days.june, days.september, days.december][k], 1e-4, `seasonTimes ${k}`));
+  assert.deepEqual(seasonTimes('circular'), [0, YEAR / 4, YEAR / 2, 3 * YEAR / 4]);
   const sun = new Float64Array(3);
   sunDirection(days.june * DAY, sun, 'kepler');
   close(Math.asin(sun[2]), AXIAL_TILT, 1e-9, 'declination at the June solstice');
@@ -127,7 +162,7 @@ test('the annual global mean rises by (1 − e²)^(−1/2) and no more', () => {
   let sum = 0;
   for (let n = 0; n < steps; n++) sum += sunDistance((n + 0.5) / steps * YEAR, 'kepler');
   close(sum / steps, 1 / Math.sqrt(1 - ECCENTRICITY * ECCENTRICITY), 1e-9, 'time mean of (a/r)²');
-  const mesh = buildMesh(new Grid(16)), kepler = createRadiation(mesh, createSigmaCore(mesh), { orbit: 'kepler' }), circular = createRadiation(mesh, createSigmaCore(mesh));
+  const mesh = buildMesh(new Grid(16)), kepler = createRadiation(mesh, createSigmaCore(mesh), { orbit: 'kepler' }), circular = createRadiation(mesh, createSigmaCore(mesh), { orbit: 'circular' });
   let total = { kepler: 0, circular: 0 }, area = 0;
   for (let i = 0; i < mesh.nCells; i++) area += mesh.areaCell[i];
   const perDay = 6, count = 365 * perDay;
@@ -168,7 +203,7 @@ test('at every latitude the annual mean on the kepler orbit is the circular timi
 });
 
 test('every cell gets the model\'s own sunlight scaled by the distance factor, and the circular orbit still gets exactly S₀ times the cosine', () => {
-  const mesh = buildMesh(new Grid(16)), core = createSigmaCore(mesh), kepler = createRadiation(mesh, core, { orbit: 'kepler' }), circular = createRadiation(mesh, core), sun = new Float64Array(3);
+  const mesh = buildMesh(new Grid(16)), core = createSigmaCore(mesh), kepler = createRadiation(mesh, core), circular = createRadiation(mesh, core, { orbit: 'circular' }), sun = new Float64Array(3);
   for (const t of [0, 0.3 * DAY, 91.25 * DAY + 5000, 200.7 * DAY, 300 * DAY + 77]) {
     kepler.setTime(t); circular.setTime(t);
     sunDirection(t, sun, 'kepler');
@@ -186,9 +221,22 @@ test('every cell gets the model\'s own sunlight scaled by the distance factor, a
   }
 });
 
+test('the page names the season by the orbit\'s own equinoxes and solstices', () => {
+  const [, june, september, december] = seasonTimes('kepler');
+  assert.equal(seasonPhrase(0, 'kepler'), 'the Northern spring equinox');
+  assert.equal(seasonPhrase(june, 'kepler'), 'the Northern summer solstice');
+  assert.equal(seasonPhrase(september + 2 * DAY, 'kepler'), '2 days past the Northern autumn equinox');
+  assert.equal(seasonPhrase(december - 3 * DAY, 'kepler'), '3 days before the Northern winter solstice');
+  assert.equal(seasonPhrase(YEAR - DAY, 'kepler'), '1 day before the Northern spring equinox');
+  assert.equal(seasonPhrase(182.5 * DAY, 'kepler'), '4 days before the Northern autumn equinox');
+  assert.equal(seasonPhrase(91.25 * DAY, 'circular'), 'the Northern summer solstice');
+  assert.equal(seasonPhrase(185.5 * DAY, 'circular'), '3 days past the Northern autumn equinox');
+  assert.equal(seasonPhrase(60 * DAY), seasonPhrase(60 * DAY, DEFAULT_ORBIT));
+});
+
 test('the orbit is circular or kepler', () => {
   const mesh = buildMesh(new Grid(16)), core = createSigmaCore(mesh);
-  for (const orbit of ['ellipse', 'Kepler', null, 1]) assert.throws(() => createRadiation(mesh, core, { orbit }), /orbit must be/, String(orbit));
+  for (const orbit of ['ellipse', 'Kepler', null, 1, '']) assert.throws(() => createRadiation(mesh, core, { orbit }), /orbit must be/, String(orbit));
 });
 
 function heldModel(radiationEvery, orbit) {
@@ -226,5 +274,58 @@ test('with the kepler orbit what the radiation absorbs and reflects makes the st
       for (let i = 0; i < C; i++) if (radiation.held.mu[i] > 0) held++;
       assert.ok(held > C / 4, `${held} columns hold a lit call`);
     }
+  }
+});
+
+function columnOn(orbit) {
+  const model = createModel(new Grid(16), { ocean: false, radiation: { orbit } });
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  const { core, radiation } = model, { K, C } = core.diagnostics, [pi, theta, , surfaceT, q] = model.state, qc = new Float64Array(K * C);
+  for (let i = 0; i < C; i++) core.diagnoseColumn(i, pi, theta, q, qc);
+  const call = (i, sunlight) => {
+    radiation.column(i, pi[i], theta, surfaceT[i], 5, undefined, sunlight, q[(K - 1) * C + i], q, qc, 0.07, 0.07);
+    return { ...radiation.budget };
+  };
+  return { radiation, call, C };
+}
+
+test('a column given a sun reads its cosine from that sun, so a beam and a cosine give the same budget on any date of either orbit', () => {
+  const circular = columnOn('circular'), kepler = columnOn('kepler'), cosines = [1, 0.4, 0.05];
+  for (const day of [0, 100, 200.7, 290]) {
+    circular.radiation.setTime(day * DAY); kepler.radiation.setTime(day * DAY);
+    assert.ok(Math.abs(sunDistance(day * DAY, 'kepler') - 1) > 1e-3, `the distance factor at day ${day}`);
+    for (const i of [0, 7, 30]) {
+      const absorbed = cosines.map((mu) => {
+        const sunlight = { beam: SOLAR_CONSTANT * mu, mu }, fromCircular = circular.call(i, sunlight);
+        assert.deepEqual(kepler.call(i, sunlight), fromCircular, `day ${day}, cell ${i}, cosine ${mu}`);
+        return fromCircular.atmosphereSolar / sunlight.beam;
+      });
+      assert.ok(absorbed[2] > 1.05 * absorbed[0], `day ${day}, cell ${i}: the cosine sets the path, the share absorbed at 0.05 is ${absorbed[2]} against ${absorbed[0]} overhead`);
+    }
+  }
+});
+
+test('a column left to its own sun is the column given that sun, and by night the column given 0', () => {
+  const { radiation, call, C } = columnOn('kepler');
+  for (const day of [0, 100, 200.7, 290]) {
+    radiation.setTime(day * DAY + 3600);
+    let lit = 0;
+    for (let i = 0; i < C; i += 5) {
+      const own = call(i, undefined), beam = radiation.insolation(i), given = call(i, beam > 0 ? { beam, mu: radiation.cosZenith(i) } : 0);
+      for (const key of Object.keys(given)) {
+        if (Number.isNaN(given[key])) assert.ok(Number.isNaN(own[key]), `day ${day}, cell ${i}: ${key}`);
+        else close(own[key], given[key], 1e-9 * (1 + Math.abs(given[key])), `day ${day}, cell ${i}: ${key}`);
+      }
+      if (beam > 0) lit++; else assert.equal(own.absorbedSolar, 0, `day ${day}, cell ${i} by night`);
+    }
+    assert.ok(lit > C / 20, `day ${day}: ${lit} lit cells sampled`);
+  }
+});
+
+test('a column takes its sun as undefined, 0 or { beam, mu }, and refuses a bare beam, whose cosine it would have to guess', () => {
+  const { call } = columnOn('kepler');
+  for (const sunlight of [undefined, 0, { beam: 0, mu: 0 }, { beam: 340.5, mu: 0.25 }]) call(0, sunlight);
+  for (const sunlight of [340.5, 1, -1, NaN, null, '0', true, {}, { beam: 340.5 }, { mu: 0.25 }, { beam: -1, mu: 0.25 }, { beam: 340.5, mu: NaN }]) {
+    assert.throws(() => call(0, sunlight), /column takes sunlight/, JSON.stringify(sunlight));
   }
 });

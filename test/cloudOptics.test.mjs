@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { sunDirection, cloudOptics, liquidShare, iceRadius, CLOUD_OPTICS, SOLAR_CONSTANT, STEFAN_BOLTZMANN, YEAR } from '../js/physics/radiation.module.js';
+import { sunDirection, sunDistance, orbitOf, cloudOptics, liquidShare, iceRadius, CLOUD_OPTICS, SOLAR_CONSTANT, STEFAN_BOLTZMANN, YEAR } from '../js/physics/radiation.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -40,7 +40,7 @@ function singleLayer(radiation, T, path) {
   qc[k * C + i] = path * core.diagnostics.g / (pi[i] * core.diagnostics.dSigma[k]);
   core.diagnoseColumn(i, pi, theta, dry, qc);
   const mu = 0.5, beam = SOLAR_CONSTANT * mu, surfaceT = 290;
-  rad.column(i, pi[i], theta, surfaceT, 5, undefined, beam, null, null, qc, 0, 0);
+  rad.column(i, pi[i], theta, surfaceT, 5, undefined, { beam, mu }, null, null, qc, 0, 0);
   const b = rad.budget, surface = STEFAN_BOLTZMANN * surfaceT ** 4;
   return { reflectance: b.reflectedSolar / beam, emissivity: (surface - b.outgoingLongwave) / (surface - STEFAN_BOLTZMANN * T ** 4), closure: Math.abs(b.absorbedSolar + b.reflectedSolar - beam) / beam };
 }
@@ -100,8 +100,8 @@ async function physicsPair(base, options, dt = 864000) {
   gpu.uploadPhysics({ snow: model.seaIce.snow, concentration: model.seaIce.concentration });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
   await gpu.tendency();
-  const sun = sunDirection(model.time);
-  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, (model.time % YEAR) / YEAR, sun[0], sun[1], sun[2], 0, 0, 0]));
+  const orbit = orbitOf({ radiation: physics }), sun = sunDirection(model.time, undefined, orbit);
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, (model.time % YEAR) / YEAR, sun[0], sun[1], sun[2], 0, 0, 0, sunDistance(model.time, orbit)]));
   const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
   for (const name of PHYSICS_PASSES) {
@@ -159,7 +159,7 @@ test('under the phase optics every sunlit column with warm, mixed-phase and cold
   for (let i = 0; i < C; i++) {
     core.diagnoseColumn(i, pi, theta, q, qc);
     const beam = radiation.insolation(i);
-    radiation.column(i, pi[i], theta, surfaceT[i], 5, undefined, beam, q[bottom + i], q, qc, 0.06, 0.06, 1, undefined, 1, model.boundaryLayer.depth[i] - geopotential[bottom + i] / g, 0, 0);
+    radiation.column(i, pi[i], theta, surfaceT[i], 5, undefined, undefined, q[bottom + i], q, qc, 0.06, 0.06, 1, undefined, 1, model.boundaryLayer.depth[i] - geopotential[bottom + i] / g, 0, 0);
     if (!(beam > 1)) continue;
     const b = radiation.budget;
     lit++;

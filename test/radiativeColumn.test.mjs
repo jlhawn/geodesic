@@ -107,7 +107,7 @@ test('ozoneAt is the model\'s own climatology at that latitude and day', () => {
     core.diagnoseColumn(i, pi, theta);
     for (let k = 0; k < K; k++) theta[k * C + i] = MLS.temperature[k] / exnerLayer[k * C + i];
     core.diagnoseColumn(i, pi, theta);
-    radiation.column(i, 101325, theta, 290, 5, undefined, 800, null, q, null, 0.1, 0.1);
+    radiation.column(i, 101325, theta, 290, 5, undefined, { beam: 800, mu: 800 / 1362 }, null, q, null, 0.1, 0.1);
     const own = { ...radiation.budget };
     const ours = makeColumn({ temperature: MLS.temperature, groundTemperature: 290, ozoneProfile: ozoneAt(mesh.latCell[i] * 180 / Math.PI, day), beam: 800, mu: 800 / 1362, albedo: 0.1 }).budget;
     close(ours.ozone, own.ozoneSolar, 1e-9, `ozone sunlight at cell ${i}, day ${day}`);

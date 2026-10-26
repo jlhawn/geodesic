@@ -13,12 +13,14 @@ const unit = (lat, lon) => [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.
 
 test('day 0 at noon at Greenwich is t = 0, the March equinox with the sun over 0° N, 0° E', () => {
   assert.equal(timeOf(0, 12), 0);
-  const { lat, lon } = subsolarPoint(sunDirection(0));
-  close(lat, 0, 0, 'latitude');
-  close(lon, 0, 0, 'longitude');
-  close(sunlightAt(...unit(0, 0), sunDirection(0)), 1362, 1e-12, 'sunlight under the sun');
-  close(sunlightAt(...unit(45 * D, 0), sunDirection(0)), 1362 * Math.SQRT1_2, 1e-9, 'sunlight at 45° N on the Greenwich meridian');
-  close(sunlightAt(...unit(0, 90 * D), sunDirection(0)), 0, 1e-12, 'sunlight on the terminator');
+  for (const orbit of ['circular', 'kepler']) {
+    const sun = sunDirection(0, undefined, orbit), { lat, lon } = subsolarPoint(sun);
+    close(lat, 0, 1e-12, `${orbit} latitude`);
+    close(lon, 0, 0, `${orbit} longitude`);
+    close(sunlightAt(...unit(0, 0), sun), 1362, 1e-9, `${orbit} sunlight under the sun`);
+    close(sunlightAt(...unit(45 * D, 0), sun), 1362 * Math.SQRT1_2, 1e-9, `${orbit} sunlight at 45° N on the Greenwich meridian`);
+    close(sunlightAt(...unit(0, 90 * D), sun), 0, 1e-12, `${orbit} sunlight on the terminator`);
+  }
 });
 
 test('the sun moves west 15° an hour and is over Greenwich at noon every day', () => {
@@ -28,21 +30,21 @@ test('the sun moves west 15° an hour and is over Greenwich at noon every day', 
   }
 });
 
-test('the subsolar latitude is 23.44°·sin(2πt/YEAR): 23.44° N at the June solstice, 23.44° S at the December one', () => {
+test('on the circular orbit the subsolar latitude is 23.44°·sin(2πt/YEAR): 23.44° N at the June solstice, 23.44° S at the December one', () => {
   close(timeOf(91, 18), YEAR / 4, 0, 'June solstice time');
-  close(subsolarPoint(sunDirection(YEAR / 4)).lat / D, 23.44, 1e-12, 'June solstice');
-  close(subsolarPoint(sunDirection(3 * YEAR / 4)).lat / D, -23.44, 1e-12, 'December solstice');
+  close(subsolarPoint(sunDirection(YEAR / 4, undefined, 'circular')).lat / D, 23.44, 1e-12, 'June solstice');
+  close(subsolarPoint(sunDirection(3 * YEAR / 4, undefined, 'circular')).lat / D, -23.44, 1e-12, 'December solstice');
   for (let n = 0; n < 200; n++) {
     const t = n * 1.83 * DAY + n * 977;
-    close(subsolarPoint(sunDirection(t)).lat, AXIAL_TILT * Math.sin(2 * Math.PI * (t % YEAR) / YEAR), 1e-12, `t = ${t}`);
+    close(subsolarPoint(sunDirection(t, undefined, 'circular')).lat, AXIAL_TILT * Math.sin(2 * Math.PI * (t % YEAR) / YEAR), 1e-12, `t = ${t}`);
   }
 });
 
 test('every cell gets exactly the sunlight the model\'s own radiation gives it', () => {
-  const mesh = buildMesh(new Grid(16)), radiation = createRadiation(mesh, createSigmaCore(mesh)), out = new Float64Array(mesh.nCells);
+  const mesh = buildMesh(new Grid(16)), radiation = createRadiation(mesh, createSigmaCore(mesh), { orbit: 'circular' }), out = new Float64Array(mesh.nCells);
   for (const t of [0, 0.3 * DAY, 91.25 * DAY + 5000, 200.7 * DAY, 300 * DAY + 77]) {
     radiation.setTime(t);
-    sunlightOnCells(mesh.xCell, sunDirection(t), out);
+    sunlightOnCells(mesh.xCell, sunDirection(t, undefined, 'circular'), out);
     for (let i = 0; i < mesh.nCells; i++) assert.equal(out[i], radiation.insolation(i), `cell ${i} at t = ${t}`);
   }
 });

@@ -38,6 +38,7 @@ import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { placeCumulus } from '../js/physics/moist.module.js';
+import { PUBLISHED_RADIATION } from '../explain/published.module.js';
 
 const FLOAT32_TOLERANCE = 2 ** -21, SECTION_MIN_THICKNESS = 0.1, NET_FRACTION = 0.1;
 const N = 16, DAY = 86400, STEP = 450, GRID = 'bl36', FRAME_DAYS = 5, SPINUP_FRAMES = 60, BINS = 36, CAP_STEP = 5, UPWELLING_DEPTH = 50, CELSIUS = 273.15;
@@ -87,7 +88,7 @@ const base = resumed ? JSON.parse(resumed.optionsJson) : { ocean: { everySteps: 
 const ICE = process.env.WET_ICE ? JSON.parse(process.env.WET_ICE) : base.ice;
 const OCEAN = { ...base.ocean, ...JSON.parse(process.env.OCEAN_OPTS ?? '{}') };
 const cadence = withCadence({ ocean: OCEAN }, STEP, N);
-const options = { ocean: cadence.ocean, levels: sigmaInterfaces(GRID), radiation: { ...cadence.radiation, clearSkyPass: true }, dragEvery: cadence.dragEvery, ice: ICE, surface: JSON.parse(process.env.SURFACE_OPTS ?? '{}') };
+const options = { ocean: cadence.ocean, levels: sigmaInterfaces(GRID), radiation: { ...cadence.radiation, clearSkyPass: true, orbit: PUBLISHED_RADIATION.orbit }, dragEvery: cadence.dragEvery, ice: ICE, surface: JSON.parse(process.env.SURFACE_OPTS ?? '{}') };
 const runStartTime = resumed ? resumed.runStartTime : (Math.ceil(SPINUP_DAYS / 365) * 365 - SPINUP_DAYS) * DAY;
 const invocationStart = resumed ? resumed.time : runStartTime, recordStart = invocationStart + SPINUP_DAYS * DAY, end = RECORD_DAYS * DAY;
 if (Math.round(recordStart / DAY) % 365 !== 0) { console.error(`the checkpoint is at model day ${Math.round(invocationStart / DAY)}; a record must start on a March equinox, ${365 - (Math.round(invocationStart / DAY) % 365)} days on (or that plus whole years)`); process.exit(1); }

@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { sunDirection, SOLAR_CONSTANT, STEFAN_BOLTZMANN, GREENHOUSE_GASES, YEAR } from '../js/physics/radiation.module.js';
+import { sunDirection, sunDistance, orbitOf, SOLAR_CONSTANT, STEFAN_BOLTZMANN, GREENHOUSE_GASES, YEAR } from '../js/physics/radiation.module.js';
 import { longwaveTableFor, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
@@ -37,7 +37,7 @@ function cloudColumn(radiation, { T, path, humid, sigma }) {
   qc[k * C + i] = path * core.diagnostics.g / (pi[i] * core.diagnostics.dSigma[k]);
   core.diagnoseColumn(i, pi, theta, q, qc);
   const beam = SOLAR_CONSTANT * 0.5, surfaceT = 290;
-  const run = (water) => { rad.column(i, pi[i], theta, surfaceT, 5, undefined, beam, q[(K - 1) * C + i], q, water, 0, 0); return { ...rad.budget }; };
+  const run = (water) => { rad.column(i, pi[i], theta, surfaceT, 5, undefined, { beam, mu: 0.5 }, q[(K - 1) * C + i], q, water, 0, 0); return { ...rad.budget }; };
   const cloudy = run(qc), clear = run(none);
   return { model, i, k, q, beam, surfaceT, cloudy, clear };
 }
@@ -140,8 +140,8 @@ async function physicsPair(base, options, dt = 864000) {
   gpu.uploadPhysics({ snow: model.seaIce.snow, concentration: model.seaIce.concentration });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
   await gpu.tendency();
-  const sun = sunDirection(model.time);
-  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, (model.time % YEAR) / YEAR, sun[0], sun[1], sun[2], 0, 0, 0]));
+  const orbit = orbitOf({ radiation: physics }), sun = sunDirection(model.time, undefined, orbit);
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, (model.time % YEAR) / YEAR, sun[0], sun[1], sun[2], 0, 0, 0, sunDistance(model.time, orbit)]));
   const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
   for (const name of PHYSICS_PASSES) {

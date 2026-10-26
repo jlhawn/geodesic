@@ -189,7 +189,7 @@ test('a state saved with the filtered depth resumes exactly, and one saved witho
   assert.deepEqual(started.mleDepths, started.boundaryDepths);
 });
 
-test('with the option off the ocean is the ocean it was: the same bits whether the option is absent, false or its other settings differ', () => {
+test('by default the restratification runs, the same bits as the option true, and false leaves it out: no restratification cells, no saved depths and other layers', () => {
   const build = (options) => {
     const ocean = createOcean(mesh, { everySteps: 1, ...options }), surfaceT = Float64Array.from(latCell, (lat) => 300 - 26 * Math.sin(lat) ** 2), ice = new Float64Array(C), flux = new Float64Array(C), stress = new Float64Array(E);
     for (let e = 0; e < E; e++) stress[e] = 0.06 * Math.sin(2 * mesh.latEdge[e]) * Math.cos(Math.atan2(mesh.xEdge[3 * e + 1], mesh.xEdge[3 * e]));
@@ -197,12 +197,13 @@ test('with the option off the ocean is the ocean it was: the same bits whether t
     for (let n = 0; n < 16; n++) { surfaceT.set(ocean.T0); ocean.advance(surfaceT, ice, flux, stress, DT); }
     return ocean;
   };
-  const plain = build({}), off = build({ mixedLayerRestratification: false });
-  for (const name of ['h', 'u', 'Q', 'W', 'eta', 'boundaryDepths']) assert.deepEqual(off[name], plain[name], name);
+  const plain = build({}), on = build({ mixedLayerRestratification: true });
+  for (const name of ['h', 'u', 'Q', 'W', 'eta', 'boundaryDepths']) assert.deepEqual(on[name], plain[name], name);
+  assert.ok(plain.restratCells && plain.restartArrays().mleDepths, 'the default saves its restratification depths');
+  const off = build({ mixedLayerRestratification: false });
   assert.equal(off.restratCells, undefined);
   assert.equal(off.restartArrays().mleDepths, undefined);
-  const on = build({ mixedLayerRestratification: true });
   let moved = 0;
-  for (let n = 0; n < on.h.length; n++) moved = Math.max(moved, Math.abs(on.h[n] - plain.h[n]));
-  assert.ok(moved > 0, 'with the option on the layers differ');
+  for (let n = 0; n < off.h.length; n++) moved = Math.max(moved, Math.abs(off.h[n] - plain.h[n]));
+  assert.ok(moved > 0, 'with the option off the layers differ');
 });

@@ -40,7 +40,7 @@ function columns(model, radiation) {
   run.radiation.setTime(model.time);
   const rad = run.radiation, out = { outgoing: new Float64Array(C), back: new Float64Array(C), clear: new Float64Array(C), longwave: new Float64Array(K * C), closure: 0, scale: 0 };
   for (let i = 0; i < C; i++) {
-    rad.column(i, pi[i], theta, surfaceT[i], 5, undefined, rad.insolation(i), q[(K - 1) * C + i], q, qc, 0.07, 0.07);
+    rad.column(i, pi[i], theta, surfaceT[i], 5, undefined, undefined, q[(K - 1) * C + i], q, qc, 0.07, 0.07);
     out.outgoing[i] = rad.budget.outgoingLongwave; out.back[i] = rad.budget.downwardLongwave; out.clear[i] = rad.budget.clearOutgoingLongwave;
     let sum = 0;
     for (let k = 0; k < K; k++) { out.longwave[k * C + i] = rad.longwave[k * C + i]; sum += rad.longwave[k * C + i]; }

@@ -1,6 +1,6 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
-import { sunDirection, sunDistance, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
+import { sunDirection, sunDistance, DEFAULT_ORBIT, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, PHYSICS_PASSES, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
@@ -813,7 +813,7 @@ const columnKernel = (diagnose) => `@compute @workgroup_size(${WORKGROUP}) fn ma
 Object.assign(KERNELS, { column: columnKernel('diagnoseColumnMid'), columnLast: columnKernel('diagnoseColumn') });
 
 export const PHYSICS_DEFAULTS = {
-  solarConstant: 1362, orbit: 'circular', cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
+  solarConstant: 1362, orbit: DEFAULT_ORBIT, cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
   mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'exponentialRandom', decorrelationLength: DECORRELATION_LENGTH, decorrelationSlope: DECORRELATION_SLOPE, prognosticHeight: true, deckRest: 'regime', deckSlab: 'fraction', deckReference: 'layer', deckInversion: 'grid', deckCloud: 'sigma', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false, radiationEvery: 1, dragEvery: 1,

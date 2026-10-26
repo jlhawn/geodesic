@@ -43,7 +43,7 @@ test('the fixed scheme takes no account of the surface buoyancy flux, and mixCol
   assert.equal(run(fluxes, {}), run({ ...fluxes, buoyancy: 0 }, {}));
 });
 
-test('the ocean keeps the heat and salt its surface gave it over the step, the light that passed the top layer and the brine of ice grown included, and leaves them out of the default scheme', () => {
+test('the ocean keeps the heat and salt its surface gave it over the step, the light that passed the top layer and the brine of ice grown included, and leaves them out of the fixed m*', () => {
   const mesh = buildMesh(new Grid(16)), C = mesh.nCells, DT = 1350;
   const stress = new Float64Array(mesh.nEdges).fill(0.02);
   const give = (options) => {
@@ -54,7 +54,7 @@ test('the ocean keeps the heat and salt its surface gave it over the step, the l
     ocean.advance(warm, grown, flux, stress, DT);
     return ocean;
   };
-  const ocean = give({ mstarScheme: 'rh18' }), rest = give({});
+  const ocean = give({ mstarScheme: 'rh18' }), rest = give({ mstarScheme: 'fixed', langmuirScheme: 'factor' });
   let warmed = 0, cooled = 0, brined = 0;
   for (let i = 0; i < C; i++) {
     if (!ocean.cellOcean[i] || ocean.shelf?.[i]) continue;
@@ -88,6 +88,37 @@ test('with langmuirScheme rescale the energy is the rh18 m* times min(5, 1 + wav
   assert.ok(run({ langmuirScheme: 'rescale', waves: 0.5 }).depth < run({ langmuirScheme: 'rescale' }).depth);
   assert.deepEqual(LANGMUIR_SCHEMES, ['factor', 'rescale']);
   const mesh = buildMesh(new Grid(16));
-  assert.throws(() => createOcean(mesh, { everySteps: 1, langmuirScheme: 'rescale' }), /langmuirScheme 'rescale' multiplies the m\* of mstarScheme 'rh18'/);
+  assert.throws(() => createOcean(mesh, { everySteps: 1, mstarScheme: 'fixed', langmuirScheme: 'rescale' }), /langmuirScheme 'rescale' multiplies the m\* of mstarScheme 'rh18'/);
   assert.throws(() => createOcean(mesh, { everySteps: 1, mstarScheme: 'rh18', langmuirScheme: 'additive' }), /langmuirScheme is one of factor, rescale/);
+});
+
+test('readSurface forms the heat and salt the surface gave the step, as the step does, so a phase-by-phase step takes the same surface buoyancy flux', () => {
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, DT = 1350, stress = new Float64Array(mesh.nEdges).fill(0.02);
+  const start = new Float64Array(C).fill(285), flux = new Float64Array(C);
+  const warm = Float64Array.from(start, (t, i) => t + (mesh.latCell[i] > 0 ? 0.5 : -0.5)), grown = Float64Array.from(start, (_, i) => (mesh.latCell[i] < -1.2 ? 0.1 : 0));
+  const make = () => {
+    const ocean = createOcean(mesh, { everySteps: 1, mstarScheme: 'rh18' });
+    ocean.initialize(Float64Array.from(start), new Float64Array(C));
+    ocean.accumulate(new Float64Array(C).fill(1e-5), new Float64Array(C), DT);
+    return ocean;
+  };
+  const stepped = make(), phased = make();
+  stepped.advance(Float64Array.from(warm), grown, flux, stress, DT);
+  phased.readSurface(Float64Array.from(warm), grown);
+  let heat = 0, salt = 0;
+  for (let i = 0; i < C; i++) { heat = Math.max(heat, Math.abs(phased.heatIn[i])); salt = Math.max(salt, Math.abs(phased.saltIn[i])); }
+  assert.ok(heat > 0.1 && salt > 1e-5, `the step gave heat ${heat} K m and salt ${salt} psu m`);
+  assert.deepEqual(phased.heatIn, stepped.heatIn);
+  assert.deepEqual(phased.saltIn, stepped.saltIn);
+});
+
+test('a column whose mixing releases more energy than it costs, under a wind whose energy has decayed to nothing at that depth, mixes through its whole depth under every m* scheme', () => {
+  const unstable = () => ({ h: new Float64Array(K).fill(100), T: Float64Array.from({ length: K }, (_, k) => (k < 5 ? 277 - 0.5 * k : 275 + 0.1 * (k - 4))), S: new Float64Array(K).fill(34.7), kappa: new Float64Array(K), scratch: columnScratch(K) });
+  for (const options of [{ mstarScheme: 'fixed', rotationLimit: 'rh18' }, { mstarScheme: 'rh18' }]) {
+    const { h, T, S, kappa, scratch } = unstable();
+    const layer = boundaryLayer({ h, T, S, K, ustar: 1e-3, f: 1e-4, dt, langmuir: 0, buoyancy: 0, ...options }, kappa, scratch);
+    assert.equal(layer.energy, 0);
+    assert.ok(layer.work < 0, `the work of mixing the column is ${layer.work}`);
+    assert.equal(layer.depth, K * 100, `${options.mstarScheme}: the boundary layer reaches ${layer.depth} m`);
+  }
 });

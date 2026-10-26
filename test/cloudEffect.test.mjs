@@ -37,7 +37,7 @@ test('the clear-sky pass gives each column the top-of-atmosphere fluxes of the s
   const bottom = (K - 1) * C;
   let checked = 0, lit = 0, worst = 0;
   for (let i = 0; i < C; i++) {
-    const args = (water) => [i, pi[i], theta, surfaceT[i], 5, undefined, radiation.insolation(i), q[bottom + i], q, water, 0.07, 0.06, 1, undefined, 0, 0, 0, 0];
+    const args = (water) => [i, pi[i], theta, surfaceT[i], 5, undefined, undefined, q[bottom + i], q, water, 0.07, 0.06, 1, undefined, 0, 0, 0, 0];
     radiation.column(...args(none));
     const clear = { absorbedSolar: radiation.budget.absorbedSolar, outgoingLongwave: radiation.budget.outgoingLongwave };
     assert.equal(radiation.budget.clearAbsorbedSolar, clear.absorbedSolar, `cell ${i}: a cloudless column's clear-sky ASR is its ASR`);
