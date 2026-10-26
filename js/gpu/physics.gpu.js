@@ -1,7 +1,7 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT, seaIceRemoval } from '../physics/ice.module.js';
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
-import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
+import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, fogConstants } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
@@ -298,7 +298,7 @@ export function physicsConstants(o) {
   const visibleSum = (term) => rayleigh.map(([w, tau]) => `${w} * ${term(`${tau / REFERENCE_PRESSURE} * light.y + light.z`)}`).join(' + ');
   const scatters = rayleigh.some(([, tau]) => tau > 0) || o.nearInfraredRayleigh > 0 || o.landAerosol > 0 || o.seaAerosol > 0;
   if (shielding && !(o.solarGases === 'clirad' && o.nearInfrared === 'bands' && o.upwardAbsorption && scatters && (o.cloudCover !== 'pdf' || o.cloudOverlap === 'exponentialRandom'))) throw new Error(`vaporShielding 'cloudTop' needs solarGases 'clirad', nearInfrared 'bands', upwardAbsorption, Rayleigh scattering or aerosol and, under cloudCover 'pdf', cloudOverlap 'exponentialRandom'`);
-  const shortwaveScheme = o.shortwave ?? 'sequential';
+  const shortwaveScheme = o.shortwave ?? DEFAULT_SHORTWAVE;
   if (shortwaveScheme !== 'sequential' && shortwaveScheme !== 'layered') throw new Error(`shortwave must be 'sequential' or 'layered', not ${shortwaveScheme}`);
   const layering = shortwaveScheme === 'layered';
   if (layering && !(o.solarGases === 'clirad' && o.nearInfrared === 'bands' && scatters && !shielding && o.cloudScattering == null && o.vaporAbsorption === 1)) throw new Error(`shortwave 'layered' needs solarGases 'clirad', nearInfrared 'bands', Rayleigh scattering or aerosol, vaporShielding 'none', no gray cloudScattering and vaporAbsorption 1`);

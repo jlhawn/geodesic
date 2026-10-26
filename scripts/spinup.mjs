@@ -50,6 +50,9 @@
 // saved a whole day.
 // Whole-day names alone count towards KEEP, and only whole-day names match
 // the day patterns of the shell drivers.
+// The header records the radiation's shortwave scheme and the moist physics'
+// bergeronAutoconversion, with the RADIATION and MOIST given, as the options
+// the page starts the state with (scripts/stateOptions.mjs).
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}';
@@ -163,6 +166,7 @@ import { START_CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { SEA_ICE_START_FILE, loadSeaIceStart } from '../js/physics/seaIceStart.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { withCadence } from '../js/cadence.module.js';
+import { recordedOptions } from './stateOptions.mjs';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
@@ -180,7 +184,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, LAKE = JSON.parse(process.env.LAKE ?? '{}');
-const RADIATION = withCadence({ radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
+const GIVEN_RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), RADIATION = withCadence({ radiation: { clearSkyPass: true, ...GIVEN_RADIATION } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
 const DRAG_EVERY = withCadence({ dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, 1350 * 16 / N, N).dragEvery;
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
@@ -555,7 +559,7 @@ if (days > 0 && !step) {
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
 const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
-const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(GEOGRAPHY), levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
+const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(GEOGRAPHY), levels: core.levels, options: recordedOptions({ radiation: GIVEN_RADIATION, moist: MOIST }), ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
 writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));

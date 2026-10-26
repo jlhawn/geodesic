@@ -1049,6 +1049,12 @@ closure still holds exactly (with the latent heat of evaporation
 counted as leaving the surface). The cloud–albedo, cloud–longwave and
 ice–albedo feedbacks are all live from here.
 
+This is the `sequential` shortwave, which the explainers keep. The model's
+default solves the cloudy part of each column layer by layer (`shortwave:
+'layered'`, docs/cloud-gas-overlap.md), cloud water absorbing there by the
+single scattering albedo of its band, so `cloudSolarAbsorption` acts only on
+the sequential scheme.
+
 Marine stratocumulus is diagnosed, not condensed. By default
 (`mixedLayerDeck`) each ice-free sea column starts the bulk mixed-layer
 model of `js/physics/mixedLayer.module.js` (Lilly 1968; Bretherton &
@@ -11996,8 +12002,11 @@ exactly): day 1 Ts 14.79 against 14.78 °C, ASR 237.1 alike, OLR
 same day lines.
 
 **The radiation held between full calls** (`radiationEvery`, both
-engines; the drivers' default from `js/cadence.module.js`, RADIATION_MINUTES
-11.25: every 4 steps at N=128, every 2 at N=64). As in every GCM (CAM and
+engines; the drivers' default from `js/cadence.module.js` from N=64 up,
+RADIATION_MINUTES: 45 with the layered shortwave, every 16 steps at N=128
+and every 8 at N=64, and 11.25 with the sequential, every 4 and every 2;
+the measurements below are the sequential scheme's, and the layered
+scheme's cost and held error are in docs/cloud-gas-overlap.md). As in every GCM (CAM and
 the IFS call their radiation hourly) the full longwave and shortwave,
 clear-sky pass included, run every k steps. Between calls the shortwave
 heating of the layers and the surface and top shortwave fluxes scale
@@ -12039,7 +12048,7 @@ The cost grows with the interval in minutes rather than in steps: the
 OLR falls and the longwave cloud effect rises as the cloud the longwave
 sees ages (by half the interval on average), and the shortwave cloud
 effect strengthens likewise. 11.25 minutes is the longest interval whose
-means stay within 0.1 W/m² of every step; the peak of the diurnal cycle
+means stay within 0.1 W/m² of every step with the sequential shortwave; the peak of the diurnal cycle
 of Ts over land (15.6 h local at N=64, 15.4 at N=128) moves by under
 0.03 h at any interval, its amplitude by under 0.25 %. The physics pass
 falls from 41.1 to 23.7 ms at N=128 (19.9 every 8), the radiation's
@@ -12239,7 +12248,7 @@ pass with no bound changed.
 
 **The drags laid every 11.25 minutes** (`dragEvery`, both engines; the
 drivers' default from `js/cadence.module.js`, DRAG_MINUTES 11.25, the
-radiation's interval: every 4 steps at N=128, every 2 at N=64, every
+sequential radiation's interval: every 4 steps at N=128, every 2 at N=64, every
 step at N=32 and coarser). The non-orographic gravity-wave drag and the
 subgrid orography's blocking and gravity waves follow the large-scale
 wind, which changes over hours, yet their columns took 3.6 and 2.1 ms a

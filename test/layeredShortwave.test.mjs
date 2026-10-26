@@ -37,7 +37,7 @@ function sunAt(radiation, zenith) {
 function columnBudgets(column, { zenith, clouds, albedo = 0.06, options = {} }) {
   const out = {};
   let time = null;
-  for (const [name, scheme] of [['sequential', {}], ['layered', { shortwave: 'layered' }]]) {
+  for (const [name, scheme] of [['sequential', { shortwave: 'sequential' }], ['layered', { shortwave: 'layered' }]]) {
     const radiation = createRadiation(mesh, core, { landAerosol: 0, seaAerosol: 0, clearSkyPass: true, cloudCover: 'overcast', cloudColumns: false, solarConstant: S0, ...gasesOf(column), ...options, ...scheme });
     time ??= sunAt(radiation, zenith);
     radiation.setTime(time);

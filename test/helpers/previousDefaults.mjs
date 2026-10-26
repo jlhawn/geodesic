@@ -5,8 +5,10 @@ import { sigmaInterfaces } from '../../js/dynamics/sigmaCore.module.js';
  * model's defaults differ.
  */
 export const PREVIOUS_LEVELS = sigmaInterfaces('cam26');
-export const PREVIOUS_RADIATION = { cloudColumns: false, cloudSpread: 0, varianceCover: 'deficit', buoyancyLength: null, deckResolved: 'added', orbit: 'circular' };
-export const PREVIOUS_MOIST = { stratocumulusInversion: null, cumulusEntrainmentHeight: null, cumulusAscent: 'buoyant' };
+export const PREVIOUS_SHORTWAVE = { shortwave: 'sequential' };
+export const PREVIOUS_BERGERON = { bergeronAutoconversion: false };
+export const PREVIOUS_RADIATION = { cloudColumns: false, cloudSpread: 0, varianceCover: 'deficit', buoyancyLength: null, deckResolved: 'added', orbit: 'circular', ...PREVIOUS_SHORTWAVE };
+export const PREVIOUS_MOIST = { stratocumulusInversion: null, cumulusEntrainmentHeight: null, cumulusAscent: 'buoyant', ...PREVIOUS_BERGERON };
 export const PREVIOUS_SURFACE = { seaHumidity: 1 };
 export const PREVIOUS_OCEAN = { rotationLimit: 'algebraic', langmuirIce: 'none', shelfMeltLayer: 0, iceDrift: false, mstarScheme: 'fixed', langmuirScheme: 'factor', mixedLayerRestratification: false };
 

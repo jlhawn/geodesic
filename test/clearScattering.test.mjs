@@ -6,6 +6,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16, syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
+import { PREVIOUS_SHORTWAVE } from './helpers/previousDefaults.mjs';
 import { REFERENCE_PRESSURE, RAYLEIGH_BANDS, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION, LAND_AEROSOL, SEA_AEROSOL, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 
 let gpuAvailable = true;
@@ -19,7 +20,7 @@ function random(seed) {
 
 test('over a black surface the clear column reflects the two-stream value of its Rayleigh sub-bands and aerosol, the weighted τ/(τ + 2μ) of the visible beam less ozone and aerosol absorption, at three zenith angles over sea and over land (with the fixed ozone share)', () => {
   const grid = new Grid(16), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
-  const model = createModel(grid, { ocean: false, radiation: { land, clearSkyPass: true, solarGases: 'lacisHansen' } });
+  const model = createModel(grid, { ocean: false, radiation: { ...PREVIOUS_SHORTWAVE, land, clearSkyPass: true, solarGases: 'lacisHansen' } });
   const init = initializeState(model, {});
   init.forEach((values, a) => model.state[a].set(values));
   const { radiation, core } = model, { K } = core.diagnostics, [pi, theta] = model.state;
@@ -83,7 +84,8 @@ test('in every column of a state with real geography, cloud, deck and cumulus, t
   assert.ok(below > 0.55 && aerosolTotal > 0, `${below} of the aerosol in the lowest 2 km`);
 });
 
-async function enginePair(radiation, seed) {
+async function enginePair(given, seed) {
+  const radiation = { ...PREVIOUS_SHORTWAVE, ...given };
   const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
   const cpu = createModel(new Grid(16), { topography, ocean: false, radiation }), gpu = await createGpuModel(new Grid(16), { topography, ocean: false, radiation });
   const init = initializeState(cpu, {});
@@ -140,7 +142,7 @@ test('the light the surface reflects loses to vapour what the path it crossed co
   const { waterVaporAbsorptivity } = await import('../js/physics/radiation.module.js');
   const grid = new Grid(16), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
   const make = (options) => {
-    const model = createModel(grid, { ocean: false, radiation: { land, clearSkyPass: true, ...options } });
+    const model = createModel(grid, { ocean: false, radiation: { ...PREVIOUS_SHORTWAVE, land, clearSkyPass: true, ...options } });
     initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
     return model;
   };
