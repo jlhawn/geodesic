@@ -1,6 +1,6 @@
 # Gas absorption under clouds: vaporShielding and the layered shortwave
 
-Why the model's clouds absorb 9.7 W/m² of sunlight above what a clear sky
+Why the model's clouds absorb 10.3 W/m² of sunlight above what a clear sky
 does where observations and the reference models say 2 to 4, and what two
 structural fixes do to that and to the planet's reflection, and what the
 brighter planet asks of the clouds. Measured on 2026-10-25 on the CPU engine at
@@ -8,7 +8,7 @@ fourteen64's days 1460, 1551, 1643 and 1734 (March, June, September and
 December of year 5, eight times of day each) and r18flux's days 91 and 183, on
 the single columns of `test/vaporShielding.test.mjs` and
 `test/layeredShortwave.test.mjs`, on CIRC Phase I's cases 6 and 7, and against
-ESA Cloud_cci retrievals of MODIS-Aqua and AVHRR NOAA-18.
+ESA Cloud_cci retrievals of MODIS-Aqua and AVHRR NOAA-18 and ERA5's cloud water.
 
 ## The question
 
@@ -111,15 +111,15 @@ downward flux and direct flux are each kept at no less than nothing
 nowhere but to the reflection: the heating profile is the layered solution's, and
 the top-of-atmosphere reflection is the beam less what the atmosphere and the
 surface absorb, so absorbed plus reflected equals the beam. Over the 163,847
-cell-times of the four seasonal days that closure is at most 4.9e-16 of the
-beam in every record, with the floor holding the surface's absorption in 1.24 %
-of the sunlit samples (any of the three fluxes in 7.61 %). The sunlight the floor
+cell-times of the four seasonal days that closure is at most 5.4e-16 of the
+beam in every record, with the floor holding the surface's absorption in 1.26 %
+of the sunlit samples (any of the three fluxes in 7.54 %). The sunlight the floor
 sends from the surface to the reflection is 0.009 W/m² in the global mean:
 
 | zenith angle | below 70 | 70-80 | 80-85 | 85-90 |
 |---|---|---|---|---|
 | global-mean sunlight moved from the surface to the reflection, W/m² | 0.000 | 0.000 | 0.002 | 0.007 |
-| sunlit samples where the surface's absorption is floored | 0.0 % | 0.2 % | 2.0 % | 11.8 % |
+| sunlit samples where the surface's absorption is floored | 0.0 % | 0.2 % | 2.1 % | 12.0 % |
 
 (the downward and direct fluxes, floored the same way, gain 0.013 and 0.074
 W/m²). The floor is small against the two-stream method's own error at low sun:
@@ -140,15 +140,15 @@ of the same months; CERES EBAF Ed4.0 as Loeb et al. (2018, Table 5, July
 
 | | sequential | cloudTop | cloudTop, kappa 0.55 | layered | ERA5 | CERES |
 |---|---|---|---|---|---|---|
-| ASR | 242.8 | 237.8 | 240.3 | 235.0 | 243.7 | 240.9 |
-| atmosphere | 82.8 | 78.1 | 81.2 | 76.9 | 79.6 | |
-| cloud-induced atmosphere | 9.7 | 5.0 | 8.1 | 3.8 | 2.4 | |
-| surface | 160.0 | 159.8 | 159.1 | 158.1 | 164.1 | |
-| SWCRE | -50.0 | -55.1 | -52.5 | -57.9 | -46.7 | -45.8 |
-| June 0-20N ASR | 312.6 | 302.2 | 307.6 | 292.6 | 326.5 | |
-| June 0-20N SWCRE | -77.7 | -88.1 | -82.7 | -97.7 | -44.4 | -52.1 |
-| June 40-60N ASR | 334.8 | 327.5 | 332.1 | 320.3 | 316.7 | |
-| June 40-60N SWCRE | -94.1 | -101.5 | -96.9 | -108.7 | -99.3 | -90.4 |
+| ASR | 242.4 | 237.4 | 240.1 | 234.0 | 243.7 | 240.9 |
+| atmosphere | 83.4 | 78.7 | 82.0 | 77.0 | 79.6 | |
+| cloud-induced atmosphere | 10.3 | 5.6 | 8.9 | 3.9 | 2.4 | |
+| surface | 158.9 | 158.7 | 158.1 | 157.0 | 164.1 | |
+| SWCRE | -50.5 | -55.5 | -52.8 | -58.9 | -46.7 | -45.8 |
+| June 0-20N ASR | 312.3 | 302.1 | 307.8 | 291.2 | 326.5 | |
+| June 0-20N SWCRE | -78.0 | -88.3 | -82.5 | -99.1 | -44.4 | -52.1 |
+| June 40-60N ASR | 333.8 | 326.5 | 331.3 | 318.9 | 316.7 | |
+| June 40-60N SWCRE | -95.1 | -102.5 | -97.7 | -110.1 | -99.3 | -90.4 |
 
 The clear-sky ASR is 292.9 in every column. CERES's 286.7 is that of cloud-free
 scenes, which differ from the clear sky of cloudy columns by 0.24 W/m² in the
@@ -158,30 +158,35 @@ against ERA5's 213.2, the atmosphere 73.1 against 77.2. The Kepler orbit
 changes none of the differences between the columns by more than 0.05 W/m²
 (annual means; June, near aphelion, is 3 % dimmer).
 
-Shielding takes 5.9 W/m² of gas absorption, 0.8 of it returns in the cloud,
-and the planet brightens by 5.0 W/m² (4.7 to 5.3 by season). The layered
-scheme brightens it by 7.9 (7.4 to 9.0 by season): its cloud-induced
-absorption, 3.8, is the closest of the three to ERA5's 2.4, and its reflection
+Shielding takes 5.9 W/m² of gas absorption, the clouds' own absorption rises
+by 1.4, and the planet brightens by 5.0 W/m² (4.7 to 5.2 by season). The layered
+scheme brightens it by 8.4 (7.9 to 9.5 by season): its cloud-induced
+absorption, 3.9, is the closest of the three to ERA5's 2.4, and its reflection
 is what a delta-Eddington cloud of the model's optical depths gives (the
-single columns below). The tropics carry it: June 0-20N loses 20 W/m² of ASR
-(its SWCRE is -98 against CERES's -52), the clouds of that state hold more
+single columns below). The tropics carry it: June 0-20N loses 21 W/m² of ASR
+(its SWCRE is -99 against CERES's -52), the clouds of that state hold more
 water than the sky does.
+
+The shallow-cumulus cloud that the saved states hold for the radiation (the
+lowest 18 layers' plume cover and water) is part of these numbers: left out it
+would read 0.5 W/m² more absorbed sunlight in the sequential scheme (242.8) and
+1.0 more in the layered one (235.0).
 
 ## Where the layered scheme's brightening sits
 
 Layered less sequential, the same clouds and decks, over the 163,847 cell-times
-of the four seasonal days, global means in W/m²: reflected +7.85 (97.68 to
-105.53), absorbed -7.85, of which the atmosphere -5.93 and the surface -1.92.
+of the four seasonal days, global means in W/m²: reflected +8.39 (98.14 to
+106.54), absorbed -8.39, of which the atmosphere -6.45 and the surface -1.94.
 By latitude band:
 
 | band | area | reflected, band mean | atmosphere | surface | share of the global change |
 |---|---|---|---|---|---|
-| 90S-60S | 6.7 % | +2.74 | -2.39 | -0.35 | 2 % |
-| 60S-30S | 18.3 % | +7.53 | -5.64 | -1.89 | 18 % |
-| 30S-0 | 25.0 % | +7.67 | -5.31 | -2.36 | 24 % |
-| 0-30N | 25.0 % | +10.57 | -8.00 | -2.57 | 34 % |
-| 30N-60N | 18.3 % | +7.76 | -6.07 | -1.69 | 18 % |
-| 60N-90N | 6.7 % | +4.62 | -4.40 | -0.22 | 4 % |
+| 90S-60S | 6.7 % | +2.75 | -2.42 | -0.32 | 2 % |
+| 60S-30S | 18.3 % | +7.77 | -5.88 | -1.89 | 17 % |
+| 30S-0 | 25.0 % | +8.47 | -6.06 | -2.41 | 25 % |
+| 0-30N | 25.0 % | +11.56 | -8.97 | -2.60 | 34 % |
+| 30N-60N | 18.3 % | +8.01 | -6.33 | -1.68 | 17 % |
+| 60N-90N | 6.7 % | +4.67 | -4.46 | -0.21 | 4 % |
 
 By cloud class, ISCCP-style: the pressure of the first cloud the light meets
 (the level by optical depth) below 440 hPa, from 440 to 680 and above 680, and the
@@ -192,62 +197,69 @@ the class's part of the global change:
 
 | class | sunlit samples | reflectance, sequential / layered | change, W/m² | share |
 |---|---|---|---|---|
-| high, depth > 23 | 8.4 % | 0.481 / 0.649 | +4.78 | 61 % |
-| high, 3.6-23 | 10.3 % | 0.397 / 0.431 | +1.18 | 15 % |
-| high, 0.3-3.6 | 7.4 % | 0.191 / 0.196 | +0.13 | 2 % |
-| mid, depth > 23 | 2.8 % | 0.466 / 0.533 | +0.66 | 8 % |
-| mid, 3.6-23 | 9.1 % | 0.333 / 0.347 | +0.42 | 5 % |
-| mid, 0.3-3.6 | 2.9 % | 0.331 / 0.333 | +0.01 | 0 % |
-| low, depth > 23 | 1.8 % | 0.371 / 0.393 | +0.14 | 2 % |
-| low, 3.6-23 | 35.4 % | 0.265 / 0.269 | +0.49 | 6 % |
-| low, 0.3-3.6 | 6.4 % | 0.211 / 0.213 | +0.03 | 0 % |
-| clear or depth < 0.3 | 15.3 % | 0.165 / 0.165 | 0.00 | 0 % |
+| high, depth > 23 | 8.8 % | 0.479 / 0.643 | +4.93 | 59 % |
+| high, 3.6-23 | 10.4 % | 0.381 / 0.414 | +1.14 | 14 % |
+| high, 0.3-3.6 | 4.9 % | 0.224 / 0.230 | +0.09 | 1 % |
+| mid, depth > 23 | 3.3 % | 0.448 / 0.510 | +0.73 | 9 % |
+| mid, 3.6-23 | 10.4 % | 0.309 / 0.323 | +0.48 | 6 % |
+| mid, 0.3-3.6 | 2.8 % | 0.332 / 0.334 | +0.01 | 0 % |
+| low, depth > 23 | 8.1 % | 0.195 / 0.204 | +0.29 | 4 % |
+| low, 3.6-23 | 36.3 % | 0.257 / 0.263 | +0.70 | 8 % |
+| low, 0.3-3.6 | 4.1 % | 0.244 / 0.246 | +0.02 | 0 % |
+| clear or depth < 0.3 | 10.9 % | 0.193 / 0.193 | 0.00 | 0 % |
 
-The tropics carry 58 % of it and the towers 61 %: columns topped above 440 hPa
-with a depth above 23, whose mean depth is 80 with 466 g/m² of liquid and 217 g/m²
-of ice, reflect 0.48 of the sunlight in the sequential scheme and 0.65 in the
-layered one, and 4.61 of their 4.78 W/m² comes out of the atmosphere's
+The tropics carry 59 % of it and the towers 59 %: columns topped above 440 hPa
+with a depth above 23, whose mean depth is 80 with 464 g/m² of liquid and 211 g/m²
+of ice, reflect 0.48 of the sunlight in the sequential scheme and 0.64 in the
+layered one, and 4.74 of their 4.93 W/m² comes out of the atmosphere's
 absorption: the sequential scheme lets the gases below such a cloud take
-sunlight that the cloud then does not reflect. The low clouds, 44 % of the sunlit
-samples, change it by 0.7 W/m².
+sunlight that the cloud then does not reflect. The low clouds, 49 % of the sunlit
+samples, change it by 1.0 W/m².
 
-## The model's clouds against satellite retrievals
+## The model's clouds against satellite retrievals and ERA5
 
-The sequential scheme's absorbed sunlight is near CERES's (242.8 against 240.9)
+The sequential scheme's absorbed sunlight is near CERES's (242.4 against 240.9)
 with clouds that are optically thick. The tropical means (30S-30N) of the model's
 four seasonal days against the ESA Cloud_cci L3C v2.0 monthly products of
-MODIS-Aqua and AVHRR NOAA-18 (Stengel et al. 2017):
+MODIS-Aqua and AVHRR NOAA-18 (Stengel et al. 2017) and against ERA5 (the cloud
+liquid and ice water content of ARCO-ERA5 at 12 UTC on 20 March, June, September
+and December 2020, 0.25 degrees, with the model's optics laid on them):
 
-| 30S-30N | model | MODIS-Aqua | AVHRR NOAA-18 |
-|---|---|---|---|
-| cloud cover | 57.8 % | 58.0 % | 54.9 % |
-| cover by top: high, mid, low | 17.9, 7.8, 22.2 % (9.9 % below depth 0.3) | 22.6, 10.0, 24.5 % | 24.4, 8.2, 21.8 % |
-| area topped above 440 hPa with depth > 23 | 7.3 % | 1.5 % | |
-| in-cloud optical depth: mean (geometric mean) | 24.1 (11.5) | 6.9 (3.6) | 8.8 (4.2) |
-| over ocean | 19.5 (10.2) | 6.4 (3.2) | 8.1 (3.8) |
-| over land | 38.1 (16.6) | 8.8 (5.1) | 11.2 (5.5) |
-| all-sky liquid water path, g/m² | 69.9 | 25.1 | 21.8 |
-| all-sky ice water path, g/m² | 22.3 | 45.0 | 87.1 |
-| liquid droplet radius over ocean, land, um | 11.8, 8.5 | 16.3, 11.7 | 13.9, 10.5 |
-| global: in-cloud optical depth, mean (geometric mean) | 21.2 (10.4) | 10.6 (5.4) | 11.7 (5.8) |
-| global: area topped above 440 hPa with depth > 23 | 8.3 % | 2.6 % | |
+| 30S-30N | model | ERA5 | MODIS-Aqua | AVHRR NOAA-18 |
+|---|---|---|---|---|
+| cloud cover | 53.1 % | | 58.0 % | 54.9 % |
+| cover by top: high, mid, low | 17.6, 8.9, 21.8 % (5.0 % below depth 0.3) | | 22.6, 10.0, 24.5 % | 24.4, 8.2, 21.8 % |
+| condensate path, g/m²: liquid + ice | 80 + 22 = 102 | 55 + 16 = 71 | 25 + 45 = 70 | 22 + 87 = 109 |
+| the same in the retrievals' convention (a column topped by ice has its whole path in ice) | 39 + 63 | 36 + 36 | as retrieved | as retrieved |
+| grid-mean optical depth | 12.8 | 8.6 | 4.0 | 4.8 |
+| in-cloud optical depth: mean (geometric mean) | 26.5 (14.2) | | 6.9 (3.6) | 8.8 (4.2) |
+| over ocean | 22.1 (13.1) | | 6.4 (3.2) | 8.1 (3.8) |
+| over land | 40.0 (18.3) | | 8.8 (5.1) | 11.2 (5.5) |
+| share of the depth in liquid | 88 % | 87 % | | |
+| liquid droplet radius over ocean, land, um | 11.8, 8.5 | | 16.3, 11.7 | 13.9, 10.5 |
+| area topped above 440 hPa with depth > 23 (ERA5: grid-mean depth > 23) | 7.8 % | 7.9 % | 1.5 % | |
+| global: in-cloud optical depth, mean (geometric mean) | 22.6 (11.7) | | 10.6 (5.4) | 11.7 (5.8) |
+| global: area topped above 440 hPa with depth > 23 | 8.6 % | | 2.6 % | |
 
 The model: cover, top pressure and in-cloud depth as above, weighted by area and
 cover over the columns with cover above 0.05; water paths are the column's
-(liquid and ice by the radiation's temperature rule, resolved plus cumulus
-water, below cloud tops too); the droplet radii are the options' (11.8 over sea,
-8.5 over land). The retrievals see the topmost layer in daytime at the
+(liquid and ice by the radiation's temperature rule, resolved plus the cumulus
+plume's water, below cloud tops too); the droplet radii are the options' (11.8
+over sea, 8.5 over land). The retrievals see the topmost layer in daytime at the
 overpass (13:30 for Aqua, about 14:00 for NOAA-18): cloud fractions and
 all-sky paths are means of March, June, September and December 2007 to 2009, the
 optical depths and radii (weighted by area and cloud fraction, by liquid or ice
 share for the phase variables) of the same months of 2008, and the depth-pressure
 frequencies the daytime joint histogram of 2008 on every sixth 0.5-degree cell,
-area-weighted. What the retrievals do not see makes the model's liquid path an
-upper bound of the comparison, and the overpass time and the
-sensors' sampling matter at the tens of percent, not at factors of three.
+area-weighted. Grid-mean depth is the in-cloud mean times the cover. The
+retrievals' paths are their liquid and ice retrievals' all-sky means; the model's
+and ERA5's are the water of the whole column, which the retrievals do not see
+below the top of a thick cloud.
 
 Sources (ESA Cloud_cci, anonymous OPeNDAP at CEDA, `dap.ceda.ac.uk/thredds/dodsC/
-neodc/esacci/cloud/data/phase-2/L3C/`; no login), each set in a directory of its own:
+neodc/esacci/cloud/data/phase-2/L3C/`; ARCO-ERA5 on Google Cloud Storage,
+`gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3`; no login),
+each set in a directory of its own:
 
 | set | source path | files | size |
 |---|---|---|---|
@@ -256,20 +268,119 @@ neodc/esacci/cloud/data/phase-2/L3C/`; no login), each set in a directory of its
 | cot, cot_log, cer_liq, cer_ice, cot_liq, cot_ice, cph, 2008, four months | MODIS-AQUA | 29 | 29.1 MB |
 | the same | AVHRR NOAA-18 | 29 | 29.1 MB |
 | hist2d_cot_ctp and nobs_day, every sixth 0.5-degree cell, 2008, four months | MODIS-AQUA | 9 | 45.1 MB |
+| specific_cloud_liquid_water_content and specific_cloud_ice_water_content on 37 levels and total_column_cloud_liquid_water and total_column_cloud_ice_water, 30S-30N, four dates of 2020 (the Blosc blocks of the band, read by byte ranges from the global chunks) | `specific_cloud_liquid_water_content/<hours since 1900>.0.0.0` and the others | 320 | 79.6 MB |
 
-The model's clouds hold the observed cover and 2.7 to 3.5 times the observed
-optical depth in the tropics (2.0 and 1.8 times in the global mean). The tropical
-in-cloud depth is 24 where the satellites give 7 to 9, the liquid water path about
-three times theirs (the model's counts the water below the tops, which the
-satellites do not see), the droplets smaller over ocean by 28 % than MODIS's and
-15 % than AVHRR's (the 16.3 um of MODIS over the tropical ocean is itself about
-4 um above the MISR-referenced values of Fu et al. 2019, which the model's
-11.8 um matches), and the ice path half of MODIS's and a quarter of AVHRR's. The
-excess is in the towers: columns topped above 440 hPa with a depth above 23 cover
-7.3 % of the tropics where MODIS gives 1.5 %. The sequential scheme meets CERES
-with them in part because it reflects too little of the thick ones: in CIRC case
-6 (depth about 57) its top-of-atmosphere reflection is 25.8 W/m² (4.1 %) below
-CHARTS's 628.8, the layered scheme's 7.5 W/m² (1.2 %) above.
+## Why the tropical clouds are three times too thick
+
+The model's tropical grid-mean optical depth, 12.8, is 3.2 times MODIS's 4.0
+(2.7 times AVHRR's 4.8) where the cover is within 5 points of theirs. Three
+factors make the 3.2:
+
+- 1.5 is the model's condensate against ERA5's: 102 g/m² against 71, and 12.8
+  against 8.6 with the same optics.
+- 1.4 is the droplet size: with the retrievals' radii (16.3 um over ocean, 11.7
+  over land, where the model has 11.8 and 8.5; the ocean's MODIS value is itself
+  about 4 um above the MISR-referenced 11.2 to 12.1 of Fu et al. 2019) ERA5's depth
+  falls to 6.3.
+- 1.6 is what is left of ERA5 against MODIS with the same optics: passive
+  retrievals see the top of a thick cloud and give an ice-topped column's whole
+  depth to ice (Platnick et al. 2017), the overpass is the afternoon, and ERA5's
+  own error.
+
+The phase is not the cause. Liquid carries 88 % of the model's depth and 87 % of
+ERA5's, and in the retrievals' convention the model's paths (39 liquid, 63 ice)
+lie between AVHRR's and MODIS's ice and 1.5 to 1.8 times their liquid. The
+model's excess over ERA5 is in two places. By layer, in g/m² of the tropical
+mean:
+
+| layer | model | ERA5 | model / ERA5 |
+|---|---|---|---|
+| above 250 hPa | 5.6 | 4.7 | 1.2 |
+| 250-450 hPa (-38 to -15 C) | 25.6 (liquid 10.2) | 9.8 (liquid 0.9) | 2.6 |
+| 450-700 hPa | 24.2 | 22.4 | 1.1 |
+| 700-1000 hPa | 46.6 (the plume's 8.6) | 34.8 | 1.3 |
+| 250-1000 hPa, resolved cloud only (the plume's 9.7 left out) | 86.8 | 67.0 | 1.3 |
+
+Below 700 hPa the resolved cloud (38.0 g/m² of liquid at 700-1000 hPa) is ERA5's
+34.9 within 9 %, and the cumulus plume's water (9.7 g/m², 10 % of the in-cloud
+depth), which the radiation adds to it, is the excess. In the mixed-phase layer
+the model holds 2.6 times ERA5's condensate and eleven times its liquid. By
+temperature band the in-cloud depth of 26.5 is 66 % warm liquid, 20 % in
+the band 0 to -20 C, 8 % in -20 to -40 C and 5 % in ice colder than -40 C; the
+condensate there is 60, 22, 14 and 6 g/m² (ERA5: 45, 14, 7 and 5). The towers,
+columns topped above 440 hPa with a depth above 23, are about 8 % of the area with
+a mean depth of 91, 83 % of it liquid and 4 % the plume's, and 744 g/m² of water.
+The liquid share of the condensate mass by layer temperature, against the
+liquid share of the cloud tops the retrievals see:
+
+| temperature, C | -36 | -31 | -26 | -21 | -16 | -11 | -6 | -1 |
+|---|---|---|---|---|---|---|---|---|
+| model, the radiation's ramp (273.15 to 235.15 K) | 6 % | 20 % | 31 % | 47 % | 58 % | 71 % | 87 % | 98 % |
+| ERA5, share of the mass | 0 % | 2 % | | 8 % | 30 % | 52 % | 81 % | 94 % |
+| MODIS-Aqua, share of the cloud tops (daytime, 30S-30N, 2008) | 6 % (-38) | | 33 % (-27) | | 64 % | | 84 % (-8) | 100 % (+1) |
+
+The ramp is the retrievals' cloud-top phase within 6 points, and it gives
+the layer 250-450 hPa eleven times ERA5's liquid mass; the two measure different
+things, the top layer and the mass, and ERA5's partition is itself a model's.
+
+The processes that would have to change, each with the sunlight the layered
+scheme gives (annual global absorbed sunlight and SWCRE in W/m²; CERES 240.9 and
+-45.8) when the tropical cloud (30S-30N) or the rule is taken to ERA5's, nothing
+else altered:
+
+| process | evidence | reference | layered | sequential |
+|---|---|---|---|---|
+| the model as is | | | 234.0 / -58.9 | 242.4 / -50.5 |
+| mixed-phase condensate, 250-450 hPa: glaciation (Bergeron-Findeisen, riming), conversion to precipitation, ice fall speed | 2.6 times ERA5's mass | Korolev et al. 2017; Tiedtke 1993; Heymsfield and Donner 1990 | 235.2 / -57.6 | 242.9 / -50.0 |
+| anvil condensate above 250 hPa: detrainment, lifetime | 1.2 times | Tiedtke 1993; Li et al. 2012; Waliser et al. 2009 | 234.3 / -58.5 | 242.6 / -50.2 |
+| shallow-cumulus plume water added to the resolved cloud, 9.7 g/m² | 10 % of the depth | Siebesma et al. 2003 | 235.0 / -57.9 | 242.8 / -50.0 |
+| the cloud below 450 hPa as a whole (the plume's water, the resolved excess at 650-750 and 950-1000 hPa) | 1.24 times | Khairoutdinov and Kogan 2000; Siebesma et al. 2003 | 237.3 / -55.5 | 245.1 / -47.7 |
+| phase partition: the ramp taken to ERA5's mass shares (271.15 to 251.15 K, everywhere) | 47 % against 8 % liquid at -21 C | Korolev et al. 2017; Hu et al. 2010; ECMWF IFS Documentation Part IV | 234.9 / -57.9 | 242.9 / -50.0 |
+| the tropical profile at ERA5's, bin by bin, reductions only | 71 g/m² against 102 | | 239.1 / -53.7 | 246.1 / -46.8 |
+| the same with ERA5's phase partition | | | 240.0 / -52.9 | 246.6 / -46.3 |
+| autoconversion of the warm cloud (Kessler, 1 h) | the resolved liquid at 700-1000 hPa is ERA5's within 9 % | Kessler 1969; Khairoutdinov and Kogan 2000 | not implicated | |
+| overlap, the two bounds (random, maximum) | cover 53 % against 55 to 58 % | Hogan and Illingworth 2000; Shonk et al. 2010 | 229.1 / -63.8; 235.7 / -57.2 | 237.6 / -55.3; 244.0 / -48.9 |
+
+The tropical condensate at ERA5's takes the layered scheme to within 1.8 W/m² of
+CERES's absorbed sunlight (0.9 with ERA5's phase partition), and its cloud
+effect from -58.9 to -53.7 (-52.9). The layer 250-450 hPa holds half of the
+excess condensate and gives a quarter of the sunlight, because three quarters of
+a column's depth lies below it; the cloud below 450 hPa gives two thirds. What
+remains of the cloud effect, 7 W/m² too strong, is outside what this changes: the
+clouds outside 30S-30N (June 40-60N is -110 against CERES's -90), the optics and
+the cover. The clear sky's 6.2 W/m² excess absorption is separate; with the
+cloud effect at CERES's -45.8 the layered scheme would absorb 247.
+
+## What else would close the gap to CERES (none applied)
+
+The reflection is the cloud's: its water (above), its optical depths (droplet
+radius 11.8 and 8.5 um, Han et al. 1994; MODIS 2.1 um's ocean mean 16.3 to 16.6 um
+falls to 11.2 to 12.1 once its bias against MISR is removed, Fu et al. 2019), its
+inhomogeneity (cloudSpread 0.75, 0.75 +- 0.18, Shonk et al. 2010) and its cover.
+Absorbed sunlight and SWCRE of the four seasonal days with the clouds or their
+optics changed offline, in W/m²:
+
+| change | sequential | cloudTop | layered |
+|---|---|---|---|
+| none | 242.4 / -50.5 | 237.4 / -55.5 | 234.0 / -58.9 |
+| cloud water above 440 hPa x 0.7 | 243.4 / -49.4 | | 235.8 / -57.1 |
+| cloud water above 440 hPa x 0.5 | 244.3 / -48.6 | | 237.2 / -55.7 |
+| cloud water above 440 hPa x 0.3 | 245.5 / -47.4 | | 239.0 / -53.9 |
+| cloud water above 440 hPa x 0.15 | 246.6 / -46.3 | | 240.6 / -52.2 |
+| cloud water at every level x 0.7 | 250.1 / -42.8 | | 243.8 / -49.1 |
+| cloud water at every level x 0.5 | 256.8 / -36.0 | | 252.1 / -40.8 |
+| droplet radii +20 % (sea 14.2, land 10.2 um) | | 241.3 / -51.6 | 238.2 / -54.6 |
+| cloudSpread 1.0 | | 238.7 / -54.1 | 235.2 / -57.6 |
+| both | | 242.5 / -50.4 | 239.4 / -53.5 |
+| liquid asymmetry +0.02 (Slingo's 0.846 at 6.9 um; Mie about 0.86) | | | 236.5 / -56.4 |
+| cloudSolarAbsorption 0.55 | 244.8 / -48.1 | 240.1 / -52.8 | |
+
+The layered scheme reaches CERES's absorbed sunlight with the cloud water above
+440 hPa at about 0.12 of its present amount, with the water at every level at
+about 0.8, or with the droplet radii and the inhomogeneity both at the edge of
+their observed ranges (239.4); its SWCRE of -45.8 needs the water at every level
+at about 0.6, with the clear sky's 6.2 W/m² excess as it is. The same changes of
+the water put the sequential scheme 3 to 16 W/m² above CERES.
 
 ## Single columns, tropical atmosphere, % of the beam
 
@@ -395,44 +506,6 @@ scheme's (the CPU and GPU tests hold both). What the hold cannot follow is the
 change of the heating's shape with the zenith angle and the change of the
 clouds and the humidity between calls.
 
-## What would close the gap to CERES (none applied)
-
-The reflection is the cloud's: its water (above), its optical depths (droplet
-radius 11.8 and 8.5 um, Han et al. 1994; MODIS 2.1 um's ocean mean 16.3 to 16.6 um
-falls to 11.2 to 12.1 once its bias against MISR is removed, Fu et al. 2019), its
-inhomogeneity (cloudSpread 0.75, 0.75 +- 0.18, Shonk et al. 2010) and its cover.
-Absorbed sunlight and the shortwave cloud effect (SWCRE) of the four seasonal
-days with the clouds or their optics changed offline, in W/m² (CERES: 240.9 and
--45.8; the clear-sky absorbed sunlight is 292.9 against CERES's 286.7 in every
-row):
-
-| change | sequential | cloudTop | layered |
-|---|---|---|---|
-| none | 242.8 / -50.0 | 237.8 / -55.1 | 235.0 / -57.9 |
-| cloud water above 440 hPa x 0.7 | 243.9 / -48.9 | | 236.8 / -56.0 |
-| cloud water above 440 hPa x 0.5 | 244.9 / -48.0 | | 238.3 / -54.5 |
-| cloud water above 440 hPa x 0.3 | 246.1 / -46.8 | | 240.2 / -52.7 |
-| cloud water above 440 hPa x 0.15 | 247.3 / -45.6 | | 241.9 / -51.0 |
-| cloud water at every level x 0.7 | 250.9 / -42.0 | | 245.0 / -47.9 |
-| cloud water at every level x 0.5 | 257.8 / -35.1 | | 253.3 / -39.6 |
-| droplet radii +20 % (sea 14.2, land 10.2 um) | | 241.8 / -51.0 | 239.3 / -53.5 |
-| cloudSpread 1.0 | | 239.3 / -53.6 | 236.4 / -56.5 |
-| both | | 243.2 / -49.7 | 240.6 / -52.3 |
-| liquid asymmetry +0.02 (Slingo's 0.846 at 6.9 um; Mie about 0.86) | | | 237.5 / -55.4 |
-| cloudSolarAbsorption 0.55 | 245.1 / -47.8 | 240.3 / -52.5 | |
-
-The layered scheme reaches CERES's absorbed sunlight with the cloud water above
-440 hPa at about 0.24 of its present amount, with the water at every level at
-about 0.8 of it, or with the droplet radii and the inhomogeneity both at the
-edge of their observed ranges (240.6); its SWCRE of -45.8 needs the water at
-every level at about 0.65, with the clear sky's 6.2 W/m² excess as it is. The
-same changes of the water put the sequential scheme 3 to 17 W/m² above CERES.
-Cutting the water by a fifth would leave the tropical in-cloud depth near 19
-(the depth scales with the water), two to three times the satellites', so
-closing the balance does not by itself bring the clouds to the observed
-thickness; that would also take the clear sky's excess absorption and the cover
-into account.
-
 ## Cheaper layered variants (offline, not options)
 
 The layered work is the number of slices (the g-points and the two visible
@@ -443,15 +516,16 @@ two nodes in place of four:
 
 | g-points | nodes | work (34 x 5 = 1) | direct beam absorption miss, W/m² of 1360 (mean, worst) | global ASR | SWCRE |
 |---|---|---|---|---|---|
-| 32 | 4 | 1.00 | 1.2, 4.1 | 235.0 | -57.9 |
-| 24 | 4 | 0.76 | 2.0, 7.3 | 234.9 | -58.0 |
-| 16 | 4 | 0.53 | 5.5, 29.9 | 234.8 | -58.1 |
-| 32 | 2 | 0.60 | 1.2, 4.1 | 234.5 | -58.3 |
-| 24 | 2 | 0.46 | 2.0, 7.3 | 234.5 | -58.4 |
-| 16 | 2 | 0.32 | 5.5, 29.9 | 234.3 | -58.5 |
+| 32 | 4 | 1.00 | 1.2, 4.1 | 234.0 | -58.9 |
+| 24 | 4 | 0.76 | 2.0, 7.3 | 233.9 | -59.0 |
+| 16 | 4 | 0.53 | 5.5, 29.9 | 233.8 | -59.1 |
+| 32 | 2 | 0.60 | 1.2, 4.1 | 232.7 | -60.2 |
+| 24 | 2 | 0.46 | 2.0, 7.3 | 232.6 | -60.3 |
+| 16 | 2 | 0.32 | 5.5, 29.9 | 232.4 | -60.4 |
 
-The global balance hardly notices either (0.1 to 0.6 W/m²), the clear-sky
-absorption of the folded table does at 16 g-points.
+The global balance hardly notices the g-points (0.1 to 0.2 W/m²) and takes
+1.3 W/m² less sunlight with two nodes in place of four; the clear-sky
+absorption of the folded table does notice them at 16 g-points.
 
 ## Limitations
 
@@ -469,3 +543,46 @@ the clear column, so the ozone does not take cloud-reflected ultraviolet a
 second time. Above a zenith angle of 70 degrees the layered and the sequential
 clear regions differ by more than 0.3 % of the beam (1.8 % at 80 degrees), and
 the surface's sunlight under a thick cloud is held at no less than nothing.
+
+## References for the cloud and low-sun sections
+
+- Barker, H. W., J. N. S. Cole, J. Li, B. Yi and P. Yang, 2015: Estimation of
+  errors in two-stream approximations of the solar radiative transfer equation
+  for cloudy-sky conditions. J. Atmos. Sci., 72, 4053-4074.
+- ECMWF, IFS Documentation, Part IV: Physical Processes, chapter 7, Clouds and
+  large-scale precipitation.
+- Heymsfield, A. J., and L. J. Donner, 1990: A scheme for parameterizing ice-cloud
+  water content in general circulation models. J. Atmos. Sci., 47, 1865-1877.
+- Hogan, R. J., and A. J. Illingworth, 2000: Deriving cloud overlap statistics
+  from radar. Q. J. R. Meteorol. Soc., 126, 2903-2909.
+- Hu, Y., et al., 2010: Occurrence, liquid water content, and fraction of
+  supercooled water clouds from combined CALIOP/IIR/MODIS measurements. J.
+  Geophys. Res., 115, D00H34.
+- Kessler, E., 1969: On the distribution and continuity of water substance in
+  atmospheric circulations. Meteor. Monogr., 10 (32).
+- Khairoutdinov, M., and Y. Kogan, 2000: A new cloud physics parameterization in
+  a large-eddy simulation model of marine stratocumulus. Mon. Wea. Rev., 128,
+  229-243.
+- King, M. D., and Harshvardhan, 1986: Comparative accuracy of selected multiple
+  scattering approximations. J. Atmos. Sci., 43, 784-801.
+- Korolev, A., et al., 2017: Mixed-phase clouds: Progress and challenges. Meteor.
+  Monogr., 58, 5.1-5.50.
+- Li, J.-L. F., et al., 2012: An observationally based evaluation of cloud ice
+  water in CMIP3 and CMIP5 GCMs and contemporary reanalyses using contemporary
+  satellite data. J. Geophys. Res., 117, D16105.
+- Platnick, S., et al., 2017: The MODIS cloud optical and microphysical products:
+  Collection 6 updates and examples from Terra and Aqua. IEEE Trans. Geosci.
+  Remote Sens., 55, 502-525.
+- Shonk, J. K. P., R. J. Hogan, J. M. Edwards and G. G. Mace, 2010: Effect of
+  improving representation of horizontal and vertical cloud structure on the
+  Earth's global radiation budget. Part I: Review and parametrization. Q. J. R.
+  Meteorol. Soc., 136, 1191-1204.
+- Siebesma, A. P., et al., 2003: A large eddy simulation intercomparison study of
+  shallow cumulus convection. J. Atmos. Sci., 60, 1201-1219.
+- Stengel, M., et al., 2017: Cloud property datasets retrieved from AVHRR, MODIS,
+  AATSR and MERIS in the framework of the Cloud_cci project. Earth Syst. Sci.
+  Data, 9, 881-904.
+- Tiedtke, M., 1993: Representation of clouds in large-scale models. Mon. Wea.
+  Rev., 121, 3040-3061.
+- Waliser, D. E., et al., 2009: Cloud ice: A climate model challenge with signs
+  and expectations of progress. J. Geophys. Res., 114, D00A21.
