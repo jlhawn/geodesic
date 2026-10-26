@@ -60,7 +60,7 @@ export function topographyFromInt16(buffer, rows = 720, cols = 1440, name = 'eto
 export const TOPOGRAPHIES = { etopo1: 'topography_0p25.bin', etopo2022: 'topography2022_0p25.bin' };
 export const ICE_SHEETS = ['rule', 'observed'], ICE_SHELVES = ['land', 'sea', 'cavity'], MASKS = ['raster', 'n1024'];
 export const LEGACY_GEOGRAPHY = { topography: 'etopo1', iceSheets: 'rule', iceShelves: 'land', mask: 'raster' };
-export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity', mask: 'raster' };
+export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'cavity', mask: 'n1024' };
 export const topographyUrl = (name = 'etopo1') => new URL(`../data/${TOPOGRAPHIES[name]}`, import.meta.url);
 
 export function checkGeography(record) {
@@ -413,6 +413,8 @@ function cavityGeography(mesh, shelf, sea, cavityDepth) {
  * cells their index and the lake's level (int16, meters).
  */
 export const maskUrl = (N, mask = 'n1024') => new URL(`../data/geography_${mask}_N${N}.bin`, import.meta.url);
+export const MASK_GRIDS = Object.freeze([64, 128]);
+export const missingMask = (N, mask = 'n1024') => new Error(`the ${mask} land mask has no file for N=${N}: fresh starts on it are built in at N=${MASK_GRIDS.join(' and N=')}; a state saved at N=${N} carries its own geography, and scripts/geographyMask.mjs ${N} builds the file`);
 
 export function encodeMask({ nCells, relax }, shelf, sea) {
   const N = Math.round(Math.sqrt((nCells - 2) / 10)), C = shelf.land.length, E = shelf.edgeSill.length, fraction = (v) => Math.round(65535 * Math.min(1, Math.max(0, v)));
@@ -457,6 +459,7 @@ export function decodeMask(bytes) {
 export function readMask(mesh, mask = 'n1024') {
   const fs = globalThis.process?.getBuiltinModule?.('node:fs'), N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
   if (!fs) throw new Error(`data/geography_${mask}_N${N}.bin is read under node only; pass it as maskData`);
+  if (!fs.existsSync(maskUrl(N, mask))) throw missingMask(N, mask);
   return decodeMask(fs.readFileSync(maskUrl(N, mask)));
 }
 

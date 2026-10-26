@@ -9,11 +9,13 @@ import { N, shelfBands, warmOcean, restingShelf, steppedDraft } from './helpers/
 import { basalMelt, baseFreezing, SHELF_MELT } from '../js/ocean/iceShelfMelt.module.js';
 import { decodeClimatology, encodeClimatology } from '../js/ocean/climatology.module.js';
 import { zonalWindOnEdges, totalHeatSalt } from './helpers/layered.mjs';
+import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { syntheticTopography, createGeography, encodeLandIce, decodeLandIce, readTopography, geographyOptions, FRESH_GEOGRAPHY, ICE_DENSITY, SEAWATER_DENSITY } from '../js/geography.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
+const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
 const deg = 180 / Math.PI;
 
@@ -194,6 +196,22 @@ test(`both engines run the cavities alike at N=${N}: the water under the shelves
   console.log(`twelve hours of melt under the shelves: CPU ${melt.cpu.toExponential(4)} kg, GPU ${melt.gpu.toExponential(4)} kg; last step's southern discharge, melt and draw: CPU ${[record.discharge[0], record.melt[0], record.drawn[0]].map((x) => x.toExponential(3))}, GPU ${[pools.pools[0], pools.pools[2], pools.pools[6]].map((x) => x.toExponential(3))}`);
   assert.ok(melt.cpu > 0 && Math.abs(melt.gpu - melt.cpu) < 1e-3 * melt.cpu, `melt: CPU ${melt.cpu} kg, GPU ${melt.gpu} kg`);
   assert.ok(Math.abs(pools.pools[2] - record.melt[0]) < 1e-3 * record.melt[0] && Math.abs(pools.pools[4] + pools.pools[6] - pools.pools[2]) < 1e-6 * pools.pools[2], `the GPU's southern pool ${Array.from(pools.pools)} against the CPU's ${JSON.stringify(record)}`);
+});
+
+test(`a saved state keeps the shelves' load at f64, so on each engine a restart melts beneath them from the same freezing point bit for bit at N=${N}`, { skip: !gpuAvailable && 'webgpu not available' }, async () => {
+  const { raster, options } = shelfBands(), setup = { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { iceDrift: false } };
+  const bits = (values) => new Uint32Array(Float64Array.from(values).buffer);
+  const liquidus = async (model) => { const { buffers, layout } = model.oceanEngine; return new Uint32Array((await readRanges(model.gpu.device, buffers.OD, [{ offset: layout.OD.LIQUIDUS, length: model.mesh.nCells }]))[0].buffer); };
+  for (const make of [() => createModel(new Grid(N), setup), () => createGpuModel(new Grid(N), setup)]) {
+    const first = await prepare(await make()), saved = await first.ocean.serialize();
+    assert.ok(saved.shelfLoad.some((weight) => weight > 0), 'no shelf loads the water');
+    const { ocean } = await decodeState(encodeState({ N, day: 0, time: 0, ocean: saved }));
+    assert.deepEqual(bits(ocean.shelfLoad), bits(saved.shelfLoad));
+    if (!first.oceanEngine) continue;
+    const second = await prepare(await make());
+    second.ocean.load(ocean, Float64Array.from(second.state[3]), Float64Array.from(second.state[6]));
+    assert.deepEqual(await liquidus(second), await liquidus(first));
+  }
 });
 
 test('the three-equation melt balances heat, salt and the freezing point of the interface, takes the root that vanishes with the thermal driving, keeps it in f32, and freezes supercooled water onto the base', () => {
@@ -422,7 +440,7 @@ test('with discharge at the outlets both engines take the melt out of the calvin
 });
 
 test('on ETOPO 2022 the cavities lie under the Antarctic shelves near their observed extent, Ross and Filchner–Ronne the largest, the Amundsen Sea shelves resolved at N=128', () => {
-  const topography = readTopography('etopo2022'), { geography: base } = geographyOptions(FRESH_GEOGRAPHY);
+  const topography = readTopography('etopo2022'), { geography: base } = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'raster' });
   const regions = {
     Ross: (la, lo) => la < -77.3 && (lo > 158 || lo < -145),
     'Filchner–Ronne': (la, lo) => la < -74.4 && lo > -85 && lo < -28,

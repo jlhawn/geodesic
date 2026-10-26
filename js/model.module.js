@@ -11,7 +11,7 @@ import { createOcean, JERLOV } from './ocean/layered.module.js';
 import { COUPLED_ICE_DRIFT, iceDriftMoves } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
-import { createLake, lakeWater, LAKE_DEFAULTS, FLAKE } from './physics/lake.module.js';
+import { createLake, lakeWater, lakeModelOf, FLAKE } from './physics/lake.module.js';
 import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, visibleCloudHeights } from './frames.module.js';
@@ -132,7 +132,7 @@ export function createModel(gridOrMesh, {
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
   if (moist) radiation.useCondensation(moistPhysics.condensation);
-  const lake = physics && geography && (lakeOptions.model ?? LAKE_DEFAULTS.model) !== 'off' ? createLake(mesh, geography, lakeOptions) : null, lakeCell = lake ? lake.isLake : null;
+  const lake = physics && geography && lakeModelOf(geography, lakeOptions) !== 'off' ? createLake(mesh, geography, lakeOptions) : null, lakeCell = lake ? lake.isLake : null;
   const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography: lake ? lakeWater(mesh, geography) : geography, iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }) : null;
   const land = physics && geography ? createLandSurface(mesh, geography, { buffers: buffers ? buffers.land : null, ...landOptions }) : null;
   const landMask = geography ? geography.land : null;

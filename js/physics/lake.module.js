@@ -232,7 +232,11 @@ export function lakeEnthalpy(c, D) {
   return k.rhoWater * k.cWater * D * (c.mean - k.freezing) - k.rhoIce * c.ice * (k.fusion + k.cIce * CI * (k.freezing - c.iceT));
 }
 
-export const LAKE_DEFAULTS = Object.freeze({ model: 'off', freshDepth: 10, salineDepth: 5 });
+export const LAKE_DEFAULTS = Object.freeze({ model: 'flake', freshDepth: 10, salineDepth: 5 });
+export const lakeModelOf = (geography, { model } = {}) => model ?? (geography?.lake ? LAKE_DEFAULTS.model : 'off');
+export const lakeStateName = (name) => `lake${name[0].toUpperCase()}${name.slice(1)}`;
+export const lakeArrays = (serialized) => Object.fromEntries(Object.entries(serialized).map(([name, values]) => [lakeStateName(name), Float64Array.from(values)]));
+export const savedLake = (saved) => (saved?.lakeMean ? Object.fromEntries([...LAKE_FIELDS, 'passed'].map((name) => [name, saved[lakeStateName(name)]]).filter(([, values]) => values)) : null);
 export const LAKE_FIELDS = ['mixed', 'mean', 'bottom', 'shape', 'mixedDepth', 'ice', 'iceT'];
 
 /*

@@ -5,7 +5,7 @@ The files are:
 - `data/subgrid_etopo2022_n1024_N<N>.bin`, written by `scripts/subgridTerrain.mjs` with `MASK=n1024`;
 - `data/geography1024.bin`, which is generated and not committed.
 
-They are derived from the sources below.
+They are the geography of every fresh start of the model (built in for N = 64 and N = 128) and are derived from the sources below.
 
 ## GSHHG
 

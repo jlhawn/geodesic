@@ -5,7 +5,7 @@ import { Grid, DEFAULT_RELAX } from '../js/grid.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
 import { createGeography, readTopography, geographyOptions, subgridUrl, decodeSubgrid, landSubgrid, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 
-const etopo1 = readTopography('etopo1'), etopo2022 = readTopography('etopo2022'), observed = geographyOptions(FRESH_GEOGRAPHY);
+const etopo1 = readTopography('etopo1'), etopo2022 = readTopography('etopo2022'), observed = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'raster' });
 
 test('ETOPO 2022 moves the coast of 632 cells at N=128, its sub-grid files fit its land mask on every mesh, and ETOPO1\'s still fit ETOPO1\'s', () => {
   for (const N of [16, 32, 64, 128, 192]) {
