@@ -8,7 +8,7 @@ import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN } from '../js/physics/exchange.module.js';
-import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -198,7 +198,7 @@ test('the gustiness is the free-convection velocity of the step\'s own flux, and
 });
 
 test('a saturated, fog-filled lowest layer over a sea 3 K warmer counts its vapor only, so its Ri_b, C_H and gust stay those of moist air; with its cloud water as loading it would read far more unstable', () => {
-  const model = prepare(createModel(new Grid(16), { topography }));
+  const model = prepare(createModel(new Grid(16), { topography, surface: PREVIOUS_SURFACE }));
   model.step(900);
   const { exchange, state, core, mesh } = model, C = mesh.nCells, K = core.K, b = (K - 1) * C;
   const { exnerLayer, exnerLower, sigmaMid, g } = core.diagnostics;

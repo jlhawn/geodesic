@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { sunDirection, sunDistance, orbitOf, YEAR } from '../js/physics/radiation.module.js';
 import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
-import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -53,13 +53,13 @@ async function pair(steps, dt, inversion = 0, stratus = inversion > 0, options =
   const radiation = previous ? { ...PREVIOUS_RADIATION, ...given } : given;
   moist = previous ? { ...PREVIOUS_MOIST, ...moist } : moist;
   const grid = new Grid(N), shares = transmission ? new Float64Array(grid.size) : null, penetrated = transmission ? new Float64Array(grid.size) : null;
-  const model = createModel(grid, { ocean: false, ...(levels ? { levels } : {}), radiation: { stratus, ...radiation }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' }, dragEvery, ...(shares ? { ice: { transmission: shares, penetrated } } : {}) });
+  const model = createModel(grid, { ocean: false, ...(levels ? { levels } : {}), radiation: { stratus, ...radiation }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness', ...(previous ? PREVIOUS_SURFACE : {}) }, dragEvery, ...(shares ? { ice: { transmission: shares, penetrated } } : {}) });
   if (shares) model.mesh.latCell.forEach((lat, i) => { shares[i] = transmission(lat); });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
   for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += inversion;
-  const gpu = await createGpuCore(model.mesh, { ...(levels ? { levels } : {}), nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, dragEvery, ...radiation, ...moist, ...boundaryLayer, ...(shares ? { penetration: 'IB' } : {}) } });
+  const gpu = await createGpuCore(model.mesh, { ...(levels ? { levels } : {}), nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, dragEvery, ...radiation, ...moist, ...boundaryLayer, ...(shares ? { penetration: 'IB' } : {}), ...(previous ? { exchangeOptions: PREVIOUS_SURFACE } : {}) } });
   gpu.upload(model.state);
   gpu.uploadPhysics(shares ? { transmission: shares } : {});
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); if (each) await each(model, await gpu.downloadPhysics(), gpu); }
@@ -839,7 +839,7 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
 async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloudLifetime: 3 * 3600, plumeCape: 70 }, step = null, turbulence = 'dry', exchange = 'roughness', surfaceLayer = {}, ...options } = {}) {
   const physics = { ...PREVIOUS_RADIATION, mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options };
   moist = { ...PREVIOUS_MOIST, ...moist };
-  const model = createModel(new Grid(N), { ocean: false, levels: PREVIOUS_LEVELS, radiation: physics, moist, boundaryLayer: { turbulence }, surface: { exchange, ...surfaceLayer } });
+  const model = createModel(new Grid(N), { ocean: false, levels: PREVIOUS_LEVELS, radiation: physics, moist, boundaryLayer: { turbulence }, surface: { exchange, ...PREVIOUS_SURFACE, ...surfaceLayer } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells, theta = model.state[1], q = model.state[4];
@@ -849,7 +849,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloud
   }
   model.radiation.mlmSubsidence.fill(seed);
   model.radiation.mlmHeight.fill(height);
-  const gpu = await createGpuCore(model.mesh, { levels: PREVIOUS_LEVELS, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence, surfaceExchange: exchange, exchangeOptions: surfaceLayer } });
+  const gpu = await createGpuCore(model.mesh, { levels: PREVIOUS_LEVELS, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence, surfaceExchange: exchange, exchangeOptions: { ...PREVIOUS_SURFACE, ...surfaceLayer } } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   const parted = new Set();

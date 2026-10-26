@@ -19,7 +19,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
-const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
+const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false, mixedLayerRestratification: false };
 const N = 16, DT = 1350;
 
 function stats(cpu, gpu, mask = null) {
@@ -76,6 +76,6 @@ async function parity(options, reference, moved) {
   gpuModel.destroy();
 }
 
-test('with mstarScheme rh18 the GPU hybrid ocean forms the surface buoyancy flux from the heat the surface gave it and the brine of the ice grown, and its boundary layer tracks the CPU\'s over twelve steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, () => parity({ mstarScheme: 'rh18' }, {}, 10));
+test('with mstarScheme rh18 the GPU hybrid ocean forms the surface buoyancy flux from the heat the surface gave it and the brine of the ice grown, and its boundary layer tracks the CPU\'s over twelve steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, () => parity({ mstarScheme: 'rh18', langmuirScheme: 'factor' }, { mstarScheme: 'fixed', langmuirScheme: 'factor' }, 10));
 
-test('with langmuirScheme rescale the GPU hybrid ocean multiplies the m* of rh18 by the capped Langmuir enhancement of the wind\'s surface-layer Langmuir number, tapered by the ice, and its boundary layer tracks the CPU\'s over twelve steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, () => parity({ mstarScheme: 'rh18', langmuirScheme: 'rescale' }, { mstarScheme: 'rh18' }, 5));
+test('with langmuirScheme rescale the GPU hybrid ocean multiplies the m* of rh18 by the capped Langmuir enhancement of the wind\'s surface-layer Langmuir number, tapered by the ice, and its boundary layer tracks the CPU\'s over twelve steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, () => parity({ mstarScheme: 'rh18', langmuirScheme: 'rescale' }, { mstarScheme: 'rh18', langmuirScheme: 'factor' }, 5));
