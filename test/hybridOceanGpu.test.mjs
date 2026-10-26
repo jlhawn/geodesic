@@ -6,7 +6,8 @@ import { createOcean as createCpuOcean } from '../js/ocean/layered.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
-import { HYBRID_LAYERS } from '../js/ocean/column.module.js';
+import { HYBRID_LAYERS, labelBoundaries } from '../js/ocean/column.module.js';
+import { SEAWATER, seawaterDensity, salinityForDensity } from '../js/ocean/seawater.module.js';
 
 /*
  * The GPU hybrid ocean (vertical: 'hybrid' in js/gpu/layeredOcean.gpu.js)
@@ -437,5 +438,34 @@ test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes
   assert.ok(mle < 1e-3, `the filtered depths part by ${mle} m`);
   const [, floorHeat, , floorSalt, , floorVolume] = FLOORS.eddy;
   assert.ok(worst.volume < floorVolume && worst.heat < floorHeat && worst.salt < floorSalt && worst.column < 1e-4, `the books: ${JSON.stringify(worst)}`);
+  gpuModel.destroy();
+});
+
+test(`at N=${N} a thick deep layer lighter than its class boundary by less than float32 resolves at 1027 kg/m³ goes to the lighter class in the regrid on both engines`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice } = scenario(N, HYBRID), C = mesh.nCells;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });
+  const gpu = gpuModel.oceanEngine;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  const L = cpu.layers, boundaries = labelBoundaries(cpu.serialize().densities);
+  let i = -1;
+  for (let c = 0; c < C; c++) if (cpu.D[c] > 3000 && (i < 0 || cpu.D[c] > cpu.D[i])) i = c;
+  let k = -1;
+  for (let m = L - 1; m > L / 2; m--) if (cpu.h[m * C + i] > 200) { k = m; break; }
+  assert.ok(i >= 0 && k > 0, `a deep column with a thick layer below mid-column (cell ${i}, layer ${k})`);
+  const tied = (rho) => Math.fround(SEAWATER.rho0 + Math.fround(rho - SEAWATER.rho0)) === Math.fround(boundaries[k]);
+  let deficit = 1e-5;
+  while (deficit < 1e-4 && !tied(boundaries[k] - deficit)) deficit += 1e-6;
+  assert.ok(deficit < 1e-4, 'a deficit that float32 rounds onto the boundary');
+  const n = k * C + i, hk = cpu.h[n], T = cpu.Q[n] / hk, S = salinityForDensity(boundaries[k] - deficit, T);
+  cpu.W[n] = hk * S;
+  assert.ok(Math.abs(seawaterDensity(T, S) - (boundaries[k] - deficit)) < 1e-9);
+  await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
+  const before = Array.from({ length: L }, (_, m) => cpu.h[m * C + i]);
+  cpu.phases.regrid(DT); gpu.phases.regrid(DT);
+  const after = await gpu.download(), column = (h) => Array.from({ length: L }, (_, m) => h[m * C + i]);
+  const onCpu = column(cpu.h), onGpu = column(after.h);
+  console.log(`cell ${i} layer ${k}, ${deficit.toExponential(1)} kg/m³ under the boundary: before ${before[k - 1].toFixed(1)} / ${before[k].toFixed(1)} m, CPU ${onCpu[k - 1].toFixed(1)} / ${onCpu[k].toFixed(1)} m, GPU ${onGpu[k - 1].toFixed(1)} / ${onGpu[k].toFixed(1)} m`);
+  assert.ok(onCpu[k - 1] - before[k - 1] > 0.5 * before[k], `the CPU files the water in class ${k - 1}`);
+  for (let m = 0; m < L; m++) assert.ok(Math.abs(onCpu[m] - onGpu[m]) < 1, `layer ${m}: CPU ${onCpu[m]} m, GPU ${onGpu[m]} m`);
   gpuModel.destroy();
 });

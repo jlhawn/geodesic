@@ -140,6 +140,11 @@ function hybridHead(o) {
   const arr = (name, values) => `const ${name}: array<f32, ${values.length}> = array<f32, ${values.length}>(${Array.from(values, (v) => Number(v).toExponential(10)).join(', ')});`;
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const boundaries = labelBoundaries(o.rho);
+  const { a0, b0, lambda1, lambda2, nu, t0, s0 } = SEAWATER, literal = (v) => Number(v).toExponential(10);
+  const eosAnomalyRelative = `fn eosA(t: f32, s: f32) -> f32 {
+  let ta = t - ${literal(t0 - HEAT_REFERENCE)}; let sa = s - ${literal(s0 - SALT_REFERENCE)};
+  return -${literal(a0)} * (1.0 + ${literal(0.5 * lambda1)} * ta) * ta + ${literal(b0)} * (1.0 - ${literal(0.5 * lambda2)} * sa) * sa - ${literal(nu)} * ta * sa;
+}`;
   const floors = Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m));
   return `
 ${arr('MINIMUM', table.minimum)}
@@ -147,13 +152,13 @@ const FIXEDTOP: i32 = ${table.fixed ?? 0};
 ${arr('TOKENEDGE', Array.from(table.minimum, (m) => 2 * Math.min(m, table.spacing ?? m)))}
 ${arr('DEPTHS', table.depths)}
 ${arr('PVFLOORK', floors)}
-${arr('BOUNDARY', boundaries.subarray(1, L))}
+${arr('BOUNDARY', Array.from(boundaries.subarray(1, L), (b) => b - SEAWATER.rho0))}
 const GEN: i32 = ${GENERATORS.indexOf(o.generator)};
 const LP1: i32 = ${L + 1};
 ${constLine('HMIN', o.minimumLayer)} ${constLine('THINEDGE', 2 * o.minimumLayer)} ${constLine('MODEDEPTH', o.modeDepth)} ${constLine('MSTAR', o.mstar)} ${constLine('EKMANF', o.ekmanFactor)} ${constLine('RH18C2', RH18_NEUTRAL.c2)} ${constLine('RH18C3', RH18_NEUTRAL.c3)} ${constLine('ICEWAVES', ICE_WAVE_DAMPING)} ${constLine('NSTAR', o.nstar)}${o.mstarScheme === 'rh18' ? ` ${Object.keys(RH18_ENERGY).map((key) => constLine(`RH${key}`, RH18_ENERGY[key])).join(' ')}` : ''}
 ${constLine('BACKKAPPA', o.backgroundDiffusivity)} ${constLine('CONVKAPPA', o.convectiveDiffusivity)} ${constLine('VONK', 0.4)} ${constLine('BLFLOOR', 0.1)} ${constLine('DZFLOOR', 1e-3)} ${constLine('HNEGLECT', 1e-6)} ${constLine('MLEXCESS', 0.03)}
 ${constLine('BLTOL', 1e-6)} const BLITER: i32 = 24;
-fn eosA(t: f32, s: f32) -> f32 { return eos(t + TREF, s + SREF); }
+${eosAnomalyRelative}
 fn modeWeight(k: i32, i: i32) -> f32 {
   if (GEN == 0) { return 1.0; }
   if (GEN == 1) { return 0.0; }
@@ -577,7 +582,7 @@ ${o.shelfMeltLayer > 0 ? `    var slab = 0.0; var sumT = 0.0; var sumS = 0.0;
   var previous = vec3<f32>(0.0, 0.0, 0.0); var rPrev = 0.0; var hPrev = 0.0; var aPrev = 0.0; var bPrev = 0.0; var mixing = false;
   for (var k = 0; k < L; k++) {
     let hk = CH[k]; let tk = CT[k] + TREF; let sk = CS[k] + SREF;
-    let rk = eos(tk, sk); let ak = alphaT(tk, sk); let bk = betaS(tk, sk);
+    let rk = eosA(CT[k], CS[k]); let ak = alphaT(tk, sk); let bk = betaS(tk, sk);
     var wv = vec3<f32>(0.0, 0.0, 0.0);
     for (var m = 0; m < MAXE; m++) { wv += weights[m] * IN[uOff(k) + edges[m]] * normals[m]; }
     wv = wv / area;
@@ -839,10 +844,10 @@ fn restratShape(s: f32) -> f32 { let x = 2.0 * s + 1.0; let x2 = x * x; return m
     oCellTendency: `${K}  let i = ${idx}; if (i >= C) { return; }
   var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
   for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
-  var weighted = OD[O_LOAD + i] + OD[O_DRAFT + i] * eosAnomaly(OD[O_LOADT + i] + TREF, OD[O_LOADS + i] + SREF);
+  var weighted = OD[O_LOAD + i] + OD[O_DRAFT + i] * eosA(OD[O_LOADT + i], OD[O_LOADS + i]);
   for (var k = 0; k < L; k++) {
     let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k] - SREF, IN[wOff(k) + i] / hv, hv > 1e-6);
-    let r = select(RHOA[k], eosAnomaly(IN[qOff(k) + i] / hv + TREF, IN[wOff(k) + i] / hv + SREF), hv > 1e-6);
+    let r = select(RHOA[k], eosA(IN[qOff(k) + i] / hv, IN[wOff(k) + i] / hv), hv > 1e-6);
     let n = k * C + i; OD[O_PR + 2 * n] = weighted; OD[O_PR + 2 * n + 1] = r; weighted += r * hv;
     var divH = 0.0; var divQ = 0.0; var divW = 0.0; var difQ = 0.0; var difW = 0.0;
     for (var m = 0; m < MAXE; m++) {
@@ -1022,7 +1027,7 @@ ${K}  let i = ${idx}; if (i >= C) { return; }
     if (covered >= depth) { break; }
     let hv = IN[hOff(k) + i]; let part = min(hv, depth - covered);
     if (part > 0.0) {
-      let r = select(RHOA[k], eosAnomaly(IN[qOff(k) + i] / hv + TREF, IN[wOff(k) + i] / hv + SREF), hv > 1e-6);
+      let r = select(RHOA[k], eosA(IN[qOff(k) + i] / hv, IN[wOff(k) + i] / hv), hv > 1e-6);
       mass += part * r; covered += part;
     }
   }
@@ -1271,7 +1276,7 @@ fn thermoclineDepthOf(i: i32) -> f32 {
   var z = 0.0; var previous = -1.0e30; var center = 0.0;
   for (var k = 0; k < L; k++) {
     let hv = IN[hOff(k) + i];
-    let r = select(RHOA[k], eosAnomaly(IN[qOff(k) + i] / hv + TREF, IN[wOff(k) + i] / hv + SREF), hv > 1e-6);
+    let r = select(RHOA[k], eosA(IN[qOff(k) + i] / hv, IN[wOff(k) + i] / hv), hv > 1e-6);
     let rk = max(previous, r); let c = z + 0.5 * hv;
     if (rk >= THERMOA) { return select(center + (THERMOA - previous) / max(rk - previous, 1e-12) * (c - center), 0.0, k == 0); }
     previous = rk; center = c; z += hv;
