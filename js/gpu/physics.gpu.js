@@ -2567,6 +2567,22 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
 
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
+const BERGERON_RAIN = [
+  ['    let excess = max(0.0, liquid - AUTO_T);\n', `    let temperature = IN[S_TH + idx] * D[D_EXM + idx];
+    var bergeron = 1.0;
+    if (temperature < SQ_BF) { bergeron = 1.0 + 0.5 * sqrt(min(SQ_BF - temperature, SQ_BF - SQ_ICE)); }
+    let excess = max(0.0, liquid - AUTO_T / bergeron);\n`],
+  ['exp(-AUTO_R * dt)) + liquid * (1.0 - exp(-dt / lifetime))', 'exp(-AUTO_R * bergeron * dt)) + liquid * (1.0 - exp(-bergeron * dt / lifetime))'],
+];
+
+export function bergeronRain(body) {
+  return BERGERON_RAIN.reduce((text, [from, to]) => {
+    const at = text.indexOf(from);
+    if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error('the Bergeron autoconversion anchor is not in the adjustRain kernel exactly once');
+    return text.slice(0, at) + to + text.slice(at + from.length);
+  }, body);
+}
+
 export const PHYSICS_PASSES = ['physics', 'radiation', 'longwave', 'physicsSurface'];
 export const LAYERED_PASSES = ['physics', 'radiation', 'layered', 'longwave', 'physicsSurface'];
 export const layeredPass = (o, held) => layeredKernel(o, held, LONGWAVE_STASH);

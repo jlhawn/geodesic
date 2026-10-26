@@ -159,12 +159,36 @@ test('a deep column of falling ice is stable at any step: the implicit fall neve
   assert.ok(Math.abs(after.water + snow - before.water) < 1e-13 * before.water);
 });
 
+test('bergeronAutoconversion multiplies the liquid share\'s two conversion rates and divides its threshold by 1 + 0.5 sqrt(min(268.16 - T, 18)) below 268.16 K, and changes nothing in warmer layers', () => {
+  const dt = 600, { autoconversionThreshold: threshold, autoconversionRate: rate, cloudLifetime: lifetime } = MOIST_DEFAULTS;
+  const run = (options, pressure, water) => {
+    const model = build({ iceFall: null, ...options }), k = layerAt(model, pressure), { C, exnerLayer } = model.core.diagnostics;
+    const s = column(model, (j, T, p) => 0.95 * saturationHumidity(T, p));
+    s.qc[k * C] = water;
+    model.core.diagnoseColumn(0, s.pi, s.theta, s.q, s.qc);
+    const T = s.theta[k * C] * exnerLayer[k * C], rain = model.moist.autoconvertColumn(0, s.pi, s.theta, s.q, s.qc, dt);
+    return { T, left: s.qc[k * C], rain };
+  };
+  const expected = (water, T, factored) => {
+    const factor = factored && T < 268.16 ? 1 + 0.5 * Math.sqrt(Math.min(268.16 - T, 18)) : 1, excess = Math.max(0, water - threshold / factor);
+    return water - Math.min(water, excess * (1 - Math.exp(-rate * factor * dt)) + water * (1 - Math.exp(-factor * dt / lifetime)));
+  };
+  for (const [pressure, water] of [[3e4, 1e-4], [4.5e4, 3e-4], [4.5e4, 5e-5], [7e4, 3e-4], [9e4, 3e-4]]) {
+    const plain = run({}, pressure, water), fast = run({ bergeronAutoconversion: true }, pressure, water);
+    assert.ok(Math.abs(plain.left - expected(water, plain.T, false)) < 1e-18, `plain ${plain.left} against ${expected(water, plain.T, false)} at ${plain.T} K`);
+    assert.ok(Math.abs(fast.left - expected(water, fast.T, true)) < 1e-18, `with the factor ${fast.left} against ${expected(water, fast.T, true)} at ${fast.T} K`);
+    if (fast.T < 268.16) assert.ok(fast.left < plain.left, `${fast.T} K converts faster`);
+    else assert.ok(fast.left === plain.left && fast.rain === plain.rain, `${fast.T} K is unchanged`);
+    console.log(`${(pressure / 100).toFixed(0)} hPa ${fast.T.toFixed(1)} K, ${(1e3 * water).toFixed(2)} g/kg: keeps ${(plain.left / water).toFixed(4)} of it, ${(fast.left / water).toFixed(4)} with the factor`);
+  }
+});
+
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 
-test('on the GPU the falling ice and the uniform condensation keep column water with the precipitation and moist enthalpy to single precision, and match the CPU column by column', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+async function gpuAdjustParity(previous, reference = null) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
-  const dt = 900, previous = { plumeEntrainmentLaw: 'gregory' }, model = createModel(new Grid(16), { ocean: false, levels, moist: previous }), { core, mesh } = model, C = mesh.nCells, { K, sigmaMid, exnerLayer, dSigma, g, cp } = core.diagnostics;
+  const dt = 900, model = createModel(new Grid(16), { ocean: false, levels, moist: previous }), { core, mesh } = model, C = mesh.nCells, { K, sigmaMid, exnerLayer, dSigma, g, cp } = core.diagnostics;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   let seed = 4242;
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
@@ -179,8 +203,9 @@ test('on the GPU the falling ice and the uniform condensation keep column water 
   surfaceT.fill(300);
   for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   core.diagnose(pi, theta, q, qc);
+  const start = reference ? model.state.map((a) => Float64Array.from(a)) : null;
   const exner = Float64Array.from(exnerLayer);
-  const budget = (th, qq, cc, i) => { let h = 0, w = 0; for (let k = 0; k < K; k++) { const x = k * C + i, m = pi[i] * dSigma[k] / g; h += (cp * th[x] * exner[x] + LATENT_HEAT * qq[x]) * m; w += (qq[x] + cc[x]) * m; } return { h, w }; };
+  const budget =(th, qq, cc, i) => { let h = 0, w = 0; for (let k = 0; k < K; k++) { const x = k * C + i, m = pi[i] * dSigma[k] / g; h += (cp * th[x] * exner[x] + LATENT_HEAT * qq[x]) * m; w += (qq[x] + cc[x]) * m; } return { h, w }; };
   const before = Array.from({ length: C }, (_, i) => budget(theta, q, qc, i));
   let icy = 0;
   for (let i = 0; i < C; i++) { let cold = false; for (let k = 0; k < K; k++) if (qc[k * C + i] > 0 && theta[k * C + i] * exner[k * C + i] < 235.15) cold = true; if (cold) icy++; }
@@ -210,7 +235,25 @@ test('on the GPU the falling ice and the uniform condensation keep column water 
   assert.ok(cpuH < 1e-14 && cpuW < 1e-14, `CPU ${cpuH}, ${cpuW}`);
   assert.ok(worstH < 1e-6 && worstW < 2e-6, `GPU ${worstH}, ${worstW}`);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
-});
+  if (!reference) return;
+  const plain = createModel(new Grid(16), { ocean: false, levels, moist: reference });
+  plain.state.forEach((a, n) => a.set(start[n]));
+  plain.core.diagnose(plain.state[0], plain.state[1], plain.state[4], plain.state[5]);
+  plain.moist.precipitation.fill(0);
+  plain.phases.adjust(0, C, dt);
+  let moved = 0, drier = 0, wetter = 0;
+  for (let x = 0; x < K * C; x++) {
+    const change = after[5][x] - plain.state[5][x];
+    if (Math.abs(change) > 1e-7) moved++;
+    if (change < -1e-7) drier++; else if (change > 1e-7) wetter++;
+  }
+  console.log(`against the CPU without the factor the GPU's cloud water differs by more than 1e-7 in ${moved} of ${K * C} layers (${drier} drier, ${wetter} wetter)`);
+  assert.ok(moved > 0 && drier > wetter, `the factor moved ${moved} layers, ${drier} drier and ${wetter} wetter`);
+}
+
+test('on the GPU the falling ice and the uniform condensation keep column water with the precipitation and moist enthalpy to single precision, and match the CPU column by column', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory' }));
+
+test('on the GPU bergeronAutoconversion converts the cold liquid faster and matches the CPU column by column to the same tolerances', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: true }, { plumeEntrainmentLaw: 'gregory' }));
 
 function coverColumn(radiation = {}) {
   const model = createModel(new Grid(16), { ocean: false, levels, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999], ...radiation } });

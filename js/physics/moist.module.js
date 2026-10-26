@@ -432,7 +432,12 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime
  * (`upperCloudLifetime` where the layer's pressure is below `shallowTop`,
- * the anvils' layers; null: cloudLifetime throughout). Stratiform cloud
+ * the anvils' layers; null: cloudLifetime throughout). With
+ * `bergeronAutoconversion` (false) the liquid share's two rates are multiplied
+ * and its threshold divided, below 268.16 K, by the Bergeron–Findeisen factor
+ * 1 + 0.5 √min(268.16 − T, 18) of the plume's conversion above, as the IFS's
+ * large-scale precipitation applies it to c0 and l_crit (IFS Documentation
+ * CY25r1 Part IV ch. 6, eqs 6.49–6.53, after Sundqvist 1978). Stratiform cloud
  * under an inversion lives longer: the lifetime moves to
  * `stratiformLifetime` (3 h; null: no such cloud) by the layer's share
  * s, 0 in the layers at and below the top of a plume that ran in the
@@ -511,7 +516,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
-  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
+  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, bergeronAutoconversion: false, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
   deckVeto: true, coupledVeto: false, stratocumulusInversion: 7, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
@@ -526,7 +531,7 @@ export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep'
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, boundaryCloudLayer = null, stratiform = null, deckGate = null, stabilityLayer = null, surfaceBuoyancy = null, frictionVelocity = null, land = null, iceSheet = null, surfaceDrag = null, surfaceSensible = null, surfaceEvaporation = null, buffers = null, ...options } = {}) {
   for (const retired of RETIRED_OPTIONS) if (retired in options) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   const {
-    latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, stratiformLifetime, rainEvaporation, autoconversionFloor, fogDroplets, fogDeposition, fogDepositionLimit,
+    latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, bergeronAutoconversion, stratiformLifetime, rainEvaporation, autoconversionFloor, fogDroplets, fogDeposition, fogDepositionLimit,
     deckVeto, coupledVeto, stratocumulusInversion, evaporationInCloud, virtualBuoyancy,
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusAscent, cumulusEntrainmentHeight, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
@@ -808,10 +813,11 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         }
         continue;
       }
-      const excess = Math.max(0, liquid - autoconversionThreshold);
+      const temperature = theta[idx] * exnerLayer[idx], bergeron = bergeronAutoconversion && temperature < IFS_PRECIPITATION.bergeron ? 1 + 0.5 * Math.sqrt(Math.min(IFS_PRECIPITATION.bergeron - temperature, IFS_PRECIPITATION.bergeron - IFS_PRECIPITATION.ice)) : 1;
+      const excess = Math.max(0, liquid - autoconversionThreshold / bergeron);
       let lifetime = upperCloudLifetime !== null && pi[i] * sigmaMid[k] < shallowTop ? upperCloudLifetime : cloudLifetime;
       if (stratiformLifetime !== null) lifetime += longCloudShare(i, k, pi, iced) * (stratiformLifetime - lifetime);
-      const converted = Math.min(liquid, excess * (1 - Math.exp(-autoconversionRate * dt)) + liquid * (1 - Math.exp(-dt / lifetime)));
+      const converted = Math.min(liquid, excess * (1 - Math.exp(-autoconversionRate * bergeron * dt)) + liquid * (1 - Math.exp(-bergeron * dt / lifetime)));
       qc[idx] -= converted;
       rain += pi[i] * dSigma[k] / g * converted;
     }
