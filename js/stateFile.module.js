@@ -81,7 +81,7 @@ export function savedLevels(saved) {
  * `ocean` and `land`, as float32 or, listed in `f64` or in F64, float64,
  * with the header padded with spaces so the arrays start 8-byte aligned.
  */
-const GROUPS = ['ocean', 'land'], F64 = ['levels', 'ocean.densities', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum'];
+const GROUPS = ['ocean', 'land'], F64 = ['levels', 'ocean.densities', 'ocean.shelfLoad', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum'];
 const isArray = (value) => ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer;
 const isScalar = (value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 
