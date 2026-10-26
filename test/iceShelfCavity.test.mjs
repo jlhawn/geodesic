@@ -5,6 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
 import { bathymetryFrom, createOcean, displacedWeight, inertialStepLimit } from '../js/ocean/layered.module.js';
+import { N, shelfBands, warmOcean, restingShelf, steppedDraft } from './helpers/iceShelf.mjs';
 import { basalMelt, baseFreezing, SHELF_MELT } from '../js/ocean/iceShelfMelt.module.js';
 import { decodeClimatology, encodeClimatology } from '../js/ocean/climatology.module.js';
 import { zonalWindOnEdges, totalHeatSalt } from './helpers/layered.mjs';
@@ -14,28 +15,7 @@ let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
-const deg = 180 / Math.PI, N = 16;
-const sparse = ({ rows, cols, points, count, ...fields }) => {
-  const index = Uint32Array.from(Array.from(count.keys()).filter((p) => count[p] > 0)), take = (Kind, field) => Kind.from(index, (p) => (field ? field[p] : 0));
-  return decodeLandIce(encodeLandIce({
-    rows, cols, points, index, count: take(Uint8Array, count), floating: take(Uint8Array, fields.floating), thickness: take(Uint16Array, fields.thickness),
-    floatThickness: take(Uint16Array, fields.floatThickness), floatSurface: take(Uint16Array, fields.floatSurface), floatBed: take(Int16Array, fields.floatBed),
-  }));
-};
-
-function shelfBands(slope = 0, { water = 0, shelfSea = 0, thickness: H = 400 } = {}) {
-  const mesh = gridMesh(new Grid(N)), rows = 90, cols = 180, points = 225, freeboard = 50, draft = H * ICE_DENSITY / SEAWATER_DENSITY, deep = -800, shallow = -Math.round(draft + 30);
-  const zone = (lat) => (lat < -70 ? 'grounded' : lat < -54 && !water ? 'shallow' : lat < -38 ? 'deep' : lat < -22 && shelfSea ? 'shelfSea' : 'sea');
-  const raster = syntheticTopography(rows, cols, (lat) => ({ grounded: 500, shallow: freeboard, deep: freeboard, shelfSea: -shelfSea, sea: -4000 })[zone(lat * deg)]);
-  const pixels = (f) => Array.from({ length: rows * cols }, (_, n) => { const lat = 90 - (Math.floor(n / cols) + 0.5) * 180 / rows; return f(zone(lat), lat); }), afloat = (z) => z === 'shallow' || z === 'deep';
-  const shelf = (z, lat) => (z === 'deep' ? Math.round(H + slope * Math.max(-1, Math.min(1, (-46 - lat) / 8))) : H);
-  const ice = sparse({
-    rows, cols, points, count: pixels((z) => (z === 'sea' || z === 'shelfSea' ? 0 : points)), thickness: pixels((z, lat) => (z === 'grounded' ? 1500 : afloat(z) ? shelf(z, lat) : 0)),
-    floating: pixels((z) => (afloat(z) ? points : 0)), floatThickness: pixels((z, lat) => (afloat(z) ? shelf(z, lat) : 0)), floatSurface: pixels((z) => (afloat(z) ? freeboard : 0)),
-    floatBed: pixels((z, lat) => (z === 'deep' ? (water ? -Math.round(shelf(z, lat) * ICE_DENSITY / SEAWATER_DENSITY + water) : deep) : z === 'shallow' ? shallow : 0)),
-  });
-  return { mesh, raster, zone, draft, deep, options: { landBridges: {}, seaStraits: {}, landIce: ice } };
-}
+const deg = 180 / Math.PI;
 
 async function prepare(model) {
   const init = initializeState(model, {});
@@ -67,53 +47,6 @@ function stratify(cpu, gpu) {
   gpu.ocean.load(saved, gpu.state[3], gpu.state[6]);
 }
 
-function warmOcean(mesh, geography, options = {}) {
-  const C = mesh.nCells, ocean = createOcean(mesh, { geography, everySteps: 1, ...options }), L = ocean.layers, surfaceT = new Float64Array(C).fill(275), ice = new Float64Array(C);
-  ocean.initialize(surfaceT, ice);
-  const saved = { ...ocean.serialize(), ...ocean.restartArrays(), flux: new Float64Array(C) }, isomip = (z) => [271.25 + 2.9 * z / 720, 33.8 + 0.9 * z / 720];
-  for (let i = 0; i < C; i++) {
-    if (!geography.cavity[i]) continue;
-    let z = geography.iceDraft[i];
-    for (let k = 0; k < L; k++) { const n = k * C + i, hk = ocean.h[n], [t, sal] = isomip(z + 0.5 * hk); saved.Q[n] = hk * t; saved.W[n] = hk * sal; z += hk; }
-    saved.previousT0[i] = saved.Q[i] / ocean.h[i];
-    saved.shelfLoad[i] = displacedWeight(geography.iceDraft[i], isomip);
-  }
-  ocean.load(saved, surfaceT, ice);
-  return { ocean, surfaceT, ice };
-}
-
-async function restMonth({ raster, options }, iceShelves, profile) {
-  const setup = { topography: raster, geography: { ...options, iceShelves }, ocean: { iceDrift: false } }, { mesh, geography } = createModel(new Grid(N), setup), C = mesh.nCells, E = mesh.nEdges;
-  const cavity = geography.cavity ?? new Uint8Array(C), cpu = createOcean(mesh, { geography, everySteps: 1, shelfMelt: false }), L = cpu.layers, ice = new Float64Array(C), calm = new Float64Array(E), flux = new Float64Array(C);
-  const [surface] = profile(0);
-  cpu.initialize(new Float64Array(C).fill(surface), ice);
-  const saved = { ...cpu.serialize(), ...cpu.restartArrays(), flux: new Float64Array(C) };
-  for (let i = 0; i < C; i++) {
-    let sum = 0, z = cavity[i] ? geography.iceDraft[i] : 0;
-    for (let k = 0; k < L; k++) sum += saved.h[k * C + i];
-    for (let k = 0; k < L; k++) {
-      const n = k * C + i;
-      if (sum > 0) saved.h[n] *= cpu.D[i] / sum;
-      const [t, s] = profile(z + 0.5 * saved.h[n]);
-      z += saved.h[n];
-      saved.Q[n] = saved.h[n] * t; saved.W[n] = saved.h[n] * s; saved.T[n] = t; saved.S[n] = s;
-    }
-    saved.eta[i] = 0; saved.previousT0[i] = saved.T[i];
-    if (saved.shelfLoad) saved.shelfLoad[i] = cavity[i] ? displacedWeight(geography.iceDraft[i], profile) : 0;
-  }
-  saved.u.fill(0);
-  const gpu = (await createGpuModel(new Grid(N), { ...setup, ocean: { everySteps: 1, shelfMelt: false, iceDrift: false } })).oceanEngine, cpuSkin = new Float64Array(C).fill(surface), gpuSkin = new Float64Array(C).fill(surface);
-  cpu.load(saved, cpuSkin, ice);
-  gpu.upload(saved, gpuSkin, ice);
-  for (let n = 0; n < 720; n++) { cpu.advance(cpuSkin, ice, flux, calm, 3600); await gpu.advance(gpuSkin, ice, calm, 3600); }
-  const b = await gpu.download(), most = (a) => a.reduce((m, v) => Math.max(m, Math.abs(v)), 0), under = (u) => {
-    let m = 0;
-    for (let e = 0; e < E; e++) if (cavity[mesh.cellsOnEdge[2 * e]] || cavity[mesh.cellsOnEdge[2 * e + 1]]) for (let k = 0; k < L; k++) m = Math.max(m, Math.abs(u[k * E + e]));
-    return m;
-  };
-  return { cpu: most(cpu.u), gpu: most(b.u), cpuEta: most(cpu.eta), gpuEta: most(b.eta), cpuCavity: under(cpu.u), gpuCavity: under(b.u), ocean: cpu, mesh, geography };
-}
-const show = (r) => ['cpu', 'gpu', 'cpuEta', 'gpuEta'].map((k) => `${k} ${r[k].toExponential(1)}`).join(', ');
 
 test('a cavity is land to the atmosphere and sea beneath its shelf, from the draft of the floating ice down to the bed, and stays land where less than cavityDepth of water lies under the shelf', () => {
   const { mesh, raster, zone, draft, deep, options } = shelfBands(), shelf = createGeography(mesh, raster, options), cavity = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' });
@@ -288,26 +221,6 @@ test('the three-equation melt balances heat, salt and the freezing point of the 
   }
 });
 
-test(`on ISOMIP+'s warm profile the shelf melts, fastest near its grounding line, at meters of ice a year at N=${N}, and with no discharge to take it from the sheet's store pays for all of it`, () => {
-  const { mesh, raster, options } = shelfBands(250), geography = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' }), C = mesh.nCells, E = mesh.nEdges, days = 2;
-  const run = (tidalSpeed) => {
-    const { ocean, surfaceT, ice } = warmOcean(mesh, geography, { tidalSpeed }), flux = new Float64Array(C), calm = new Float64Array(E);
-    for (let n = 0; n < days * 64; n++) ocean.advance(surfaceT, ice, flux, calm, 1350);
-    return ocean;
-  };
-  const tide = run(SHELF_MELT.tidalSpeed), still = run(0), year = 365.25 * 86400, iceRate = (o, i) => o.shelfMelted[i] / (days * 86400) * year / ICE_DENSITY;
-  const cells = [...geography.cavity.keys()].filter((i) => geography.cavity[i]), drafts = cells.map((i) => geography.iceDraft[i]), deep = Math.max(...drafts), shallow = Math.min(...drafts);
-  const mean = (o, where) => { let a = 0, m = 0; for (const i of cells) if (where(i)) { a += mesh.areaCell[i]; m += mesh.areaCell[i] * iceRate(o, i); } return m / a; };
-  const near = mean(tide, (i) => geography.iceDraft[i] > deep - 1), front = mean(tide, (i) => geography.iceDraft[i] < shallow + 1), all = [mean(tide, () => true), mean(still, () => true)];
-  console.log(`warm profile, N=${N}, ${days} days: ${near.toFixed(2)} m/yr of ice at the ${deep.toFixed(0)} m draft by the grounding line, ${front.toFixed(2)} at ${shallow.toFixed(0)} m by the front; mean ${all[0].toFixed(2)} with u_tidal ${SHELF_MELT.tidalSpeed} m/s, ${all[1].toFixed(2)} without`);
-  assert.ok(near > front && front > 0 && near > 0.3 && near < 30, `${near} m/yr by the grounding line, ${front} by the front`);
-  assert.ok(all[0] > all[1], `the tide's stirring adds melt: ${all}`);
-  const { discharge, melt, drawn } = tide.shelfBudget;
-  let draw = 0, melted = 0;
-  for (const i of cells) { draw += mesh.areaCell[i] * tide.shelfDraw[i]; melted += mesh.areaCell[i] * tide.shelfMelted[i]; }
-  assert.ok(discharge[0] === 0 && drawn[0] === melt[0] && Math.abs(draw - melted) < 1e-12 * melted, `with no discharge: ${draw} kg drawn from the store, ${melted} kg melted`);
-});
-
 test('with the shelves loading the water and its top at their sloping draft, every phase of the ocean step but the rescale keeps its water, heat and salt to rounding beyond what the melt and the outlets\' calving take and give, and the rescale corrects the columns under and beside the shelves as little as the open sea\'s', () => {
   const { mesh, raster, options } = shelfBands(250), geography = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' }), DT = 1350;
   const C = mesh.nCells, ocean = createOcean(mesh, { geography, everySteps: 1, shelfMeltLayer: 0 }), L = ocean.layers, P = ocean.phases, parts = Math.max(1, Math.ceil(DT / inertialStepLimit(mesh))), part = DT / parts;
@@ -377,35 +290,9 @@ test('with the shelves loading the water and its top at their sloping draft, eve
   assert.ok(under > 1e-4, `the water under the shelves moves: ${under} m/s`);
 });
 
-test('with the melt off, a homogeneous ocean under a sloping shelf with a front stays as still for a month as it does with the shelves as land, on each engine', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const bands = shelfBands(250), still = () => [271.65, 34.4], shelves = await restMonth(bands, 'cavity', still), bare = await restMonth(bands, 'land', still);
-  console.log(`a month at rest, homogeneous water: with the shelves ${show(shelves)}; with them as land ${show(bare)}`);
-  // Rounding walks both oceans off rest; 10× leaves room for the cavity's added cells and catches a load, draft or pin that pushes the water.
-  for (const [u, eta] of [['cpu', 'cpuEta'], ['gpu', 'gpuEta']]) assert.ok(shelves[u] < 10 * bare[u] && shelves[eta] < 10 * bare[eta], `${u}: ${show(shelves)} against ${show(bare)}`);
-});
+test('with the melt off, a homogeneous ocean under a sloping shelf with a front stays as still for a month as it does with the shelves as land, on each engine', { skip: !gpuAvailable && 'webgpu not installed' }, () => restingShelf(['gpu']));
 
-test('under a shelf whose draft steps 300 m from cell to cell over 200 m of water, where neighbors share no depth, every edge passes the sill floor, and with the melt off the ocean stays as still for a month as with the shelves as land, homogeneous or on ISOMIP+\'s warm profile, on each engine', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const bands = shelfBands(700, { water: 200, thickness: 760 }), still = () => [271.65, 34.4], isomip = (z) => [271.25 + 2.9 * Math.min(z, 720) / 720, 33.8 + 0.9 * Math.min(z, 720) / 720];
-  const shelves = await restMonth(bands, 'cavity', still), bare = await restMonth(bands, 'land', still), { ocean, mesh, geography: { cavity, iceDraft } } = shelves, floor = 50, top = (i) => (cavity[i] ? iceDraft[i] : 0);
-  let step = 0, empty = 0, thin = 0;
-  for (let e = 0; e < mesh.nEdges; e++) {
-    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
-    if (!ocean.cellOcean[a] || !ocean.cellOcean[b]) continue;
-    const shared = Math.min(top(a) + ocean.D[a], top(b) + ocean.D[b]) - Math.max(top(a), top(b));
-    if (cavity[a] && cavity[b]) step = Math.max(step, Math.abs(top(a) - top(b)));
-    if (shared <= 0) empty++;
-    else if (shared < floor) thin++;
-    assert.ok(ocean.sillEdge[e] >= floor, `edge ${e} passes ${ocean.sillEdge[e]} m`);
-  }
-  console.log(`drafts step by up to ${step.toFixed(0)} m between cavity cells: ${empty} edges share no depth and ${thin} share less than ${floor} m; each passes ${floor} m`);
-  assert.ok(step >= 300 && empty > 0, `drafts step by ${step} m, ${empty} edges share no depth`);
-  console.log(`a month at rest, homogeneous water: with the shelves ${show(shelves)}; with them as land ${show(bare)}`);
-  for (const [u, eta] of [['cpu', 'cpuEta'], ['gpu', 'gpuEta']]) assert.ok(shelves[u] < 10 * bare[u] && shelves[eta] < 10 * bare[eta], `${u}: ${show(shelves)} against ${show(bare)}`);
-  const layered = await restMonth(bands, 'cavity', isomip), flat = await restMonth(bands, 'land', isomip);
-  console.log(`a month at rest on ISOMIP+'s warm profile: with the shelves ${show(layered)}, on the cavities' edges cpu ${layered.cpuCavity.toExponential(1)}, gpu ${layered.gpuCavity.toExponential(1)}; with them as land ${show(flat)}`);
-  // On a stratified profile the sloping base's pressure gradient moves the cavity edges at about twice the open sea's speed; 3× still catches a runaway.
-  for (const [u, eta, under] of [['cpu', 'cpuEta', 'cpuCavity'], ['gpu', 'gpuEta', 'gpuCavity']]) assert.ok(layered[u] < 10 * flat[u] && layered[eta] < 10 * flat[eta] && layered[under] < 3 * flat[u], `${u}: ${show(layered)}, cavities ${layered[under]}, against ${show(flat)}`);
-});
+test('under a shelf whose draft steps 300 m from cell to cell over 200 m of water, where neighbors share no depth, every edge passes the sill floor, and with the melt off the ocean stays as still for a month as with the shelves as land, homogeneous or on ISOMIP+\'s warm profile, on each engine', { skip: !gpuAvailable && 'webgpu not installed' }, () => steppedDraft(['gpu']));
 
 test('from an atlas a cavity starts with its nearest open column\'s water at the same depth, that column\'s bottom water below its floor, no colder than the in-situ freezing point, on each engine', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { raster, options } = shelfBands(340, { water: 200, shelfSea: 700 }), setup = { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { iceDrift: false } }, { mesh, geography } = createModel(new Grid(N), setup), C = mesh.nCells;
@@ -471,40 +358,6 @@ test('from an atlas a cavity starts with its nearest open column\'s water at the
     assert.ok(Math.abs(a - b) < 1e-5 * Math.abs(a), `cell ${i} ${field}: cpu ${a}, gpu ${b}`);
   }
   for (const i of cells) assert.ok(Math.abs(engines.cpu.shelfLoad[i] - engines.gpu.shelfLoad[i]) < 1e-5 * engines.cpu.shelfLoad[i], `cell ${i} load: cpu ${engines.cpu.shelfLoad[i]}, gpu ${engines.gpu.shelfLoad[i]}`);
-});
-
-test('with a 20 m melt layer, as in Losch (2008), the melt reads T_w and S_w as the mean of the 20 m below the ice base, spreads its heat and salt over them, closes both in each column, and melts more by the grounding line than the 3 m top layer does', () => {
-  const { mesh, raster, options } = shelfBands(250), geography = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' }), C = mesh.nCells, E = mesh.nEdges, DT = 3600;
-  const cells = [...geography.cavity.keys()].filter((i) => geography.cavity[i]), { ocean } = warmOcean(mesh, geography, { shelfMeltLayer: 20 }), L = ocean.layers, load = ocean.serialize().shelfLoad;
-  const k = { rho0: 1025, rhoCp: ocean.rhoCp, latentHeat: 3.34e5 };
-  ocean.u.fill(0);
-  const before = cells.map((i) => {
-    let slab = 0, t = 0, s = 0, q = 0, w = 0;
-    for (let n = 0; n < L; n++) {
-      const j = n * C + i, part = Math.min(ocean.h[j], 20 - slab);
-      if (part > 0) { t += part * ocean.Q[j] / ocean.h[j]; s += part * ocean.W[j] / ocean.h[j]; slab += part; }
-      q += ocean.Q[j]; w += ocean.W[j];
-    }
-    return { i, T: t / slab, S: s / slab, q, w };
-  });
-  ocean.phases.column(DT);
-  for (const { i, T, S, q, w } of before) {
-    const { melt, Tb } = basalMelt(T, S, baseFreezing(9.81 * load[i]), Math.sqrt(2.5e-3 * SHELF_MELT.tidalSpeed ** 2), k), m = melt * DT;
-    let q1 = 0, w1 = 0;
-    for (let n = 0; n < L; n++) { q1 += ocean.Q[n * C + i]; w1 += ocean.W[n * C + i]; }
-    assert.ok(Math.abs(ocean.melted[i] - m) < 1e-12 * Math.abs(m) && Math.abs(ocean.meltBase[i] - Tb) < 1e-12 * Tb, `cell ${i}: melt ${ocean.melted[i]} against ${m} from the 20 m means ${T} K, ${S} psu`);
-    assert.ok(Math.abs(q1 - q + 3.34e5 * m / ocean.rhoCp + m / 1000 * (T - Tb)) < 1e-12 * q && Math.abs(w1 - w + S * m / 1000) < 1e-12 * w, `cell ${i}: heat ${q1 - q}, salt ${w1 - w}`);
-  }
-  const run = (shelfMeltLayer) => {
-    const { ocean: o, surfaceT, ice } = warmOcean(mesh, geography, { shelfMeltLayer }), flux = new Float64Array(C), calm = new Float64Array(E);
-    for (let n = 0; n < 2 * 64; n++) o.advance(surfaceT, ice, flux, calm, 1350);
-    return o;
-  };
-  const top = run(0), losch = run(20), deep = Math.max(...cells.map((i) => geography.iceDraft[i]));
-  const mean = (o, where) => { let a = 0, m = 0; for (const i of cells) if (where(i)) { a += mesh.areaCell[i]; m += mesh.areaCell[i] * o.shelfMelted[i]; } return m / a / (2 * 86400) * 365.25 * 86400 / ICE_DENSITY; };
-  const near = [mean(top, (i) => geography.iceDraft[i] > deep - 1), mean(losch, (i) => geography.iceDraft[i] > deep - 1)], all = [mean(top, () => true), mean(losch, () => true)];
-  console.log(`warm profile, N=${N}, 2 days, m/yr of ice: by the grounding line ${near.map((x) => x.toFixed(2)).join(' (3 m top layer) against ')} (20 m layer); mean ${all.map((x) => x.toFixed(2)).join(' against ')}`);
-  assert.ok(near[1] > near[0] && all[1] > all[0], `the 20 m layer's melt ${near[1]}, ${all[1]} against the top layer's ${near[0]}, ${all[0]}`);
 });
 
 test('under a still shelf the release of convection from an unstable top reaches the boundary layer only while the base freezes: supercooled water deepens it on both engines, and water as far above its freezing point melts the base and has none', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
