@@ -161,8 +161,8 @@ async function cavitating(options) {
   assert.ok(rT.maxDiff < 0.1 && rS.maxDiff < 0.02, `the top layer parts by up to ${rT.maxDiff} K and ${rS.maxDiff} psu`);
   s.gpuModel.destroy();
 }
-test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({}));
-test('twenty coupled calls with the cavitating fluid, mstarScheme rh18 and langmuirScheme rescale: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mstarScheme: 'rh18', langmuirScheme: 'rescale' }));
+test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mixedLayerRestratification: false }));
+test('twenty coupled calls with the cavitating fluid, mstarScheme rh18 and langmuirScheme rescale: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mstarScheme: 'rh18', langmuirScheme: 'rescale', mixedLayerRestratification: false }));
 
 test('inside the model\'s own step every rheology takes the atmosphere\'s stress, validates on the device and keeps the ice finite and below the speed limit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createModel } = await import('../js/model.module.js'), { initializeState } = await import('../js/physics/init.module.js');
