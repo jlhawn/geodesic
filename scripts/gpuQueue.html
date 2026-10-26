@@ -82,6 +82,7 @@ button.copy:hover { border-color: var(--muted); }
 .list > li:last-child { padding-bottom: 0; }
 .list .body { flex: 1; min-width: 0; }
 .list .body > * + * { margin-top: 2px; }
+.share { flex: none; width: 3.5em; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
 .pos { display: grid; flex: none; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--chip); color: var(--muted); font-size: 13px; font-weight: 650; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th { padding: 0 12px 6px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 600; text-align: left; white-space: nowrap; }
@@ -114,6 +115,7 @@ footer { margin-top: 4px; color: var(--muted); font-size: 12.5px; overflow-wrap:
   <div id="alert" class="alert" role="alert" hidden></div>
   <main>
     <section aria-labelledby="holder-title"><h2 id="holder-title">Holder</h2><div id="holder"></div></section>
+    <section aria-labelledby="use-title"><h2 id="use-title">GPU use by process</h2><div id="use"></div></section>
     <section aria-labelledby="queue-title"><h2 id="queue-title">Queue<span id="queue-count"></span></h2><div id="queue"></div></section>
     <section aria-labelledby="outside-title"><h2 id="outside-title">GPU users outside the queue</h2><div id="outside"></div></section>
     <section id="port-section" aria-labelledby="port-title" hidden><h2 id="port-title">Port</h2><div id="port"></div></section>
@@ -212,6 +214,19 @@ function queueView(queue) {
       copyable(t.log)))));
 }
 
+const percent = (share) => (share < 0.01 ? '<1%' : `${Math.round(share * 100)}%`);
+function useView(gpu) {
+  if (!gpu.users) return none("Measuring: the next update shows each process's share.");
+  const note = el('p', { class: 'note' }, `Share of the GPU's time over the last ${span(gpu.until - gpu.since)}, from the GPU driver's per-process counters.`);
+  if (!gpu.users.length) return [note, none('No process used the GPU.')];
+  return [note, el('ul', { class: 'list' }, gpu.users.map((u) => el('li', null,
+    el('span', { class: 'share' }, percent(u.share)),
+    el('div', { class: 'body' },
+      el('div', { class: 'title' }, el('span', { class: 'who' }, u.name), el('span', { class: 'mono' }, `pid ${u.pid}`),
+        u.queued ? el('span', { class: 'badge run' }, 'holder') : u.name === 'node' && el('span', { class: 'badge warn' }, 'outside the queue')),
+      u.what !== u.name && el('p', { class: 'mono', title: u.command }, u.what)))))];
+}
+
 function outsideView(outside) {
   if (!outside.length) return none('None.');
   return [
@@ -259,6 +274,7 @@ function paint(id, data, view) {
 
 function render(s) {
   paint('holder', { holder: s.holder, lock: s.lock, exited: s.exited }, holderView);
+  paint('use', s.gpu, useView);
   paint('queue', s.queue, queueView);
   $('queue-count').textContent = s.queue.length ? ` (${s.queue.length})` : '';
   paint('outside', s.outside, outsideView);

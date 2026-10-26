@@ -8,7 +8,7 @@ import http from 'node:http';
 import vm from 'node:vm';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { config, gpuUsers, parseLsof, whoFrom, shortCommand, serve, appendHistory, recentRuns } from '../scripts/gpuQueue.mjs';
+import { config, gpuUsers, parseLsof, parseIoreg, gpuShares, gpuMeter, whoFrom, shortCommand, serve, appendHistory, recentRuns } from '../scripts/gpuQueue.mjs';
 
 const script = fileURLToPath(new URL('../scripts/gpuQueue.mjs', import.meta.url));
 const wrapper = fileURLToPath(new URL('../scripts/gpuQueue.zsh', import.meta.url));
@@ -113,6 +113,7 @@ async function renderPage(html, status) {
   };
   return {
     holder: text(nodes.get('holder')),
+    use: rows('use', 'li').map(text),
     queue: rows('queue', 'li').map(text),
     history: rows('history', 'tr').slice(1).map((row) => row.kids.map(text)),
   };
@@ -126,7 +127,7 @@ function bench(t, extra = {}) {
   fs.writeFileSync(path.join(dir, 'device.mjs'), DEVICE);
   const env = {
     ...process.env, GPU_QUEUE_DIR: path.join(dir, 'queue'), GPU_QUEUE_TICK_MS: '20', GPU_QUEUE_PORT: '0',
-    GPU_QUEUE_PROBE: `ls '${gpu}'`, GPU_QUEUE_DEVICE: path.join(dir, 'device.mjs'), GPU_QUEUE_ABORTS: 'off',
+    GPU_QUEUE_PROBE: `ls '${gpu}'`, GPU_QUEUE_IOREG: 'true', GPU_QUEUE_DEVICE: path.join(dir, 'device.mjs'), GPU_QUEUE_ABORTS: 'off',
     GPU_QUEUE_NODE: process.execPath, GPU_QUEUE_COURTESY_MS: '', GPU_QUEUE_HELD: '', GPU_WHO: '', GPU_JOB: '', GPU_PRIORITY: '',
     FAKE_GPU: gpu, TRACE: path.join(dir, 'trace'), ...extra,
   };
@@ -461,6 +462,28 @@ test('lsof output, worktrees and commands parse', () => {
   assert.equal(shortCommand(`${node} x.mjs --state=/a/b/c/d.bin --out=/a/b 'it'\\''s'`), "node x.mjs --state=…/c/d.bin --out=/a/b 'it'\\''s'");
 });
 
+test("the driver's GPU time parses per process, and two samples give each process's share", () => {
+  const client = (pid, name, usage) => '+-o AGXDeviceUserClient  <class AGXDeviceUserClient, id 0x1, !registered, !matched, active, busy 0, retain 5>\n    {\n'
+    + `      "AppUsage" = (${usage})\n${pid ? `      "IOUserClientCreator" = "pid ${pid}, ${name}"\n` : ''}    }\n`;
+  const metal = (...ns) => ns.map((n) => `{"API"="Metal","lastSubmittedTime"=68452204726583,"accumulatedGPUTime"=${n}}`).join(',');
+  const times = parseIoreg(client(414, 'WindowServer', '') + client(414, 'WindowServer', metal(4e9, 500)) + client(900, 'node', metal(7e9)) + client(0, '', metal(9)));
+  assert.deepEqual([...times.values()], [{ pid: 414, name: 'WindowServer', ns: 4000000500 }, { pid: 900, name: 'node', ns: 7e9 }]);
+  const table = new Map([[900, { pid: 900, ppid: 1, start: 'Sun Oct 25 18:00:00 2026', command: '/Users/j/.nvm/versions/node/v22.22.2/bin/node scripts/pageLoop.mjs 128' }]]);
+  const later = new Map([
+    [414, { pid: 414, name: 'WindowServer', ns: 4000000500 + 2e8 }],
+    [900, { pid: 900, name: 'node', ns: 7e9 + 1.96e9 }],
+    [901, { pid: 901, name: 'node', ns: 5e6 }],
+    [902, { pid: 902, name: 'node', ns: 5e8 }],
+  ]);
+  assert.deepEqual(gpuShares({ at: 1000, times }, { at: 3000, times: later }, table, new Set([900])).map((u) => [u.pid, u.what, +u.share.toFixed(6), u.queued]),
+    [[900, 'node scripts/pageLoop.mjs 128', 0.98, true], [902, 'node', 0.25, false], [414, 'WindowServer', 0.1, false]]);
+  const samples = [times, later, later];
+  const meter = gpuMeter(() => samples.shift());
+  assert.deepEqual(meter(table, null, 1000), { since: null, until: 1000, users: null });
+  assert.deepEqual(meter(table, { pid: 900 }, 3000).users.map((u) => [u.pid, u.queued]), [[900, true], [902, false], [414, false]]);
+  assert.deepEqual(meter(table, { pid: 900 }, 64000), { since: null, until: 64000, users: null });
+});
+
 test('the monitor serves its page and the status as JSON', { skip }, async (t) => {
   const b = bench(t);
   const url = await b.monitor();
@@ -476,7 +499,8 @@ test('the monitor serves its page and the status as JSON', { skip }, async (t) =
   assert.match(status.headers['content-type'], /^application\/json/);
   const s = JSON.parse(status.body);
   assert.ok(Math.abs(s.now - Date.now()) < 5000);
-  assert.deepEqual({ ...s, now: 0 }, { now: 0, holder: null, exited: null, lock: [], queue: [], outside: [], port: null, dir: path.join(b.dir, 'queue'), history: [] });
+  assert.deepEqual({ ...s, now: 0, gpu: { ...s.gpu, until: 0 } },
+    { now: 0, holder: null, exited: null, lock: [], queue: [], outside: [], port: null, gpu: { since: null, until: 0, users: null }, dir: path.join(b.dir, 'queue'), history: [] });
   assert.equal((await get(url, { host: 'gpu.example.com' })).status, 403);
   assert.equal((await get(`${url}queue/holder.json`)).status, 404);
   assert.equal(fs.existsSync(path.join(b.dir, 'queue')), false, 'the monitor wrote to the queue directory');
@@ -503,6 +527,33 @@ test('the monitor shows a labeled job as the holder, then in the history with it
   assert.deepEqual([second.who, second.what, second.pid, second.rc, second.aborts], ['beta', 'second in line', beta.pid, 0, null]);
   assert.ok(second.started >= first.ended);
   assert.deepEqual(b.read('queue/history.jsonl').trim().split('\n').map((line) => JSON.parse(line)).sort((x, y) => x.ended - y.ended), [first, second]);
+});
+
+test("the monitor shows each process's share of the GPU from the driver's counters and marks the holder's job", { skip }, async (t) => {
+  const b = bench(t, { GPU_QUEUE_IOREG: 'cat "$FAKE_GPU/../ioreg.txt"' });
+  const url = await b.monitor();
+  const job = b.run('alpha.log', b.job('alpha', 'gate'), { env: { GPU_WHO: 'alpha', GPU_JOB: 'gated' } });
+  await waitFor(() => b.trace().start.alpha);
+  const worker = b.trace().pid.alpha;
+  const other = b.foreign([process.execPath, '-e', 'setTimeout(() => {}, 60000)']);
+  const sample = (ns) => {
+    const text = [[worker, 'node', ns], [other.pid, 'node', ns / 2], [414, 'WindowServer', 0]].map(([pid, name, n]) => '+-o AGXDeviceUserClient  <class AGXDeviceUserClient>\n    {\n'
+      + `      "AppUsage" = ({"API"="Metal","accumulatedGPUTime"=${n}})\n      "IOUserClientCreator" = "pid ${pid}, ${name}"\n    }\n`).join('');
+    fs.writeFileSync(path.join(b.dir, 'ioreg.tmp'), text);
+    fs.renameSync(path.join(b.dir, 'ioreg.tmp'), path.join(b.dir, 'ioreg.txt'));
+  };
+  sample(0);
+  await until(async () => (await json(`${url}status.json`)).gpu.users?.length === 0);
+  sample(1e15);
+  const s = await until(async () => { const status = await json(`${url}status.json`); return status.gpu.users?.length && status; });
+  assert.deepEqual(s.gpu.users.map((u) => [u.pid, u.name, u.queued]), [[worker, 'node', true], [other.pid, 'node', false]]);
+  assert.match(s.gpu.users[0].what, /job\.mjs alpha gate 1$/);
+  assert.ok(s.gpu.users[0].share > s.gpu.users[1].share && s.gpu.since < s.gpu.until);
+  const shown = await renderPage((await get(url)).body, s);
+  assert.match(shown.use[0], new RegExp(`^\\d+% node pid ${worker} holder node \\S+job\\.mjs alpha gate 1$`));
+  assert.match(shown.use[1], new RegExp(`^\\d+% node pid ${other.pid} outside the queue node -e `));
+  b.open('alpha');
+  assert.equal(await job.exited, 0);
 });
 
 test('polling the monitor never opens the lock or a ticket, so no waiter waits on it', { skip }, async (t) => {

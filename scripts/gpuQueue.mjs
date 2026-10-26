@@ -37,9 +37,11 @@
 // and aborts.
 // The file keeps its last 500 lines once it passes 1000. `serve` answers on
 // 127.0.0.1:PORT (8008) with scripts/gpuQueue.html, a page that polls
-// /status.json: the status as JSON, reused for 10 ticks once computed, and
-// the last 20 runs. It never opens the lock, a ticket or a GPU device and
-// writes nothing, so no run ever waits on it.
+// /status.json: the status as JSON, reused for 10 ticks once computed, the
+// last 20 runs, and each process's share of the GPU's time since the
+// previous computation, from the driver's per-process counters (the
+// AppUsage of ioreg's AGXDeviceUserClient entries). It never opens the lock,
+// a ticket or a GPU device and writes nothing, so no run ever waits on it.
 // The lock is an O_EXLOCK flock on <dir>/lock, which the kernel drops when
 // its holders exit; CMD inherits it as fd 19, so a job outliving a killed
 // holder keeps it. Waiters hold flocks on their tickets in <dir>/queue, named
@@ -50,7 +52,8 @@
 // GPU_QUEUE_PROBE (a shell command that prints the pids using the GPU, in
 // place of lsof), GPU_QUEUE_DEVICE (off, or a module whose getDevice stands
 // in for js/gpu/device.module.js), GPU_QUEUE_COURTESY_MS (15000,60000: how
-// long levels 4 and 5 wait for the lock to stay free) and GPU_QUEUE_ABORTS
+// long levels 4 and 5 wait for the lock to stay free), GPU_QUEUE_IOREG (a
+// shell command whose output stands in for ioreg's) and GPU_QUEUE_ABORTS
 // (off) serve tests.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -72,6 +75,7 @@ const PAGE = new URL('./gpuQueue.html', import.meta.url);
 const LOCAL_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
 const SERVE_PORT = 8008, RESERVED_PORTS = [8000, 8001];
 const HISTORY_SHOWN = 20, HISTORY_MAX = 1000, HISTORY_KEEP = 500;
+const IOREG = ['-r', '-c', 'AGXDeviceUserClient', '-l'], MIN_SHARE = 0.005, USE_WINDOW_MS = 60000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -97,7 +101,7 @@ export function config(env = process.env) {
     tick, recheck: 10 * tick, cache: 10 * tick, settle: 15 * tick, grace: 100 * tick, linger: 100 * tick,
     monitor: 150 * tick, nestedEvery: 25, refreshEvery: 150, stale: 300 * tick,
     port: env.GPU_QUEUE_PORT ? Number(env.GPU_QUEUE_PORT) : env.GPU_QUEUE_PORT === '' ? 0 : 8000,
-    probe: env.GPU_QUEUE_PROBE || '', device, aborts: env.GPU_QUEUE_ABORTS !== 'off',
+    probe: env.GPU_QUEUE_PROBE || '', ioreg: env.GPU_QUEUE_IOREG || '', device, aborts: env.GPU_QUEUE_ABORTS !== 'off',
     who: oneLine(env.GPU_WHO), what: oneLine(env.GPU_JOB), priority: oneLine(env.GPU_PRIORITY) || String(DEFAULT_LEVEL),
     courtesy: courtesy.length === 2 && courtesy.every((ms) => ms >= 0) ? courtesy : COURTESY_MS,
   };
@@ -187,6 +191,8 @@ export function descendants(table, pid) {
   return found;
 }
 
+const familyOf = (table, holder) => (holder ? new Set([...lineage(table, holder.pid).keys(), ...descendants(table, holder.pid)]) : new Set());
+
 export function parseLsof(text) {
   const pids = new Set();
   let pid = 0;
@@ -200,6 +206,46 @@ export function parseLsof(text) {
 export function gpuUsers(cfg = config()) {
   if (cfg.probe) return new Set(pidList(output('/bin/sh', ['-c', cfg.probe])));
   return parseLsof(output('/usr/sbin/lsof', ['-w', '-c', 'node', '-a', '-d', 'txt', '-Fpn']));
+}
+
+export function parseIoreg(text) {
+  const times = new Map();
+  for (const entry of text.split('+-o ').slice(1)) {
+    const creator = /"IOUserClientCreator" = "pid (\d+), ([^"]*)"/.exec(entry);
+    if (!creator) continue;
+    const pid = Number(creator[1]);
+    const ns = [...entry.matchAll(/"accumulatedGPUTime"=(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+    times.set(pid, { pid, name: creator[2], ns: (times.get(pid)?.ns ?? 0) + ns });
+  }
+  return times;
+}
+
+export const gpuTimes = (cfg = config()) => parseIoreg(cfg.ioreg ? output('/bin/sh', ['-c', cfg.ioreg]) : output('/usr/sbin/ioreg', IOREG));
+
+export function gpuShares(before, after, table, family = new Set()) {
+  const window = (after.at - before.at) * 1e6;
+  const users = [];
+  for (const t of after.times.values()) {
+    const ns = Math.max(0, t.ns - (before.times.get(t.pid)?.ns ?? 0));
+    if (!(window > 0) || ns < MIN_SHARE * window) continue;
+    const p = table.get(t.pid);
+    users.push({
+      pid: t.pid, name: t.name, what: p && t.name === 'node' ? shortCommand(p.command) : t.name,
+      command: p?.command ?? null, share: ns / window, queued: family.has(t.pid),
+    });
+  }
+  return users.sort((a, b) => b.share - a.share || a.pid - b.pid);
+}
+
+export function gpuMeter(read) {
+  let before = null;
+  return (table, holder, at = Date.now()) => {
+    const after = { at, times: read() };
+    const prior = before;
+    before = after;
+    if (!prior || at <= prior.at || at - prior.at > USE_WINDOW_MS) return { since: null, until: at, users: null };
+    return { since: prior.at, until: at, users: gpuShares(prior, after, table, familyOf(table, holder)) };
+  };
 }
 
 const listeners = (port) => (port ? pidList(output('/usr/sbin/lsof', ['-w', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'])) : []);
@@ -361,7 +407,7 @@ function snapshot(cfg, net = {}, how = probing) {
   const queue = listed.filter((t) => how.waiting(cfg, t, table) && t.info)
     .map((t) => ({ ...labels(t.info), priority: t.priority, pid: t.pid, since: t.ms, log: t.info.log, command: t.info.command, cwd: t.info.cwd }));
   const lock = holder ? [] : how.holders(cfg, record, queue).filter((pid) => table.has(pid)).map((pid) => described(table.get(pid)));
-  const family = holder ? new Set([...lineage(table, holder.pid).keys(), ...descendants(table, holder.pid)]) : new Set();
+  const family = familyOf(table, holder);
   const outside = [...(net.users || gpuUsers(cfg))].map((pid) => table.get(pid))
     .filter((p) => p && !family.has(p.pid) && !AGENT.test(p.command))
     .map((p) => ({ ...described(p), start: Date.parse(p.start) }));
@@ -665,10 +711,13 @@ export function serve(cfg, port = SERVE_PORT) {
   const policy = `default-src 'none'; script-src ${hash(/<script>([^]*?)<\/script>/)}; style-src ${hash(/<style>([^]*?)<\/style>/)}; `
     + "img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
   const how = watching();
+  const meter = gpuMeter(() => gpuTimes(cfg));
   let cached = null;
   const current = () => {
     if (!cached || Date.now() - cached.at >= cfg.cache) {
-      const body = JSON.stringify({ ...snapshot(cfg, {}, how), dir: cfg.dir, history: recentRuns(cfg) });
+      const table = processes();
+      const s = snapshot(cfg, { table }, how);
+      const body = JSON.stringify({ ...s, gpu: meter(table, s.holder), dir: cfg.dir, history: recentRuns(cfg) });
       cached = { at: Date.now(), body };
     }
     return cached.body;
