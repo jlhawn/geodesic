@@ -2,14 +2,14 @@
 #   source scripts/gpuQueue.zsh
 #   export GPU_WHO=<session name>                  once per session; labels the runs of both
 #   GPU_JOB='<one line>' gpu_run LOG CMD [ARG...]  waits its turn, holds the GPU for all of CMD, exits with its status
-#   GPU_PRIORITY=<1-5> gpu_run …                   the run's level, 1 the highest and 3 the default: 1: a check Joshua is waiting on;
-#                                                  2: test suites before a merge or push; 3: the default; 4: routine reports and figures;
-#                                                  5: long background experiments, in short segments
-#   GPU_JOB='<one line>' gpu_share LOG node --test [FLAG...] FILE.test.mjs
-#                                                  runs one GPU test file beside other shared test files, never beside a
-#                                                  gpu_run job, on one CPU slot; status 75 when a GPU abort fails it
-#   gpu_lane [reset]                               prints the shared lane: how many test files share at once, and why;
-#                                                  reset reopens it to 2 after an abort dropped it to 1
+#   GPU_PRIORITY=<1-3> gpu_run …                   the run's level, 3 by default: 1: a job under 5 minutes that tolerates
+#                                                  contention, such as a GPU test file, up to 5 at once, each on CPU_SLOTS
+#                                                  slots (1); 2: a measurement such as pace, at most 10 minutes, alone;
+#                                                  3: a long job with heavy GPU use, alone
+#   GPU_JOB='<one line>' gpu_share LOG CMD [ARG...]
+#                                                  gpu_run at level 1; status 75 when a GPU abort in node fails it
+#   gpu_lane [reset]                               prints how many level-1 jobs may share the GPU at once, and why;
+#                                                  reset lets 5 share again after an abort dropped level 1 to one at a time
 #   gpu_status                                     rewrites and prints <queue dir>/status.md: the holder and the queue in order
 #   gpu_serve [PORT]                               serves a live page of the queue and its recent runs on http://127.0.0.1:PORT/ (8008)
 #   CPU_SLOTS=<k> CPU_JOB='<one line>' cpu_run LOG CMD [ARG...]

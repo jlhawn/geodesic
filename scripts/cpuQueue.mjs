@@ -13,8 +13,8 @@
 // --test-concurrency at most its slots. A run inside another run's CMD goes
 // ahead at once on the outer run's slots. GPU_WHO and CPU_JOB (one line on
 // what CMD is) label a run; `status` lists the runs holding slots and those
-// waiting. A shared GPU test file of scripts/gpuQueue.mjs takes one slot
-// through holdSlots, without waiting when it holds the GPU.
+// waiting. A level-1 run of scripts/gpuQueue.mjs takes its CPU_SLOTS through
+// holdSlots, without waiting when it holds the GPU.
 // Each slot is an O_EXLOCK flock on <dir>/slot-<i>. A waiter takes slots
 // only while it holds the flock on <dir>/door, so a run waiting for many is
 // never overtaken by smaller ones. CMD inherits the slots from fd 20 on, so a

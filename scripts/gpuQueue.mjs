@@ -1,9 +1,13 @@
-// One GPU job at a time on this Mac, by level and then in order of arrival,
-// for every session: macOS aborts the command buffers of node WebGPU models
-// that share the GPU, and Dawn never reports it. Only test files, which keep
-// the GPU busy a few percent of their time, may share it, a few at once.
+// The GPU queue of this Mac, for every session, by level and then in order
+// of arrival: macOS aborts the command buffers of node WebGPU models that
+// share the GPU, and Dawn never reports it, so heavy jobs run alone. Levels:
+//   1  a short job (under 5 minutes) that tolerates contention, such as a GPU
+//      test file: up to 5 level-1 jobs share the GPU at once;
+//   2  a measurement of the GPU, such as pace, of at most 10 minutes of heavy
+//      use: alone;
+//   3  a long job with heavy GPU use, the default: alone.
 //   node scripts/gpuQueue.mjs run LOG CMD [ARG...]
-//   node scripts/gpuQueue.mjs share LOG node --test [FLAG...] FILE.test.mjs
+//   node scripts/gpuQueue.mjs share LOG CMD [ARG...]
 //   node scripts/gpuQueue.mjs lane [reset]
 //   node scripts/gpuQueue.mjs status
 //   node scripts/gpuQueue.mjs serve [PORT]
@@ -22,25 +26,24 @@
 // GPU_QUEUE_HELD=1 in their environment, without which
 // js/gpu/device.module.js opens no GPU on this Mac. CPU-only jobs do not use
 // the queue and never wait for it.
-// GPU_PRIORITY (1-5, default 3) sets a run's level, 1 the highest. A waiter
-// tries the lock only when no live ticket is ahead of it in (level, seq, ms,
-// pid) order: a level waits until every higher one is empty, runs in order
-// of arrival, and never preempts a running job. A level-4 waiter takes a free
-// lock only once it has stayed free for 15 s, a level-5 waiter 60 s, with no
-// ticket arriving ahead of it meanwhile, so neither takes the GPU in the gap
+// GPU_PRIORITY (1-3, default 3) sets a run's level; `share` runs at level 1,
+// and 4 and 5, the levels of older scripts, run as 3. A waiter tries the
+// lock only when no live ticket is ahead of it in (level, seq, ms, pid)
+// order: a level waits until every lower-numbered one is empty, runs in
+// order of arrival, and never preempts a running job. A level-3 waiter takes
+// a free lock only once it has stayed free for 15 s with no ticket arriving
+// ahead of it meanwhile, so a long job does not take the GPU in the gap
 // between another session's runs; a finished holder keeps its idle device
-// for a waiter of levels 1-3 only.
-// `share` runs one GPU test file and nothing else. Up to the lane's limit of
-// shared runs hold the GPU together, never beside a `run`, in the same order
-// of arrival; a shared run joining others takes the GPU at once, whatever
-// its level, and treats their processes as its own. Each also takes one CPU
-// slot of scripts/cpuQueue.mjs, unless it runs inside a cpu_run, and gives
-// the GPU back to the queue while it waits for one. The lane allows 2 at
-// once, then 3 after a day with no aborts in which at least 20 shared runs
-// overlapped another. A shared run writes its "exit" line only after its
-// abort scan: a command-buffer abort in a node process during its job fails
-// it with status 75 and drops the lane to one at a time until `lane reset`.
-// `lane` prints the lane.
+// for a waiter of levels 1 and 2 only. A level-1 job that runs past 5
+// minutes, or a level-2 job past 10, says so in its log and the status.
+// Level-1 runs hold the GPU together, up to 5 at once, never beside a run of
+// level 2 or 3; one joining others takes the GPU at once and treats their
+// processes as its own. Each also takes CPU_SLOTS slots (1 by default) of
+// scripts/cpuQueue.mjs, unless it runs inside a cpu_run, and gives the GPU
+// back to the queue while it waits for them. A level-1 run writes its "exit"
+// line only after its abort scan: a command-buffer abort in a node process
+// during its job fails it with status 75 and drops level 1 to one job at a
+// time until `lane reset`. `lane` prints how many level-1 jobs may share.
 // GPU_WHO (a short name for the session) and GPU_JOB (one line on what CMD
 // is) label a run. <dir>/status.md lists the holder and the queue in order,
 // each with its level, by these labels, or by worktree and command for a run
@@ -62,7 +65,7 @@
 // its holders exit; CMD inherits it as fd 19, so a job outliving a killed
 // holder keeps it. A shared run holds an O_SHLOCK on it instead and an
 // O_EXLOCK on one of <dir>/share-<i>, i below the limit, which its job
-// inherits too, with its CPU slot. Its record is <dir>/shared/<pid>.json,
+// inherits too, with its CPU slots. Its record is <dir>/shared/<pid>.json,
 // and holder.json mirrors one shared record for runs of older copies of this
 // script, which take the lock exclusively and so wait for every shared run.
 // The lane is <dir>/lane.json. Waiters hold flocks on their tickets in
@@ -72,9 +75,11 @@
 // wait is a multiple of it), GPU_QUEUE_PORT (8000; 0 for none),
 // GPU_QUEUE_PROBE (a shell command that prints the pids using the GPU, in
 // place of lsof), GPU_QUEUE_DEVICE (off, or a module whose getDevice stands
-// in for js/gpu/device.module.js), GPU_QUEUE_COURTESY_MS (15000,60000: how
-// long levels 4 and 5 wait for the lock to stay free), GPU_QUEUE_IOREG (a
-// shell command whose output stands in for ioreg's) and GPU_QUEUE_ABORTS
+// in for js/gpu/device.module.js), GPU_QUEUE_COURTESY_MS (15000: how long
+// level 3 waits for the lock to stay free), GPU_QUEUE_OVERTIME_MS
+// (300000,600000: how long a job of level 1 and of level 2 runs before it
+// says it is over), GPU_QUEUE_IOREG (a shell command whose output stands in
+// for ioreg's) and GPU_QUEUE_ABORTS
 // (off, or a shell command whose output stands in for the system log's)
 // serve tests.
 import fs from 'node:fs';
@@ -91,10 +96,11 @@ const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL, O_NONBLOCK } = fs.constants;
 const INHERITED_FD = 19;
 const AGENT = /(^|[\s/])gpuQueue\.mjs (run|share)\b/;
 const TICKET = /^(?:p([1-5])-)?(\d+)-(\d+)-(\d+)\.json$/;
-const LEVELS = [1, 2, 3, 4, 5], DEFAULT_LEVEL = 3, COURTESY_MS = [15000, 60000];
+const LEVELS = [1, 2, 3, 4, 5], DEFAULT_LEVEL = 3, SHARED_LEVEL = 1, COURTESY_MS = 15000;
+const OVERTIME_MS = [5 * 60e3, 10 * 60e3];
 const LSTART = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/;
-const USAGE = 'usage: gpuQueue.mjs run LOG CMD [ARG...] | gpuQueue.mjs share LOG node --test [FLAG...] FILE.test.mjs | gpuQueue.mjs lane [reset] | gpuQueue.mjs status | gpuQueue.mjs serve [PORT]';
-const LANE_START = 2, LANE_MOST = 3, LANE_DAY_MS = 24 * 3600e3, LANE_OVERLAPS = 20, ABORTED = 75;
+const USAGE = 'usage: gpuQueue.mjs run LOG CMD [ARG...] | gpuQueue.mjs share LOG CMD [ARG...] | gpuQueue.mjs lane [reset] | gpuQueue.mjs status | gpuQueue.mjs serve [PORT]';
+const LANE_MOST = 5, ABORTED = 75;
 const ABORT_LINE = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?:\.(\d+))?\s+\S+\s+(.+?)\[(\d+):/;
 const PAGE = new URL('./gpuQueue.html', import.meta.url);
 const LOCAL_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
@@ -108,6 +114,7 @@ const pad = (n) => String(n).padStart(2, '0');
 const clock = (ms = Date.now()) => new Date(ms).toTimeString().slice(0, 8);
 const day = (ms = Date.now()) => new Date(ms).toDateString().slice(4, 10);
 const when = (ms) => (day(ms) === day() ? clock(ms) : `${day(ms)} ${clock(ms)}`);
+const minutes = (ms) => (ms % 60000 ? `${ms / 1000} s` : `${ms / 60000} minutes`);
 const cut = (text = '', n = 100) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 const oneLine = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
 const quote = (argv) => argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(' ');
@@ -119,7 +126,8 @@ export function config(env = process.env) {
   const device = env.GPU_QUEUE_DEVICE === 'off' ? null
     : env.GPU_QUEUE_DEVICE ? pathToFileURL(path.resolve(env.GPU_QUEUE_DEVICE)).href
     : new URL('../js/gpu/device.module.js', import.meta.url).href;
-  const courtesy = String(env.GPU_QUEUE_COURTESY_MS ?? '').split(',').map((ms) => (ms.trim() ? Number(ms) : NaN));
+  const courtesy = String(env.GPU_QUEUE_COURTESY_MS ?? '').trim() ? Number(env.GPU_QUEUE_COURTESY_MS) : NaN;
+  const overtime = String(env.GPU_QUEUE_OVERTIME_MS ?? '').split(',').map((ms) => (ms.trim() ? Number(ms) : NaN));
   return {
     dir, lock: path.join(dir, 'lock'), holder: path.join(dir, 'holder.json'), queue: path.join(dir, 'queue'),
     shared: path.join(dir, 'shared'), lane: path.join(dir, 'lane.json'),
@@ -130,11 +138,12 @@ export function config(env = process.env) {
     probe: env.GPU_QUEUE_PROBE || '', ioreg: env.GPU_QUEUE_IOREG || '', device, aborts: env.GPU_QUEUE_ABORTS !== 'off',
     abortLog: env.GPU_QUEUE_ABORTS && env.GPU_QUEUE_ABORTS !== 'off' ? env.GPU_QUEUE_ABORTS : '',
     who: oneLine(env.GPU_WHO), what: oneLine(env.GPU_JOB), priority: oneLine(env.GPU_PRIORITY) || String(DEFAULT_LEVEL),
-    courtesy: courtesy.length === 2 && courtesy.every((ms) => ms >= 0) ? courtesy : COURTESY_MS,
+    courtesy: courtesy >= 0 ? courtesy : COURTESY_MS,
+    overtime: overtime.length === 2 && overtime.every((ms) => ms > 0) ? overtime : OVERTIME_MS,
   };
 }
 
-const delayOf = (cfg, level) => (level > DEFAULT_LEVEL ? cfg.courtesy[level - DEFAULT_LEVEL - 1] : 0);
+const delayOf = (cfg, level) => (level >= DEFAULT_LEVEL ? cfg.courtesy : 0);
 const levelOf = (info) => (LEVELS.includes(info?.priority) ? info.priority : DEFAULT_LEVEL);
 
 export function whoFrom(cwd = '') {
@@ -175,17 +184,6 @@ export function shortCommand(command = '') {
     .map((a) => a.replace(/^([^/]*=)?\/[^=]*?\/([^/=]+\/[^/=]+)$/, '$1…/$2'))
     .map((a) => (!a || /[\s'"\\]/.test(a) ? `'${a.replace(/'/g, `'\\''`)}'` : a))
     .join(' '), 120);
-}
-
-export function sharedTestFile(argv) {
-  let args = argv;
-  if (path.basename(args[0] || '') === 'env') {
-    args = args.slice(1);
-    while (args.length > 1 && /^[A-Za-z_]\w*=/.test(args[0])) args = args.slice(1);
-  }
-  if (path.basename(args[0] || '') !== 'node' || !args.includes('--test')) return null;
-  const files = args.filter((a) => /\.test\.m?js$/.test(a));
-  return files.length === 1 ? files[0] : null;
 }
 
 const labels = (info) => ({ who: oneLine(info.who) || whoFrom(info.cwd), what: oneLine(info.what) || shortCommand(info.command) });
@@ -462,7 +460,7 @@ function agents(cfg, table) {
 
 function laneOf(cfg) {
   const lane = readJson(cfg.lane);
-  return lane && [1, LANE_START, LANE_MOST].includes(lane.limit) ? lane : { limit: LANE_START, since: null };
+  return lane?.fallback ? { ...lane, limit: 1 } : { limit: LANE_MOST };
 }
 
 function editLane(cfg, edit) {
@@ -476,28 +474,14 @@ function editLane(cfg, edit) {
   });
 }
 
-const overlapping = (runs) => runs.filter((a) => runs.some((b) => b !== a && a.started < b.ended && b.started < a.ended)).length;
-const sharedRuns = (cfg, since) => allRuns(cfg).filter((r) => r.shared && r.started >= since && r.ended);
-
-function promote(cfg, now = Date.now()) {
-  return editLane(cfg, (lane) => {
-    if (lane.limit !== LANE_START || lane.fallback || !lane.since || now - lane.since < LANE_DAY_MS) return null;
-    return overlapping(sharedRuns(cfg, lane.since)) >= LANE_OVERLAPS ? { ...lane, limit: LANE_MOST, promoted: now } : null;
-  });
-}
-
 export function laneText(cfg = config()) {
-  const lane = laneOf(cfg), f = lane.fallback;
-  if (f) return `Shared lane: one at a time since ${when(f.at)}, after ${f.aborts} GPU command-buffer abort${f.aborts === 1 ? '' : 's'} in ${f.who}, ${f.what} (${f.log}); gpu_lane reset reopens it`;
-  if (!lane.since) return `Shared lane: ${lane.limit} at a time, not used yet`;
-  if (lane.limit === LANE_START) {
-    return `Shared lane: ${LANE_START} at a time since ${when(lane.since)}; ${LANE_MOST} once a day has passed with no aborts and ${LANE_OVERLAPS} shared runs have overlapped another (${overlapping(sharedRuns(cfg, lane.since))} so far)`;
-  }
-  return `Shared lane: ${lane.limit} at a time since ${when(lane.promoted ?? lane.since)}`;
+  const f = laneOf(cfg).fallback;
+  if (f) return `Level 1: one job at a time since ${when(f.at)}, after ${f.aborts} GPU command-buffer abort${f.aborts === 1 ? '' : 's'} in ${f.who}, ${f.what} (${f.log}); gpu_lane reset lets ${LANE_MOST} share again`;
+  return `Level 1: up to ${LANE_MOST} jobs share the GPU; levels 2 and 3 run alone`;
 }
 
 export function lane(cfg, args = []) {
-  if (args.length === 1 && args[0] === 'reset') editLane(cfg, () => ({ limit: LANE_START, since: Date.now(), reset: Date.now() }));
+  if (args.length === 1 && args[0] === 'reset') editLane(cfg, () => ({ limit: LANE_MOST, reset: Date.now() }));
   else if (args.length) throw refused(`not a lane command: ${args.join(' ')}; use gpu_lane, or gpu_lane reset`);
   return laneText(cfg);
 }
@@ -542,7 +526,8 @@ function describeBlock(cfg, net) {
 
 function holderState(record) {
   const since = record.stateSince ? ` since ${when(record.stateSince)}` : '';
-  if (record.state === 'running') return `running since ${when(record.started)}`;
+  const over = record.over ? `, past level ${levelOf(record)}'s ${minutes(record.over)}` : '';
+  if (record.state === 'running') return `running since ${when(record.started)}${over}`;
   if (record.state === 'waiting') return `waiting${since} for ${record.blockers}`;
   return `checking for GPU users outside the queue${since}`;
 }
@@ -606,7 +591,7 @@ function statusText(cfg, net) {
     out.push(`Holder: **${h.who}**, ${h.what}`, `- level ${h.priority}, ${holderState(h)}`,
       `- pid ${h.pid}, took the lock at ${when(h.acquired)}${h.deviceReady ? ', idle device open' : ''}`, `- log ${h.log}`);
   } else if (s.shared.length) {
-    out.push(`Holders: ${s.shared.length} test file${s.shared.length === 1 ? '' : 's'} sharing the GPU`);
+    out.push(`Holders: ${s.shared.length} level-1 job${s.shared.length === 1 ? '' : 's'} sharing the GPU`);
     for (const r of s.shared) {
       out.push(`- **${r.who}**, ${r.what}`, `  - level ${r.priority}, ${holderState(r)}, pid ${r.pid}${r.deviceReady ? ', idle device open' : ''}`, `  - log ${r.log}`);
     }
@@ -618,7 +603,7 @@ function statusText(cfg, net) {
   out.push('', s.lane.text, '', s.queue.length ? 'Queue:' : 'Queue: empty');
   s.queue.forEach((t, i) => {
     const indent = ' '.repeat(`${i + 1}. `.length);
-    out.push(`${i + 1}. **${t.who}**, ${t.what}`, `${indent}- level ${t.priority}${t.shared ? ', to share' : ''}, queued since ${when(t.since)}, pid ${t.pid}`, `${indent}- log ${t.log}`);
+    out.push(`${i + 1}. **${t.who}**, ${t.what}`, `${indent}- level ${t.priority}, queued since ${when(t.since)}, pid ${t.pid}`, `${indent}- log ${t.log}`);
   });
   out.push('', s.outside.length ? 'Outside the queue:' : 'Outside the queue: none');
   for (const p of s.outside) out.push(`- pid ${p.pid} since ${when(p.start)}: ${p.short}`);
@@ -737,26 +722,30 @@ async function linger(cfg, device) {
   if (!device) return;
   for (const until = Date.now() + cfg.linger; Date.now() < until; await sleep(cfg.tick)) {
     const next = readRecord(cfg);
-    if (next && next.pid !== process.pid ? next.deviceReady : !tickets(cfg).some((t) => !delayOf(cfg, t.priority) && waiting(cfg, t.file))) break;
+    if (next && next.pid !== process.pid ? next.deviceReady : !tickets(cfg).some((t) => t.priority < DEFAULT_LEVEL && waiting(cfg, t.file))) break;
   }
   try { device.destroy(); } catch {}
 }
 
-export async function run(cfg, logArg, argv, { share = false } = {}) {
+export async function run(cfg, logArg, argv, { share: shareCommand = false } = {}) {
   if (!logArg || !argv.length) { console.error(USAGE); return 2; }
-  if (!/^[1-5]$/.test(cfg.priority)) {
-    console.error(`gpu_run: GPU_PRIORITY is '${cfg.priority}'; use 1, 2, 3, 4 or 5 (1 runs first, 3 is the default)`);
+  if (!shareCommand && !/^[1-5]$/.test(cfg.priority)) {
+    console.error(`gpu_run: GPU_PRIORITY is '${cfg.priority}'; use 1 (under 5 minutes, shares the GPU), 2 (a measurement of at most 10 minutes, alone) or 3 (long, alone; the default)`);
     return 2;
   }
-  if (share && !sharedTestFile(argv)) {
-    console.error('gpu_share: a shared run is one GPU test file, node --test [FLAG...] FILE.test.mjs; run anything else with gpu_run');
+  const priority = shareCommand ? SHARED_LEVEL : Math.min(Number(cfg.priority), DEFAULT_LEVEL);
+  const share = priority === SHARED_LEVEL;
+  const cpuCfg = cpuConfig();
+  const want = share && !/^\d+$/.test(cpuCfg.held) ? Number(cpuCfg.slots) : 0;
+  if (share && !/^\d+$/.test(cpuCfg.held) && !(Number.isInteger(want) && want >= 1 && want <= cpuCfg.total)) {
+    console.error(`gpu_run: CPU_SLOTS is '${cpuCfg.slots}'; a level-1 run takes a whole number of CPU slots from 1 to ${cpuCfg.total}, 1 by default`);
     return 2;
   }
-  const priority = Number(cfg.priority);
   const log = path.resolve(logArg);
   if (finished(log)) { console.error(`gpu_run: skipped, ${log} already holds "exit 0"`); return 0; }
   const say = (text) => fs.appendFileSync(log, `${text}\n`);
   fs.mkdirSync(path.dirname(log), { recursive: true });
+  if (!shareCommand && Number(cfg.priority) > DEFAULT_LEVEL) say(`level ${cfg.priority} runs as level ${DEFAULT_LEVEL}: GPU_PRIORITY takes 1, 2 or 3`);
   fs.mkdirSync(cfg.queue, { recursive: true });
   const line = lineage(processes(), process.pid);
   const self = {
@@ -799,7 +788,7 @@ export async function run(cfg, logArg, argv, { share = false } = {}) {
   const waitTurn = async () => {
     ticket = enqueue(cfg, self);
     const delay = delayOf(cfg, priority);
-    const at = `${priority === DEFAULT_LEVEL ? '' : ` at level ${priority}`}${share ? ' to share' : ''}`;
+    const at = priority === DEFAULT_LEVEL ? '' : ` at level ${priority}`;
     let freeSince = 0;
     for (let n = 1; ; n++) {
       const ahead = tickets(cfg).filter((t) => order(t, ticket) < 0 && waiting(cfg, t.file));
@@ -821,11 +810,10 @@ export async function run(cfg, logArg, argv, { share = false } = {}) {
     }
   };
   let above = holderAbove(cfg, line, true) || await waitTurn();
-  const cpuCfg = cpuConfig();
-  if (!above && share && !/^\d+$/.test(cpuCfg.held)) {
+  if (!above && want) {
     const entry = {
-      pid: process.pid, want: 1, log, command: self.command, cwd: self.cwd, who: self.who, queued: Date.now(),
-      what: `shared GPU test file${self.what ? `: ${self.what}` : ''}`,
+      pid: process.pid, want, log, command: self.command, cwd: self.cwd, who: self.who, queued: Date.now(),
+      what: `level-1 GPU job${self.what ? `: ${self.what}` : ''}`,
     };
     cpu = await holdSlots(cpuCfg, entry, { wait: false });
     if (!cpu) {
@@ -861,7 +849,6 @@ export async function run(cfg, logArg, argv, { share = false } = {}) {
   };
   enter('checking');
   dequeue(ticket);
-  if (share) editLane(cfg, (lane) => (lane.since ? null : { ...lane, since: Date.now() }));
 
   let opening = null, clearSince = 0, said = '';
   for (;;) {
@@ -902,7 +889,13 @@ export async function run(cfg, logArg, argv, { share = false } = {}) {
   if (cpu && job.child.pid) cpu.child(job.child.pid);
   refresh(cfg);
   const seen = new Set();
+  const overtime = cfg.overtime[priority - 1];
   const monitor = setInterval(() => {
+    if (overtime && !record.over && Date.now() - started > overtime) {
+      record.over = overtime;
+      write();
+      say(`overtime ${clock()}: past level ${priority}'s ${minutes(overtime)}; queue jobs this long at level ${priority + 1 === DEFAULT_LEVEL ? DEFAULT_LEVEL : `${priority + 1} or ${DEFAULT_LEVEL}`}`);
+    }
     const net = survey(cfg, process.pid, share);
     for (const u of net.outside) {
       if (!seen.has(u.pid)) { seen.add(u.pid); say(`overlap ${clock()} pid ${u.pid}: ${shortCommand(u.command)}`); }
@@ -929,8 +922,8 @@ export async function run(cfg, logArg, argv, { share = false } = {}) {
       const failed = rc === 0 ? ` with status ${ABORTED}` : '';
       if (rc === 0) rc = ABORTED;
       const fell = editLane(cfg, (lane) => (lane.fallback ? null : { ...lane, limit: 1, fallback: { at: Date.now(), aborts: caught, ...labels(self), log } }));
-      say(`${caught} GPU command-buffer abort${caught === 1 ? '' : 's'} in node during the job: the run fails${failed}${fell ? ', and the shared lane falls back to one at a time' : ''}`);
-    } else if (promote(cfg)) say(`the shared lane now allows ${LANE_MOST} at a time, after a day with no aborts`);
+      say(`${caught} GPU command-buffer abort${caught === 1 ? '' : 's'} in node during the job: the run fails${failed}${fell ? ', and level 1 falls back to one job at a time' : ''}`);
+    }
     say(`exit ${rc} ${clock()}`);
   }
   remember(scan.count);

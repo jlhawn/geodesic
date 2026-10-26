@@ -196,12 +196,12 @@ const copyable = (text) => el('span', { class: 'path' },
 function sharedView(shared) {
   return [
     el('div', { class: 'title' }, el('span', { class: 'badge run' }, 'Sharing'),
-      el('span', null, `${shared.length} test file${shared.length === 1 ? '' : 's'} share the GPU; no other job runs beside them.`)),
+      el('span', null, `${shared.length} level-1 job${shared.length === 1 ? '' : 's'} share${shared.length === 1 ? 's' : ''} the GPU; no job of level 2 or 3 runs beside them.`)),
     el('ul', { class: 'list' }, shared.map((h) => {
       const [tone, label] = STATES[h.state] || STATES.checking;
       const since = (h.state === 'running' ? h.started : h.stateSince) || h.acquired || h.since;
       return el('li', null, el('div', { class: 'body' },
-        el('div', { class: 'title' }, el('span', { class: `badge ${tone}` }, label), el('span', { class: 'who' }, h.who), el('span', { class: 'mono' }, `pid ${h.pid}`)),
+        el('div', { class: 'title' }, el('span', { class: `badge ${tone}` }, label), overBadge(h), el('span', { class: 'who' }, h.who), el('span', { class: 'mono' }, `pid ${h.pid}`)),
         el('p', null, h.what),
         el('p', { class: 'line' }, `level ${h.priority}${dot}since `, el('b', null, when(since)), dot, elapsed(since)),
         h.state === 'waiting' && h.blockers && el('p', { class: 'blockers' }, `for ${h.blockers}`),
@@ -209,6 +209,8 @@ function sharedView(shared) {
     })),
   ];
 }
+
+const overBadge = (h) => h.over && el('span', { class: 'badge warn', title: `Past level ${h.priority}'s ${span(h.over)}` }, 'overtime');
 
 function holderView({ holder, shared, lane, lock, exited }) {
   return [shared.length ? sharedView(shared) : soleView({ holder, lock, exited }), lane && el('p', { class: 'note' }, lane.text)];
@@ -220,7 +222,7 @@ function soleView({ holder: h, lock, exited }) {
     const since = (h.state === 'running' ? h.started : h.stateSince) || h.acquired || h.since;
     const doing = h.state === 'running' ? 'Running' : h.state === 'waiting' ? 'Waiting' : 'Checking for GPU users outside the queue';
     return [
-      el('div', { class: 'title' }, el('span', { class: `badge ${tone}` }, label), el('span', { class: 'who' }, h.who)),
+      el('div', { class: 'title' }, el('span', { class: `badge ${tone}` }, label), overBadge(h), el('span', { class: 'who' }, h.who)),
       el('p', { class: 'what' }, h.what),
       el('p', { class: 'line' }, `${doing} since `, el('b', null, when(since)), dot, elapsed(since)),
       h.state === 'waiting' && h.blockers && el('p', { class: 'blockers' }, `for ${h.blockers}`),
@@ -250,7 +252,7 @@ function queueView(queue) {
   return el('ol', { class: 'list' }, queue.map((t, i) => el('li', null,
     el('span', { class: 'pos' }, i + 1),
     el('div', { class: 'body' },
-      el('div', { class: 'title' }, el('span', { class: 'badge' }, `level ${t.priority}`), t.shared && el('span', { class: 'badge run' }, 'to share'),
+      el('div', { class: 'title' }, el('span', { class: 'badge' }, `level ${t.priority}`),
         el('span', { class: 'who' }, t.who), el('span', { class: 'mono' }, `pid ${t.pid}`)),
       el('p', null, t.what),
       el('p', { class: 'line' }, 'queued since ', el('b', null, when(t.since)), dot, elapsed(t.since)),
