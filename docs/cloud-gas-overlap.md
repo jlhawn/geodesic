@@ -456,16 +456,78 @@ value there, because the liquid ramp reaches down to 235.15 K where the IFS's
 cloud is ice. The option changes the liquid share's conversion and nothing else:
 the phase ramp, the radiation, the ice's fall and the plume are as they were, the
 shader text is unchanged with the option off, and the default path's digests hold.
-The converted liquid leaves as rain without freezing aloft or melting at 0 C; at
-+0.1 mm/day in the tropical mean (the table's 3.29 to 3.40) that is 0.4 W/m² of
-fusion heat (3.34e5 J/kg times 0.1 kg/m² per day over 86400 s), which a rule that
-froze the water where it forms and melted the snow would move. It is not built.
+The converted liquid leaves as liquid rain, as every conversion of the resolved
+cloud does; the next subsection sets out what the model's phase bookkeeping does with
+it, and why the option has no heat-of-fusion term.
+
+### Where the heat of fusion is
+
+The model keeps it in three places and nowhere else, the same on the CPU
+(`autoconvertColumn` in `js/physics/moist.module.js`, `adjust` in `js/model.module.js`)
+and the GPU (`adjustRain` in `js/gpu/physics.gpu.js`).
+
+- The resolved cloud's condensate carries no enthalpy: condensation, deposition,
+  evaporation and sublimation take the latent heat L of vaporization whatever the phase
+  (the phase ramp sets the saturation vapor pressure and the radiation, not the heat).
+  A layer's ice falls at its own speed and on arrival the share α(T) of it joins the rain
+  stream, the rest the layer's cloud; the liquid share converts to the rain stream
+  (Kessler's rate, times F with the option); rain evaporates in dry layers with L. No
+  step in this stage releases or charges L_f, so no resolved-cloud precipitation counts
+  as frozen while it falls.
+- The plume's precipitation is complete: its liquid-ice static energy carries L_f for the
+  ice, the frozen share of its rain is tracked down the column (`convectiveFrozen`,
+  `frozen`), melts in the first layer at 273.15 K or warmer with L_f taken from that
+  layer, and sublimates with L + L_f; what arrives frozen is `convectiveSnow`. The plume
+  splits its rain by its condensate's phase, so its liquid share also falls as
+  supercooled liquid rain, and its Bergeron-Findeisen factor leaves that as it is.
+- The surface decides the rest: all precipitation reaching a surface whose lowest layer
+  is below 273.15 K is frozen there (`adjust` decides it for land, `lake.deposit` and
+  `seaIce.deposit` for lakes and the sea), and L_f times (the precipitation less
+  `convectiveSnow`) heats that layer (the snow store, or the open sea's slab, holds the
+  opposite enthalpy); the plume's snow arriving at a warmer surface costs the lowest
+  layer L_f times its amount.
+
+So the converted liquid is treated as everything else the resolved cloud rains out, the
+liquid share of the plume's rain included: liquid until the surface, frozen there only
+where the air is below freezing, with the heat of fusion paid at the surface. The model's
+energy is closed with that convention (the conservation rows), and the option does not
+touch it. What the convention omits is physical, and is not the
+option's: the freezing of supercooled liquid aloft and of the ice's deposition (L_f
+released in 250-450 hPa) and the melting of what falls through 273.15 K (L_f charged
+there), a vertical dipole of the heating with no net in a warm column. The IFS release
+and charge it as IFS Documentation CY25r1 Part IV does: L = α L_vap + (1 - α) L_subl at
+condensation (equations 6.8 and 6.12) and snowmelt M = (c_p / L_fus)(T - T_melt)/τ with
+τ = 5 h / (1 + 0.5 (T - T_melt)) (equation 6.56; 5.42 in the convection chapter), and its
+conversion of the mixed-phase cloud (equation 6.49, the factor of 6.53) releases no heat
+of fusion: there is no term for freezing the converted liquid, neither there nor in
+the plume here.
+
+Size, from the CPU model's six hours from fourteen64's June state (N = 64), the
+30S-30N mean in mm/day and in W/m² of fusion heat (3.34e5 J/kg):
+
+| | without the option | with it |
+|---|---|---|
+| liquid converted below 273.15 K | 0.83 (3.2) | 1.10 (4.2) |
+| of it below 268.16 K, where F > 1 | 0.52 (2.0) | 0.77 (3.0) |
+| ice leaving the layers | 0.84 (3.3) | 0.62 (2.4) |
+| ice melted on arrival | 0.38 (1.5) | 0.25 (1.0) |
+| precipitation at the surface | 3.29 | 3.40 |
+
+The option adds 0.27 mm/day of conversion below 273.15 K, which is 1.0 W/m² of fusion
+heat, takes 0.13 mm/day from the ice melted on arrival, and adds 0.10 mm/day (0.4 W/m²)
+to the rain at the surface. Over 250-600 hPa
+(3570 kg/m²) the whole liquid conversion is 0.10 K/day and the option's part 0.03 K/day,
+a dipole that warms the mixed-phase layer and cools the melting level. A treatment of
+it belongs to the whole resolved cloud, with the ice's deposition and melting in it,
+on the lines of equations 6.8 and 6.56; it changes every run's heating and its
+pins, and is not an option of the Bergeron-Findeisen factor.
 
 ### Paired arms
 
 `scripts/fixedSst.mjs`, the atmosphere alone over the sea held at WOA23's August
-temperature (N = 128, the 48-layer bl48 levels, fifteen128_day0872, 20 days, a save every
-two days, the Kepler orbit), three seeds (the first unperturbed, the others with the initial θ
+temperature (N = 128, the 48-layer bl48 levels, fifteen128_day0872 (a 60-layer state,
+carried onto the 48 layers by `remapLevels`), 20 days, a save every two days, the Kepler
+orbit), three seeds (the first unperturbed, the others with the initial θ
 scaled by 1 + 1e-5 u, u uniform in ±1/2),
 with the sequential shortwave (K) or the layered (KL), each with the option on (KM, KLM).
 K and KL are the bl48 session's runs; this tree with the option off reproduces both
@@ -533,6 +595,83 @@ of absorbed sunlight in the offline table above, and the arms show no bias that
 needs it. A prognostic phase with an explicit deposition rate (Rotstayn et al. 2000;
 Forbes and Ahlgrimm 2014) is the change that would remove the residual; it is a much
 larger one, and it is the next question only if the liquid mass itself matters.
+
+### The pairs at N = 64
+
+The same harness and readers at N = 64 (the 48-layer bl48 levels, 337.5 s steps, 4.6 s
+per model day on the GPU), K and KM, three seeds each, 20 days with a save every two
+days, the tree of commit 9ceae1a; the saves of days 10 to 20 are read, the offline
+radiation and the tower split on the CPU model at N = 64. The sea is held at WOA23's
+August temperature. No N = 64 state on bl48 exists for late August, so the arms start
+from three:
+
+- a: `eleven64_day0882`, August 19, the eleven spin-up's state on its 36 layers and on a
+  mesh of 8 Lloyd passes (no sub-grid orography file, so no form drag).
+- b: `fourteen64_day1643`, September 21, the fourteen spin-up's N = 64 state on 60 layers.
+- c: day 183 of the E10 fix run, September 21, a state on the 48 layers, 183 days from
+  a fresh start.
+
+The model is built on the 48 layers and the state is carried onto them conservatively in
+σ (`remapLevels`: q, qc and u keep their column integrals, θ its enthalpy), as for the
+N = 128 arms and their 60-layer start; c is the one native bl48 start. The saves of days
+10 to 20 fall on August 29 to September 8 for a and on October 1 to 11 for b and c. CERES
+is interpolated to each save's date (September's for October), GPCP and ERA5 are
+August's, so for b and c the differences are the result and the levels against the
+observations are not.
+
+Each start drifts as the atmosphere adjusts to the levels and the sea. The global
+absorbed sunlight of K by windows of days, and KM less K with the spread of the three
+seeds' paired differences, W/m²:
+
+| start | | days 1-3 | 4-6 | 7-10 | 11-15 | 16-20 |
+|---|---|---|---|---|---|---|
+| a | K | 239.8 | 239.9 | 241.4 | 242.1 | 242.4 |
+| | KM less K | +0.60 ± 0.00 | +0.61 ± 0.02 | +0.83 ± 0.03 | +0.21 ± 0.27 | +1.11 ± 1.13 |
+| b | K | 245.9 | 244.7 | 245.5 | 246.1 | 247.6 |
+| | KM less K | +0.77 ± 0.00 | +0.93 ± 0.03 | +1.22 ± 0.06 | +1.30 ± 0.33 | +0.29 ± 0.94 |
+| c | K | 241.4 | 244.6 | 245.4 | 244.9 | 243.9 |
+| | KM less K | +0.79 ± 0.02 | +0.89 ± 0.05 | +0.93 ± 0.15 | +1.21 ± 0.08 | +2.23 ± 0.55 |
+
+K moves by 2.6, 1.7 and 2.5 W/m² between the first and last windows and by 0.3, 1.5 and
+-1.0 W/m² between days 11-15 and 16-20, so the levels of the K columns below carry a
+drift of that size. KM less K is +0.6 to +0.8 W/m² in the first three days, before the
+arms have separated, and stays between 0.2 and 2.2 W/m² after; the seeds' spread, 0.00 at
+first, grows to 0.5 to 1.1 W/m² by days 16-20 as their weather decorrelates, and sets the
+size of the errors below. Saves of days 10 to 20, K to KM (the difference and the spread
+of the seeds' paired differences where the cell gives them):
+
+| K to KM | a | b | c | N = 128 | reference |
+|---|---|---|---|---|---|
+| 250-450 hPa condensate, tropics, g/m² (liquid) | 25.7 (10.4) to 14.1 (4.9) | 25.0 (9.7) to 13.7 (4.5) | 26.1 (10.4) to 14.1 (4.8) | 28.0 (11.3) to 14.9 (5.3) | ERA5 9.3 (1.1) |
+| optical depth, tropical grid-mean (in-cloud) | 12.8 (25.8) to 11.6 (23.3) | 12.4 (25.8) to 10.8 (22.7) | 13.3 (26.7) to 11.5 (23.7) | 13.3 (27.4) to 11.4 (23.9) | MODIS 4.0 (6.9), AVHRR 4.8 (8.8), ERA5 8.4 |
+| global absorbed sunlight | 242.2 to 242.9 (+0.6 ± 0.5) | 246.7 to 247.6 (+0.8 ± 0.3) | 244.7 to 246.2 (+1.6 ± 0.2) | 244.4 to 245.5 | CERES annual 240.9 |
+| global SWCRE | -48.3 to -47.6 (+0.7 ± 0.6) | -47.3 to -46.4 (+0.9 ± 0.3) | -47.4 to -45.9 (+1.6 ± 0.2) | -44.8 to -43.8 | -43.3 |
+| 30S-30N absorbed sunlight | 307.4 to 307.4 (+0.1 ± 1.0) | 316.6 to 317.2 (+0.6 ± 0.4) | 313.3 to 315.3 (+2.0 ± 0.3) | 305.2 to 306.3 | 304.0 |
+| 30S-30N SWCRE | -50.6 to -50.5 (+0.1 ± 1.0) | -49.2 to -48.6 (+0.6 ± 0.4) | -51.7 to -49.7 (+2.0 ± 0.4) | -47.8 to -46.8 | -43.2 |
+| 30S-30N OLR (LWCRE) | 261.3 (25.4) to 261.7 (24.9) | 262.4 (24.7) to 262.5 (24.4) | 261.1 (25.9) to 262.1 (24.9) | 262.2 (25.4) to 262.5 (24.9) | 264.5 (26.0) |
+| 10S-10N SWCRE | -59.0 to -60.2 (-1.2 ± 0.8) | -53.5 to -53.6 (-0.1 ± 0.3) | -60.5 to -58.8 (+1.7 ± 0.3) | -56.7 to -55.0 | -49.5 |
+| trough SWCRE | -40.2 to -42.3 (-2.2 ± 7.2) | -65.4 to -59.7 (+5.8 ± 5.1) | -59.0 to -61.3 (-2.3 ± 3.3) | -62.2 to -58.3 | -70.5 |
+| trough LWCRE | 36.3 to 38.5 (+2.2 ± 7.4) | 64.2 to 58.1 (-6.2 ± 6.1) | 54.0 to 58.5 (+4.5 ± 5.7) | 62.4 to 58.8 | 60.2 |
+| trough rain, mm/day | 3.06 to 3.77 (+0.71 ± 1.07) | 10.88 to 8.93 (-1.95 ± 1.97) | 7.15 to 7.58 (+0.43 ± 0.56) | 8.61 to 7.59 | GPCP 7.84 |
+| trough ω at 500 hPa, hPa/day | 4.1 to -2.9 (-7.0 ± 11.6) | -60.9 to -47.6 (+13.3 ± 19.0) | -32.1 to -37.3 (-5.2 ± 2.5) | -36.0 to -31.3 | ERA5 -44.7 |
+| trough atmosphere SW cloud effect | 7.9 to 7.5 (-0.4 ± 1.9) | 21.0 to 14.9 (-6.0 ± 4.6) | 16.6 to 14.5 (-2.2 ± 1.5) | 18.4 to 13.4 | ERA5 1.7, CERES 1.3 |
+| trough atmosphere cloud effect, SW + LW | 34.9 to 37.2 (+2.3 ± 8.9) | 74.3 to 65.1 (-9.2 ± 13.8) | 58.3 to 61.4 (+3.2 ± 7.3) | 72.7 to 64.2 | ERA5 47.3, CERES 51.2 |
+| trough column radiation R, SW + LW | -92.6 to -89.0 (+3.6 ± 10.2) | -52.9 to -60.9 (-8.0 ± 15.4) | -69.5 to -64.7 (+4.8 ± 8.4) | -49.6 to -57.0 | ERA5 -68.2, CERES -73.5 |
+| T500 40-60N, KM less K, sea (land), K | -0.08 ± 0.17 (-0.31 ± 0.25) | +0.54 ± 0.41 (+0.55 ± 0.21) | -0.09 ± 0.52 (-0.17 ± 0.27) | -0.20 ± 0.31 (-0.12 ± 0.63) | |
+| rain, global (Indian Ocean 3S-3N 60-90E), mm/day | 2.94 (9.0) to 2.94 (9.4) | 2.89 (3.6) to 2.88 (4.1) | 2.87 (13.8) to 2.88 (13.8) | 2.96 (12.4) to 2.95 (14.3) | GPCP 2.72 (5.9) |
+
+The targeted quantities respond as they do at N = 128, from every start. The tropical
+250-450 hPa condensate falls by 45, 45 and 46 % (47 % at N = 128) and its liquid by 53,
+54 and 54 % (53 %), the grid-mean optical depth by 10, 13 and 14 % (14 %); the global
+absorbed sunlight rises by 0.6 ± 0.5, 0.8 ± 0.3 and 1.6 ± 0.2 W/m² (1.1 ± 0.2 at
+N = 128), the global shortwave cloud effect by 0.7, 0.9 and 1.6, the 30S-30N longwave
+cloud effect falls by 0.5, 0.4 and 1.0 W/m² (0.5), the global rain does not move and the
+T500 at 40-60N moves by -0.1, +0.5 and -0.1 K over the sea. The trough is not decided at N = 64. Start a
+has none (rain 3.1 mm/day against GPCP's 7.8, ω500 of +4 hPa/day), and in b and c the
+changes in its rain (-1.9 ± 2.0 and +0.4 ± 0.6 mm/day), its atmosphere's shortwave
+cloud effect (-6.0 ± 4.6 and -2.2 ± 1.5 W/m²; -5.0 at N = 128) and its column
+radiation (-8.0 ± 15.4 and +4.8 ± 8.4 W/m²; -7.4) are within the spread of three seeds.
+The test of what the option costs the trough stays with the N = 128 pairs.
 
 ## Single columns, tropical atmosphere, % of the beam
 
