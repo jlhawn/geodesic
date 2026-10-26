@@ -569,7 +569,7 @@ test('with discharge at the outlets both engines take the melt out of the calvin
 });
 
 test('on ETOPO 2022 the cavities lie under the Antarctic shelves near their observed extent, Ross and Filchner–Ronne the largest, the Amundsen Sea shelves resolved at N=128', () => {
-  const topography = readTopography('etopo2022'), { geography: base } = geographyOptions(FRESH_GEOGRAPHY);
+  const topography = readTopography('etopo2022'), { geography: base } = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'raster' });
   const regions = {
     Ross: (la, lo) => la < -77.3 && (lo > 158 || lo < -145),
     'Filchner–Ronne': (la, lo) => la < -74.4 && lo > -85 && lo < -28,

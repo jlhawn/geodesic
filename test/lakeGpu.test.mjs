@@ -44,11 +44,10 @@ test(`FLake at N=${N} on the n1024 mask: both engines carry the lakes' columns, 
   assert.ok(ice < 1e-3, `ice ${ice} m`);
 });
 
-test(`at N=${N} on the n1024 mask a GPU model with the lake off runs exactly as one never told of lakes`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const plain = prepare(await createGpuModel(new Grid(N), setup(null))), off = prepare(await createGpuModel(new Grid(N), setup({ model: 'off' })));
+test(`at N=${N} on the n1024 mask the GPU model runs FLake unless told the lake is off, and off it holds no lake slots`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const plain = await createGpuModel(new Grid(N), setup(null)), off = await createGpuModel(new Grid(N), setup({ model: 'off' }));
+  assert.ok(plain.lake && plain.lake.cells.length >= 2 && plain.gpu.layout.PH.LAKE !== undefined);
   assert.equal(off.lake, null);
-  assert.equal(off.gpu.layout.PH.total, plain.gpu.layout.PH.total);
-  for (let n = 0; n < 4; n++) { await plain.step(DT); await off.step(DT); }
-  await plain.sync(); await off.sync();
-  for (const a of [0, 1, 3, 6]) assert.deepEqual(Array.from(off.state[a]), Array.from(plain.state[a]), `state ${a}`);
+  assert.equal(off.gpu.layout.PH.LAKE, undefined);
+  assert.ok(plain.gpu.layout.PH.total > off.gpu.layout.PH.total);
 });

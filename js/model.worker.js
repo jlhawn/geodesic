@@ -19,7 +19,7 @@ import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, 
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
-import { LAKE_FIELDS } from './physics/lake.module.js';
+import { lakeArrays, savedLake } from './physics/lake.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
@@ -348,15 +348,13 @@ function placeDeck(model, saved, N) {
   if (model.skin) model.skin.load(saved && saved.N === N ? saved : null);
 }
 
-const lakeName = (name) => `lake${name[0].toUpperCase()}${name.slice(1)}`;
-
 /*
  * A lake's columns come with a saved run at the same resolution; otherwise
  * each starts mixed at its surface temperature on its first step.
  */
 function placeLake(model, saved, N) {
-  if (!model.lake || !saved || saved.N !== N || !saved.lakeMean) return;
-  model.lake.load(Object.fromEntries([...LAKE_FIELDS, 'passed'].map((name) => [name, saved[lakeName(name)]]).filter(([, values]) => values)));
+  if (!model.lake || !saved || saved.N !== N || !savedLake(saved)) return;
+  model.lake.load(savedLake(saved));
 }
 
 /*
@@ -656,7 +654,7 @@ async function snapshot() {
   for (const name of Object.keys(RADIATION_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   arrays.levels = Float64Array.from(model.core.levels).buffer;
   if (model.skin) for (const [name, values] of Object.entries(model.skin.serialize())) arrays[name] = values.buffer;
-  if (model.lake) for (const [name, values] of Object.entries(await model.lake.serialize())) arrays[lakeName(name)] = Float64Array.from(values).buffer;
+  if (model.lake) for (const [name, values] of Object.entries(lakeArrays(await model.lake.serialize()))) arrays[name] = values.buffer;
   let ocean = null, land = null;
   if (model.ocean) {
     const o = await model.ocean.serialize();
