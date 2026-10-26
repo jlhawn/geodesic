@@ -8,7 +8,7 @@ import { initializeState, equilibriumProfile } from '../js/physics/init.module.j
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG } from '../js/physics/surface.module.js';
-import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -296,7 +296,7 @@ test('the shear term comes in continuously with the surface buoyancy flux: w_e f
 async function engines(entrainment) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry' }, surface: { exchange: 'fixed' } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry' }, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
   const { core: c, mesh: m, state, radiation, moist, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -327,7 +327,7 @@ async function engines(entrainment) {
   c.diagnose(pi, theta, q, qc);
   const { piSigmaDot, exnerLower } = c.diagnostics;
   for (let k = 1; k < nK; k++) for (let i = 0; i < nC; i++) piSigmaDot[k * nC + i] = Math.fround(0.6 * (random() - 0.4));
-  const gpu = await createGpuCore(m, { levels, physics: { entrainment, turbulence: 'dry', surfaceExchange: 'fixed' } });
+  const gpu = await createGpuCore(m, { levels, physics: { entrainment, turbulence: 'dry', surfaceExchange: 'fixed', exchangeOptions: PREVIOUS_SURFACE } });
   const { device, buffers, kernels } = gpu, dt = 900;
   gpu.upload(state);
   device.queue.writeBuffer(buffers.D, 4 * gpu.layout.D.PSD, Float32Array.from(piSigmaDot));
