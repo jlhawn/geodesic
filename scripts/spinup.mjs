@@ -150,6 +150,7 @@ import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0 } from '../js/dynamics/sigmaCore.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS, regridLand, remapLevels } from '../js/physics/regrid.module.js';
+import { placeCumulus } from '../js/physics/moist.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
@@ -239,7 +240,7 @@ function loadSaved(saved) {
   if (saved.exchangeHeat && model.exchange && !model.exchange.fixed) model.exchange.heat.set(saved.exchangeHeat);
   if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
   if (model.skin) model.skin.load(saved);
-  for (const field of ['cumulusCover', 'cumulusWater']) if (saved[field] && saved[field].length === model.moist[field].length) model.moist[field].set(saved[field]);
+  placeCumulus(model, saved);
   if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual); else model.moist.subcloudVirtual.fill(0);
   model.time = saved.time;
   model.load();
