@@ -966,7 +966,8 @@ rlut, rsdt, rstcre, rltcre), GPCP v2.3 (1991-2020), WOA23's monthly sea surface 
 means are those of the daily lines of the spin-up logs over the 365 days, the regional means those of the last day of
 each of the twelve monthly saves.
 
-Annual means of the model days of the log (days 366 to 730), W/m² unless stated; the observed values are CERES EBAF Ed4.2.1 (2001-2024) and GPCP v2.3 (1991-2020) monthly climatologies weighted by days:
+Annual means of the model days of the log (days 366 to 730), W/m² unless stated; the observed values are CERES EBAF Ed4.2.1 (2001-2024) and GPCP v2.3 (1991-2020) monthly climatologies
+interpolated to the dates of the twelve saves and averaged:
 
 | global | previous | new | new less previous | observed |
 |---|---|---|---|---|
