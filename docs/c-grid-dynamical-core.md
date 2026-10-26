@@ -11067,9 +11067,41 @@ and keeps half its condensate at each upper interface. Its cloud runs from
 the lower interface of its first cloudy layer to the height inside a layer
 where its w² vanishes, solved exactly for that layer's buoyancy and mixing
 and placed in ln p. Deeper than 200 hPa, the column runs the deep plume
-alone; otherwise the shallow plume alone, without the deep ascent. One
-departure level only: the IFS repeats the test from higher levels up to
-350 hPa above the ground, and the model's deep plume has one source. On
+alone; otherwise the shallow plume alone, without the deep ascent. The
+departure level is the 50 hPa stack's alone, unless `plumeDeparture` says
+otherwise. 'elevated' is the IFS's search (Cy41r2 Part IV §6.4: the test
+parcel is repeated from each higher model level, bottom up, until the
+departure level is more than 350 hPa above the ground, and the first level
+whose test cloud is deeper than 200 hPa roots the deep updraught; Bechtold
+et al. 2014, JAS 71, 734, §2.2: PCAPE_bl is zero for convection rooting
+above the boundary layer). Where the surface test is not deep, the layers
+above the stack are tried one at a time up to 350 hPa above the ground
+(12 layers at bl48 and 1000 hPa, 12 to 45 hPa thick), each with its s_l and
+q_t plus 0.2 K and 1e-4 kg/kg and entrainment scaled by the lowest layer's
+q_s (`DEPARTURE.reference`, the literal Cy41r2 reading; the departure
+layer's own q_s, the other reading, cuts the columns found by 24 to 33 %
+and leaves the convective rain added within 2 %). The first deep one roots
+the plume: it draws on that layer alone (flux 1 at the layer's top
+interface, none below, so the layers beneath are not mixed by the
+updraught), PCAPE_bl is 0 and the closure removes the whole PCAPE over τ.
+'elevatedStable' searches only where the surface buoyancy flux is not
+positive. One N=128 CPU step from the three heavy-slab control states
+(12 UTC): 8.8 % of the land columns and 2.2 % of the sea columns have a
+deep parcel the surface test missed (4.1 % of all; 12 % of land at night,
+19 % over the Americas at dawn), 98 % of them fire, with a median PCAPE of
+30 to 120 Pa and a base flux of about 70 g/m²/s, and a quarter to a third
+are held by the cap of a tenth of the source mass a step. The convective
+rain of land goes from 0.63 to 1.52 mm/d (the rule also acts by day: 0.16
+to 1.00 mm/d at 12 to 15 h) and that of the sea poleward of 30° from 0.57
+to 0.93; 'elevatedStable' takes the midday increase away (0.16 to 0.24)
+and keeps 91 to 99 % of the nocturnal one at the IFS land heat capacity,
+65 to 72 % of the poleward sea's. From the state at 1.5e5 J/m²/K (21 UTC:
+India at 2.3 local hours, Indochina at 3.8) 40 % and 54 % of the land find
+a departure, where the surface test is deep on 6 % and 15 %, and the first
+step's convective rain goes 0.07 to 6.3 and 0.12 to 17.1 mm/d, against 1
+and 3 to 4 mm/d for the heavy slab: the right sign and the wrong size for a
+first step. The search adds 11 layer visits per column to the surface
+test's 6.5. On
 Jordan's column the test cloud passes 200 hPa at 756 hPa and its w² vanishes
 at 124 hPa (the plume tops at 211); with the free troposphere ×0.3 and ×0.1
 the test parcel is still deep (w² zero at 215 and 266 hPa) while the plume
