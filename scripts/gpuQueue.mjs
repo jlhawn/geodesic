@@ -89,7 +89,7 @@ import { config as cpuConfig, holdSlots } from './cpuQueue.mjs';
 const O_SHLOCK = 0x10, O_EXLOCK = 0x20;
 const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL, O_NONBLOCK } = fs.constants;
 const INHERITED_FD = 19;
-const AGENT = /(^|[\s/])gpuQueue\.mjs run\b/;
+const AGENT = /(^|[\s/])gpuQueue\.mjs (run|share)\b/;
 const TICKET = /^(?:p([1-5])-)?(\d+)-(\d+)-(\d+)\.json$/;
 const LEVELS = [1, 2, 3, 4, 5], DEFAULT_LEVEL = 3, COURTESY_MS = [15000, 60000];
 const LSTART = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/;

@@ -38,7 +38,7 @@ export async function getDevice() {
   fs.writeFileSync(\`\${process.env.FAKE_GPU}/\${process.pid}\`, '');
   fs.appendFileSync(process.env.TRACE, \`device \${process.pid} \${Date.now()} \${process.env.GPU_QUEUE_HELD}\\n\`);
   return { device: { destroy() {
-    fs.rmSync(\`\${process.env.FAKE_GPU}/\${process.pid}\`, { force: true });
+    if (!process.env.FAKE_STICKY) fs.rmSync(\`\${process.env.FAKE_GPU}/\${process.pid}\`, { force: true });
     fs.appendFileSync(process.env.TRACE, \`destroy \${process.pid} \${Date.now()}\\n\`);
   } } };
 }
@@ -1037,4 +1037,20 @@ test('a shared file that finds no CPU slot leaves the GPU to the queue until it 
   const { start, end } = b.trace();
   assert.ok(start.one >= end.solo && start.one >= end.hog);
   assert.match(b.read('one.log'), /^waiting \d\d:\d\d:\d\d for a CPU slot, with the GPU left to the queue\nqueued \d\d:\d\d:\d\d to share behind pid \d+ \(.*\)\nstart \d\d:\d\d:\d\d, sharing the GPU in slot 1 of 2\n/);
+});
+
+test("a finished shared run that still maps the GPU during its abort scan is no outside user to the files still sharing", { skip }, async (t) => {
+  const b = bench(t, { FAKE_STICKY: '1', GPU_QUEUE_ABORTS: 'sleep 2' });
+  const one = b.share('one.log', 'one', 'gate');
+  await waitFor(() => b.trace().start.one);
+  const two = b.share('two.log', 'two', 'gate');
+  await waitFor(() => b.trace().start.two);
+  b.open('one');
+  await waitFor(() => b.trace().end.one);
+  const three = b.share('three.log', 'three', 50);
+  await waitFor(() => b.trace().start.three);
+  assert.ok(alive(one.pid), 'the first run ended its abort scan before the third file started');
+  b.open('two');
+  assert.deepEqual(await Promise.all([one.exited, two.exited, three.exited]), [0, 0, 0]);
+  for (const name of ['two', 'three']) assert.doesNotMatch(b.read(`${name}.log`), /^(waiting|overlap) /m, name);
 });
