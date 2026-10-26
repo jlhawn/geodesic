@@ -45,7 +45,7 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const mesh = stateGrid(saved, topography).mesh, dt = 1350 * 16 / saved.N, perDay = Math.round(86400 / dt);
 const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedLevels(saved);
-const model = await createGpuModel(mesh, { topography, geography, land: landOptions, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES'), dynamics: env('DYNAMICS') });
+const model = await createGpuModel(mesh, { topography, geography, land: { ...landOptions, ...env('LAND') }, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES'), dynamics: env('DYNAMICS') });
 const { state, core } = model, C = mesh.nCells;
 const carried = { ...saved, ...(process.env.LEVELS ? remapLevels(savedLevels(saved), levels, saved, mesh) : {}) };
 const PERTURB = Number(process.env.PERTURB ?? 0);
