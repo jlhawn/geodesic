@@ -589,18 +589,25 @@ The page loop (`scripts/pageLoop.mjs`: 60 s of wall time after a warm-up frame, 
 page's options, one job at a time through the GPU queue, alternating repeats) on an
 M1 Max from sixteen128_day0730 (N = 128, 48 layers, steps of 168.75 s, 512 a day) and
 fourteen64_day1825 (N = 64, 60 layers, 337.5 s, 256 a day), in seconds per model day
-with milliseconds per step in parentheses and the repeats in the last column:
+with milliseconds per step in parentheses (the mean of the repeats), the layered scheme's
+excess over the sequential at the same cadence, and the repeats of the sequential, the
+cloudTop and the layered scheme:
 
-| N, radiation every | sequential | cloudTop | layered | layered less sequential | repeats, sequential and layered |
+| N, radiation every | sequential | cloudTop | layered | layered less sequential | repeats: sequential / cloudTop / layered |
 |---|---|---|---|---|---|
-| 128, 4th (page) | 40.8 (79.7) | 41.0 (80.2) | 54.5 (106.4) | +26.8 ms, +34 % | 42.1, 39.5 and 57.3, 51.7 |
-| 128, 8th | 40.0 (78.0) | | 49.5 (96.6) | +18.6 ms, +24 % | 38.9, 41.0 and 50.6, 48.3 |
-| 128, 16th | 40.3 (78.7) | | 45.5 (88.8) | +10.1 ms, +13 % | 40.6, 40.0 and 46.1, 44.8 |
-| 64, 2nd (page) | 6.7 (26.2) | 6.95 (27.1) | 11.5 (44.9) | +18.8 ms, +72 % | 6.9, 6.5 and 11.5, 11.5 |
+| 128, 4th (page) | 41.4 (80.8) | 42.1 (82.2) | 55.7 (108.7) | +27.9 ms, +35 % | 42.1, 39.5, 42.5 / 41.7, 40.4, 44.1 / 57.3, 51.7, 58.0 |
+| 128, 8th | 40.6 (79.2) | 41.0 (80.2) | 49.5 (96.6) | +17.4 ms, +22 % | 38.9, 41.0, 41.8 / 41.3, 40.8 / 50.6, 48.3 |
+| 128, 16th | 40.3 (78.7) | 41.0 (80.0) | 45.5 (88.8) | +10.1 ms, +13 % | 40.6, 40.0 / 40.9, 41.0 / 46.1, 44.8 |
+| 64, 2nd (page) | 6.7 (26.2) | 6.9 (27.1) | 11.5 (44.9) | +18.8 ms, +72 % | 6.9, 6.5 / 7.1, 6.8 / 11.5, 11.5 |
+| 64, 4th | 6.5 (25.2) | 6.4 (25.0) | 8.8 (34.4) | +9.2 ms, +36 % | 6.4, 6.5 / 6.2, 6.6 / 8.5, 9.1 |
+| 64, 8th | 6.1 (23.6) | 5.9 (23.0) | 7.0 (27.3) | +3.7 ms, +16 % | 5.9, 6.2 / 5.9, 5.9 / 7.0, 7.0 |
+| 64, 16th | 5.8 (22.7) | 5.8 (22.5) | 6.3 (24.8) | +2.1 ms, +9 % | 5.7, 5.9 / 5.8, 5.7 / 6.4, 6.3 |
 
-Repeats of one configuration differ by up to 5 s per day, so the differences between
-cadences of one scheme are within the noise except for the layered scheme's. The cost
-is the layered pass and how often it is called. Profiled with the radiation called
+Repeats of one configuration differ by up to 5 s per day at N = 128 (the second
+layered repeat at the page cadence, 51.7, is the low one of three), so the sequential
+and cloudTop schemes cost the same at every cadence within the noise and only the
+layered scheme's cost follows the cadence. The cost is the layered pass and how often it
+is called. Profiled with the radiation called
 every step (every dispatch timed in a pass of its own, two repeats), the layered pass
 takes 108 and 118 ms per call at N = 128 and 36.1 and 36.2 ms at N = 64, against
 6 to 9 ms for the radiation kernel and 6 to 9 ms for the longwave at N = 128 (1.7 and
@@ -627,6 +634,15 @@ days 1 to 4, W/m²; surface temperature in K):
 The brightening of the layered scheme is not a cadence effect: its absorbed sunlight
 less the sequential scheme's is -8.50 and -7.88 W/m² (days 1 and 4) with the radiation
 every step and -8.35 and -7.69 with it every 16th.
+
+Taking the largest of the three day-mean differences in the table over the four days as the
+held error, a 22.5-minute interval holds it to 0.16 W/m² (sequential) and 0.08 (layered), a
+45-minute interval to 0.27 and 0.18, and 90 minutes to 0.67 and 0.39. Under 0.2 W/m² the
+sequential scheme can run every 8th step at N = 128 and every 4th at N = 64, and the layered
+scheme every 16th and every 8th: at the page's cost that is +10 % at N = 128 (45.5 s a day
+against the sequential page's 41.4) and +4 % at N = 64 (7.0 against 6.7). The four days
+include the divergence of two runs, so the error of the later days is an upper bound; on day 1
+alone the 45-minute interval is 0.19 (sequential) and 0.12 (layered).
 
 ## Cheaper layered variants (offline, not options)
 
