@@ -8,7 +8,7 @@ import http from 'node:http';
 import vm from 'node:vm';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { config, gpuUsers, parseLsof, parseIoreg, gpuShares, gpuMeter, whoFrom, shortCommand, serve, appendHistory, recentRuns } from '../scripts/gpuQueue.mjs';
+import { config, gpuUsers, parseLsof, parseIoreg, gpuShares, gpuRecorder, gpuHistory, whoFrom, shortCommand, serve, appendHistory, recentRuns } from '../scripts/gpuQueue.mjs';
 
 const script = fileURLToPath(new URL('../scripts/gpuQueue.mjs', import.meta.url));
 const wrapper = fileURLToPath(new URL('../scripts/gpuQueue.zsh', import.meta.url));
@@ -33,6 +33,17 @@ export async function getDevice() {
     fs.rmSync(\`\${process.env.FAKE_GPU}/\${process.pid}\`, { force: true });
     fs.appendFileSync(process.env.TRACE, \`destroy \${process.pid} \${Date.now()}\\n\`);
   } } };
+}
+`;
+const IOREG = `import fs from 'node:fs';
+const users = JSON.parse(fs.readFileSync(new URL('./users.json', import.meta.url), 'utf8'));
+const ns = Date.now() * 1e6;
+for (const [pid, name, share] of users) {
+  console.log(\`+-o AGXDeviceUserClient  <class AGXDeviceUserClient>
+    {
+      "AppUsage" = ({"API"="Metal","accumulatedGPUTime"=\${Math.round(ns * share)}})
+      "IOUserClientCreator" = "pid \${pid}, \${name}"
+    }\`);
 }
 `;
 const UNLABELED = `import fs from 'node:fs';
@@ -87,6 +98,8 @@ const json = async (url) => JSON.parse((await get(url)).body);
 async function renderPage(html, status) {
   class Node {
     constructor(tag, text = '') { Object.assign(this, { tag, text, kids: [], attrs: {}, hidden: false, classList: { toggle() {} } }); }
+    addEventListener() {}
+    getBoundingClientRect() { return { left: 0, width: 640 }; }
     append(...kids) { for (const kid of kids) this.kids.push(kid instanceof Node ? kid : new Node('#text', String(kid))); }
     replaceChildren(...kids) { this.kids = []; this.append(...kids); }
     setAttribute(name, value) { this.attrs[name] = String(value); }
@@ -95,7 +108,7 @@ async function renderPage(html, status) {
   }
   const nodes = new Map();
   const document = {
-    hidden: false, title: '', body: new Node('body'), createElement: (tag) => new Node(tag),
+    hidden: false, title: '', body: new Node('body'), createElement: (tag) => new Node(tag), createElementNS: (ns, tag) => new Node(tag),
     getElementById: (id) => nodes.get(id) ?? nodes.set(id, new Node('div')).get(id),
     querySelectorAll: () => [], addEventListener() {},
   };
@@ -114,6 +127,7 @@ async function renderPage(html, status) {
   return {
     holder: text(nodes.get('holder')),
     use: rows('use', 'li').map(text),
+    chart: text(nodes.get('use-chart')),
     queue: rows('queue', 'li').map(text),
     history: rows('history', 'tr').slice(1).map((row) => row.kids.map(text)),
   };
@@ -477,11 +491,29 @@ test("the driver's GPU time parses per process, and two samples give each proces
   ]);
   assert.deepEqual(gpuShares({ at: 1000, times }, { at: 3000, times: later }, table, new Set([900])).map((u) => [u.pid, u.what, +u.share.toFixed(6), u.queued]),
     [[900, 'node scripts/pageLoop.mjs 128', 0.98, true], [902, 'node', 0.25, false], [414, 'WindowServer', 0.1, false]]);
-  const samples = [times, later, later];
-  const meter = gpuMeter(() => samples.shift());
-  assert.deepEqual(meter(table, null, 1000), { since: null, until: 1000, users: null });
-  assert.deepEqual(meter(table, { pid: 900 }, 3000).users.map((u) => [u.pid, u.queued]), [[900, true], [902, false], [414, false]]);
-  assert.deepEqual(meter(table, { pid: 900 }, 64000), { since: null, until: 64000, users: null });
+  const record = { pid: 900, start: 'Sun Oct 25 18:00:00 2026', who: 'alpha', what: 'timing' };
+  const steps = [[1000, times, record], [3000, later, record], [5000, later, null], [69000, later, null]];
+  let step = null;
+  const recorder = gpuRecorder({ useKeep: 3600000 }, { read: () => step[1], table: () => table, record: () => step[2], now: () => step[0] });
+  for (step of steps) recorder.sample();
+  assert.deepEqual(recorder.samples.map((x) => [x.since, x.until, x.holder?.who ?? null, x.users.map((u) => [u.pid, u.queued])]),
+    [[1000, 3000, 'alpha', [[900, true], [902, false], [414, false]]], [3000, 5000, null, []]]);
+  assert.deepEqual(gpuHistory(recorder.samples), {
+    times: [3000, 5000],
+    holder: { shares: [0.98, null], jobs: [{ from: 0, to: 0, pid: 900, who: 'alpha', what: 'timing' }] },
+    lines: [
+      { key: '414 WindowServer', pid: 414, name: 'WindowServer', what: 'WindowServer', outside: false, shares: [0.1, null] },
+      { key: '902 node', pid: 902, name: 'node', what: 'node', outside: true, shares: [0.25, null] },
+    ],
+  });
+  const crowd = [0, 1, 2].map((i) => ({ since: i, until: i + 1, holder: null,
+    users: Array.from({ length: 9 }, (_, k) => ({ pid: 100 + k, name: `p${k}`, what: `p${k}`, share: i === 1 && k === 8 ? 0 : 0.02 * (k + 1), queued: false })).filter((u) => u.share) }));
+  const crowded = gpuHistory(crowd);
+  assert.deepEqual(crowded.lines.map((line) => line.key), ['103 p3', '104 p4', '105 p5', '106 p6', '107 p7', '108 p8', 'other']);
+  assert.deepEqual(crowded.lines.at(-1), { key: 'other', pid: null, name: '3 other processes', what: null, outside: false, shares: [0.12, 0.12, 0.12] });
+  assert.deepEqual(crowded.lines[0].shares, [0.08, 0.08, 0.08]);
+  assert.deepEqual(gpuHistory(crowd.map((x) => ({ ...x, users: x.users.filter((u) => u.pid === 108) }))).lines[0].shares, [0.18, 0, 0.18]);
+  assert.deepEqual(crowded.holder.shares, [null, null, null]);
 });
 
 test('the monitor serves its page and the status as JSON', { skip }, async (t) => {
@@ -499,8 +531,10 @@ test('the monitor serves its page and the status as JSON', { skip }, async (t) =
   assert.match(status.headers['content-type'], /^application\/json/);
   const s = JSON.parse(status.body);
   assert.ok(Math.abs(s.now - Date.now()) < 5000);
-  assert.deepEqual({ ...s, now: 0, gpu: { ...s.gpu, until: 0 } },
-    { now: 0, holder: null, exited: null, lock: [], queue: [], outside: [], port: null, gpu: { since: null, until: 0, users: null }, dir: path.join(b.dir, 'queue'), history: [] });
+  const { gpu, gpuHistory: use, ...rest } = s;
+  assert.deepEqual({ ...rest, now: 0 }, { now: 0, holder: null, exited: null, lock: [], queue: [], outside: [], port: null, dir: path.join(b.dir, 'queue'), history: [] });
+  assert.ok(gpu.users === null || gpu.users.length === 0, JSON.stringify(gpu));
+  assert.deepEqual([use.lines, use.holder.jobs], [[], []]);
   assert.equal((await get(url, { host: 'gpu.example.com' })).status, 403);
   assert.equal((await get(`${url}queue/holder.json`)).status, 404);
   assert.equal(fs.existsSync(path.join(b.dir, 'queue')), false, 'the monitor wrote to the queue directory');
@@ -529,29 +563,29 @@ test('the monitor shows a labeled job as the holder, then in the history with it
   assert.deepEqual(b.read('queue/history.jsonl').trim().split('\n').map((line) => JSON.parse(line)).sort((x, y) => x.ended - y.ended), [first, second]);
 });
 
-test("the monitor shows each process's share of the GPU from the driver's counters and marks the holder's job", { skip }, async (t) => {
-  const b = bench(t, { GPU_QUEUE_IOREG: 'cat "$FAKE_GPU/../ioreg.txt"' });
-  const url = await b.monitor();
+test("the monitor charts each process's share of the GPU from the driver's counters, the holder's job as one line", { skip }, async (t) => {
+  const b = bench(t, { GPU_QUEUE_IOREG: '"$GPU_QUEUE_NODE" "$FAKE_GPU/../ioreg.mjs"' });
+  fs.writeFileSync(path.join(b.dir, 'ioreg.mjs'), IOREG);
   const job = b.run('alpha.log', b.job('alpha', 'gate'), { env: { GPU_WHO: 'alpha', GPU_JOB: 'gated' } });
   await waitFor(() => b.trace().start.alpha);
   const worker = b.trace().pid.alpha;
   const other = b.foreign([process.execPath, '-e', 'setTimeout(() => {}, 60000)']);
-  const sample = (ns) => {
-    const text = [[worker, 'node', ns], [other.pid, 'node', ns / 2], [414, 'WindowServer', 0]].map(([pid, name, n]) => '+-o AGXDeviceUserClient  <class AGXDeviceUserClient>\n    {\n'
-      + `      "AppUsage" = ({"API"="Metal","accumulatedGPUTime"=${n}})\n      "IOUserClientCreator" = "pid ${pid}, ${name}"\n    }\n`).join('');
-    fs.writeFileSync(path.join(b.dir, 'ioreg.tmp'), text);
-    fs.renameSync(path.join(b.dir, 'ioreg.tmp'), path.join(b.dir, 'ioreg.txt'));
-  };
-  sample(0);
-  await until(async () => (await json(`${url}status.json`)).gpu.users?.length === 0);
-  sample(1e15);
-  const s = await until(async () => { const status = await json(`${url}status.json`); return status.gpu.users?.length && status; });
+  fs.writeFileSync(path.join(b.dir, 'users.json'), JSON.stringify([[worker, 'node', 0.9], [other.pid, 'node', 0.3], [414, 'WindowServer', 0.004]]));
+  const url = await b.monitor();
+  const s = await until(async () => { const status = await json(`${url}status.json`); return status.gpuHistory.times.length >= 2 && status; });
   assert.deepEqual(s.gpu.users.map((u) => [u.pid, u.name, u.queued]), [[worker, 'node', true], [other.pid, 'node', false]]);
+  assert.ok(Math.abs(s.gpu.users[0].share - 0.9) < 0.15 && Math.abs(s.gpu.users[1].share - 0.3) < 0.15, JSON.stringify(s.gpu.users));
   assert.match(s.gpu.users[0].what, /job\.mjs alpha gate 1$/);
-  assert.ok(s.gpu.users[0].share > s.gpu.users[1].share && s.gpu.since < s.gpu.until);
+  const h = s.gpuHistory;
+  assert.equal(h.times.at(-1), s.gpu.until);
+  assert.ok(h.holder.shares.every((v) => Math.abs(v - 0.9) < 0.15), JSON.stringify(h.holder.shares));
+  assert.deepEqual(h.holder.jobs, [{ from: 0, to: h.times.length - 1, pid: job.pid, who: 'alpha', what: 'gated' }]);
+  assert.deepEqual(h.lines.map((line) => [line.pid, line.name, line.outside, line.shares.length]), [[other.pid, 'node', true, h.times.length]]);
   const shown = await renderPage((await get(url)).body, s);
   assert.match(shown.use[0], new RegExp(`^\\d+% node pid ${worker} holder node \\S+job\\.mjs alpha gate 1$`));
   assert.match(shown.use[1], new RegExp(`^\\d+% node pid ${other.pid} outside the queue node -e `));
+  assert.match(shown.chart, new RegExp(`^holder the job holding the queue's lock node ${other.pid} outside the queue 0% 25% 50% 75% 100% .*holder `
+    + `latest, \\d\\d:\\d\\d:\\d\\d \\d+% holder: alpha, gated \\d+% node ${other.pid}$`));
   b.open('alpha');
   assert.equal(await job.exited, 0);
 });

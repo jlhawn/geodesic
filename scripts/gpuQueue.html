@@ -23,6 +23,7 @@
   --bad: #c42b1c;
   --bad-bg: #fde8e6;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -40,6 +41,7 @@
     --ok-bg: #0f2d18;
     --bad: #ff8a80;
     --bad-bg: #421715;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
   }
 }
 * { box-sizing: border-box; }
@@ -82,6 +84,25 @@ button.copy:hover { border-color: var(--muted); }
 .list > li:last-child { padding-bottom: 0; }
 .list .body { flex: 1; min-width: 0; }
 .list .body > * + * { margin-top: 2px; }
+.chart { margin-bottom: 12px; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; }
+.chart svg:focus { outline: none; }
+.chart svg:focus-visible { outline: 2px solid var(--run); outline-offset: 2px; border-radius: 4px; }
+.legend, .readout { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12.5px; }
+.legend { margin-bottom: 8px; }
+.readout { min-height: 20px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.legend > span, .readout > span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .muted, .readout .muted { color: var(--muted); }
+.c1 { --c: var(--s1); } .c2 { --c: var(--s2); } .c3 { --c: var(--s3); } .c4 { --c: var(--s4); }
+.c5 { --c: var(--s5); } .c6 { --c: var(--s6); } .c7 { --c: var(--s7); } .c8 { --c: var(--s8); }
+.key { display: inline-block; flex: none; width: 14px; height: 2px; border-radius: 1px; background: var(--c); }
+.grid { stroke: var(--line); stroke-width: 1; shape-rendering: crispEdges; }
+.tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.label { fill: var(--text); font-size: 11.5px; font-weight: 600; }
+.series { fill: none; stroke: var(--c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.cross { stroke: var(--muted); stroke-width: 1; shape-rendering: crispEdges; }
+.dot { fill: var(--c); stroke: var(--card); stroke-width: 2; }
+.hit { fill: transparent; cursor: crosshair; }
 .share { flex: none; width: 3.5em; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
 .pos { display: grid; flex: none; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--chip); color: var(--muted); font-size: 13px; font-weight: 650; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -115,7 +136,7 @@ footer { margin-top: 4px; color: var(--muted); font-size: 12.5px; overflow-wrap:
   <div id="alert" class="alert" role="alert" hidden></div>
   <main>
     <section aria-labelledby="holder-title"><h2 id="holder-title">Holder</h2><div id="holder"></div></section>
-    <section aria-labelledby="use-title"><h2 id="use-title">GPU use by process</h2><div id="use"></div></section>
+    <section aria-labelledby="use-title"><h2 id="use-title">GPU use by process</h2><div id="use-chart" class="chart"></div><div id="use"></div></section>
     <section aria-labelledby="queue-title"><h2 id="queue-title">Queue<span id="queue-count"></span></h2><div id="queue"></div></section>
     <section aria-labelledby="outside-title"><h2 id="outside-title">GPU users outside the queue</h2><div id="outside"></div></section>
     <section id="port-section" aria-labelledby="port-title" hidden><h2 id="port-title">Port</h2><div id="port"></div></section>
@@ -227,6 +248,132 @@ function useView(gpu) {
       u.what !== u.name && el('p', { class: 'mono', title: u.command }, u.what)))))];
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const CHART = { height: 180, left: 40, right: 58, top: 8, bottom: 20 };
+const TICK_MINUTES = [1, 2, 5, 10, 15, 30, 60];
+const slots = new Map();
+let hoverAt = null;
+
+function svg(tag, attrs, ...kids) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value !== null && value !== undefined && value !== false) node.setAttribute(key, value);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid === null || kid === undefined || kid === false || kid === '') continue;
+    node.append(kid instanceof Node ? kid : String(kid));
+  }
+  return node;
+}
+const lineKey = (slot) => el('span', { class: `key c${slot}` });
+const nearest = (times, t) => times.reduce((best, time, i) => (Math.abs(time - t) < Math.abs(times[best] - t) ? i : best), 0);
+const shareText = (v) => (v === 0 ? '0%' : percent(v));
+
+function slotOf(id, present) {
+  if (!slots.has(id)) {
+    const taken = new Set([...slots].filter(([other]) => present.has(other)).map(([, slot]) => slot));
+    let slot = 2;
+    while (taken.has(slot) && slot < 8) slot++;
+    slots.set(id, slot);
+  }
+  return slots.get(id);
+}
+
+function chartView(h) {
+  if (!h.times.length) return none('The chart fills in as the monitor samples the driver, every few seconds.');
+  const present = new Set(h.lines.map((line) => line.key));
+  const series = [
+    { slot: 1, name: 'holder', shares: h.holder.shares },
+    ...h.lines.map((line) => ({ slot: slotOf(line.key, present), name: line.pid ? `${line.name} ${line.pid}` : line.name, shares: line.shares, line })),
+  ];
+  const width = Math.max(320, Math.round($('use-chart').clientWidth || 640));
+  const { height, left, right, top, bottom } = CHART;
+  const x0 = left, x1 = width - right, y0 = height - bottom, y1 = top;
+  const times = h.times, n = times.length, t0 = times[0], t1 = times[n - 1];
+  const ceiling = Math.ceil(Math.max(1, ...series.flatMap((s) => s.shares.filter((v) => v !== null))) * 4) / 4;
+  const X = (t) => (t1 > t0 ? x0 + ((t - t0) / (t1 - t0)) * (x1 - x0) : x1);
+  const Y = (v) => y0 - (v / ceiling) * (y0 - y1);
+  const axes = [];
+  for (let v = 0; v <= ceiling + 1e-9; v += ceiling > 2 ? 0.5 : 0.25) {
+    axes.push(svg('line', { class: 'grid', x1: x0, x2: x1, y1: Y(v), y2: Y(v) }),
+      svg('text', { class: 'tick', x: x0 - 6, y: Y(v) + 4, 'text-anchor': 'end' }, `${Math.round(v * 100)}%`));
+  }
+  const step = (TICK_MINUTES.find((m) => (t1 - t0) / (m * 60000) <= 6) ?? 60) * 60000;
+  for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+    axes.push(svg('text', { class: 'tick', x: X(t), y: height - 4, 'text-anchor': 'middle' }, clock(t).slice(0, 5)));
+  }
+  const paths = series.map((s) => {
+    let d = '', run = 0;
+    s.shares.forEach((v, i) => {
+      if (v === null) {
+        if (run === 1) d += 'h0.1';
+        run = 0;
+        return;
+      }
+      d += `${run ? 'L' : 'M'}${X(times[i]).toFixed(1)},${Y(v).toFixed(1)}`;
+      run++;
+    });
+    if (run === 1) d += 'h0.1';
+    return d && svg('path', { class: `series c${s.slot}`, d });
+  });
+  const last = h.holder.shares.findLastIndex((v) => v !== null);
+  const label = last >= 0 && svg('text', { class: 'label', x: X(times[last]) + 6, y: Y(h.holder.shares[last]) + 4 }, 'holder');
+  const cross = svg('line', { class: 'cross', y1, y2: y0, visibility: 'hidden' });
+  const dots = series.map((s) => svg('circle', { class: `dot c${s.slot}`, r: 4, visibility: 'hidden' }));
+  const hit = svg('rect', { class: 'hit', x: x0, y: y1, width: x1 - x0, height: y0 - y1 });
+  const chart = svg('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img', tabindex: 0, 'aria-label': `GPU use by process over the last ${span(t1 - t0)}` },
+    axes, paths, label, cross, dots, hit);
+  const legend = el('div', { class: 'legend' }, series.map((s) => el('span', null, lineKey(s.slot),
+    s.line ? [s.line.name, s.line.pid && el('span', { class: 'muted' }, s.line.pid), s.line.outside && el('span', { class: 'muted' }, 'outside the queue')]
+      : ['holder', el('span', { class: 'muted' }, "the job holding the queue's lock")])));
+  const readout = el('div', { class: 'readout' });
+  const show = () => {
+    const i = hoverAt === null ? n - 1 : nearest(times, hoverAt);
+    const x = X(times[i]);
+    cross.setAttribute('x1', x);
+    cross.setAttribute('x2', x);
+    cross.setAttribute('visibility', hoverAt === null ? 'hidden' : 'visible');
+    series.forEach((s, k) => {
+      const v = s.shares[i];
+      dots[k].setAttribute('visibility', hoverAt !== null && v !== null ? 'visible' : 'hidden');
+      if (v !== null) {
+        dots[k].setAttribute('cx', x);
+        dots[k].setAttribute('cy', Y(v));
+      }
+    });
+    const job = h.holder.jobs.find((j) => j.from <= i && i <= j.to);
+    readout.replaceChildren(el('span', { class: 'muted' }, hoverAt === null ? `latest, ${clock(times[i])}` : clock(times[i])),
+      ...series.filter((s) => s.shares[i] !== null).map((s) => el('span', null, lineKey(s.slot), el('b', null, shareText(s.shares[i])),
+        el('span', { class: 'muted' }, s.line ? s.name : job ? `holder: ${job.who}, ${job.what}` : 'holder'))));
+  };
+  const at = (event) => {
+    const box = chart.getBoundingClientRect();
+    const px = ((event.clientX - box.left) / box.width) * width;
+    return t1 > t0 ? t0 + ((px - x0) / (x1 - x0)) * (t1 - t0) : t1;
+  };
+  const point = (event) => {
+    hoverAt = at(event);
+    show();
+  };
+  const leave = () => {
+    hoverAt = null;
+    show();
+  };
+  hit.addEventListener('pointermove', point);
+  hit.addEventListener('pointerdown', point);
+  chart.addEventListener('pointerleave', leave);
+  chart.addEventListener('blur', leave);
+  chart.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Escape'].includes(event.key)) return;
+    event.preventDefault();
+    const i = hoverAt === null ? n - 1 : nearest(times, hoverAt);
+    hoverAt = event.key === 'Escape' ? null : times[Math.min(n - 1, Math.max(0, i + (event.key === 'ArrowLeft' ? -1 : 1)))];
+    show();
+  });
+  show();
+  return [legend, chart, readout];
+}
+
 function outsideView(outside) {
   if (!outside.length) return none('None.');
   return [
@@ -274,6 +421,7 @@ function paint(id, data, view) {
 
 function render(s) {
   paint('holder', { holder: s.holder, lock: s.lock, exited: s.exited }, holderView);
+  paint('use-chart', s.gpuHistory, chartView);
   paint('use', s.gpu, useView);
   paint('queue', s.queue, queueView);
   $('queue-count').textContent = s.queue.length ? ` (${s.queue.length})` : '';
@@ -343,6 +491,15 @@ setInterval(() => {
   if (failure) showState();
 }, 1000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+let resizing = 0;
+document.defaultView?.addEventListener('resize', () => {
+  clearTimeout(resizing);
+  resizing = setTimeout(() => {
+    if (!last) return;
+    delete painted['use-chart'];
+    paint('use-chart', last.gpuHistory, chartView);
+  }, 150);
+});
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-copy]');
   if (!button) return;

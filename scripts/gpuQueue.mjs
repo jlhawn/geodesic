@@ -38,10 +38,11 @@
 // The file keeps its last 500 lines once it passes 1000. `serve` answers on
 // 127.0.0.1:PORT (8008) with scripts/gpuQueue.html, a page that polls
 // /status.json: the status as JSON, reused for 10 ticks once computed, the
-// last 20 runs, and each process's share of the GPU's time since the
-// previous computation, from the driver's per-process counters (the
-// AppUsage of ioreg's AGXDeviceUserClient entries). It never opens the lock,
-// a ticket or a GPU device and writes nothing, so no run ever waits on it.
+// last 20 runs, and the GPU's use by process: every 25 ticks it samples the
+// driver's per-process counters (the AppUsage of ioreg's AGXDeviceUserClient
+// entries) and keeps an hour of each process's share of the GPU's time, the
+// holder's job as one line whichever job it is. It never opens the lock, a
+// ticket or a GPU device and writes nothing, so no run ever waits on it.
 // The lock is an O_EXLOCK flock on <dir>/lock, which the kernel drops when
 // its holders exit; CMD inherits it as fd 19, so a job outliving a killed
 // holder keeps it. Waiters hold flocks on their tickets in <dir>/queue, named
@@ -75,7 +76,7 @@ const PAGE = new URL('./gpuQueue.html', import.meta.url);
 const LOCAL_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
 const SERVE_PORT = 8008, RESERVED_PORTS = [8000, 8001];
 const HISTORY_SHOWN = 20, HISTORY_MAX = 1000, HISTORY_KEEP = 500;
-const IOREG = ['-r', '-c', 'AGXDeviceUserClient', '-l'], MIN_SHARE = 0.005, USE_WINDOW_MS = 60000;
+const IOREG = ['-r', '-c', 'AGXDeviceUserClient', '-l'], MIN_SHARE = 0.005, LINE_PEAK = 0.01, USE_LINES = 7, USE_WINDOW_MS = 60000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -98,7 +99,7 @@ export function config(env = process.env) {
   return {
     dir, lock: path.join(dir, 'lock'), holder: path.join(dir, 'holder.json'), queue: path.join(dir, 'queue'),
     status: path.join(dir, 'status.md'), statusLock: path.join(dir, 'status.lock'), history: path.join(dir, 'history.jsonl'),
-    tick, recheck: 10 * tick, cache: 10 * tick, settle: 15 * tick, grace: 100 * tick, linger: 100 * tick,
+    tick, recheck: 10 * tick, cache: 10 * tick, settle: 15 * tick, grace: 100 * tick, linger: 100 * tick, useEvery: 25 * tick, useKeep: 18000 * tick,
     monitor: 150 * tick, nestedEvery: 25, refreshEvery: 150, stale: 300 * tick,
     port: env.GPU_QUEUE_PORT ? Number(env.GPU_QUEUE_PORT) : env.GPU_QUEUE_PORT === '' ? 0 : 8000,
     probe: env.GPU_QUEUE_PROBE || '', ioreg: env.GPU_QUEUE_IOREG || '', device, aborts: env.GPU_QUEUE_ABORTS !== 'off',
@@ -237,15 +238,51 @@ export function gpuShares(before, after, table, family = new Set()) {
   return users.sort((a, b) => b.share - a.share || a.pid - b.pid);
 }
 
-export function gpuMeter(read) {
+export function gpuRecorder(cfg, { read = () => gpuTimes(cfg), table = processes, record = () => readRecord(cfg), now = Date.now } = {}) {
+  const samples = [];
   let before = null;
-  return (table, holder, at = Date.now()) => {
+  const sample = () => {
+    const at = now(), procs = table(), r = record();
+    const holder = r?.start && procs.get(r.pid)?.start === r.start ? { pid: r.pid, ...labels(r) } : null;
     const after = { at, times: read() };
-    const prior = before;
+    if (before && at > before.at && at - before.at <= USE_WINDOW_MS) {
+      samples.push({ since: before.at, until: at, holder, users: gpuShares(before, after, procs, familyOf(procs, holder)) });
+      while (samples[0].until < at - cfg.useKeep) samples.shift();
+    }
     before = after;
-    if (!prior || at <= prior.at || at - prior.at > USE_WINDOW_MS) return { since: null, until: at, users: null };
-    return { since: prior.at, until: at, users: gpuShares(prior, after, table, familyOf(table, holder)) };
   };
+  return { samples, sample };
+}
+
+const thousandths = (x) => Math.round(x * 1000) / 1000;
+
+export function gpuHistory(samples) {
+  const n = samples.length;
+  const holder = { shares: samples.map((s) => (s.holder ? thousandths(s.users.reduce((sum, u) => sum + (u.queued ? u.share : 0), 0)) : null)), jobs: [] };
+  samples.forEach((s, i) => {
+    const job = holder.jobs.at(-1);
+    if (job && s.holder?.pid === job.pid && job.to === i - 1) job.to = i;
+    else if (s.holder) holder.jobs.push({ from: i, to: i, ...s.holder });
+  });
+  const found = new Map();
+  samples.forEach((s, i) => s.users.forEach((u) => {
+    if (u.queued) return;
+    const key = `${u.pid} ${u.name}`;
+    const line = found.get(key) ?? found.set(key, { key, pid: u.pid, name: u.name, what: u.what, outside: u.name === 'node', first: i, last: i, peak: 0, at: [] }).get(key);
+    Object.assign(line, { last: i, peak: Math.max(line.peak, u.share) });
+    line.at[i] = u.share;
+  }));
+  const dense = (line) => Array.from({ length: n }, (_, i) => (i < line.first || i > line.last ? null : thousandths(line.at[i] ?? 0)));
+  const ranked = [...found.values()].filter((line) => line.peak >= LINE_PEAK).sort((a, b) => b.peak - a.peak || a.first - b.first);
+  const kept = ranked.length > USE_LINES ? ranked.slice(0, USE_LINES - 1) : ranked;
+  const lines = kept.sort((a, b) => a.first - b.first || a.pid - b.pid)
+    .map((line) => ({ key: line.key, pid: line.pid, name: line.name, what: line.what, outside: line.outside, shares: dense(line) }));
+  const rest = ranked.slice(kept.length).map(dense);
+  if (rest.length) {
+    const shares = Array.from({ length: n }, (_, i) => (rest.some((v) => v[i] !== null) ? thousandths(rest.reduce((sum, v) => sum + (v[i] ?? 0), 0)) : null));
+    lines.push({ key: 'other', pid: null, name: `${rest.length} other processes`, what: null, outside: false, shares });
+  }
+  return { times: samples.map((s) => s.until), holder, lines };
 }
 
 const listeners = (port) => (port ? pidList(output('/usr/sbin/lsof', ['-w', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'])) : []);
@@ -711,13 +748,16 @@ export function serve(cfg, port = SERVE_PORT) {
   const policy = `default-src 'none'; script-src ${hash(/<script>([^]*?)<\/script>/)}; style-src ${hash(/<style>([^]*?)<\/style>/)}; `
     + "img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
   const how = watching();
-  const meter = gpuMeter(() => gpuTimes(cfg));
+  const recorder = gpuRecorder(cfg);
+  const sample = () => { try { recorder.sample(); } catch {} };
+  sample();
+  const sampler = setInterval(sample, cfg.useEvery).unref();
   let cached = null;
   const current = () => {
     if (!cached || Date.now() - cached.at >= cfg.cache) {
-      const table = processes();
-      const s = snapshot(cfg, { table }, how);
-      const body = JSON.stringify({ ...s, gpu: meter(table, s.holder), dir: cfg.dir, history: recentRuns(cfg) });
+      const latest = recorder.samples.at(-1);
+      const gpu = latest ? { since: latest.since, until: latest.until, users: latest.users } : { since: null, until: null, users: null };
+      const body = JSON.stringify({ ...snapshot(cfg, {}, how), gpu, gpuHistory: gpuHistory(recorder.samples), dir: cfg.dir, history: recentRuns(cfg) });
       cached = { at: Date.now(), body };
     }
     return cached.body;
@@ -735,10 +775,15 @@ export function serve(cfg, port = SERVE_PORT) {
       try { send(200, 'application/json', current()); } catch (error) { send(500, 'application/json', JSON.stringify({ error: error.message })); }
     } else send(404, 'text/plain', 'not found\n');
   });
+  server.on('close', () => clearInterval(sampler));
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
+    const fail = (error) => {
+      clearInterval(sampler);
+      reject(error);
+    };
+    server.once('error', fail);
     server.listen(port, '127.0.0.1', () => {
-      server.off('error', reject);
+      server.off('error', fail);
       resolve(server);
     });
   });
