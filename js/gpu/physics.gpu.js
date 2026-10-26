@@ -3,7 +3,7 @@ import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders }
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, fogConstants } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, fogConstants } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, longwaveCores, LONGWAVE_CORES, CORE_EDGES, CORE_FACTOR_POINTS, coreFactors } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -269,6 +269,8 @@ export function physicsConstants(o) {
   if (o.excessVelocity !== 'surfaceLayer' && o.excessVelocity !== 'convective') throw new Error(`excessVelocity must be 'surfaceLayer' or 'convective', not ${o.excessVelocity}`);
   if (o.capeClosure !== 'bechtold' && o.capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${o.capeClosure}`);
   if (o.pcapeBoundary !== 'positive' && o.pcapeBoundary !== 'signed') throw new Error(`pcapeBoundary must be 'positive' or 'signed', not ${o.pcapeBoundary}`);
+  if (o.plumeDeparture !== 'surface' && o.plumeDeparture !== 'elevated' && o.plumeDeparture !== 'elevatedStable') throw new Error(`plumeDeparture must be 'surface', 'elevated' or 'elevatedStable', not ${o.plumeDeparture}`);
+  if (o.plumeDeparture !== 'surface' && !(o.convectionType === 'testParcel' && o.capeClosure === 'bechtold')) throw new Error(`plumeDeparture '${o.plumeDeparture}' needs convectionType 'testParcel' and capeClosure 'bechtold'`);
   if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
   if (o.autoconversionFloor !== 'lowest' && o.autoconversionFloor !== 'boundaryLayer' && o.autoconversionFloor !== 'mixingTop' && o.autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer', 'mixingTop' or 'none', not ${o.autoconversionFloor}`);
   if (o.fogDroplets !== null && !(Array.isArray(o.fogDroplets) && o.fogDroplets.length === 2 && o.fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(o.fogDroplets)}`);
@@ -375,6 +377,7 @@ const PL_SEPARATE: bool = ${o.plumeClosure === 'separate' && o.convectionType ==
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const PL_SURFACE50: bool = ${o.plumeSourceDepth === 'surface50'}; const EX_COEF: f32 = ${SOURCE_EXCESS.coefficient}; const EX_T: f32 = ${SOURCE_EXCESS.temperature}; const EX_Q: f32 = ${SOURCE_EXCESS.humidity};
 const EX_LAYER: bool = ${o.excessVelocity === 'surfaceLayer'}; const EX_SCALE: f32 = ${SOURCE_EXCESS.scale}; const EX_STAB: f32 = ${SOURCE_EXCESS.layer}; const EX_KARMAN: f32 = ${SOURCE_EXCESS.karman}; const EX_USTAR: f32 = ${SOURCE_EXCESS.friction}; const EX_VIRT: f32 = ${SOURCE_EXCESS.virtual};
+const PL_ELEVATED: bool = ${o.plumeDeparture !== 'surface'}; const PL_STABLE: bool = ${o.plumeDeparture === 'elevatedStable'}; const DEP_DEPTH: f32 = ${DEPARTURE.depth}; const DEP_DT: f32 = ${DEPARTURE.temperature}; const DEP_DQ: f32 = ${DEPARTURE.humidity}; const DEP_OWN: bool = ${DEPARTURE.reference === 'departure'};
 const PL_BECHTOLD: bool = ${o.capeClosure === 'bechtold'}; const BT_POSITIVE: bool = ${o.pcapeBoundary === 'positive'}; const BT_SCALE: f32 = ${BECHTOLD.resolution / BECHTOLD.reference}; const BT_SHORT: f32 = ${BECHTOLD.shortest}; const BT_LONG: f32 = ${BECHTOLD.longest}; const BT_WIND: f32 = ${BECHTOLD.boundaryWind}; const BT_TSTAR: f32 = ${BECHTOLD.temperatureScale}; const SUB_K: i32 = ${o.subcloudLayers ?? 0};
 const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_SUBSIDENCE: bool = ${!!entrainment.subsidence}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${darkening !== false}; const DARK_SURFACE: bool = ${darkening === 'surface'}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${wetting[0]}; const DARK_SPAN: f32 = ${wetting[1] - wetting[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
@@ -2157,6 +2160,40 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
   }
   return produced;
 }
+// moist.module.js's parcelDeep: whether the test parcel leaving the top of layer start with s0 and q0 has a cloud deeper than DEEP_DEPTH
+fn parcelTypes(i: i32, pi: f32, start: i32, s0: f32, q0: f32, reference: f32) -> bool {
+  var ts = s0; var tq = q0; var tw2 = PL_W0 * PL_W0; var tguess = 0.0; var tbase = 0.0;
+  for (var k = start - 1; k > 0; k--) {
+    let lower = upperInterface(i, k + 1); let upper = upperInterface(i, k); let depth = upper - lower;
+    let Tk = plumeT(i, k); let pk = layerP(pi, k); let zk = plumeZ(i, k); let env = plumeEnv(i, k);
+    let ratio = cloudSat(Tk, pk).x / reference;
+    let epsilon = TP_EPS * IFS_EPS * ratio * ratio * ratio;
+    let half = exp(-epsilon * (zk - lower));
+    let midQ = env.y + (tq - env.y) * half;
+    let mid = plumeState(env.x + (ts - env.x) * half, midQ, zk, pk, tguess);
+    tguess = mid.x;
+    if (!(tbase > 0.0) && mid.y > 0.0) { tbase = pi * LV[L_SL + k]; }
+    let idx = k * C + i; let environment = Tk * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + idx]) - CU_LOADING * max(0.0, IN[S_QC + idx]));
+    let buoyancy = GRAV * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - environment) / environment;
+    let mixing = IFS_DRAG * epsilon; let x = 2.0 * mixing * depth;
+    let next = tw2 * exp(-x) + 2.0 * PL_ACC * buoyancy * depth * select(1.0, relaxedFraction(x) / x, x > 0.0);
+    if (!(next > 0.0)) {
+      if (tbase > 0.0) {
+        let lift = -PL_ACC * buoyancy; let y = mixing * tw2 / lift;
+        let reach = select(tw2 / (2.0 * lift), select(y * (1.0 - 0.5 * y), log(1.0 + y), y > 1e-3) / (2.0 * mixing), mixing > 0.0);
+        return tbase - pi * LV[L_SL + k] * pow(LV[L_SU + k] / LV[L_SL + k], min(1.0, reach / depth)) > DEEP_DEPTH;
+      }
+      return false;
+    }
+    tw2 = next;
+    if (tbase > 0.0 && tbase - pi * LV[L_SU + k] > DEEP_DEPTH) { return true; }
+    let full = exp(-epsilon * depth);
+    ts = env.x + (ts - env.x) * full; tq = env.y + (tq - env.y) * full;
+    if (PL_MIXED) { let at = frozenState(ts, tq, upper, pi * LV[L_SU + k], tguess); tq -= TP_REMOVE * at.y; ts += LHEAT * TP_REMOVE * at.y + LFUSION * TP_REMOVE * at.z; }
+    else { let liquidAt = plumeState(ts, tq, upper, pi * LV[L_SU + k], tguess); tq -= TP_REMOVE * liquidAt.y; ts += LHEAT * TP_REMOVE * liquidAt.y; }
+  }
+  return tbase > 0.0 && tbase - pi * LV[L_SL + 0] > DEEP_DEPTH;
+}
 // the convective mass flux of moist.module.js's plumeColumn; returns the rain it leaves falling, per layer in cuFall
 fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   cuDeep = false; cuBase = K; cuShallowRain = 0.0; cuSnow = 0.0;
@@ -2196,48 +2233,40 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
       sourceS += CP * dT; sourceQ += dQ;
     }
   }
-  if (!(sourceQ > 0.0)) { return cumulusColumn(i, pi, dt); }
-  let lcl = condensationLevel((sourceS - GRAV * surfaceZ) / CP, sourceQ, surfaceP);
-  if (!(lcl.y > pi * LV[L_SL + 0])) { return cumulusColumn(i, pi, dt); }
-  if (PL_PARCEL) {
-    let surfaceSat = cloudSat(surfaceT, surfaceP).x;
-    var ts = sourceS; var tq = sourceQ; var tw2 = PL_W0 * PL_W0; var tguess = 0.0; var tbase = 0.0; var typed = false; var decided = false;
-    for (var k = source - 1; k > 0; k--) {
-      let lower = upperInterface(i, k + 1); let upper = upperInterface(i, k); let depth = upper - lower;
-      let Tk = plumeT(i, k); let pk = layerP(pi, k); let zk = plumeZ(i, k); let env = plumeEnv(i, k);
-      let ratio = cloudSat(Tk, pk).x / surfaceSat;
-      let epsilon = TP_EPS * IFS_EPS * ratio * ratio * ratio;
-      let half = exp(-epsilon * (zk - lower));
-      let midQ = env.y + (tq - env.y) * half;
-      let mid = plumeState(env.x + (ts - env.x) * half, midQ, zk, pk, tguess);
-      tguess = mid.x;
-      if (!(tbase > 0.0) && mid.y > 0.0) { tbase = pi * LV[L_SL + k]; }
-      let idx = k * C + i; let environment = Tk * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + idx]) - CU_LOADING * max(0.0, IN[S_QC + idx]));
-      let buoyancy = GRAV * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - environment) / environment;
-      let mixing = IFS_DRAG * epsilon; let x = 2.0 * mixing * depth;
-      let next = tw2 * exp(-x) + 2.0 * PL_ACC * buoyancy * depth * select(1.0, relaxedFraction(x) / x, x > 0.0);
-      if (!(next > 0.0)) {
-        if (tbase > 0.0) {
-          let lift = -PL_ACC * buoyancy; let y = mixing * tw2 / lift;
-          let reach = select(tw2 / (2.0 * lift), select(y * (1.0 - 0.5 * y), log(1.0 + y), y > 1e-3) / (2.0 * mixing), mixing > 0.0);
-          typed = tbase - pi * LV[L_SL + k] * pow(LV[L_SU + k] / LV[L_SL + k], min(1.0, reach / depth)) > DEEP_DEPTH;
-        }
-        decided = true; break;
-      }
-      tw2 = next;
-      if (tbase > 0.0 && tbase - pi * LV[L_SU + k] > DEEP_DEPTH) { typed = true; decided = true; break; }
-      let full = exp(-epsilon * depth);
-      ts = env.x + (ts - env.x) * full; tq = env.y + (tq - env.y) * full;
-      if (PL_MIXED) { let at = frozenState(ts, tq, upper, pi * LV[L_SU + k], tguess); tq -= TP_REMOVE * at.y; ts += LHEAT * TP_REMOVE * at.y + LFUSION * TP_REMOVE * at.z; }
-      else { let liquidAt = plumeState(ts, tq, upper, pi * LV[L_SU + k], tguess); tq -= TP_REMOVE * liquidAt.y; ts += LHEAT * TP_REMOVE * liquidAt.y; }
-    }
-    if (!decided) { typed = tbase > 0.0 && tbase - pi * LV[L_SL + 0] > DEEP_DEPTH; }
-    if (!typed) { return cumulusColumn(i, pi, dt); }
+  let stackSource = source;
+  var sourceBottom = bottom; var rooted = true;
+  var lcl = vec2<f32>(0.0, 0.0);
+  var typed = false;
+  if (sourceQ > 0.0) {
+    lcl = condensationLevel((sourceS - GRAV * surfaceZ) / CP, sourceQ, surfaceP);
+    typed = lcl.y > pi * LV[L_SL + 0];
   }
+  var surfaceSat = 0.0;
+  if (PL_PARCEL) {
+    surfaceSat = cloudSat(surfaceT, surfaceP).x;
+    if (typed) { typed = parcelTypes(i, pi, source, sourceS, sourceQ, surfaceSat); }
+  }
+  if (PL_ELEVATED && !typed && !(PL_STABLE && PH[PH_BUOY + i] > 0.0)) {
+    for (var kd = stackSource - 1; kd > 0; kd--) {
+      let pd = layerP(pi, kd);
+      if (pi - pd > DEP_DEPTH) { break; }
+      let env = plumeEnv(i, kd);
+      let departureS = env.x + CP * DEP_DT; let departureQ = env.y + DEP_DQ;
+      let departureLcl = condensationLevel((departureS - GRAV * plumeZ(i, kd)) / CP, departureQ, pd);
+      if (!(departureLcl.y > pi * LV[L_SL + 0])) { continue; }
+      var reference = surfaceSat;
+      if (DEP_OWN) { reference = cloudSat(plumeT(i, kd), pd).x; }
+      if (parcelTypes(i, pi, kd, departureS, departureQ, reference)) {
+        source = kd; sourceBottom = kd; mass = layerDp(pi, kd); sourceS = departureS; sourceQ = departureQ; lcl = departureLcl; rooted = false; typed = true;
+        break;
+      }
+    }
+  }
+  if (!typed) { return cumulusColumn(i, pi, dt); }
   var plumeS: array<f32, K>; var plumeQ: array<f32, K>; var liquid: array<f32, K>; var speed: array<f32, K + 1>; var flux: array<f32, K + 1>;
   var entrained: array<f32, K>; var thick: array<f32, K>; var counted: array<f32, K>;
   var sourceBelow = 0.0;
-  for (var j = bottom; j > source; j--) { sourceBelow += layerDp(pi, j); flux[j] = sourceBelow / mass; }
+  for (var j = sourceBottom; j > source; j--) { sourceBelow += layerDp(pi, j); flux[j] = sourceBelow / mass; }
   flux[source] = 1.0;
   var s = sourceS; var w = sourceQ; var w2 = 0.0; var below = 0.0; var inhibition = 0.0; var cloudy = false; var started = false; var top = -1; var guess = 0.0; var cape = 0.0; var base = -1; var neutral = -1; var neutralB = 0.0; var aboveB = 0.0; var pcape = 0.0; var baseSat = 0.0;
   var rainAbove = 0.0; var rainOne = 0.0;
@@ -2398,12 +2427,13 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   var envJ = plumeEnv(i, bottom);
   for (var j = bottom; j > top; j--) {
     var upS = plumeS[j]; var upQ = plumeQ[j];
-    if (j > source) {
+    let envUp = plumeEnv(i, j - 1);
+    if (j > sourceBottom) { upS = envUp.x; upQ = envUp.y; }
+    else if (j > source) {
       let dpj = layerDp(pi, j);
       belowMass += dpj; belowS += dpj * envJ.x; belowQ += dpj * envJ.y;
       upS = select(belowS / belowMass, sourceS, PL_LOWEST); upQ = select(belowQ / belowMass, sourceQ, PL_LOWEST);
     }
-    let envUp = plumeEnv(i, j - 1);
     dS[j] = flux[j] * (upS - envUp.x) + share * dflux[j] * (dS[j] - envJ.x);
     dQ[j] = flux[j] * (upQ - envUp.y) + share * dflux[j] * (dQ[j] - envJ.y);
     envJ = envUp;
@@ -2431,15 +2461,18 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     for (var k = top; k < base; k++) { let depth = layerDepth(i, k); weighted += depth * sqrt(max(0.0, 0.5 * (speed[k] + speed[k + 1]))); thickness += depth; }
     let turnover = cloudDepth / (weighted / thickness);
     let tau = clamp((1.0 + BT_SCALE * sqrt(MF[F_AREA + i])) * turnover, BT_SHORT, BT_LONG);
-    let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
-    var forcing = 0.0; var layerMass = 0.0; var wind = 0.0;
-    for (var k = max(base, K - SUB_K); k <= bottom; k++) {
-      let idx = k * C + i; let saved = PH[PH_SUBTV + (k - K + SUB_K) * C + i]; let dpk = layerDp(pi, k);
-      if (saved > 0.0) { forcing += (plumeT(i, k) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + idx]) - CU_LOADING * max(0.0, IN[S_QC + idx])) - saved) / dt * dpk; }
-      wind += dpk * length(cellWind(i, k)); layerMass += dpk;
+    var pcapeBoundary = 0.0;
+    if (rooted) {
+      let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
+      var forcing = 0.0; var layerMass = 0.0; var wind = 0.0;
+      for (var k = max(base, K - SUB_K); k <= bottom; k++) {
+        let idx = k * C + i; let saved = PH[PH_SUBTV + (k - K + SUB_K) * C + i]; let dpk = layerDp(pi, k);
+        if (saved > 0.0) { forcing += (plumeT(i, k) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + idx]) - CU_LOADING * max(0.0, IN[S_QC + idx])) - saved) / dt * dpk; }
+        wind += dpk * length(cellWind(i, k)); layerMass += dpk;
+      }
+      let boundaryTime = select((baseHeight - ground) / max(BT_WIND, wind / layerMass), turnover, PH[PH_LAND + i] > 0.5);
+      pcapeBoundary = boundaryTime / BT_TSTAR * select(forcing, max(0.0, forcing), BT_POSITIVE);
     }
-    let boundaryTime = select((baseHeight - ground) / max(BT_WIND, wind / layerMass), turnover, PH[PH_LAND + i] > 0.5);
-    let pcapeBoundary = boundaryTime / BT_TSTAR * select(forcing, max(0.0, forcing), BT_POSITIVE);
     if (consumptionP > 0.0) { relaxed = max(0.0, pcape - pcapeBoundary) / (tau * consumptionP); }
   } else if (consumption > 0.0 && cape > PL_CAPE) { relaxed = (cape - PL_CAPE) / (PL_TAU * consumption); }
   let gate = clamp(0.5 + (CIN_MAX - inhibition) / max(1.0, CIN_MAX), 0.0, 1.0);
@@ -3056,7 +3089,7 @@ fn transportEdge(e: i32, a: i32, b: i32) {
   let source = min(i32(PH[PH_MOMS + a]), i32(PH[PH_MOMS + b])); let columnMass = 0.5 * (IN[S_PI + a] + IN[S_PI + b]);
   var rising = 0.0; var below = 0.0; var weight = 0.0;
   for (var j = bottom; j >= 1; j--) {
-    if (j >= source) { below += LV[L_DS + j] * before[j]; weight += LV[L_DS + j]; rising = below / weight; }
+    if (j >= source) { if (up[j] > 0.0) { below += LV[L_DS + j] * before[j]; weight += LV[L_DS + j]; rising = below / weight; } }
     else { rising = before[j] + (rising - before[j]) * 0.5 * (PH[PH_MOMK + j * C + a] + PH[PH_MOMK + j * C + b]); }
     flux[j] = up[j] * (rising - before[j - 1]);
   }
