@@ -382,6 +382,79 @@ their observed ranges (239.4); its SWCRE of -45.8 needs the water at every level
 at about 0.6, with the clear sky's 6.2 W/m² excess as it is. The same changes of
 the water put the sequential scheme 3 to 16 W/m² above CERES.
 
+## Mixed-phase liquid at 250-450 hPa: `moist.bergeronAutoconversion`
+
+The layer 250-450 hPa (-38 to -15 C) holds 25.6 g/m² of condensate in the
+tropical mean against ERA5's 9.8, and 10.2 g/m² of it as liquid against about 1.
+ERA5's cloud ice excludes snow, which the model lumps with its ice, so the
+liquid is the like-for-like number. Four things keep it there.
+
+- One phase rule. `liquidFraction` (linear in temperature from 273.15 K to
+  235.15 K, 44 % liquid at -21 C) splits the condensate for the saturation mix,
+  the plume's liquid-ice static energy, the Kessler conversion, the melting of
+  falling ice and the radiation; the moist module takes the radiation's two
+  temperatures unless its own options name others. Nothing in the resolved cloud
+  turns liquid into ice faster than the temperature does.
+- No Bergeron-Findeisen or riming term in the resolved cloud's conversion. The
+  factor 1 + 0.5 sqrt(268.16 - T) appears only in the plume's Sundqvist
+  conversion; the liquid share of the resolved cloud converts at Kessler's rate
+  above 0.2 g/kg (1e-3 per s) and over the cloud lifetime (1 h, 3 h under an
+  inversion) at -20 C as at +20 C.
+- One fall speed for the ice share, Heymsfield and Donner's form, 2.5 m/s times the
+  in-cloud ice water content (kg/m³) to the power 0.16 (0.4 to 0.8 m/s), for the
+  cloud ice and for the snow the model lumps with it.
+- The plume's detrained water takes the same ramp.
+
+One pass of the moist physics on the tropical mean of fourteen64's June state:
+the layer holds 27.4 g/m², 12.1 of it liquid, and the conversion and fall stage
+takes 24.4 g/m² per hour out of it, half Kessler's conversion of the liquid and
+half the ice's settling, a residence of 1.1 to 1.3 h against 0.7 h at 450-700 hPa
+and 1.4 h above 250 hPa.
+
+Six hours of the CPU model from that state (N = 64, 64 steps), the tropical
+(30S-30N) mean in g/m² of condensate by layer, the liquid of 250-450 hPa in
+parentheses, and the rain, with the moist options named changed:
+
+| options | 250-450 hPa | above 250 | 450-700 | 700-1000 | column | rain, mm/day |
+|---|---|---|---|---|---|---|
+| none (the start: 27.4, 5.5, 26.2, 43.5, 102.7) | 27.7 (12.3) | 5.0 | 26.7 | 42.8 | 102.3 | 3.29 |
+| `upperCloudLifetime` 1200 s | 18.2 (7.5) | 4.9 | 16.5 | 43.6 | 83.1 | 3.54 |
+| `iceFall` 5 | 20.0 (9.7) | 2.0 | 26.3 | 43.0 | 91.3 | 3.36 |
+| `cloudLifetime` 1800 s | 21.8 (9.3) | 4.9 | 20.2 | 32.0 | 78.9 | 3.50 |
+| the moist ramp 271.15 K to 251.15 K (the radiation's unchanged) | 34.4 (7.8) | 5.3 | 26.9 | 42.7 | 109.3 | 3.39 |
+| the three together | 17.5 (4.1) | 2.1 | 16.4 | 43.3 | 79.3 | 3.68 |
+| `bergeronAutoconversion` | 16.4 (6.7) | 4.8 | 26.0 | 43.0 | 90.2 | 3.40 |
+| `bergeronAutoconversion` and the glaciated ramp | 26.8 (4.8) | 5.2 | 26.0 | 42.7 | 100.7 | 3.45 |
+| `bergeronAutoconversion` and `iceFall` 4 | 13.9 (6.1) | 2.6 | 25.8 | 43.1 | 85.4 | 3.43 |
+
+A shorter lifetime or a faster fall acts on every layer that has the water: the
+lifetime on 450-700 hPa and the fall on the anvils, whose 5.0 g/m² is ERA5's 4.5.
+A glaciated ramp lowers the liquid and raises the condensate, because more of the
+vapor condenses over ice. The Bergeron-Findeisen factor is the one change that
+acts only where the temperature is below 268 K (450-700 hPa loses 3 %, 700-1000 hPa
+nothing), and it is a process the cloud has in the IFS and the plume here has.
+
+`bergeronAutoconversion` (false) multiplies the liquid share's two conversion
+rates and divides its threshold, below 268.16 K, by F = 1 + 0.5 sqrt(min(268.16 -
+T, 18)): F is 1.9 at 265 K, 2.4 at 260 K, 3.0 at 252 K (-21 C) and 3.1 from 250.16
+K to the colder end of the liquid ramp. The IFS's large-scale precipitation does
+this to the two parameters of Sundqvist's conversion, the rate c0 and the
+critical water content l_crit, as c0 = c0* F1 F2 and l_crit = l_crit* / (F1 F2)
+with F2 = 1 + b2 sqrt(T_BF - T) for T_ice < T < T_BF and Sundqvist's constants,
+T_BF = 268 K and b2 = 0.5 (IFS Documentation CY25r1 Part IV chapter 6, equations
+6.49 to 6.53; F1 is the collection by falling rain, which this model's conversion
+does not have). Here Kessler's rate and threshold take the places of c0 and
+l_crit; the factor of the plume's conversion, which carries the later cycles'
+268.16 K and 250.16 K, is the one used, and below 250.16 K the factor stays at its
+value there, because the liquid ramp reaches down to 235.15 K where the IFS's
+cloud is ice. The option changes the liquid share's conversion and nothing else:
+the phase ramp, the radiation, the ice's fall and the plume are as they were, the
+shader text is unchanged with the option off, and the default path's digests hold.
+The converted liquid leaves as rain without freezing aloft or melting at 0 C; at
++0.1 mm/day in the tropical mean (the table's 3.29 to 3.40) that is 0.4 W/m² of
+fusion heat (3.34e5 J/kg times 0.1 kg/m² per day over 86400 s), which a rule that
+froze the water where it forms and melted the snow would move. It is not built.
+
 ## Single columns, tropical atmosphere, % of the beam
 
 Atmosphere's absorption, reflection and surface's absorption, 30 degrees (60
@@ -551,6 +624,8 @@ the surface's sunlight under a thick cloud is held at no less than nothing.
   for cloudy-sky conditions. J. Atmos. Sci., 72, 4053-4074.
 - ECMWF, IFS Documentation, Part IV: Physical Processes, chapter 7, Clouds and
   large-scale precipitation.
+- ECMWF, 2003: IFS Documentation Cycle CY25r1, Part IV: Physical processes,
+  chapter 6, Clouds and large-scale precipitation (equations 6.49 to 6.53).
 - Heymsfield, A. J., and L. J. Donner, 1990: A scheme for parameterizing ice-cloud
   water content in general circulation models. J. Atmos. Sci., 47, 1865-1877.
 - Hogan, R. J., and A. J. Illingworth, 2000: Deriving cloud overlap statistics
@@ -582,6 +657,9 @@ the surface's sunlight under a thick cloud is held at no less than nothing.
 - Stengel, M., et al., 2017: Cloud property datasets retrieved from AVHRR, MODIS,
   AATSR and MERIS in the framework of the Cloud_cci project. Earth Syst. Sci.
   Data, 9, 881-904.
+- Sundqvist, H., 1978: A parameterization scheme for non-convective condensation
+  including prediction of cloud water content. Q. J. R. Meteorol. Soc., 104,
+  677-690.
 - Tiedtke, M., 1993: Representation of clouds in large-scale models. Mon. Wea.
   Rev., 121, 3040-3061.
 - Waliser, D. E., et al., 2009: Cloud ice: A climate model challenge with signs
