@@ -31,9 +31,9 @@ absorption is one number for every phase and size.
 
 | `radiation.shortwave` / `vaporShielding` | what the cloud does | reference |
 |---|---|---|
-| `sequential` (default) | the gray stream above | |
+| `sequential` | the gray stream above | |
 | `vaporShielding: 'cloudTop'` | one effective cloud top per column; the near-infrared stream passes the gases around it as in a column with a reflecting layer: gases above the top see the beam and the light the cloud reflects, gases below see the light it transmits and the light the surface reflects | Lacis and Hansen 1974, with the overlap of Hogan and Illingworth 2000 |
-| `shortwave: 'layered'` | every layer of the cloudy region holds the gases, Rayleigh scattering, aerosol and cloud of the slice (32 near-infrared g-points and 2 visible slices, the ultraviolet ozone bands left to the clear column); delta-Eddington two-stream, layers added over the surface; cloud depth at the model's four lognormal nodes | Joseph, Wiscombe and Weinman 1976; Meador and Weaver 1980; Slingo 1989 (liquid) and Ebert and Curry 1992 (ice), cloud optics by band |
+| `shortwave: 'layered'` (default) | every layer of the cloudy region holds the gases, Rayleigh scattering, aerosol and cloud of the slice (32 near-infrared g-points and 2 visible slices, the ultraviolet ozone bands left to the clear column); delta-Eddington two-stream, layers added over the surface; cloud depth at the model's four lognormal nodes | Joseph, Wiscombe and Weinman 1976; Meador and Weaver 1980; Slingo 1989 (liquid) and Ebert and Curry 1992 (ice), cloud optics by band |
 
 Both options leave the clear-sky pass, the clear columns and the mixed-layer
 deck's stream (2.6 % of the area, 4 % of the ocean's, in the days above) as
@@ -440,7 +440,7 @@ vapor condenses over ice. The Bergeron-Findeisen factor is the one change that
 acts only where the temperature is below 268 K (450-700 hPa loses 3 %, 700-1000 hPa
 nothing), and it is a process the cloud has in the IFS and the plume here has.
 
-`bergeronAutoconversion` (false) multiplies the liquid share's two conversion
+`bergeronAutoconversion` (true) multiplies the liquid share's two conversion
 rates and divides its threshold, below 268.16 K, by F = 1 + 0.5 sqrt(min(268.16 -
 T, 18)): F is 1.9 at 265 K, 2.4 at 260 K, 3.0 at 252 K (-21 C) and 3.1 from 250.16
 K to the colder end of the liquid ramp. The IFS's large-scale precipitation does
@@ -455,7 +455,8 @@ l_crit; the factor of the plume's conversion, which carries the later cycles'
 value there, because the liquid ramp reaches down to 235.15 K where the IFS's
 cloud is ice. The option changes the liquid share's conversion and nothing else:
 the phase ramp, the radiation, the ice's fall and the plume are as they were, the
-shader text is unchanged with the option off, and the default path's digests hold.
+shader text is unchanged with the option off, and the digests of the previous defaults
+(`test/helpers/previousDefaults.mjs`) hold with it off.
 The converted liquid leaves as liquid rain, as every conversion of the resolved
 cloud does; the next subsection sets out what the model's phase bookkeeping does with
 it, and why the option has no heat-of-fusion term.
@@ -529,8 +530,10 @@ temperature (N = 128, the 48-layer bl48 levels, fifteen128_day0872 (a 60-layer s
 carried onto the 48 layers by `remapLevels`), 20 days, a save every two days, the Kepler
 orbit), three seeds (the first unperturbed, the others with the initial θ
 scaled by 1 + 1e-5 u, u uniform in ±1/2),
-with the sequential shortwave (K) or the layered (KL), each with the option on (KM, KLM).
-K and KL are the bl48 session's runs; this tree with the option off reproduces both
+with the sequential shortwave (K) or the layered (KL), each with the option on (KM, KLM):
+the arms name `shortwave` and `moist.bergeronAutoconversion` (K: 'sequential' and false;
+KM: 'sequential' and true; KL: 'layered' and false; KLM: 'layered' and true), as the defaults
+are 'layered' and true. K and KL are the bl48 session's runs; this tree with the option off reproduces both
 at day 874 bit for bit (all 45 arrays of the saved state), and the option on ran two
 clean days before the arms. Means of the three seeds' saves of days 882 to 892 (days 10
 to 20), W/m² unless stated; CERES is the August and September EBAF climatology
@@ -721,8 +724,8 @@ moves the layered TOA by -10.9 and -18.0 W/m² in the two cases.
 
 The CPU solver, `js/physics/layeredShortwave.module.js`, is the reference.
 On the GPU the layered scheme is one pass, `layered`, between the radiation
-and longwave kernels, present only with the option (the default passes and
-their shader text are those of the sequential scheme). The radiation kernel
+and longwave kernels, present only with shortwave 'layered' (the sequential
+scheme's passes and shader text are those of an engine without it). The radiation kernel
 solves the clear sky as for the sequential scheme and, for each cell with
 cloud outside the deck, leaves nine values in `PH_LYR` (whether the pass
 applies, the sun's cosine, the beam, the two surface albedos, the cover, the
@@ -778,8 +781,9 @@ buffers.
 
 ## The held radiation between calls
 
-With `radiationEvery` above 1 (the page's cadence: 11.25 minutes of model time,
-every 4th step at N = 128, every 2nd at N = 64) both engines run the full
+With `radiationEvery` above 1 (the drivers' cadence from N = 64 up, `js/cadence.module.js`:
+45 minutes of model time with the layered shortwave, every 16th step at N = 128 and every
+8th at N = 64, and 11.25 minutes with the sequential, every 4th and every 2nd) both engines run the full
 radiation only at a step whose number is a multiple of `radiationEvery`, and at
 a column's first step, under the mean cosine of the zenith angle over the steps
 the call covers (`callCosZenith`: the positive cosines weighted by themselves,
@@ -809,16 +813,16 @@ cloudTop and the layered scheme:
 
 | N, radiation every | sequential | cloudTop | layered | layered less sequential | repeats: sequential / cloudTop / layered |
 |---|---|---|---|---|---|
-| 128, 4th (page) | 41.4 (80.8) | 42.1 (82.2) | 55.7 (108.7) | +27.9 ms, +35 % | 42.1, 39.5, 42.5 / 41.7, 40.4, 44.1 / 57.3, 51.7, 58.0 |
+| 128, 4th (sequential's page cadence) | 41.4 (80.8) | 42.1 (82.2) | 55.7 (108.7) | +27.9 ms, +35 % | 42.1, 39.5, 42.5 / 41.7, 40.4, 44.1 / 57.3, 51.7, 58.0 |
 | 128, 8th | 40.6 (79.2) | 41.0 (80.2) | 49.5 (96.6) | +17.4 ms, +22 % | 38.9, 41.0, 41.8 / 41.3, 40.8 / 50.6, 48.3 |
-| 128, 16th | 40.3 (78.7) | 41.0 (80.0) | 45.5 (88.8) | +10.1 ms, +13 % | 40.6, 40.0 / 40.9, 41.0 / 46.1, 44.8 |
-| 64, 2nd (page) | 6.7 (26.2) | 6.9 (27.1) | 11.5 (44.9) | +18.8 ms, +72 % | 6.9, 6.5 / 7.1, 6.8 / 11.5, 11.5 |
+| 128, 16th (layered's page cadence) | 40.3 (78.7) | 41.0 (80.0) | 45.5 (88.8) | +10.1 ms, +13 % | 40.6, 40.0 / 40.9, 41.0 / 46.1, 44.8 |
+| 64, 2nd (sequential's page cadence) | 6.7 (26.2) | 6.9 (27.1) | 11.5 (44.9) | +18.8 ms, +72 % | 6.9, 6.5 / 7.1, 6.8 / 11.5, 11.5 |
 | 64, 4th | 6.5 (25.2) | 6.4 (25.0) | 8.8 (34.4) | +9.2 ms, +36 % | 6.4, 6.5 / 6.2, 6.6 / 8.5, 9.1 |
-| 64, 8th | 6.1 (23.6) | 5.9 (23.0) | 7.0 (27.3) | +3.7 ms, +16 % | 5.9, 6.2 / 5.9, 5.9 / 7.0, 7.0 |
+| 64, 8th (layered's page cadence) | 6.1 (23.6) | 5.9 (23.0) | 7.0 (27.3) | +3.7 ms, +16 % | 5.9, 6.2 / 5.9, 5.9 / 7.0, 7.0 |
 | 64, 16th | 5.8 (22.7) | 5.8 (22.5) | 6.3 (24.8) | +2.1 ms, +9 % | 5.7, 5.9 / 5.8, 5.7 / 6.4, 6.3 |
 
 Repeats of one configuration differ by up to 5 s per day at N = 128 (the second
-layered repeat at the page cadence, 51.7, is the low one of three), so the sequential
+layered repeat at the sequential page cadence, 51.7, is the low one of three), so the sequential
 and cloudTop schemes cost the same at every cadence within the noise and only the
 layered scheme's cost follows the cadence. The cost is the layered pass and how often it
 is called. Profiled with the radiation called
@@ -853,8 +857,8 @@ Taking the largest of the three day-mean differences in the table over the four 
 held error, a 22.5-minute interval holds it to 0.16 W/m² (sequential) and 0.08 (layered), a
 45-minute interval to 0.27 and 0.18, and 90 minutes to 0.67 and 0.39. Under 0.2 W/m² the
 sequential scheme can run every 8th step at N = 128 and every 4th at N = 64, and the layered
-scheme every 16th and every 8th: at the page's cost that is +10 % at N = 128 (45.5 s a day
-against the sequential page's 41.4) and +4 % at N = 64 (7.0 against 6.7). The four days
+scheme every 16th and every 8th, the cadence the layered default runs at: its cost is +10 %
+at N = 128 (45.5 s a day against the sequential page's 41.4) and +4 % at N = 64 (7.0 against 6.7). The four days
 include the divergence of two runs, so the error of the later days is an upper bound; on day 1
 alone the 45-minute interval is 0.19 (sequential) and 0.12 (layered).
 

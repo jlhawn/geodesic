@@ -5,6 +5,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, sigmaInterfaces, GRAVITY } from '../js/dynamics/sigmaCore.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { PREVIOUS_SHORTWAVE } from './helpers/previousDefaults.mjs';
 import { createRadiation, DAY, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 import { nearInfraredBands, nearInfraredShielded, NEAR_INFRARED_MOLAR, OXYGEN, OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { BENCHMARK, modelColumn, meanMixingRatio } from '../scripts/standardAtmospheres.mjs';
@@ -36,7 +37,7 @@ function columnBudgets(column, { zenith, clouds, albedo = 0.06, options = {} }) 
   const out = {};
   let time = null;
   for (const vaporShielding of ['none', 'cloudTop']) {
-    const radiation = createRadiation(mesh, core, { landAerosol: 0, seaAerosol: 0, clearSkyPass: true, cloudCover: 'overcast', cloudColumns: false, solarConstant: S0, ...gasesOf(column), ...options, vaporShielding });
+    const radiation = createRadiation(mesh, core, { ...PREVIOUS_SHORTWAVE, landAerosol: 0, seaAerosol: 0, clearSkyPass: true, cloudCover: 'overcast', cloudColumns: false, solarConstant: S0, ...gasesOf(column), ...options, vaporShielding });
     time ??= sunAt(radiation, zenith);
     radiation.setTime(time);
     const pi = new Float64Array(C).fill(column.ps), theta = new Float64Array(K * C).fill(280), q = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -60,7 +61,9 @@ const CASES = [
 const gas = (b) => b.vaporSolar + b.oxygenSolar + b.carbonDioxideSolar + b.methaneSolar + b.shieldedGasSolar;
 
 test('vaporShielding is none or cloudTop, and cloudTop needs the band gases, a scattering atmosphere and a cover it can follow', () => {
-  const make = (extra) => createRadiation(mesh, core, extra);
+  const make = (extra) => createRadiation(mesh, core, { ...PREVIOUS_SHORTWAVE, ...extra });
+  assert.doesNotThrow(() => createRadiation(mesh, core, {}));
+  assert.throws(() => createRadiation(mesh, core, { vaporShielding: 'cloudTop' }), /vaporShielding/, 'the layered default and cloudTop do not go together');
   assert.doesNotThrow(() => make({}));
   assert.doesNotThrow(() => make({ vaporShielding: 'none' }));
   assert.doesNotThrow(() => make({ vaporShielding: 'cloudTop' }));
@@ -142,7 +145,7 @@ test('cloudTop takes the gas absorption below a thick high cloud away, adds to i
 
 test('under cloudTop the cloudy N = 16 model\'s absorbed plus reflected sunlight makes the insolation of every step, held or not, and the shielding acts in its columns', () => {
   for (const every of [1, 4]) {
-    const model = createModel(new Grid(16), { ocean: false, radiation: { stratus: true, clearSkyPass: true, radiationEvery: every, vaporShielding: 'cloudTop' }, surface: { exchange: 'roughness' } });
+    const model = createModel(new Grid(16), { ocean: false, radiation: { ...PREVIOUS_SHORTWAVE, stratus: true, clearSkyPass: true, radiationEvery: every, vaporShielding: 'cloudTop' }, surface: { exchange: 'roughness' } });
     initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
     const radiation = model.radiation, cells = model.mesh.nCells, dt = 900;
     model.time = 150 * DAY;

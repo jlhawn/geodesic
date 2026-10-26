@@ -362,10 +362,12 @@ function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
       }
       continue;
     }
-    const excess = Math.max(0, liquid - O.autoconversionThreshold);
+    const airTemperature = th[idx] * exnerLayer[idx];
+    const bergeron = O.bergeronAutoconversion && airTemperature < IFS_PRECIPITATION.bergeron ? 1 + 0.5 * Math.sqrt(Math.min(IFS_PRECIPITATION.bergeron - airTemperature, IFS_PRECIPITATION.bergeron - IFS_PRECIPITATION.ice)) : 1;
+    const excess = Math.max(0, liquid - O.autoconversionThreshold / bergeron);
     let lifetime = O.upperCloudLifetime !== null && pi[i] * sigmaMid[k] < O.shallowTop ? O.upperCloudLifetime : O.cloudLifetime;
     if (O.stratiformLifetime !== null) lifetime += longCloudShare(twin, i, k, iced) * (O.stratiformLifetime - lifetime);
-    const converted = Math.min(liquid, excess * (1 - Math.exp(-O.autoconversionRate * dt)) + liquid * (1 - Math.exp(-dt / lifetime)));
+    const converted = Math.min(liquid, excess * (1 - Math.exp(-O.autoconversionRate * bergeron * dt)) + liquid * (1 - Math.exp(-bergeron * dt / lifetime)));
     cc[idx] -= converted;
     const made = pi[i] * dSigma[k] / g * converted;
     rain += made;

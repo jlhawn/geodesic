@@ -8,7 +8,7 @@ import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSIO
 import { syntheticTopography } from '../js/geography.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
-import { PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_MOIST, PREVIOUS_BERGERON } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -634,7 +634,7 @@ test('the fog options are checked on both engines', async () => {
 });
 
 test('with upperCloudLifetime cloud water in the layers above the shallow top converts over that lifetime and the cloud below over cloudLifetime (with no ice falling, all of it as liquid)', () => {
-  const dt = 600, model = build({ upperCloudLifetime: 1800, iceFall: null }), plain = build({ iceFall: null }), { K, C, sigmaMid } = model.core.diagnostics;
+  const dt = 600, model = build({ upperCloudLifetime: 1800, iceFall: null, ...PREVIOUS_BERGERON }), plain = build({ iceFall: null, ...PREVIOUS_BERGERON }), { K, C, sigmaMid } = model.core.diagnostics;
   for (const m of [model, plain]) jordanColumn(m, 0);
   const pressure = (k) => model.state[0][0] * sigmaMid[k];
   let upper = 0, lower = K - 3;

@@ -9,7 +9,7 @@ import { longwaveTableFor, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShar
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn } from '../scripts/standardAtmospheres.mjs';
-import { PREVIOUS_RADIATION } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_RADIATION, PREVIOUS_SHORTWAVE } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -18,7 +18,7 @@ const { createGpuCore, PHYSICS_PASSES } = gpuAvailable ? await import('../js/gpu
 const SPECTRAL = { longwaveScheme: 'correlated', solarGases: 'clirad' };
 const GRAY_GASES = { longwaveScheme: 'gray', solarGases: 'lacisHansen' };
 const TRANSPARENT = { carbonDioxide: 0, methane: 0, nitrousOxide: 0, ozone: 'idealized', ozoneColumn: [0, 0] };
-const PLAIN = { cloudCover: 'overcast', cloudSolarAbsorption: 0, rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0, upwardAbsorption: false, clearSkyPass: true };
+const PLAIN = { ...PREVIOUS_SHORTWAVE, cloudCover: 'overcast', cloudSolarAbsorption: 0, rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0, upwardAbsorption: false, clearSkyPass: true };
 const HAND = { liquid: { reflectance: 0.6430392965333067 }, thinLiquid: { emissivity: 0.7768681886822757 }, ice: { reflectance: 0.418058949528354, emissivity: 0.8998461956940361 } };
 const CLOUDS = { liquid: [285, 0.1], thinLiquid: [285, 0.01], ice: [213.15, 0.02] };
 const close = (a, b, tolerance) => Math.abs(a - b) <= tolerance * Math.abs(b);
@@ -125,7 +125,7 @@ function cloudyGrid() {
 }
 
 async function physicsPair(base, options, dt = 864000) {
-  const physics = { mixedLayerDeck: false, clearSkyPass: true, ...options };
+  const physics = { ...PREVIOUS_SHORTWAVE, mixedLayerDeck: false, clearSkyPass: true, ...options };
   const model = createModel(base.mesh, { ocean: false, radiation: physics });
   model.state.forEach((a, n) => a.set(base.state[n]));
   model.seaIce.concentration.set(base.seaIce.concentration);

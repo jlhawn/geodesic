@@ -433,7 +433,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * autoconversionRate, and of all cloud water over cloudLifetime
  * (`upperCloudLifetime` where the layer's pressure is below `shallowTop`,
  * the anvils' layers; null: cloudLifetime throughout). With
- * `bergeronAutoconversion` (false) the liquid share's two rates are multiplied
+ * `bergeronAutoconversion` (true) the liquid share's two rates are multiplied
  * and its threshold divided, below 268.16 K, by the Bergeron–Findeisen factor
  * 1 + 0.5 √min(268.16 − T, 18) of the plume's conversion above, as the IFS's
  * large-scale precipitation applies it to c0 and l_crit (IFS Documentation
@@ -516,7 +516,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
-  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, bergeronAutoconversion: false, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
+  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, bergeronAutoconversion: true, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
   deckVeto: true, coupledVeto: false, stratocumulusInversion: 7, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
