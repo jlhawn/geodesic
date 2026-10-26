@@ -211,6 +211,7 @@ function sharedView(shared) {
 }
 
 const overBadge = (h) => h.over && el('span', { class: 'badge warn', title: `Past level ${h.priority}'s ${span(h.over)}` }, 'overtime');
+const promotedBadge = (h) => h.promoted && el('span', { class: 'badge run', title: `Promoted ahead of level 1 at ${when(h.promoted)}` }, 'promoted');
 
 function holderView({ holder, shared, lane, lock, exited }) {
   return [shared.length ? sharedView(shared) : soleView({ holder, lock, exited }), lane && el('p', { class: 'note' }, lane.text)];
@@ -222,7 +223,7 @@ function soleView({ holder: h, lock, exited }) {
     const since = (h.state === 'running' ? h.started : h.stateSince) || h.acquired || h.since;
     const doing = h.state === 'running' ? 'Running' : h.state === 'waiting' ? 'Waiting' : 'Checking for GPU users outside the queue';
     return [
-      el('div', { class: 'title' }, el('span', { class: `badge ${tone}` }, label), overBadge(h), el('span', { class: 'who' }, h.who)),
+      el('div', { class: 'title' }, el('span', { class: `badge ${tone}` }, label), overBadge(h), promotedBadge(h), el('span', { class: 'who' }, h.who)),
       el('p', { class: 'what' }, h.what),
       el('p', { class: 'line' }, `${doing} since `, el('b', null, when(since)), dot, elapsed(since)),
       h.state === 'waiting' && h.blockers && el('p', { class: 'blockers' }, `for ${h.blockers}`),
@@ -252,7 +253,7 @@ function queueView(queue) {
   return el('ol', { class: 'list' }, queue.map((t, i) => el('li', null,
     el('span', { class: 'pos' }, i + 1),
     el('div', { class: 'body' },
-      el('div', { class: 'title' }, el('span', { class: 'badge' }, `level ${t.priority}`),
+      el('div', { class: 'title' }, el('span', { class: 'badge' }, `level ${t.priority}`), promotedBadge(t),
         el('span', { class: 'who' }, t.who), el('span', { class: 'mono' }, `pid ${t.pid}`)),
       el('p', null, t.what),
       el('p', { class: 'line' }, 'queued since ', el('b', null, when(t.since)), dot, elapsed(t.since)),
@@ -427,7 +428,7 @@ function historyView(runs) {
     el('thead', null, el('tr', null, head.map((name) => el('th', { scope: 'col' }, name)))),
     el('tbody', null, runs.map((r) => el('tr', null,
       el('td', { class: 'who' }, r.who),
-      el('td', { class: 'what', title: r.log }, r.what, r.shared && el('span', { class: 'muted' }, ' · shared')),
+      el('td', { class: 'what', title: r.log }, r.what, r.shared && el('span', { class: 'muted' }, ' · shared'), r.promoted && el('span', { class: 'muted' }, ' · promoted')),
       el('td', { class: 'num', 'data-label': 'level' }, r.priority ?? 3),
       el('td', { class: 'when', 'data-label': 'start', title: `queued at ${when(r.queued)}, waited ${span(r.started - r.queued)}` }, when(r.started)),
       el('td', { class: 'when', 'data-label': 'end' }, when(r.ended)),

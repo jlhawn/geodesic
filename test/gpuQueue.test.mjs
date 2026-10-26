@@ -930,6 +930,53 @@ test('a level-2 job waits for the level-1 jobs, a level-1 job that arrives behin
   assert.doesNotMatch(b.read('late.log'), /^queued /m);
 });
 
+test('a level-2 job first in its level for GPU_QUEUE_PROMOTE_MS goes ahead of level 1 and runs alone once the jobs holding the GPU finish', { skip }, async (t) => {
+  const b = bench(t, { GPU_QUEUE_PROMOTE_MS: '1500' });
+  const url = await b.monitor();
+  const one = b.share('one.log', 'one', 'gate');
+  await waitFor(() => b.trace().start.one);
+  const two = b.run('two.log', b.job('two', 'gate'), { env: { GPU_PRIORITY: '2', GPU_WHO: 'beta', GPU_JOB: 'pace' } });
+  await waitFor(() => /^queued /m.test(b.read('two.log')));
+  const next = b.run('next.log', b.job('next', 100), { env: { GPU_PRIORITY: '2' } });
+  await waitFor(() => /^queued /m.test(b.read('next.log')));
+  const four = b.run('four.log', b.job('four', 100));
+  await waitFor(() => /^queued /m.test(b.read('four.log')));
+  const early = b.share('early.log', 'early', 'gate');
+  await waitFor(() => b.trace().start.early);
+  await waitFor(() => /^promoted /m.test(b.read('two.log')));
+  const late = b.share('late.log', 'late', 100);
+  await waitFor(() => /^queued /m.test(b.read('late.log')));
+  await waitFor(() => /^promoted /m.test(b.read('next.log')));
+  assert.deepEqual(b.status().match(/^ {3}- level .*$/gm).map((l) => l.replace(/\d\d:\d\d:\d\d/g, 'T').replace(/pid \d+/, 'pid N')), [
+    '   - level 2, promoted at T, queued since T, pid N',
+    '   - level 2, promoted at T, queued since T, pid N',
+    '   - level 1, queued since T, pid N',
+    '   - level 3, queued since T, pid N',
+  ]);
+  const s = await until(async () => { const x = await json(`${url}status.json`); return x.queue[1]?.promoted && x; });
+  assert.ok(s.queue[1].promoted - s.queue[0].promoted >= 1500, 'the second level-2 job was promoted before it stood first in its level');
+  assert.match((await renderPage((await get(url)).body, s)).queue[0], /^1 level 2 promoted beta pid \d+ pace /);
+  b.open('one');
+  await waitFor(() => b.trace().end.one);
+  await sleep(300);
+  assert.equal(b.trace().start.two, undefined, 'the promoted job started beside a level-1 job');
+  b.open('early');
+  await waitFor(() => b.trace().start.two);
+  assert.match(b.status(), /^Holder: \*\*beta\*\*, pace\n- level 2, promoted at \d\d:\d\d:\d\d, running since /m);
+  b.open('two');
+  assert.deepEqual(await Promise.all([one, two, next, four, early, late].map((a) => a.exited)), [0, 0, 0, 0, 0, 0]);
+  const { start, end } = b.trace();
+  assert.ok(start.early < end.one, 'a level-1 job that arrived before the promotion did not join the GPU');
+  assert.ok(start.two >= end.early, 'the promoted job started beside a level-1 job');
+  assert.ok(start.next >= end.two && start.late >= end.next && start.four >= end.late, 'the jobs ran out of order');
+  assert.match(b.read('two.log'), /^promoted \d\d:\d\d:\d\d after 1\.5 s first in level 2: goes ahead of level 1 and runs alone once the jobs holding the GPU now finish$/m);
+  assert.doesNotMatch(b.read('four.log'), /^promoted /m);
+  const runs = recentRuns(config(b.env));
+  assert.deepEqual([two, next, four].map((a) => Boolean(runs.find((r) => r.pid === a.pid)?.promoted)), [true, true, false]);
+  const h = await until(async () => { const x = await json(`${url}status.json`); return x.history.some((r) => r.pid === two.pid) && x; });
+  assert.ok((await renderPage((await get(url)).body, h)).history.some((row) => row[1] === 'pace · promoted'));
+});
+
 test("an older copy's exclusive lock keeps level-1 jobs out until it ends", { skip }, async (t) => {
   const b = bench(t);
   const queue = path.join(b.dir, 'queue');

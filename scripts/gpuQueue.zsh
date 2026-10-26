@@ -4,7 +4,8 @@
 #   GPU_JOB='<one line>' gpu_run LOG CMD [ARG...]  waits its turn, holds the GPU for all of CMD, exits with its status
 #   GPU_PRIORITY=<1-3> gpu_run …                   the run's level, 3 by default: 1: a job under 5 minutes that tolerates
 #                                                  contention, such as a GPU test file, up to 5 at once, each on CPU_SLOTS
-#                                                  slots (1); 2: a measurement such as pace, at most 10 minutes, alone;
+#                                                  slots (1); 2: a measurement such as pace, at most 10 minutes, alone,
+#                                                  ahead of level 1 once it has waited 10 minutes first in level 2;
 #                                                  3: a long job with heavy GPU use, alone
 #   GPU_JOB='<one line>' gpu_share LOG CMD [ARG...]
 #                                                  gpu_run at level 1; status 75 when a GPU abort in node fails it
