@@ -156,12 +156,12 @@ async function cavitating(options) {
   const top = (a, b) => stats(a.subarray(0, s.C), b.subarray(0, s.C));
   const rT = top(T, fields.T), rS = top(W, fields.S);
   console.log(`ocean top layer after twenty coupled calls: T rms ${rT.rmsRel.toExponential(2)} max ${rT.maxDiff.toExponential(2)} K, S rms ${rS.rmsRel.toExponential(2)} max ${rS.maxDiff.toExponential(2)} psu`);
-  assert.ok(rT.rmsRel < 1e-3 && rS.rmsRel < 1e-3 && wet.length > 0);
+  assert.ok(rT.rmsRel < 1e-4 && rS.rmsRel < 1e-4 && wet.length > 0);
   for (const f of [fields.h, fields.u, fields.T, fields.S]) for (const v of f) assert.ok(Number.isFinite(v));
-  if (options.mstarScheme === 'rh18') assert.ok(rT.maxDiff < 0.1 && rS.maxDiff < 0.02, `the top layer parts by up to ${rT.maxDiff} K and ${rS.maxDiff} psu`);
+  assert.ok(rT.maxDiff < 0.1 && rS.maxDiff < 0.02, `the top layer parts by up to ${rT.maxDiff} K and ${rS.maxDiff} psu`);
   s.gpuModel.destroy();
 }
-test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the ocean under it follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({}));
+test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({}));
 test('twenty coupled calls with the cavitating fluid, mstarScheme rh18 and langmuirScheme rescale: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mstarScheme: 'rh18', langmuirScheme: 'rescale' }));
 
 test('inside the model\'s own step every rheology takes the atmosphere\'s stress, validates on the device and keeps the ice finite and below the speed limit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
