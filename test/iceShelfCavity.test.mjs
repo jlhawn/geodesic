@@ -290,9 +290,9 @@ test('with the shelves loading the water and its top at their sloping draft, eve
   assert.ok(under > 1e-4, `the water under the shelves moves: ${under} m/s`);
 });
 
-test('with the melt off, a homogeneous ocean under a sloping shelf with a front stays as still for a month as it does with the shelves as land, on each engine', { skip: !gpuAvailable && 'webgpu not installed' }, () => restingShelf(['gpu']));
+test('with the melt off, a homogeneous ocean under a sloping shelf with a front stays as still for a month as it does with the shelves as land, on the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, () => restingShelf(['gpu']));
 
-test('under a shelf whose draft steps 300 m from cell to cell over 200 m of water, where neighbors share no depth, every edge passes the sill floor, and with the melt off the ocean stays as still for a month as with the shelves as land, homogeneous or on ISOMIP+\'s warm profile, on each engine', { skip: !gpuAvailable && 'webgpu not installed' }, () => steppedDraft(['gpu']));
+test('under a shelf whose draft steps 300 m from cell to cell over 200 m of water, where neighbors share no depth, every edge passes the sill floor, and with the melt off the ocean stays as still for a month as with the shelves as land, homogeneous or on ISOMIP+\'s warm profile, on the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, () => steppedDraft(['gpu']));
 
 test('from an atlas a cavity starts with its nearest open column\'s water at the same depth, that column\'s bottom water below its floor, no colder than the in-situ freezing point, on each engine', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { raster, options } = shelfBands(340, { water: 200, shelfSea: 700 }), setup = { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { iceDrift: false } }, { mesh, geography } = createModel(new Grid(N), setup), C = mesh.nCells;
