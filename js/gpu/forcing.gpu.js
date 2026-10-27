@@ -1,5 +1,5 @@
 import { emptyBuffer, storageBuffer, readRanges } from './device.module.js';
-import { physicsConstants, PHYSICS_FUNCTIONS, SEA_SURFACE_WGSL, snowOnSea } from './physics.gpu.js';
+import { physicsConstants, physicsFunctions, SEA_SURFACE_WGSL, snowOnSea } from './physics.gpu.js';
 import { nearestLayer, STABILITY_SIGMA } from '../physics/radiation.module.js';
 import { encodeForcing } from '../forcing.module.js';
 import { gridHeader } from '../stateGrid.module.js';
@@ -51,7 +51,7 @@ function compile(model, name, body, prefix, offsets, out) {
   const code = `${gpu.preludeConstants}
 ${names.map((n, b) => `@group(0) @binding(${b}) var<storage, read_write> ${n}: array<${n === 'MI' ? 'i32' : 'f32'}>;`).join('\n')}
 ${constants}
-${PHYSICS_FUNCTIONS}
+${physicsFunctions(phys)}
 const O_STRESS: i32 = ${ocean.layout.OD.STRESS};
 ${ocean.layout.OD.TAUA === undefined ? '' : `const O_TAUA: i32 = ${ocean.layout.OD.TAUA};`}
 ${Object.entries(offsets).filter(([k]) => k !== 'total').map(([k, v]) => `const ${prefix}${k}: i32 = ${v};`).join('\n')}
