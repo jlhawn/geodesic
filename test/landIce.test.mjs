@@ -12,7 +12,7 @@ import { runoffOutlets } from '../js/ocean/layered.module.js';
 import { gridMesh, stateGrid } from '../js/stateGrid.module.js';
 import { DEFAULT_RELAX } from '../js/grid.module.js';
 import { syntheticTopography, createGeography, encodeLandIce, decodeLandIce, landIceUrl, geographyOptions, readTopography, savedGeography, geographyHeader, pickGeography, checkGeography, stateGeography, FRESH_GEOGRAPHY, LEGACY_GEOGRAPHY, ICE_DENSITY, SEAWATER_DENSITY } from '../js/geography.module.js';
-import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -140,7 +140,7 @@ test('a state records its geography where it differs from ETOPO1 and the rule, f
 
 test('with the ice-sheet balance an ice sheet starts full at the cap, sheds the snow above it as discharge and melts as bare ice at the melting point, every drop counted', () => {
   const mesh = gridMesh(new Grid(16)), geography = createGeography(mesh, topography, observed.geography), C = mesh.nCells, a = mesh.areaCell;
-  const land = createLandSurface(mesh, geography, observed.land), plain = createLandSurface(mesh, geography);
+  const land = createLandSurface(mesh, geography, { ...observed.land, ...PREVIOUS_LAND }), plain = createLandSurface(mesh, geography, PREVIOUS_LAND);
   land.initialize(); plain.initialize();
   let sheet = -1, ground = -1;
   for (let i = 0; i < C; i++) {
@@ -237,7 +237,7 @@ test('in the CPU model the snow above a full ice sheet reaches the sea: the ocea
 });
 
 test('both engines take the observed ice sheets and their balance alike at N=16: land codes, full sheets, the snow they shed, the bare ice they melt and the sea their discharge reaches', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const options = { topography, ...observed }, geography = createGeography(gridMesh(new Grid(16)), topography, observed.geography);
+  const options = { topography, ...observed, land: { ...observed.land, ...PREVIOUS_LAND } }, geography = createGeography(gridMesh(new Grid(16)), topography, observed.geography);
   const bareIce = [];
   for (let i = 0, n = 0; i < geography.land.length; i++) if (geography.iceSheet[i] && n++ % 3 === 0) bareIce.push(i);
   const cpu = await prepare(createModel(new Grid(16), options), { moisten: true, bareIce }), gpu = await prepare(await createGpuModel(new Grid(16), options), { moisten: true, bareIce });

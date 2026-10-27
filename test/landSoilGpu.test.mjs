@@ -17,8 +17,8 @@ const { physicsSurfaceKernel } = gpuAvailable ? await import('../js/gpu/physics.
 
 const DT = 900, STEPS = 8;
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
-const layers = { soil: 'layers', iceSheetBalance: true };
-const control = { heatCapacity: 2.19e6 * 0.07, iceSheetBalance: true };
+const layers = { iceSheetBalance: true };
+const control = { soil: 'slab', heatCapacity: 2.19e6 * 0.07, iceSheetBalance: true };
 
 function prepare(model) {
   const { mesh, geography } = model, C = mesh.nCells;
@@ -62,10 +62,31 @@ async function run({ cpu, gpu }) {
   return { decisions, near: neighbourhood(cpu.mesh, decisions.parted, 1), saved: await gpu.land.serialize() };
 }
 
+async function fedStep(gpu, land) {
+  const { geography } = gpu, C = gpu.mesh.nCells;
+  await gpu.sync();
+  const before = await gpu.land.serialize(), skinBefore = Float64Array.from(gpu.state[3]), lossBefore = Float64Array.from(gpu.land.iceLoss);
+  await gpu.step(DT);
+  await gpu.sync();
+  const after = await gpu.land.serialize(), ph = await gpu.gpu.downloadPhysics();
+  const check = createLandSurface(gpu.mesh, geography, land), T = Float64Array.from(skinBefore);
+  check.load(before, null, 0);
+  const fed = { skin: 0, atSkin: -1, deep: 0, atDeep: -1 };
+  for (let i = 0; i < C; i++) if (geography.land[i]) check.update(i, T, ph.SFLUX, ph.EVAP[i], DT);
+  for (let i = 0; i < C; i++) {
+    if (!geography.land[i]) continue;
+    const ds = Math.abs(T[i] - gpu.state[3][i]);
+    if (ds > fed.skin) { fed.skin = ds; fed.atSkin = i; }
+    for (const name of gpu.land.deepNames) { const dd = Math.abs(check[name][i] - after[name][i]); if (dd > fed.deep) { fed.deep = dd; fed.atDeep = i; } }
+  }
+  return { before, after, ph, skinBefore, lossBefore, fed };
+}
+
 test('eight GPU steps with the layered soil track the CPU model as closely as a slab of the skin\'s capacity does, and the three deeper layers agree to 3e-3 K at every land cell outside the decisions the engines took apart', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpu, gpu } = await engines('layers', layers), plain = await engines('control', control);
   const a = await run({ cpu, gpu }), b = await run(plain);
   const C = cpu.mesh.nCells, { geography } = cpu;
+  assert.deepEqual([cpu.land.layered, gpu.land.layered, gpu.gpu.physics.soilColumn.depths.length, plain.gpu.gpu.physics.soilColumn], [true, true, 4, null], 'the layers are the default and the slab is asked for');
   const skin = stats(cpu.state[3], gpu.state[3], a.near), reference = stats(plain.cpu.state[3], plain.gpu.state[3], b.near);
   const deep = gpu.land.deepNames.map((name) => ({ name, ...stats(cpu.land[name], a.saved[name], a.near), all: stats(cpu.land[name], a.saved[name]) }));
   const sheets = [...geography.iceSheet].filter((v, i) => v && geography.land[i] && !a.near.has(i)).length, melted = Array.from(gpu.land.iceLoss).filter((v) => v > 0).length;
@@ -82,25 +103,22 @@ test('eight GPU steps with the layered soil track the CPU model as closely as a 
   assert.ok(ph.SOILT2 && ph.SOILT3 && ph.SOILT4 && !ph.SOILT5);
 });
 
+test('the WGSL for one, two and five layers gives the CPU land\'s skin and layers from the GPU\'s own fluxes, in one step and in the next', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const soilDepths of [[0.2], [0.1, 0.3], [0.05, 0.1, 0.2, 0.4, 0.8]]) {
+    const land = { soilDepths, iceSheetBalance: true }, gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS }));
+    const rows = [];
+    for (let step = 0; step < 2; step++) rows.push((await fedStep(gpu, land)).fed);
+    console.log(`${soilDepths.length} layers: ${rows.map((fed) => `skin ${fed.skin.toExponential(1)} K, layers ${fed.deep.toExponential(1)} K`).join('; ')}`);
+    assert.equal(gpu.land.deepNames.length, soilDepths.length - 1);
+    for (const fed of rows) assert.ok(fed.skin < 2e-3 && fed.deep < 2e-3, `${soilDepths.length} layers: skin ${fed.skin} at ${fed.atSkin}, layers ${fed.deep} at ${fed.atDeep}`);
+  }
+});
+
 test('one GPU step, fed to the CPU land with the fluxes the GPU used, gives the same skin and deep layers, and the layers\' heat content changes by the net surface flux times the step wherever the snow and the ice are unchanged', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { gpu } = await engines('layers', layers);
   const { geography } = gpu, C = gpu.mesh.nCells, column = gpu.land.column;
   const heat = (skin, arrays, i) => (geography.iceSheet[i] ? column.firn : column.soil).capacity.reduce((sum, c, k) => sum + c * (k === 0 ? skin[i] : arrays[k - 1][i]), 0);
-  await gpu.sync();
-  const before = await gpu.land.serialize(), skinBefore = Float64Array.from(gpu.state[3]), lossBefore = Float64Array.from(gpu.land.iceLoss);
-  await gpu.step(DT);
-  await gpu.sync();
-  const after = await gpu.land.serialize(), ph = await gpu.gpu.downloadPhysics();
-  const check = createLandSurface(gpu.mesh, geography, layers), T = Float64Array.from(skinBefore);
-  check.load(before, null, 0);
-  const fed = { skin: 0, atSkin: -1, deep: 0, atDeep: -1 };
-  for (let i = 0; i < C; i++) if (geography.land[i]) check.update(i, T, ph.SFLUX, ph.EVAP[i], DT);
-  for (let i = 0; i < C; i++) {
-    if (!geography.land[i]) continue;
-    const ds = Math.abs(T[i] - gpu.state[3][i]);
-    if (ds > fed.skin) { fed.skin = ds; fed.atSkin = i; }
-    for (const name of gpu.land.deepNames) { const dd = Math.abs(check[name][i] - after[name][i]); if (dd > fed.deep) { fed.deep = dd; fed.atDeep = i; } }
-  }
+  const { before, after, ph, skinBefore, lossBefore, fed } = await fedStep(gpu, layers);
   let compared = 0, worst = 0, worstAt = -1, sheets = 0, changed = 0;
   for (let i = 0; i < C; i++) {
     if (!geography.land[i]) continue;
@@ -116,7 +134,7 @@ test('one GPU step, fed to the CPU land with the fluxes the GPU used, gives the 
   assert.ok(worst < 1e-6, `residual ${worst} at ${worstAt}`);
 });
 
-test('without the layered soil the surface kernel\'s text, its constants and the PH layout are the ones the slab has always had', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
+test('for soil \'slab\' the surface kernel\'s text, its constants and the PH layout are the slab\'s', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
   const sha = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16);
   const mesh = createModel(new Grid(16), { physics: false }).mesh;
   assert.equal(sha(physicsSurfaceKernel(false)), 'ee8de3a466192bb4');

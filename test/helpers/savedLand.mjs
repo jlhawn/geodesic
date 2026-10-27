@@ -7,7 +7,7 @@ import { createLandSurface } from '../../js/physics/land.module.js';
 import { PREVIOUS_LEVELS } from './previousDefaults.mjs';
 
 export const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
-export const options = { topography, ocean: false, levels: PREVIOUS_LEVELS };
+export const options = { topography, ocean: false, levels: PREVIOUS_LEVELS, land: { soil: 'slab' } };
 
 export const digest = (arrays) => {
   const hash = createHash('sha256');
@@ -26,7 +26,7 @@ export function savedFixture() {
   const model = createModel(new Grid(16), options);
   const { mesh, geography } = model, C = mesh.nCells;
   const state = initializeState(model, {}).map((a) => Float64Array.from(a));
-  const land = createLandSurface(mesh, geography, {});
+  const land = createLandSurface(mesh, geography, { soil: 'slab' });
   land.initialize();
   const iced = [];
   for (let i = 0; i < C; i++) {
