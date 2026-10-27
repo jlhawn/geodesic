@@ -10,4 +10,3 @@ runs/*
 node_modules/
 node_modules
 data/geography1024.bin
-data/aerosol_mac_2deg.bin

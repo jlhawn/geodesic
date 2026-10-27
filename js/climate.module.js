@@ -333,7 +333,7 @@ const VIEW_NOTES = [
   ['Total cloud water', 'All the condensed water in the column, plus the marine stratocumulus deck\'s water weighted by the part of the cell it covers, so a patchy deck shows as a fainter sheet.'],
   ['Sea ice thickness', 'Sea-ice thickness.'],
   ['Surface albedo', 'The surface albedo for diffuse light: 0.06 over water, rising to 0.5 over half a meter of ice.'],
-  ['Surface sunlight', 'Shortwave reaching the surface, direct and diffuse, before the surface reflects its share.'],
+  ['Surface sunlight', 'Shortwave reaching the surface, direct and diffuse, before the surface reflects its share. The gases, the cloud and the aerosol take their shares on the way down; the MACv2 aerosol climatology (Kinne 2019, Tellus B 71, 1623639, from the Max Planck Institute for Meteorology) gives the aerosol its depth, absorption and height month by month and place by place.'],
   ['Outgoing longwave radiation', 'Infrared leaving the top of the atmosphere: low over cold cloud tops and the poles, high over clear warm regions.'],
   ['Isobars / Height lines', 'Contours of surface pressure at the surface, of geopotential height on a pressure level, at the chosen interval.'],
   ['Frame rate', 'How often the page redraws, in frames per second, in the top-right corner; click it to switch to the milliseconds between frames and, where the browser reports it, the memory in use.'],

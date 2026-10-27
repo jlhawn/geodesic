@@ -4,7 +4,8 @@ option aerosol 'mac' reads (decodeAerosol in js/aerosol.module.js).
 
 Source: the Max Planck Institute for Meteorology's MACv2 aerosol climatology,
 reference year 2005, anonymous FTP, ftp://ftp-projects.mpimet.mpg.de/aerocom/climatology/
-under MACv2_2018/ (the server states no license; see docs/aerosol-climatology.md):
+under MACv2_2018/ (the server states no license; the attribution the file is
+distributed with is in docs/aerosol-data-notice.md):
 
   for_ICON/spec_2005/by_wave/gt_f_00550nm.nc        fine mode, 550 nm   (10.1 MB)
   for_ICON/spec_2005/by_wave/gt_c_00550nm.nc        coarse mode, 550 nm (10.1 MB)

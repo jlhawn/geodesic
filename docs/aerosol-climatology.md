@@ -30,11 +30,13 @@ The files are the Max Planck Institute for Meteorology's, on its anonymous FTP s
 | `altitude/aeropt_fin_alt_km20.nc` | 62.5 MB | the fine mode's share of the column depth in 20 layers above sea level, by month, and `asl`, the surface altitude |
 | `altitude/aeropt_coa_alt_km20.nc` | 62.5 MB | the coarse mode's |
 
-### License
+### License and attribution
 
-The server, the README and the two papers state no terms of use for these files. The derived file, `data/aerosol_mac_2deg.bin`, is therefore not in the repository: `.gitignore` names it, and it is built locally. The builder and the fit script are committed, so anyone can make the file from the public files. Whether the derived file may be redistributed, and so shipped with the page, is a question for MPI-M (the corresponding author of both papers is the data's author) and is open. Until it is answered the option is a local one: the file has to be built beside the page that serves it, and `.assetsignore` names it so that a `wrangler deploy` from a checkout that has built the file does not publish it (the deploy ignores `.gitignore`). Remove that line when the question is answered.
+The server, the README and the two papers state no terms of use for these files. The derived file, `data/aerosol_mac_2deg.bin`, is in the repository and the page serves it, with the attribution in `docs/aerosol-data-notice.md`: the source, the files that were read and when, what the derivation did to them (the 2 degree resampling, the eight one-byte fields, the heights above the dataset's surface altitude) and the license status, which is that none is stated.
 
 ### Building the file
+
+The file is committed; to make it again from the sources:
 
     BASE=ftp://ftp-projects.mpimet.mpg.de/aerocom/climatology/MACv2_2018/for_ICON
     mkdir -p RAW_DIR && cd RAW_DIR
@@ -44,7 +46,7 @@ The server, the README and the two papers state no terms of use for these files.
     curl -O $BASE/altitude/aeropt_coa_alt_km20.nc
     python3 -I scripts/packAerosol.py RAW_DIR data/aerosol_mac_2deg.bin
 
-`scripts/packAerosol.py` uses the standard library only and takes a third argument, FACTOR (2 by default), the number of source cells per side that make one cell of the output. It coarsens the 1 degree data to 2 degrees: the depth by area, 1 - SSA by the depth, the asymmetry by depth times SSA and the height by the depth. An altitude file may instead be a one-month record, `aeropt_fin_alt_km20.record` or `aeropt_coa_alt_km20.record`, cut from the file by byte range (a big-endian float32 `time` and the 20 layers); every month then has that month's heights, and the ground of a cell is the lower edge of its lowest layer that holds aerosol, there being no surface altitude in a record. A complete file gives each month its own heights over its `asl`.
+`scripts/packAerosol.py` uses the standard library only and takes a third argument, FACTOR (2 by default), the number of source cells per side that make one cell of the output. It coarsens the 1 degree data to 2 degrees: the depth by area, 1 - SSA by the depth, the asymmetry by depth times SSA and the height by the depth. An altitude file may instead be a one-month record, `aeropt_fin_alt_km20.record` or `aeropt_coa_alt_km20.record`, cut from the file by byte range (a big-endian float32 `time` and the 20 layers); every month then has that month's heights, and the ground of a cell is the lower edge of its lowest layer that holds aerosol, there being no surface altitude in a record. A complete file gives each month its own heights over its `asl`, as the committed file has.
 
 The file is little-endian, in the layout of `data/woa_sst_monthly_1deg.bin`:
 
