@@ -21,6 +21,7 @@ import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
 import { lakeArrays, savedLake } from './physics/lake.module.js';
+import { AEROSOL_FILE } from './aerosol.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
@@ -432,6 +433,15 @@ async function loadLandIce() {
   return (landIce = decodeLandIce(await response.arrayBuffer()));
 }
 
+let aerosolBytes = null;
+async function loadAerosolFile() {
+  if (aerosolBytes) return aerosolBytes;
+  const url = new URL(`../${AEROSOL_FILE}`, import.meta.url);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`aerosol climatology ${AEROSOL_FILE}: ${response.status}`);
+  return (aerosolBytes = new Uint8Array(await response.arrayBuffer()));
+}
+
 /*
  * The ocean climatology a fresh start takes its ocean and sea surface
  * from, fetched with the bytes received on the status line. Without a
@@ -713,6 +723,7 @@ async function start(message) {
     const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);
     if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };
   }
+  if (options.radiation?.aerosol === 'mac') options.radiation = { ...options.radiation, aerosolData: await loadAerosolFile() };
   options.terrain = message.terrain !== false;
   if (saved?.ocean?.generator) options.ocean = { ...(options.ocean ?? {}), generator: saved.ocean.generator };
   if (saved) options.levels = savedLevels(saved);
