@@ -4,10 +4,10 @@ import { createModel } from '../../js/model.module.js';
 import { initializeState } from '../../js/physics/init.module.js';
 import { syntheticTopography } from '../../js/geography.module.js';
 import { createLandSurface } from '../../js/physics/land.module.js';
-import { PREVIOUS_LEVELS } from './previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_AEROSOL } from './previousDefaults.mjs';
 
 export const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
-export const options = { topography, ocean: false, levels: PREVIOUS_LEVELS, land: { soil: 'slab' } };
+export const options = { topography, ocean: false, levels: PREVIOUS_LEVELS, land: { soil: 'slab' }, radiation: PREVIOUS_AEROSOL };
 
 export const digest = (arrays) => {
   const hash = createHash('sha256');
