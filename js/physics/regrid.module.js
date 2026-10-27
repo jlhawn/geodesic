@@ -210,7 +210,8 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const carbonKept = land.soilCarbon ? { soilCarbon: Float64Array.from(land.soilCarbon) } : {};
   const recorded = !!(land.litterMean && land.decayMean), carbonRecordKept = recorded ? { litterMean: Float64Array.from(land.litterMean), decayMean: Float64Array.from(land.decayMean) } : {};
   const recordKept = land.record ? { record: Float64Array.from(land.record) } : {}, snowFreeKept = land.snowFreeCover ? { snowFreeCover: Float64Array.from(land.snowFreeCover) } : {};
-  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept, ...ageKept, ...canopyKept, ...seasonKept, ...moistureKept, ...carbonKept, ...carbonRecordKept, ...snowFreeKept, ...recordKept };
+  const deepNames = Object.keys(land).filter((name) => /^soilT\d+$/.test(name)), deepKept = Object.fromEntries(deepNames.map((name) => [name, Float64Array.from(land[name])]));
+  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept, ...ageKept, ...canopyKept, ...seasonKept, ...moistureKept, ...carbonKept, ...carbonRecordKept, ...snowFreeKept, ...recordKept, ...deepKept };
   if (progress) progress(0, 'the land');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), onLand = landMask(source);
   const bucket = target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150;
@@ -233,8 +234,9 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const sineRecord = (tile) => { const { mean, amplitude } = airCycle(source.mesh.latCell[tile]); return carbonRecord(mean, amplitude, guess(tile).soil / bucket); };
   const litterMean = recorded ? sampleTiles(source, target, Float64Array.from(land.litterMean), onLand, atCells, (tile) => sineRecord(tile).litter) : null;
   const decayMean = recorded ? sampleTiles(source, target, Float64Array.from(land.decayMean), onLand, atCells, (tile) => sineRecord(tile).decay) : null;
-  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (snowFreeCover) snowFreeCover[n] = 0; if (surface) surface[n] = 0; if (canopy) canopy[n] = 0; if (seasoned) { seasonLength[n] = 0; seasonWarmth[n] = 0; } if (moistened) { rainMean[n] = 0; demandMean[n] = 0; } if (soilCarbon) soilCarbon[n] = 0; if (recorded) { litterMean[n] = 0; decayMean[n] = 0; } }
-  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(snowFreeCover ? { snowFreeCover } : {}), ...(surface ? { surface } : {}), ...(snowAlbedo ? { snowAlbedo } : {}), ...(canopy ? { canopy } : {}), ...(seasoned ? { seasonLength, seasonWarmth } : {}), ...(moistened ? { rainMean, demandMean } : {}), ...(soilCarbon ? { soilCarbon } : {}), ...(recorded ? { litterMean, decayMean } : {}), ...recordKept };
+  const deepSampled = Object.fromEntries(deepNames.map((name) => [name, sampleTiles(source, target, Float64Array.from(land[name]), onLand, atCells, (tile) => (surfaceT ? surfaceT[tile] : FREEZING + 1))]));
+  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { for (const name of deepNames) deepSampled[name][n] = 0; soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (snowFreeCover) snowFreeCover[n] = 0; if (surface) surface[n] = 0; if (canopy) canopy[n] = 0; if (seasoned) { seasonLength[n] = 0; seasonWarmth[n] = 0; } if (moistened) { rainMean[n] = 0; demandMean[n] = 0; } if (soilCarbon) soilCarbon[n] = 0; if (recorded) { litterMean[n] = 0; decayMean[n] = 0; } }
+  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(snowFreeCover ? { snowFreeCover } : {}), ...(surface ? { surface } : {}), ...(snowAlbedo ? { snowAlbedo } : {}), ...(canopy ? { canopy } : {}), ...(seasoned ? { seasonLength, seasonWarmth } : {}), ...(moistened ? { rainMean, demandMean } : {}), ...(soilCarbon ? { soilCarbon } : {}), ...(recorded ? { litterMean, decayMean } : {}), ...recordKept, ...deepSampled };
 }
 
 /*

@@ -310,8 +310,52 @@ function sineYearRates(mean, amplitude, fill, { decompositionWilting, seasonThre
   return [input, decay];
 }
 
+/*
+ * The soil under the skin. With soil 'layers' the skin is the first of
+ * soilDepths.length conducting layers, the IFS's (Cy41r2 Part IV ch. 8:
+ * thicknesses of Table 8.7, a constant volumetric heat capacity
+ * soilHeatCapacity, §8.5.1, a conductivity soilConductivity, after
+ * Peters-Lidard et al. 1998 for a dry to moderately wet topsoil, and no
+ * flux through the bottom, eq. 8.60). The surface flux Q enters layer 1
+ * explicitly, as it enters the slab, so the radiation column and the
+ * atmosphere see the same skin; the heat that moves between the layers is
+ * one implicit solve per cell and step, in which the layers' heat content
+ * changes by exactly Q dt. A cell on an ice sheet has firn of density
+ * firnDensity for soil: (ρC, λ) = (2.05e6 ρ/917, 2.2 (ρ/917)^1.88), eqs.
+ * 8.29 and 8.44. The layers below the skin are the cells' arrays soilT2,
+ * soilT3, …; `heatCapacity` belongs to the slab and is refused.
+ *
+ * A land state that lacks those arrays starts them on the annual
+ * temperature wave of a homogeneous half-space (Carslaw and Jaeger 1959;
+ * Hillel 1982): T_k = T̄ + A exp(−z_k/d) cos(ω(t − t_peak) − z_k/d), z_k the
+ * layer's mid-depth, d = √(2κ/ω) the damping depth for the cell's κ = λ/ρC
+ * and ω = 2π/year, T̄ and A the mean and amplitude of airCycle(lat,
+ * elevation) and t_peak the peak of the surface temperature: the summer
+ * solstice of the cell's hemisphere on insolationCycle's year, which starts
+ * at the March equinox, plus SOIL_LAG. Nothing in the model records the lag
+ * of the land's seasonal maximum behind the solstice; SOIL_LAG is the usual
+ * three to five weeks of the observed continental cycle.
+ */
+export const SOIL_LAYERS = { depths: [0.07, 0.21, 0.72, 1.89], heatCapacity: 2.19e6, conductivity: 0.7, firnDensity: 400, ice: { heatCapacity: 2.05e6, conductivity: 2.2, density: 917, exponent: 1.88 } };
+export const SOIL_LAG = 30 * 86400;
+const WAVE = 2 * Math.PI / YEAR;
+
+export function soilColumn({ soil = 'slab', heatCapacity, soilDepths = SOIL_LAYERS.depths, soilHeatCapacity = SOIL_LAYERS.heatCapacity, soilConductivity = SOIL_LAYERS.conductivity, firnDensity = SOIL_LAYERS.firnDensity } = {}) {
+  if (soil === 'slab') return null;
+  if (soil !== 'layers') throw new Error(`soil is 'slab' or 'layers', not ${soil}`);
+  if (heatCapacity !== undefined) throw new Error(`heatCapacity is the slab's: with soil 'layers' the skin has soilHeatCapacity × soilDepths[0], not ${heatCapacity}`);
+  if (!(Array.isArray(soilDepths) && soilDepths.length >= 1 && soilDepths.every((d) => d > 0))) throw new Error(`soilDepths must be one or more layer thicknesses above 0 m, not ${soilDepths}`);
+  if (!(soilHeatCapacity > 0 && soilConductivity > 0)) throw new Error(`soilHeatCapacity and soilConductivity must be above 0, not ${soilHeatCapacity} and ${soilConductivity}`);
+  const { ice } = SOIL_LAYERS;
+  if (!(firnDensity > 0 && firnDensity <= ice.density)) throw new Error(`firnDensity must be above 0 and at most ${ice.density} kg/m³, not ${firnDensity}`);
+  const depths = Array.from(soilDepths);
+  const column = (heat, conductivity) => ({ heatCapacity: heat, conductivity, diffusivity: conductivity / heat, capacity: depths.map((d) => heat * d), conductance: depths.slice(1).map((d, k) => conductivity / (0.5 * (depths[k] + d))) });
+  const middles = depths.map((d, k) => depths.slice(0, k).reduce((a, b) => a + b, 0) + 0.5 * d);
+  return { depths, middles, soil: column(soilHeatCapacity, soilConductivity), firn: column(ice.heatCapacity * firnDensity / ice.density, ice.conductivity * (firnDensity / ice.density) ** ice.exponent) };
+}
+
 export function createLandSurface(mesh, geography, {
-  heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
+  heatCapacity: givenCapacity, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
   latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, rootZoneCapacity = 300, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
   snowDeclineTime = 720 * 86400, iceSheetAlbedo = 0.8, iceSheetBalance = false, snowCap = 1000, bareIceAlbedo = 0.5, surfaceCapacity = 15, percolationTime = 86400, stomatalResistance = 70,
   growthColdest = 278.15, growthWarmest = 288.15, soilDarkening = 'surface', wetSoilAlbedo = 0.15, darkeningWetness = null,
@@ -323,14 +367,18 @@ export function createLandSurface(mesh, geography, {
   soilCarbon: carbonOn = SOIL_CARBON.soilCarbon, mineralAlbedo = SOIL_CARBON.mineralAlbedo, humusAlbedo = SOIL_CARBON.humusAlbedo, organicScale = SOIL_CARBON.organicScale, topsoilMass = SOIL_CARBON.topsoilMass,
   soilTurnover = SOIL_CARBON.soilTurnover, litterInput = SOIL_CARBON.litterInput, treeLitter = SOIL_CARBON.treeLitter, grassLitter = SOIL_CARBON.grassLitter, decompositionWilting = SOIL_CARBON.decompositionWilting,
   carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'neutral', buffers = null,
+  soil: soilModel = 'slab', soilDepths, soilHeatCapacity, soilConductivity, firnDensity,
 } = {}) {
   const C = mesh.nCells;
+  const column = soilColumn({ soil: soilModel, heatCapacity: givenCapacity, soilDepths, soilHeatCapacity, soilConductivity, firnDensity });
+  const layered = column !== null, heatCapacity = layered ? column.soil.capacity[0] : givenCapacity ?? 1e6;
   if (!START_CODES[start]) throw new Error(`start is 'neutral', 'bare' or 'green', not ${start}`);
   const shared = (name, length = C) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * length));
   const soil = shared('soil'), snow = shared('snow'), runoff = shared('runoff'), vegetation = shared('vegetation'), surface = shared('surface');
   const snowAlbedoField = shared('snowAlbedo'), canopy = shared('canopy'), seasonLength = shared('seasonLength'), seasonWarmth = shared('seasonWarmth');
   const rainMean = shared('rainMean'), demandMean = shared('demandMean'), soilCarbon = shared('soilCarbon'), litterMean = shared('litterMean'), decayMean = shared('decayMean');
   const snowFreeCover = shared('snowFreeCover'), discharge = shared('discharge'), iceLoss = shared('iceLoss');
+  const deepNames = layered ? column.depths.slice(1).map((_, k) => `soilT${k + 2}`) : [], deep = deepNames.map((name) => shared(name));
   const record = shared('record', 3);
   if (!(buffers && buffers.record)) record[0] = -1;
   if (!(buffers && buffers.snowAlbedo)) snowAlbedoField.fill(freshSnowAlbedo);
@@ -344,6 +392,36 @@ export function createLandSurface(mesh, geography, {
   const { land, iceSheet = null } = geography;
   const onIceSheet = (i) => iceSheet !== null && iceSheet[i] > 0;
   const glacier = (i) => iceSheetBalance && onIceSheet(i);
+  const skinCapacity = (i) => (layered ? (onIceSheet(i) ? column.firn : column.soil).capacity[0] : heatCapacity);
+  const layers = layered ? column.depths.length : 0, between = new Float64Array(layers), reach = new Float64Array(layers), carry = new Float64Array(layers);
+
+  function conduct(i, surfaceT, q, dt) {
+    const { capacity, conductance } = onIceSheet(i) ? column.firn : column.soil;
+    const top = surfaceT[i];
+    let below = top;
+    for (let k = 0; k < layers - 1; k++) { const next = deep[k][i]; between[k] = conductance[k] * (below - next); below = next; }
+    let diagonal = capacity[0] / dt + (layers > 1 ? conductance[0] : 0), source = q - (layers > 1 ? between[0] : 0);
+    reach[0] = source / diagonal; carry[0] = layers > 1 ? conductance[0] / diagonal : 0;
+    for (let k = 1; k < layers; k++) {
+      diagonal = capacity[k] / dt + conductance[k - 1] + (k < layers - 1 ? conductance[k] : 0) - conductance[k - 1] * carry[k - 1];
+      source = between[k - 1] - (k < layers - 1 ? between[k] : 0) + conductance[k - 1] * reach[k - 1];
+      reach[k] = source / diagonal; carry[k] = k < layers - 1 ? conductance[k] / diagonal : 0;
+    }
+    for (let k = layers - 2; k >= 0; k--) reach[k] += carry[k] * reach[k + 1];
+    surfaceT[i] = top + reach[0];
+    for (let k = 1; k < layers; k++) deep[k - 1][i] += reach[k];
+  }
+
+  function startDeep(i, time) {
+    const lat = mesh.latCell[i], { mean, amplitude } = airCycle(lat, geography.elevation ? geography.elevation[i] : 0);
+    const { diffusivity } = onIceSheet(i) ? column.firn : column.soil, damping = Math.sqrt(2 * diffusivity / WAVE);
+    const peak = (lat >= 0 ? 0.25 : 0.75) * YEAR + SOIL_LAG;
+    for (let k = 1; k < layers; k++) {
+      const z = column.middles[k] / damping;
+      deep[k - 1][i] = MELTING_POINT + mean + amplitude * Math.exp(-z) * Math.cos(WAVE * (time - peak) - z);
+    }
+  }
+  const startDeepLayers = (time) => { for (let i = 0; i < C; i++) if (land[i]) startDeep(i, time); else for (const layer of deep) layer[i] = 0; };
   const budget = { runoff: 0, melt: 0, discharge: 0, iceMelt: 0 };
 
   const capacity = () => (vegetated ? rootZoneCapacity : bucketCapacity);
@@ -443,12 +521,13 @@ export function createLandSurface(mesh, geography, {
   }
 
   function update(i, surfaceT, flux, evaporation, dt, airTemperature = null, potential = null) {
-    const temperature = surfaceT[i];
-    surfaceT[i] += dt * flux[i] / heatCapacity;
+    const temperature = surfaceT[i], skinC = skinCapacity(i);
+    if (layered) conduct(i, surfaceT, flux[i], dt);
+    else surfaceT[i] += dt * flux[i] / skinC;
     let left = evaporation * dt;
     const fromSnow = Math.min(snow[i], left);
     snow[i] -= fromSnow; left -= fromSnow;
-    surfaceT[i] -= latentHeatFusion * fromSnow / heatCapacity;
+    surfaceT[i] -= latentHeatFusion * fromSnow / skinC;
     if (vegetated) {
       const fromSurface = Math.min(surface[i], left * bareShare[i]);
       surface[i] -= fromSurface; left -= fromSurface;
@@ -457,15 +536,15 @@ export function createLandSurface(mesh, geography, {
     }
     soil[i] = Math.max(0, soil[i] - left);
     if (snow[i] > 0 && surfaceT[i] > MELTING_POINT) {
-      const energy = (surfaceT[i] - MELTING_POINT) * heatCapacity;
+      const energy = (surfaceT[i] - MELTING_POINT) * skinC;
       const melt = Math.min(snow[i], energy / latentHeatFusion);
       snow[i] -= melt;
       soil[i] += melt;
       budget.melt += mesh.areaCell[i] * melt;
-      surfaceT[i] = MELTING_POINT + (energy - melt * latentHeatFusion) / heatCapacity;
+      surfaceT[i] = MELTING_POINT + (energy - melt * latentHeatFusion) / skinC;
     }
     if (glacier(i) && snow[i] <= 0 && surfaceT[i] > MELTING_POINT) {
-      const melt = (surfaceT[i] - MELTING_POINT) * heatCapacity / latentHeatFusion;
+      const melt = (surfaceT[i] - MELTING_POINT) * skinC / latentHeatFusion;
       runoff[i] += melt; iceLoss[i] += melt;
       budget.runoff += mesh.areaCell[i] * melt; budget.iceMelt += mesh.areaCell[i] * melt;
       surfaceT[i] = MELTING_POINT;
@@ -533,7 +612,7 @@ export function createLandSurface(mesh, geography, {
    * until jump(). The sea's cells of `snow`, the snow on the sea ice, are
    * the sea-ice start's (initializeState).
    */
-  function initialize() {
+  function initialize(time = 0) {
     const code = START_CODES[start], placed = held[code];
     for (let i = 0; i < C; i++) {
       const grown = land[i] && vegetated && !onIceSheet(i);
@@ -547,6 +626,7 @@ export function createLandSurface(mesh, geography, {
       runoff[i] = 0; discharge[i] = 0; iceLoss[i] = 0; surface[i] = 0; snowAlbedoField[i] = freshSnowAlbedo;
     }
     record[0] = 0; record[1] = vegetated ? code : 0; record[2] = code;
+    if (layered) startDeepLayers(time);
   }
 
   function advance(dt) { if (record[0] >= 0) record[0] += dt; }
@@ -620,7 +700,7 @@ export function createLandSurface(mesh, geography, {
    * age −1: its means are exponential running means, and nothing is
    * held. One saved without a snow-free cover takes its cover for it.
    */
-  function load(saved, ice = null) {
+  function load(saved, ice = null, time = 0) {
     if (saved.record && saved.record.length >= 3) { record[0] = saved.record[0]; record[1] = vegetated ? saved.record[1] : 0; record[2] = saved.record[2]; }
     else { record[0] = -1; record[1] = 0; record[2] = 0; }
     const seasoned = !!(saved.seasonLength && saved.seasonWarmth), moistened = !!(saved.rainMean && saved.demandMean);
@@ -648,6 +728,13 @@ export function createLandSurface(mesh, geography, {
       else estimateCarbonRecord(i);
     }
     runoff.fill(0); discharge.fill(0); iceLoss.fill(0);
+    if (!layered) return;
+    const kept = deepNames.every((name) => saved[name]);
+    for (let i = 0; i < C; i++) {
+      if (!land[i]) { for (const layer of deep) layer[i] = 0; continue; }
+      if (kept && deepNames.every((name) => saved[name][i] > 0)) deepNames.forEach((name, k) => { deep[k][i] = saved[name][i]; });
+      else startDeep(i, time);
+    }
   }
 
   /*
@@ -657,8 +744,9 @@ export function createLandSurface(mesh, geography, {
   const weights = (dt) => [weight(seasonMemory, dt), weight(moistureMemory, dt), record[1]];
 
   return {
+    layered, column, deep, deepNames, skinCapacity, startDeep, ...Object.fromEntries(deepNames.map((name, k) => [name, deep[k]])),
     soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, discharge, iceLoss, record, dryAlbedo, treeFactor, moistureFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load, advance, jump, weights, placeholders,
-    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean), snowFreeCover: Float64Array.from(snowFreeCover), record: Float64Array.from(record) } : {}), ...(humic ? { soilCarbon: Float64Array.from(soilCarbon), litterMean: Float64Array.from(litterMean), decayMean: Float64Array.from(decayMean) } : {}) }; },
-    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer, soilCarbon: soilCarbon.buffer, litterMean: litterMean.buffer, decayMean: decayMean.buffer, snowFreeCover: snowFreeCover.buffer, discharge: discharge.buffer, iceLoss: iceLoss.buffer, record: record.buffer },
+    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean), snowFreeCover: Float64Array.from(snowFreeCover), record: Float64Array.from(record) } : {}), ...(humic ? { soilCarbon: Float64Array.from(soilCarbon), litterMean: Float64Array.from(litterMean), decayMean: Float64Array.from(decayMean) } : {}), ...Object.fromEntries(deepNames.map((name, k) => [name, Float64Array.from(deep[k])])) }; },
+    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer, soilCarbon: soilCarbon.buffer, litterMean: litterMean.buffer, decayMean: decayMean.buffer, snowFreeCover: snowFreeCover.buffer, discharge: discharge.buffer, iceLoss: iceLoss.buffer, record: record.buffer, ...Object.fromEntries(deepNames.map((name, k) => [name, deep[k].buffer])) },
   };
 }

@@ -55,7 +55,7 @@ test('splitState leaves a binary state\'s SST ring out of its parts and the rest
   assert.deepEqual(parted, await decodeState(plain));
 });
 
-test('splitState records RADIATION and MOIST in the header of a binary state\'s parts as its options with the shortwave scheme and bergeronAutoconversion at their defaults where not given, and keeps the arrays as they were saved', async () => {
+test('splitState records RADIATION and MOIST in the header of a binary state\'s parts as its options with the shortwave scheme, bergeronAutoconversion and the land\'s soil at their defaults where not given, and keeps the arrays as they were saved', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'split-'));
   const C = 42, values = (length, from) => Float64Array.from({ length }, (_, i) => from + i / 3);
   const state = { N: 2, K: 3, day: 12, time: 12 * 86400, grid: { relax: 30 }, pi: values(C, 1e5), theta: Float32Array.from(values(3 * C, 290)), ocean: { vertical: 'hybrid', h: values(2 * C, 10) } };
@@ -68,14 +68,14 @@ test('splitState records RADIATION and MOIST in the header of a binary state\'s 
     return decodeState(new Uint8Array(gunzipSync(Buffer.concat(parts.map((part) => readFileSync(join(dir, part.file)))))));
   };
   const both = await split('f_day0012', plain, { RADIATION: JSON.stringify(radiation), MOIST: JSON.stringify(moist) });
-  assert.deepEqual(both.options, { radiation: { shortwave: 'layered', ...radiation }, moist: { bergeronAutoconversion: true, ...moist } });
+  assert.deepEqual(both.options, { radiation: { shortwave: 'layered', ...radiation }, moist: { bergeronAutoconversion: true, ...moist }, land: { soil: 'slab' } });
   const arrays = { ...both };
   delete arrays.options;
   assert.deepEqual(arrays, await decodeState(plain));
   const moistOnly = await split('g_day0012', plain, { MOIST: JSON.stringify(moist) });
-  assert.deepEqual(moistOnly.options, { radiation: { shortwave: 'layered' }, moist: { bergeronAutoconversion: true, ...moist } });
+  assert.deepEqual(moistOnly.options, { radiation: { shortwave: 'layered' }, moist: { bergeronAutoconversion: true, ...moist }, land: { soil: 'slab' } });
   const previous = await split('h_day0012', plain, { RADIATION: JSON.stringify({ shortwave: 'sequential' }), MOIST: JSON.stringify({ bergeronAutoconversion: false }) });
-  assert.deepEqual(previous.options, { radiation: { shortwave: 'sequential' }, moist: { bergeronAutoconversion: false } });
+  assert.deepEqual(previous.options, { radiation: { shortwave: 'sequential' }, moist: { bergeronAutoconversion: false }, land: { soil: 'slab' } });
   const recorded = await split('i_day0012', encodeState({ ...state, options: { radiation: { shortwave: 'sequential' }, ocean: { everySteps: 8 } } }, { f64 }), { MOIST: JSON.stringify(moist) });
-  assert.deepEqual(recorded.options, { radiation: { shortwave: 'sequential' }, ocean: { everySteps: 8 }, moist: { bergeronAutoconversion: true, ...moist } });
+  assert.deepEqual(recorded.options, { radiation: { shortwave: 'sequential' }, ocean: { everySteps: 8 }, moist: { bergeronAutoconversion: true, ...moist }, land: { soil: 'slab' } });
 });
