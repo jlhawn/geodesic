@@ -5,3 +5,4 @@ scripts
 package.json
 package-lock.json
 httpd.py
+data/aerosol_mac_2deg.bin

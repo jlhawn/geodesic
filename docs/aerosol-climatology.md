@@ -32,7 +32,7 @@ The files are the Max Planck Institute for Meteorology's, on its anonymous FTP s
 
 ### License
 
-The server, the README and the two papers state no terms of use for these files. The derived file, `data/aerosol_mac_2deg.bin`, is therefore not in the repository: `.gitignore` names it, and it is built locally. The builder and the fit script are committed, so anyone can make the file from the public files. Whether the derived file may be redistributed, and so shipped with the page, is a question for MPI-M (the corresponding author of both papers is the data's author) and is open. Until it is answered the option is a local one: the file has to be built beside the page that serves it.
+The server, the README and the two papers state no terms of use for these files. The derived file, `data/aerosol_mac_2deg.bin`, is therefore not in the repository: `.gitignore` names it, and it is built locally. The builder and the fit script are committed, so anyone can make the file from the public files. Whether the derived file may be redistributed, and so shipped with the page, is a question for MPI-M (the corresponding author of both papers is the data's author) and is open. Until it is answered the option is a local one: the file has to be built beside the page that serves it, and `.assetsignore` names it so that a `wrangler deploy` from a checkout that has built the file does not publish it (the deploy ignores `.gitignore`). Remove that line when the question is answered.
 
 ### Building the file
 
