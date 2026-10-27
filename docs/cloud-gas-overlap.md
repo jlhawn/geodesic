@@ -898,6 +898,14 @@ apply on loading them, with the deep layers started on the periodic profile of t
 skin (`test/layeredDefault.test.mjs` reads their headers). A heat capacity given without `soil: 'slab'` is
 refused.
 
+The suite with the layers as the default: the CPU files in four jobs (883 tests) and every GPU file at
+level 1 (407 tests in 54 files; `atmosphereConservation` took 32 minutes there). The tests that assume the
+slab name it: `land` (the heat-capacity energy and the vegetation's time scales), `landIce` (the bare-ice
+melt in the CPU land and in both engines), `snowAlbedo` (the snow's ageing under a constant skin),
+`frameGpu` (its 5e-4 m/s bound on the wind speed is crossed at 850 hPa, 7.1e-4 at one cell after 12 steps,
+by the winds the layers give) and the load digests of `landLoadPath`; `land`'s expected keys,
+`splitState`'s options and `soilCarbon`'s option list take the layers' names. No digest pin moved.
+
 `radiation.aerosol` is `'mac'` by default on both engines (October 27): `DEFAULT_AEROSOL` in
 `js/aerosol.module.js`, which the CPU radiation, the GPU's `PHYSICS_DEFAULTS`, `climatologyOn` (the
 sampler of `createModel` and the page worker's fetch of `data/aerosol_mac_2deg.bin`, 1.56 MB) and
@@ -923,13 +931,24 @@ heights of the aerosol in each month, the A/B of the fixed-SST control behind th
 option leaves out are in its document, which also records that the A/B ran before the file had each month's
 heights and has not been repeated.
 
-The suite with the layers as the default: the CPU files in four jobs (883 tests) and every GPU file at
-level 1 (407 tests in 54 files; `atmosphereConservation` took 32 minutes there). The tests that assume the
-slab name it: `land` (the heat-capacity energy and the vegetation's time scales), `landIce` (the bare-ice
-melt in the CPU land and in both engines), `snowAlbedo` (the snow's ageing under a constant skin),
-`frameGpu` (its 5e-4 m/s bound on the wind speed is crossed at 850 hPa, 7.1e-4 at one cell after 12 steps,
-by the winds the layers give) and the load digests of `landLoadPath`; `land`'s expected keys,
-`splitState`'s options and `soilCarbon`'s option list take the layers' names. No digest pin moved.
+The suite with the climatology as the default: the CPU files in four jobs (911 tests) and every GPU file at
+level 1 (410 tests in 54 files), and `atmosphereConservation` at level 3 (9 tests, 25.5 minutes, no
+command-buffer abort). The tests that assume the flat aerosol name it: `clearScattering`, `cloudOptics`,
+`gasCloud`, `gasRadiation`, `radiativeColumn`, `layeredShortwave`, `layeredShortwaveGpu`, `skinGpu` and the
+columns of `layeredConservation` take it for their hand-made expectations, and `vaporShielding` and
+`vaporShieldingGpu` for the `solarGases` and the `vaporShielding: 'cloudTop'` that `'mac'` refuses;
+`splitState`'s expected options and the headers `layeredDefault` reads include the aerosol; the load digests of
+`landLoadPath` and the divergence-damping parity of `gpuModel` keep the flat aerosol for their states (the
+latter has one column, 105, whose convective adjustment parts between the engines by 1.9e-2 K against a
+bound of 2e-3 with the climatology on the old cold start, an outlier that the flat physics gives as well when
+the cold start is perturbed by 1e-4 K). No pinned digest changed its value. Running it found three faults,
+each fixed in its own commit: the clear-sky sum added the near-infrared slab's term in an order that differed
+from the all-sky column's in the last bit (`cloudEffect`), `upload()` kept the radiation stash and the staged
+fields of an earlier run (`gpuReload`), and the cold start's mean column met the climatology of cell 0 on the
+CPU engine and none on the GPU's, so that every parity test that starts both from `initializeState` diverged
+from its first step (`levels`, `landGpu`, `landIce`, `iceShelfCavity`, `exchange`, `formDrag`, `orography`,
+`landSoilGpu`, `gpu` and others); the column now meets the flat aerosol, which makes the cold start the
+previous default's.
 
 A saved state's header names the options its run was made with (`options`, by group), and the page
 starts it with them. The page's default states (`runs/fourteen64_day1825.parts.json`,
