@@ -2,7 +2,7 @@ import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductio
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, sunDistance, DEFAULT_ORBIT, DEFAULT_SHORTWAVE, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
-import { createAerosolSampler, loadAerosol, AEROSOL_FIELDS } from '../aerosol.module.js';
+import { createAerosolSampler, loadAerosol, AEROSOL_FIELDS, DEFAULT_AEROSOL } from '../aerosol.module.js';
 import { physicsConstants, physicsFunctions, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, bergeronRain, PHYSICS_PASSES, LAYERED_PASSES, layeredPass, LAYERED_SLOTS, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, SURFACE_VERTICAL_SIGMA } from '../frames.module.js';
@@ -819,7 +819,7 @@ export const PHYSICS_DEFAULTS = {
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false, radiationEvery: 1, dragEvery: 1,
   longwaveScheme: 'correlated', longwaveOverlap: 'exponentialRandom', longwaveLines: 'voigt', solarGases: 'clirad', nearInfrared: 'bands', ...GREENHOUSE_GASES, ozone: 'afgl', ozoneColumn: OZONE_COLUMN, ozoneProfile: null, vaporStrength: VAPOR_STRENGTH,
-  rayleighBands: RAYLEIGH_BANDS, rayleighDepth: null, nearInfraredRayleigh: NEAR_INFRARED_RAYLEIGH, upwardAbsorption: true, visibleFraction: VISIBLE_FRACTION, landAerosol: LAND_AEROSOL, seaAerosol: SEA_AEROSOL, aerosolAlbedo: 0.95, aerosolAsymmetry: 0.7, aerosolHeight: 2000, aerosol: 'flat', aerosolScale: 1,
+  rayleighBands: RAYLEIGH_BANDS, rayleighDepth: null, nearInfraredRayleigh: NEAR_INFRARED_RAYLEIGH, upwardAbsorption: true, visibleFraction: VISIBLE_FRACTION, landAerosol: LAND_AEROSOL, seaAerosol: SEA_AEROSOL, aerosolAlbedo: 0.95, aerosolAsymmetry: 0.7, aerosolHeight: 2000, aerosol: DEFAULT_AEROSOL, aerosolScale: 1,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10, keepSmallIce: false,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.62, meltingIceAlbedo: 0.48, iceMeltingRange: 1, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   snowAgeing: true, iceSnowFloor: 0.70, ...SNOW_AGEING,

@@ -26,6 +26,8 @@ import { monthWeights } from './ocean/climatology.module.js';
  * one infinitely high, the lowest the ground).
  * aerosolScale of the radiation multiplies the depths.
  */
+export const DEFAULT_AEROSOL = 'mac';
+export const climatologyOn = (radiation) => (radiation?.aerosol ?? DEFAULT_AEROSOL) === 'mac';
 export const AEROSOL_FILE = 'data/aerosol_mac_2deg.bin';
 export const AEROSOL_FIELD = { fineDepth: 0, coarseDepth: 1, fineAbsorption: 2, coarseAbsorption: 3, fineAsymmetry: 4, coarseAsymmetry: 5, fineHeight: 6, coarseHeight: 7 };
 export const AEROSOL_FIELDS = 8;

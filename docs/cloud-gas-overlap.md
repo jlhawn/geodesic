@@ -898,6 +898,29 @@ apply on loading them, with the deep layers started on the periodic profile of t
 skin (`test/layeredDefault.test.mjs` reads their headers). A heat capacity given without `soil: 'slab'` is
 refused.
 
+`radiation.aerosol` is `'mac'` by default on both engines (October 27): `DEFAULT_AEROSOL` in
+`js/aerosol.module.js`, which the CPU radiation, the GPU's `PHYSICS_DEFAULTS`, `climatologyOn` (the
+sampler of `createModel` and the page worker's fetch of `data/aerosol_mac_2deg.bin`, 1.56 MB) and
+`scripts/stateOptions.mjs` take. The climatology, its measurements and the evidence for the default are in
+`docs/aerosol-climatology.md`, the file's sources and attribution in `docs/aerosol-data-notice.md`.
+`PREVIOUS_AEROSOL` in `test/helpers/previousDefaults.mjs` is `{ aerosol: 'flat' }` (also inside
+`PREVIOUS_RADIATION`), and the explainers keep it (`PUBLISHED_RADIATION` in `explain/published.module.js`,
+which `scripts/explainOcean.mjs` and `scripts/explainLayers.mjs` pass on; their figures and data are
+unchanged), as does `js/charts.module.js`, whose model serves its core alone. Asked for it, this tree is
+10aa5d7's on both engines: the 661 WGSL modules of sixteen GPU configurations at N = 16 hash alike, the CPU
+model's arrays after 24 steps in ten configurations have the same SHA-256, and a model day from the cold start
+(an aquaplanet and the fresh geography with the default ocean, with and without the page's options) leaves the
+state, the ocean and the land bit-identical on the CPU and on the GPU. The 85 shaders of the default model
+(N = 16, the fresh geography, the default ocean) hash `3fbb9c19778b60e1` (`2588fd1219dbd54f` with the page's
+options) where `aerosol: 'flat'` and 10aa5d7 give `b41944bfabf0ff2d` (`265d9092be2dcae5`). The page's default
+states record no aerosol option, so the climatology applies on loading them
+(`test/layeredDefault.test.mjs` reads their headers), and `'mac'` is refused with `solarGases` other than
+`'clirad'` and with `vaporShielding: 'cloudTop'`, the message naming `aerosol: 'flat'`. The default model
+absorbs 0.5 W/m² less sunlight at the top in August, 3.3 more in the atmosphere and 3.8 less at the surface; the
+heights of the aerosol in each month, the A/B of the fixed-SST control behind the decision and what the
+option leaves out are in its document, which also records that the A/B ran before the file had each month's
+heights and has not been repeated.
+
 The suite with the layers as the default: the CPU files in four jobs (883 tests) and every GPU file at
 level 1 (407 tests in 54 files; `atmosphereConservation` took 32 minutes there). The tests that assume the
 slab name it: `land` (the heat-capacity energy and the vegetation's time scales), `landIce` (the bare-ice
@@ -911,7 +934,7 @@ starts it with them. The page's default states (`runs/fourteen64_day1825.parts.j
 `runs/fourteen128_day1825.parts.json`, `runs/twelve192_day0020.parts.json`) record cloudColumns and
 the other options of their spin-ups and neither a shortwave scheme nor the Bergeron option, so the defaults
 apply on loading them (`test/layeredDefault.test.mjs` reads their headers). `scripts/spinup.mjs`
-writes the scheme, the option and the land's soil, with the RADIATION, MOIST and LAND it was given, in the header of every
+writes the scheme, the option, the aerosol and the land's soil, with the RADIATION, MOIST and LAND it was given, in the header of every
 state it saves, and `scripts/splitState.mjs` adds them to the options it stamps
 (`scripts/stateOptions.mjs`), so that a state made now starts on the page as it was made when the
 defaults move again.

@@ -7,9 +7,9 @@
 // (js/sstMeans.module.js), which the page keeps no recorder for, and with
 // RADIATION, MOIST and LAND (JSON, as scripts/spinup.mjs takes them; of LAND
 // the soil options) recorded in its header as the options the page's model
-// starts it with, with the radiation's shortwave scheme, the moist physics'
-// bergeronAutoconversion and the land's soil at their defaults where not
-// given (scripts/stateOptions.mjs). Given a
+// starts it with, with the radiation's shortwave scheme and aerosol, the
+// moist physics' bergeronAutoconversion and the land's soil at their
+// defaults where not given (scripts/stateOptions.mjs). Given a
 // manifest, rewrites it with the hashes of the parts it lists.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';

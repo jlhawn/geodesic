@@ -295,8 +295,8 @@ export function physicsConstants(o) {
   const nir = o.nearInfrared === 'bands' ? nearInfraredWgsl(o) : null;
   const mac = o.aerosol === 'mac';
   if ((o.aerosol ?? 'flat') !== 'flat' && !mac) throw new Error(`aerosol must be 'flat' or 'mac', not ${o.aerosol}`);
-  if (mac && o.solarGases !== 'clirad') throw new Error(`aerosol 'mac' needs solarGases 'clirad', not ${o.solarGases}`);
-  if (mac && shielding) throw new Error(`aerosol 'mac' does not run with vaporShielding 'cloudTop'`);
+  if (mac && o.solarGases !== 'clirad') throw new Error(`aerosol 'mac' needs solarGases 'clirad', not ${o.solarGases}: give aerosol: 'flat' to use it`);
+  if (mac && shielding) throw new Error(`aerosol 'mac' does not run with vaporShielding 'cloudTop': give aerosol: 'flat' to use it`);
   if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from its climatology, not an ozoneProfile');
   if (o.ozone !== 'afgl' && o.ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${o.ozone}`);
   if (o.orbit !== 'circular' && o.orbit !== 'kepler') throw new Error(`orbit must be 'circular' or 'kepler', not ${o.orbit}`);

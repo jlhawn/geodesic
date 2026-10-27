@@ -46,7 +46,7 @@ function sunAt(radiation, zenith) {
  */
 function column(atmosphere, { shortwave, zenith, clouds = [], albedo = 0.06, land = false, aerosol = 'none', fields = GLOBAL_MEANS, options = {} }) {
   const radiation = createRadiation(mesh, core, {
-    landAerosol: 0, seaAerosol: 0, clearSkyPass: true, cloudCover: 'overcast', cloudColumns: false, solarConstant: S0, shortwave, ...gasesOf(atmosphere), ...(land ? { land: new Uint8Array(C).fill(1) } : {}),
+    aerosol: 'flat', landAerosol: 0, seaAerosol: 0, clearSkyPass: true, cloudCover: 'overcast', cloudColumns: false, solarConstant: S0, shortwave, ...gasesOf(atmosphere), ...(land ? { land: new Uint8Array(C).fill(1) } : {}),
     ...(aerosol === 'mac' ? { aerosol: 'mac', aerosolFields: fillAerosol(new Float32Array(8 * C), fields) } : aerosol === 'flat' ? { landAerosol: 0.12, seaAerosol: 0.12 } : {}), ...options,
   });
   radiation.setTime(sunAt(radiation, zenith));

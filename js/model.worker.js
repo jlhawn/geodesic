@@ -21,7 +21,7 @@ import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
 import { lakeArrays, savedLake } from './physics/lake.module.js';
-import { AEROSOL_FILE } from './aerosol.module.js';
+import { AEROSOL_FILE, climatologyOn } from './aerosol.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
@@ -548,7 +548,7 @@ const PROBE = { gpuN: 64, cpuN: 16, warmup: 4, steps: 12, cpuSteps: 3 };
 async function probe(message) {
   const result = { gpu: null, cpu: null }, gpuN = message.N ?? PROBE.gpuN;
   const topography = message.land === false ? null : await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href);
-  const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false };
+  const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false, radiation: { aerosolData: await loadAerosolFile() } };
   const prepare = async (test, N) => {
     for (const [a, values] of initialState(test, null, N).entries()) test.state[a].set(values);
     placeIce(test, null, N);
@@ -564,7 +564,7 @@ async function probe(message) {
     let test = null;
     try {
       status('testing the GPU…', 0.1);
-      test = await createGpuModel(new Grid(gpuN), { ...options, ...withCadence({}, 1350 * 16 / gpuN, gpuN), ...(topography ? { subgrid: await loadSubgrid(gpuN) } : {}) });
+      test = await createGpuModel(new Grid(gpuN), { ...options, ...withCadence(options, 1350 * 16 / gpuN, gpuN), ...(topography ? { subgrid: await loadSubgrid(gpuN) } : {}) });
       await prepare(test, gpuN);
       const step = 1350 * 16 / gpuN, queued = [];
       for (let n = 0; n < PROBE.warmup; n++) await test.step(step);
@@ -585,7 +585,7 @@ async function probe(message) {
   }
   if (!result.gpu || result.gpu.error) {
     status('testing the CPU…', 0.3);
-    const test = createModel(new Grid(PROBE.cpuN), { ...options, ...withCadence({}, 1350 * 16 / PROBE.cpuN, PROBE.cpuN), ...(topography ? { subgrid: await loadSubgrid(PROBE.cpuN) } : {}) });
+    const test = createModel(new Grid(PROBE.cpuN), { ...options, ...withCadence(options, 1350 * 16 / PROBE.cpuN, PROBE.cpuN), ...(topography ? { subgrid: await loadSubgrid(PROBE.cpuN) } : {}) });
     await prepare(test, PROBE.cpuN);
     const step = 1350 * 16 / PROBE.cpuN;
     await test.step(step);
@@ -723,7 +723,7 @@ async function start(message) {
     const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);
     if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };
   }
-  if (options.radiation?.aerosol === 'mac') options.radiation = { ...options.radiation, aerosolData: await loadAerosolFile() };
+  if (climatologyOn(options.radiation)) options.radiation = { ...options.radiation, aerosolData: await loadAerosolFile() };
   options.terrain = message.terrain !== false;
   if (saved?.ocean?.generator) options.ocean = { ...(options.ocean ?? {}), generator: saved.ocean.generator };
   if (saved) options.levels = savedLevels(saved);

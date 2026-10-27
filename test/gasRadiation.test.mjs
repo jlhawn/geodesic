@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { clearLongwave, longwaveTableFor, LONGWAVE_TABLE } from '../js/physics/longwave.module.js';
 import { sigmaInterfaces, GRAVITY, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, interfaceAt, layerHeating, referenceHeating, MOLAR } from '../scripts/standardAtmospheres.mjs';
-import { PREVIOUS_SHORTWAVE } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
 import { SOLAR_CONSTANT, GREENHOUSE_GASES, VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
 import { ozoneWeights, ozoneAbove } from '../js/physics/ozone.module.js';
@@ -157,7 +157,7 @@ test('with the near infrared in bands the solar gases absorb what RRTMG gives wi
 });
 
 test('without scattering the solar gases take the CLIRAD absorptivities of their paths down, and of the path down plus 5/3 of the column from the light the surface reflects', () => {
-  const grid = new Grid(16), plain = { ...PREVIOUS_SHORTWAVE, rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true, nearInfrared: 'clirad' };
+  const grid = new Grid(16), plain = { ...PREVIOUS_SHORTWAVE, ...PREVIOUS_AEROSOL, rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true, nearInfrared: 'clirad' };
   const make = (options) => { const m = createModel(grid, { ocean: false, radiation: { ...plain, ...options } }); initializeState(m, {}).forEach((v, a) => m.state[a].set(v)); return m; };
   const on = make({}), off = make({ upwardAbsorption: false });
   const { core, mesh } = on, { K, C, dSigma, sigmaMid, g, exnerLayer } = core.diagnostics, [pi, theta] = on.state, bottom = (K - 1) * C;

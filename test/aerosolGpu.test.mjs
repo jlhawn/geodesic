@@ -10,7 +10,9 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { GRAVITY } from '../js/dynamics/sigmaCore.module.js';
 import { layoutFor, PHYSICS_DEFAULTS } from '../js/gpu/core.gpu.js';
 import { physicsConstants, physicsFunctions, PHYSICS_FUNCTIONS, physicsKernel, radiationKernel, layeredPass, LONGWAVE_STASH_FLOATS } from '../js/gpu/physics.gpu.js';
+import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
 import { syntheticAerosol } from './helpers/aerosol.mjs';
+import { PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -25,9 +27,11 @@ const MAC_TEXT = /mac[A-Z]|MAC_|PH_AER|light: vec4/;
  * radiation, and without the option the generated WGSL has none of it.
  */
 
-test('without \'mac\' no WGSL of the aerosol is generated and the physics buffer and the stash are the engine\'s; with it they grow by the eight fields and an array', () => {
-  const base = { ...PHYSICS_DEFAULTS, R: 287 }, mac = { ...base, aerosol: 'mac' };
-  assert.equal(PHYSICS_DEFAULTS.aerosol, 'flat');
+test('the engine\'s default aerosol is \'mac\'; without it no WGSL of the aerosol is generated and the physics buffer and the stash are the previous engine\'s, and with it they grow by the eight fields and an array', () => {
+  const base = { ...PHYSICS_DEFAULTS, ...PREVIOUS_AEROSOL, R: 287 }, mac = { ...base, aerosol: 'mac' };
+  assert.equal(DEFAULT_AEROSOL, 'mac');
+  assert.equal(PHYSICS_DEFAULTS.aerosol, DEFAULT_AEROSOL);
+  assert.equal(base.aerosol, 'flat');
   assert.equal(PHYSICS_DEFAULTS.aerosolScale, 1);
   assert.ok(!MAC_TEXT.test(physicsConstants(base)) && !MAC_TEXT.test(physicsFunctions(base)), 'the constants and functions');
   assert.equal(physicsFunctions(base), PHYSICS_FUNCTIONS);
@@ -49,10 +53,14 @@ test('without \'mac\' no WGSL of the aerosol is generated and the physics buffer
 
 test('the GPU refuses the options the CPU radiation refuses, with the same words', () => {
   const given = (extra) => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...extra });
+  assert.doesNotThrow(() => given({}));
   assert.doesNotThrow(() => given({ aerosol: 'mac' }));
   assert.doesNotThrow(() => given({ aerosol: 'mac', shortwave: 'sequential', nearInfrared: 'clirad', aerosolScale: 2.5 }));
-  for (const [bad, message] of [[{ aerosol: 'dust' }, /aerosol must be 'flat' or 'mac', not dust/], [{ aerosol: 'mac', solarGases: 'lacisHansen' }, /aerosol 'mac' needs solarGases 'clirad', not lacisHansen/],
-    [{ aerosol: 'mac', shortwave: 'sequential', vaporShielding: 'cloudTop' }, /aerosol 'mac' does not run with vaporShielding 'cloudTop'/], [{ aerosol: 'mac', aerosolScale: -1 }, /aerosolScale must be a factor of the aerosol's depth, 0 or more, not -1/]]) assert.throws(() => given(bad), message, JSON.stringify(bad));
+  assert.doesNotThrow(() => given({ aerosol: 'flat', shortwave: 'sequential', solarGases: 'lacisHansen' }));
+  assert.doesNotThrow(() => given({ aerosol: 'flat', shortwave: 'sequential', vaporShielding: 'cloudTop' }));
+  const gases = /aerosol 'mac' needs solarGases 'clirad', not lacisHansen: give aerosol: 'flat' to use it/, shielding = /aerosol 'mac' does not run with vaporShielding 'cloudTop': give aerosol: 'flat' to use it/;
+  for (const [bad, message] of [[{ aerosol: 'dust' }, /aerosol must be 'flat' or 'mac', not dust/], [{ aerosol: 'mac', solarGases: 'lacisHansen' }, gases], [{ solarGases: 'lacisHansen' }, gases],
+    [{ aerosol: 'mac', shortwave: 'sequential', vaporShielding: 'cloudTop' }, shielding], [{ shortwave: 'sequential', vaporShielding: 'cloudTop' }, shielding], [{ aerosol: 'mac', aerosolScale: -1 }, /aerosolScale must be a factor of the aerosol's depth, 0 or more, not -1/]]) assert.throws(() => given(bad), message, JSON.stringify(bad));
 });
 
 function meanTheta(model) {
@@ -87,7 +95,7 @@ function stats(cpu, gpu) {
  * `aerosol` false is the same without the climatology.
  */
 async function pair(aerosol, radiation, { steps = 3, time = 200 * DAY - 2 * DT, thickness = 1, data = syntheticAerosol().bytes, model: modelOptions = {} } = {}) {
-  const options = { stratus: true, clearSkyPass: true, ...radiation, ...(aerosol ? { aerosol: 'mac', aerosolData: data } : {}) };
+  const options = { stratus: true, clearSkyPass: true, ...radiation, ...(aerosol ? { aerosol: 'mac', aerosolData: data } : PREVIOUS_AEROSOL) };
   const model = createModel(new Grid(N), { ocean: false, radiation: options, surface: { exchange: 'roughness' }, ...modelOptions });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   cloudier(model, thickness);
@@ -183,7 +191,7 @@ test('over a 4 km mountain the engines agree on what the aerosol does to the lay
     return d < 0.5 ? 1 + 4000 * Math.exp(-((d / 0.18) ** 2)) : -4000;
   }), data = syntheticAerosol().bytes, runs = [];
   for (const aerosol of [false, true]) {
-    const options = { stratus: true, shortwave: 'layered', radiationEvery: 4, mixedLayerDeck: false, ...(aerosol ? { aerosol: 'mac', aerosolData: data } : {}) };
+    const options = { stratus: true, shortwave: 'layered', radiationEvery: 4, mixedLayerDeck: false, ...(aerosol ? { aerosol: 'mac', aerosolData: data } : PREVIOUS_AEROSOL) };
     const cpu = createModel(new Grid(N), { ocean: false, topography: mountain, radiation: options }), gpu = await createGpuModel(new Grid(N), { ocean: false, topography: mountain, radiation: options });
     const { K, R } = cpu.core.diagnostics, phis = cpu.surfaceGeopotential;
     for (let i = 0; i < C; i++) cpu.state[0][i] = 101325 * Math.exp(-phis[i] / (R * 280));

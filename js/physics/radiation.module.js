@@ -7,7 +7,7 @@ import { longwaveTableFor, longwaveCores, LONGWAVE_CORES, LONGWAVE_CONSTANTS, GA
 import { ozoneWeights, ozoneAbove as climatologyAbove } from './ozone.module.js';
 import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptivity, oxygenAbsorptivity, carbonDioxideAbsorptivity, nearInfraredBands, nearInfraredShielded, NEAR_INFRARED_MOLAR, VISIBLE_VAPOR_BANDS, pressureScaling, vaporScaling, OXYGEN, OZONE_CM_ATM, STP_DEPTH, OZONE_SHARES, OZONE_COEFFICIENTS, VAPOR_STRENGTH, VISIBLE_VAPOR } from './shortwaveGases.module.js';
 import { createLayered } from './layeredShortwave.module.js';
-import { AEROSOL_FIELD, AEROSOL_FIELDS, WAVELENGTHS, MIXED_DEPTH, aerosolTable, streamOptics, profileFractions } from '../aerosol.module.js';
+import { AEROSOL_FIELD, AEROSOL_FIELDS, DEFAULT_AEROSOL, WAVELENGTHS, MIXED_DEPTH, aerosolTable, streamOptics, profileFractions } from '../aerosol.module.js';
 import { AEROSOL_SPECTRA } from './aerosolSpectra.module.js';
 export const STEFAN_BOLTZMANN = 5.670374419e-8;
 export const SOLAR_CONSTANT = 1362;
@@ -557,9 +557,9 @@ export function seasonTimes(orbit = DEFAULT_ORBIT) {
  * reference's reflection of the rest of the spectrum to 0.1 % (2.0 W/m²
  * of the 25.2 of the whole spectrum over a black surface). A number for
  * rayleighDepth replaces the sub-bands by one band of that depth.
- * τ_a, the aerosol's mid-visible depth, is landAerosol (0.12) over land
- * and seaAerosol (0.07) over sea and ice sheets; before the two-stream
- * it absorbs 1 − exp(−(1 − aerosolAlbedo) τ_a m) of that part of the beam,
+ * With aerosol 'flat', τ_a, the aerosol's mid-visible depth, is landAerosol
+ * (0.12) over land and seaAerosol (0.07) over sea and ice sheets; before
+ * the two-stream it absorbs 1 − exp(−(1 − aerosolAlbedo) τ_a m) of that part of the beam,
  * m the vapour's magnification, and heats each layer by its share of an
  * aerosol whose density falls off over aerosolHeight (2 km), the fraction
  * σ^(scaleHeight/aerosolHeight) of it lying above σ. With
@@ -570,11 +570,13 @@ export function seasonTimes(orbit = DEFAULT_ORBIT) {
  * that part of the beam left after the descent, each layer what its own
  * vapour adds going up; in the visible part the aerosol takes
  * 1 − exp(−(1 − aerosolAlbedo) τ_a 5/3), heating the layers as above.
- * With `aerosol` 'mac' the aerosol is the MACv2 climatology (js/aerosol.module.js,
- * docs/aerosol-climatology.md) of the cell's fine and coarse modes, in the cells'
- * eight fields `aerosolFields`, and landAerosol, seaAerosol, aerosolAlbedo,
- * aerosolAsymmetry and aerosolHeight play no part; `aerosolScale` multiplies its
- * depths. The visible slab takes the depth, albedo and asymmetry of the visible
+ * With `aerosol` 'mac', the default (DEFAULT_AEROSOL), the aerosol is the MACv2
+ * climatology (js/aerosol.module.js, docs/aerosol-climatology.md) of the cell's
+ * fine and coarse modes, in the cells' eight fields `aerosolFields`, and
+ * landAerosol, seaAerosol, aerosolAlbedo, aerosolAsymmetry and aerosolHeight
+ * play no part; `aerosolScale` multiplies its depths. It needs solarGases
+ * 'clirad' and no vaporShielding 'cloudTop': give aerosol 'flat' for those.
+ * The visible slab takes the depth, albedo and asymmetry of the visible
  * stream's mixture of the modes, and the rest of the beam meets a second slab of
  * the near-infrared stream's mixture, after the gases above the aerosol: it
  * takes 1 − exp(−(1 − ω) τ m) of the beam left there, adds (1 − g) ω τ to the
@@ -743,7 +745,7 @@ export function createRadiation(mesh, core, {
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, referenceCoefficients = null, surfaceLayer = false, seaHumidity = 1, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
   longwaveScheme = 'correlated', longwaveOverlap = 'exponentialRandom', longwaveLines = 'voigt', solarGases = 'clirad', nearInfrared = 'bands', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
-  rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, nearInfraredRayleigh = NEAR_INFRARED_RAYLEIGH, upwardAbsorption = true, visibleFraction = VISIBLE_FRACTION, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, aerosol = 'flat', aerosolScale = 1, aerosolFields = null, land = null, iceSheet = null, longwaveTable = null,
+  rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, nearInfraredRayleigh = NEAR_INFRARED_RAYLEIGH, upwardAbsorption = true, visibleFraction = VISIBLE_FRACTION, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, aerosol = DEFAULT_AEROSOL, aerosolScale = 1, aerosolFields = null, land = null, iceSheet = null, longwaveTable = null,
   liquidTemperature = CLOUD_OPTICS.liquidTemperature, iceTemperature = CLOUD_OPTICS.iceTemperature, seaDropletRadius = CLOUD_OPTICS.seaDropletRadius, landDropletRadius = CLOUD_OPTICS.landDropletRadius,
   liquidInfrared = CLOUD_OPTICS.liquidInfrared, diffusivity = CLOUD_OPTICS.diffusivity, iceFitWarmest = CLOUD_OPTICS.iceFitWarmest, iceFitColdest = CLOUD_OPTICS.iceFitColdest, radiationEvery = 1,
 } = {}) {
@@ -844,8 +846,8 @@ export function createRadiation(mesh, core, {
   if (aerosol !== 'flat' && aerosol !== 'mac') throw new Error(`aerosol must be 'flat' or 'mac', not ${aerosol}`);
   if (!(aerosolScale >= 0 && aerosolScale < Infinity)) throw new Error(`aerosolScale must be a factor of the aerosol's depth, 0 or more, not ${aerosolScale}`);
   const mac = aerosol === 'mac';
-  if (mac && solarGases !== 'clirad') throw new Error(`aerosol 'mac' needs solarGases 'clirad', not ${solarGases}`);
-  if (mac && vaporShielding === 'cloudTop') throw new Error(`aerosol 'mac' does not run with vaporShielding 'cloudTop'`);
+  if (mac && solarGases !== 'clirad') throw new Error(`aerosol 'mac' needs solarGases 'clirad', not ${solarGases}: give aerosol: 'flat' to use it`);
+  if (mac && vaporShielding === 'cloudTop') throw new Error(`aerosol 'mac' does not run with vaporShielding 'cloudTop': give aerosol: 'flat' to use it`);
   if (mac && aerosolFields && aerosolFields.length !== AEROSOL_FIELDS * C) throw new Error(`aerosolFields must hold ${AEROSOL_FIELDS} fields of the ${C} cells, not ${aerosolFields.length} values`);
   const shielding = vaporShielding === 'cloudTop';
   if (shielding && !(solarGases === 'clirad' && bands && upwardAbsorption && scatters && (cloudCover !== 'pdf' || exponential))) throw new Error(`vaporShielding 'cloudTop' needs solarGases 'clirad', nearInfrared 'bands', upwardAbsorption, Rayleigh scattering or aerosol and, under cloudCover 'pdf', cloudOverlap 'exponentialRandom'`);

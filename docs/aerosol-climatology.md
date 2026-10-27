@@ -1,6 +1,6 @@
 # The MACv2 aerosol climatology: `radiation.aerosol: 'mac'`
 
-Oct 27, 2026. Branch `claude/aerosol-mac`. `radiation: { aerosol: 'mac' }` replaces the flat visible aerosol of the shortwave (0.12 over land, 0.07 over sea, one albedo, one asymmetry, one 2 km profile) with the MACv2 climatology of Kinne (2019): for each month and cell the 550 nm optical depth, single scattering albedo and asymmetry of a fine and a coarse mode and the mean height of each. A table of 120 constants gives each mode's optics at the twelve solar wavelengths of the data, which are the centers of the shortwave bands of RRTMG_SW, so the aerosol enters the near infrared for the first time. It is on both engines (CPU f64, WGSL f32) and off by default: the default `'flat'` runs the code it always has, and the CPU results, the WGSL text, the PH layout and the saved states are bit-identical to what they were.
+Oct 27, 2026. Branch `claude/aerosol-mac`. `radiation: { aerosol: 'mac' }`, the default on both engines (CPU f64, WGSL f32), replaces the flat visible aerosol of the shortwave (0.12 over land, 0.07 over sea, one albedo, one asymmetry, one 2 km profile) with the MACv2 climatology of Kinne (2019): for each month and cell the 550 nm optical depth, single scattering albedo and asymmetry of a fine and a coarse mode and the mean height of each. A table of 120 constants gives each mode's optics at the twelve solar wavelengths of the data, which are the centers of the shortwave bands of RRTMG_SW, so the aerosol enters the near infrared for the first time. `aerosol: 'flat'` is the previous default: asked for it, a model's CPU results, WGSL text, PH layout and saved states are bit-identical to what they were before the climatology became the default.
 
 ## Sources
 
@@ -11,13 +11,35 @@ Oct 27, 2026. Branch `claude/aerosol-mac`. `radiation: { aerosol: 'mac' }` repla
 
 | option | default | meaning |
 |---|---|---|
-| `aerosol` | `'flat'` | `'flat'` the visible aerosol of `landAerosol`, `seaAerosol`, `aerosolAlbedo`, `aerosolAsymmetry` and `aerosolHeight`; `'mac'` the climatology. Under `'mac'` those five play no part |
+| `aerosol` | `'mac'` | `'mac'` the climatology (`DEFAULT_AEROSOL` in `js/aerosol.module.js`); `'flat'` the previous default, the visible aerosol of `landAerosol`, `seaAerosol`, `aerosolAlbedo`, `aerosolAsymmetry` and `aerosolHeight`, which play no part under `'mac'` |
 | `aerosolScale` | `1` | factor on both modes' depths, 0 or more. 0 is the model without aerosol, bit for bit |
 | `aerosolData` | the file | the climatology's bytes, or the decoded climatology (`decodeAerosol`). Under node it defaults to `data/aerosol_mac_2deg.bin`, and a missing file is an error that names the builder. The page's worker fetches the file and passes the bytes |
 
-`'mac'` is refused, with the same words by the CPU radiation and the GPU model, with `solarGases` other than `'clirad'` and with `vaporShielding: 'cloudTop'`. It runs with both shortwave schemes (`'layered'`, the default, and `'sequential'`), with either near infrared (`'bands'`, the default, and `'clirad'`), with held radiation (`radiationEvery`) and with the clear-sky pass. A saved state's header records `radiation.aerosol` with the other options the run was given and not the data.
+`'mac'` is refused, with the same words by the CPU radiation and the GPU model, with `solarGases` other than `'clirad'` and with `vaporShielding: 'cloudTop'`; the message says to give `aerosol: 'flat'`, as the layered soil's says to give `soil: 'slab'` for a `heatCapacity`. It runs with both shortwave schemes (`'layered'`, the default, and `'sequential'`), with either near infrared (`'bands'`, the default, and `'clirad'`), with held radiation (`radiationEvery`) and with the clear-sky pass. A saved state's header records `radiation.aerosol` with the other options the run was given and not the data, and `scripts/spinup.mjs` and `scripts/splitState.mjs` stamp the default (`recordedOptions` in `scripts/stateOptions.mjs`) where the run gave none; the page's default states record no aerosol option, so they start with the climatology.
 
-To run the page with it, start from a state whose header records `radiation: { aerosol: 'mac' }` or pass `options: { radiation: { aerosol: 'mac' } }` in the worker's start message. The worker fetches `data/aerosol_mac_2deg.bin` (1.56 MB) only then. The scripts take it through their options (`RADIATION='{"aerosol":"mac"}'`) and read the file under node.
+The page's worker fetches `data/aerosol_mac_2deg.bin` (1.56 MB) whenever the run's resolved option is `'mac'` (`climatologyOn`): a start that names no aerosol, a state that records none and a speed probe included; a start from a state that records `'flat'`, or `options: { radiation: { aerosol: 'flat' } }` in the worker's start message, fetches nothing. The scripts read the file under node, and take `RADIATION='{"aerosol":"flat"}'` for the previous default. A model built without physics (`physics: false`, the worker's regridding source) has no sampler, and `js/charts.module.js`, which builds a model for its core alone, gives `aerosol: 'flat'`.
+
+## The default
+
+The project owner decided on October 27, 2026 that the climatology would be the default if the results were good on net. The evidence is the fixed-SST A/B of the bl48 control, the climatology with the layered soil against the same without it, three seeds over model days 882 to 892 (August 17 to 27), which ran on the earlier file, the one whose heights were August's for every month.
+
+For:
+
+- Net top of atmosphere +0.06 W/m². The effective forcing is near zero, so a coupled global mean should hardly move.
+- 10S-10N clear atmosphere 94.2 to 99.0 W/m² against CERES 100.0; clear surface 276.5 to 268.5 against 265.3.
+- Equatorial stress rms (140E to 100W) 27.0 to 23.6 in every seed; the excess at 180 to 160W fell 16 percent.
+- SWCRE -51.2 to -48.4 W/m² against -43.6.
+- India rain 0.69 to 0.77 times GPCP; the Indian Ocean's 2.02 to 1.71 times.
+
+Against:
+
+- Open warm-pool rain 1.00 to 0.92 times GPCP in every seed.
+- Daily temperature range lower by 0.1 to 0.5 K outside the deserts.
+- The global clear atmosphere overshoots by about 1.7 W/m².
+
+It was judged good on net. For the days of the A/B the full-year file differs from the earlier one only in referring each mode's heights to the dataset's surface altitude, which lowers the mean heights by 0.1 to 0.3 km (the table of heights below), and the A/B was not repeated on it.
+
+In a run the default adds a fetch of 1.56 MB (the page's worker, once), eight floats a cell of memory (1.3 MB at N = 64, 5.2 MB at N = 128, on the host and on the device), 2.5 percent of the GPU's pace at N = 128 and 8 percent of a sequential CPU column (below), and moves the sunlight the model absorbs as in the table under Measured. The page's default states and every state that records no aerosol option start with the climatology. Anything that needs `solarGases` other than `'clirad'` or `vaporShielding: 'cloudTop'`, and every digest, figure and bound made under the previous default, gives `aerosol: 'flat'` (`PREVIOUS_AEROSOL` in `test/helpers/previousDefaults.mjs`, which `PREVIOUS_RADIATION` includes; `PUBLISHED_RADIATION` in `explain/published.module.js` for the explainers, whose configuration and figures are unchanged).
 
 ## The data
 
@@ -119,10 +141,15 @@ The module takes the aerosol of each slice as arrays by layer (`aerosolLayers`):
 
 ## Measured
 
-### The default is unchanged
+### Explicit `'flat'` is the previous default
 
-- The CPU model's arrays after 24 steps at N = 16 in eight configurations (plain, held radiation, sequential, clear-sky pass, shielded, land, no flat aerosol, no mixed-layer deck) have the same SHA-256 as at the commit before the option. On an August N = 128 state of the KLM control (163,842 columns, eight instants of the day, the layered shortwave with the saved clouds and the clear-sky pass), 15 day-mean radiation fields are identical to the bit.
-- The 316 WGSL modules of nine GPU configurations at N = 16 (plain, held, sequential, shielded, clear, held with clear, land, land with skin, gray) hash alike before and after; the PH layout, the stash and the pins in `test/landSoilGpu.test.mjs` are untouched.
+Against 10aa5d7, the last commit before the climatology became the default:
+
+- The CPU model's arrays after 24 steps at N = 16 in ten configurations (plain, held radiation, sequential, clear-sky pass, land, no flat aerosol, no mixed-layer deck, the layered scheme held with its clear region, and the page's options with the fresh geography and the default ocean; the eleventh, the shielded one, is refused without `'flat'`) have the same SHA-256 under `aerosol: 'flat'`. A model day (64 steps of 1350 s) from the cold start at N = 16, of an aquaplanet and of the fresh geography with the default ocean, with and without the page's options, leaves the state, the ocean and the land bit-identical on the CPU and on the GPU.
+- The 661 WGSL modules of sixteen GPU configurations at N = 16 (the ten above, the gray gases, the shielded sequential scheme, the CLIRAD near infrared and the default model with the default ocean, with and without the page's options) hash alike under `aerosol: 'flat'`; the PH layout and the stash are the previous ones.
+- On an August N = 128 state of the KLM control (163,842 columns, eight instants of the day, the layered shortwave with the saved clouds and the clear-sky pass), 15 day-mean radiation fields under `aerosol: 'flat'` are identical to the bit to those of the model before the option existed.
+
+The default's WGSL differs from the previous one's by the climatology and nothing else. The 85 shaders of the default model (N = 16, the fresh geography, the default ocean) hash `3fbb9c19778b60e1`, against `b41944bfabf0ff2d` with `aerosol: 'flat'` and at 10aa5d7; with the page's options, `2588fd1219dbd54f` against `265d9092be2dcae5`. Each hash is the SHA-256, to 16 digits, of the 85 module hashes in the order the model compiles them.
 
 ### What the climatology does to the sunlight
 
@@ -130,14 +157,48 @@ An August N = 128 state of the KLM control (model day 880, 17 August), the model
 
 | region | clear top | clear atmosphere | clear surface | all-sky top | all-sky atmosphere | all-sky surface |
 |---|---|---|---|---|---|---|
-| global | -2.31 | +3.44 | -5.75 | -0.50 | +3.35 | -3.85 |
-| 10S-10N sea | -3.40 | +3.26 | -6.66 | -1.49 | +3.13 | -4.62 |
-| 40-60N land | -2.01 | +4.37 | -6.38 | -0.34 | +4.12 | -4.47 |
-| India | -4.64 | +9.94 | -14.58 | +1.05 | +7.85 | -6.79 |
-| Sahara and Arabia | -1.64 | +21.10 | -22.74 | +2.55 | +20.34 | -17.79 |
-| East Asia | -7.60 | +10.88 | -18.48 | -1.34 | +10.08 | -11.42 |
+| global | -2.31 | +3.44 | -5.75 | -0.54 | +3.30 | -3.84 |
+| 10S-10N sea | -3.40 | +3.26 | -6.66 | -1.50 | +3.12 | -4.62 |
+| 40-60N land | -2.01 | +4.35 | -6.37 | -0.42 | +4.03 | -4.46 |
+| India | -4.64 | +9.91 | -14.55 | +0.66 | +7.41 | -6.76 |
+| Sahara and Arabia | -1.67 | +21.02 | -22.69 | +2.28 | +20.03 | -17.75 |
+| East Asia | -7.61 | +10.84 | -18.45 | -1.60 | +9.80 | -11.40 |
 
-The aerosol's own absorption rises by 3.49 W/m² globally. The design study's prototype of the same configuration, run on the same state, gives -2.31, +3.45 and -5.76 W/m² for the global clear sky and -0.54, +3.32 and -3.85 for the all sky; each region agrees to 0.15 W/m² in the clear sky and 0.5 W/m² in the all sky (the largest miss is India's all-sky top, +1.05 against +0.64). Kinne (2019) gives -1.8, +3.7 and -5.5 W/m² for the year, all sky; the model's annual figures were -0.98, +3.78 and -4.76 in the study, with the climatology's August larger than its year by about a fifth.
+The aerosol's own absorption rises by 3.48 W/m² globally. The design study's prototype of the same configuration, run on the same state, gives -2.31, +3.45 and -5.76 W/m² for the global clear sky and -0.54, +3.32 and -3.85 for the all sky; each entry of the table agrees with its prototype's to 0.4 W/m² (the largest miss is the clear atmosphere of the Sahara and Arabia, 21.02 against 21.40) and most to 0.05. Kinne (2019) gives -1.8, +3.7 and -5.5 W/m² for the year, all sky; the model's annual figures were -0.98, +3.78 and -4.76 in the study, with the climatology's August larger than its year by about a fifth.
+
+### The heights
+
+Each month has its own mean heights, above the ground, which the earlier file did not: it had August's for every month. AOD-weighted regional means of the file, km (the range the earlier file had in every month):
+
+| coarse mode | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec | earlier |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Sahara and Arabia | 1.0 | 1.1 | 1.4 | 1.7 | 1.9 | 2.1 | 2.2 | 2.3 | 2.1 | 1.7 | 1.2 | 0.9 | 2.5 to 2.6 |
+| East Asia | 1.9 | 2.1 | 2.0 | 1.8 | 1.9 | 2.0 | 2.2 | 2.3 | 1.9 | 1.5 | 1.2 | 1.5 | 2.4 to 2.5 |
+| global | 1.2 | 1.3 | 1.4 | 1.5 | 1.6 | 1.6 | 1.7 | 1.6 | 1.5 | 1.3 | 1.2 | 1.2 | 1.5 to 1.7 |
+
+| fine mode | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec | earlier |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Sahel | 2.2 | 2.2 | 2.4 | 2.6 | 2.7 | 2.5 | 2.0 | 1.9 | 2.1 | 2.2 | 2.2 | 2.2 | 1.9 to 2.2 |
+| southern Africa | 1.8 | 1.8 | 2.2 | 2.5 | 2.3 | 1.8 | 1.7 | 1.9 | 2.3 | 2.4 | 2.4 | 2.2 | 2.1 |
+| Amazon | 2.2 | 2.1 | 2.0 | 2.1 | 2.1 | 1.8 | 1.9 | 1.9 | 2.1 | 2.5 | 2.6 | 2.3 | 2.1 to 2.2 |
+| India | 1.3 | 1.5 | 1.8 | 2.2 | 2.3 | 2.4 | 2.0 | 1.8 | 1.9 | 1.6 | 1.4 | 1.3 | 1.9 to 2.0 |
+| global | 1.8 | 1.8 | 1.9 | 2.0 | 2.0 | 2.0 | 1.9 | 1.9 | 1.9 | 1.9 | 1.9 | 1.8 | 2.0 to 2.1 |
+
+Saharan dust lies 1.5 km lower in winter than the earlier file had it, 0.9 to 1.2 km above the ground from November to February where it was 2.5, and rises through the spring to 2.3 km in August, 0.2 to 0.3 km below the earlier value: over land the earlier heights counted from the lower edge of the lowest layer that held aerosol, which is below the surface, and now count from the surface altitude (over the sea the two agree). The smoke of the burning seasons is higher in them: the fine mode over southern Africa is 2.3 to 2.4 km from September to November (2.1 before) and 1.7 to 1.8 in June and July; over the Amazon 2.5 to 2.6 km in October and November (2.1 to 2.2 before); over the Sahel 2.2 km in the December to February burning (1.9 to 2.0 before) and 2.6 to 2.7 in April and May. The winter haze of India is 1.3 km (2.0 before) and its pre-monsoon aerosol 2.3 to 2.4.
+
+On the model's seasonal N = 64 states, the day means of the shortwave with the climatology on the full-year file minus on the earlier one, all-sky top of atmosphere, W/m² (the clear-sky atmosphere in brackets):
+
+| region | Jun 20 | Sep 20 | Dec 18 | Feb 17 |
+|---|---|---|---|---|
+| global | -0.02 (-0.01) | -0.05 (-0.01) | -0.06 (-0.01) | -0.07 (-0.02) |
+| Sahara and Arabia | -0.36 (-0.14) | -0.49 (-0.13) | -0.26 (-0.11) | -0.26 (-0.14) |
+| Sahel | +0.31 (+0.04) | -0.35 (-0.04) | -0.14 (-0.08) | +0.23 (-0.10) |
+| southern Africa | -0.09 (-0.05) | +0.11 (+0.03) | -0.08 (-0.00) | -0.18 (-0.02) |
+| Amazon | -0.13 (-0.04) | +0.03 (+0.00) | -0.05 (-0.01) | -0.20 (-0.04) |
+| India | +0.82 (+0.08) | -0.26 (-0.03) | -0.27 (-0.09) | -0.05 (-0.05) |
+| East Asia | -0.58 (-0.08) | -0.56 (-0.10) | -0.93 (-0.12) | -1.49 (-0.14) |
+
+The heights move the sunlight by less than 0.1 W/m² in the global mean. Regionally the largest changes are the all-sky ones of the cloudy regions: East Asia's fine mode in February, 0.5 km lower, leaves 1.5 W/m² less sunlight absorbed, ten times its change in the clear sky. In the sequential slab the near infrared that meets the aerosol is what the gases above it have left, so lower aerosol takes less of it. The Sahara and Arabia on September 20 absorb 0.5 W/m² less in the all sky against the 17 W/m² of clear-sky atmospheric absorption that their aerosol adds.
 
 ### The two shortwave schemes and the clear sky
 
@@ -177,13 +238,13 @@ At N = 16 on a synthetic climatology (`test/aerosolGpu.test.mjs`, GPU against CP
 
 The uploaded fields equal the CPU sampler's exactly, and the area means of the absorbed sunlight agree to the printed digits. On a single full call of the radiation at N = 16 over the 1400 sunlit columns where the engines' decisions agree without the aerosol, the aerosol changes a layer's shortwave heating by up to 1.5 K/day (sequential) and 2.4 K/day (layered), and the engines' change differs by at most 7.0e-4 and 2.2e-3 K/day, 1.9e-4 and 3.0e-4 below 100 hPa, and 1.7e-4 and 3.2e-4 W/m² as a flux in any layer. Over a 4 km mountain the aerosol adds 1813.6 W/m² to the layers' heating on both engines, 20.0 percent of it more than 5 km above the ground; the engines' change differs by 8.6e-5 W/m² in a layer and 4.7e-4 W/m² in the absorbed sunlight.
 
-At the page's state (`runs/fourteen128_day1825`, N = 128, dt 168.75 s, with the options its header records), `scripts/compareEngines.mjs` after one and two steps, with the default and with `'mac'`: the shortwave rows (surface and held shortwave, the sums of the absorbed sunlight, the top) differ by 3e-4 to 6e-4 in relative rms in both, PH_AER by 0, and the rows over the tool's 1e-3 are the longwave (1.1e-3) and the held direct beam (1.2e-3), which the default has too, and, only after the first step with `'mac'`, the large-scale precipitation (1.4e-3, against 5.4e-4 by default). The precipitation row is a threshold one: on the GPU alone `'mac'` and the default differ in it by 9.7e-4 (rms) after the first step, and in 5 of 163,842 cells by more than 1e-3 of its maximum.
+At the page's state (`runs/fourteen128_day1825`, N = 128, dt 168.75 s, with the options its header records), `scripts/compareEngines.mjs` after one and two steps, with the default and with `aerosol: 'flat'`: the shortwave rows (surface and held shortwave, the sums of the absorbed sunlight, the top) differ by 3e-4 to 6e-4 in relative rms in both, PH_AER by 0, and the only rows over the tool's 1e-3 are the same in both, the longwave (1.1e-3) and the held direct beam (1.2e-3), at each of the two steps.
 
 ### Cost
 
 On the CPU one column costs the same in the layered scheme (371 to 376 µs flat, 368 to 386 µs `'mac'`, N = 16 grid with 48 levels, two cloud layers) and 8 percent more in the sequential scheme (156 to 160 µs flat, 172 µs `'mac'`).
 
-On the GPU at N = 128 on the M5 Max, from the page's state with its options (`runs/fourteen128_day1825`), alone on the device at level 2 of the queue, `'flat'` and `'mac'` alternating over three rounds: one model day with the steps queued 8 to a submission (`scripts/paceGpu.mjs`) takes 47.3, 47.5 and 47.4 s flat and 48.5, 48.7 and 48.6 s with `'mac'`, 2.5 percent more. `scripts/profileGpu.mjs` gives a step 92.0 ms of GPU time flat and 94.5 ms with `'mac'` (69.2 and 70.6 ms awaited one at a time); the difference is in the radiation passes, 2.4 ms a step amortised over the radiation's cadence.
+On the GPU at N = 128 on the M5 Max, from the page's state with its options (`runs/fourteen128_day1825`), alone on the device at level 2 of the queue, `'flat'` and `'mac'` alternating over three rounds (measured before the climatology was the default and had its heights per month, neither of which changes the kernels): one model day with the steps queued 8 to a submission (`scripts/paceGpu.mjs`) takes 47.3, 47.5 and 47.4 s flat and 48.5, 48.7 and 48.6 s with `'mac'`, 2.5 percent more. `scripts/profileGpu.mjs` gives a step 92.0 ms of GPU time flat and 94.5 ms with `'mac'` (69.2 and 70.6 ms awaited one at a time); the difference is in the radiation passes, 2.4 ms a step amortised over the radiation's cadence.
 
 
 ## What the option leaves out
@@ -192,4 +253,4 @@ On the GPU at N = 128 on the M5 Max, from the page's state with its options (`ru
 - No infrared. The coarse mode's absorption at 10 µm (dust) is a later stage; it matters for the surface in the Sahara and Arabia and for a coupled model's top-of-atmosphere balance by about 0.7 W/m².
 - The spectral constants are fitted to the August maps. For the fine mode's 1000 to 550 nm depth ratio and its 1 - SSA they hold in the other months to 5 percent; the other bands were not tested against other months.
 - The vertical distribution is one number per mode, from ECHAM-HAM.
-- The option moves the calibrated state: with the climatology the all-sky top of atmosphere changes by about -0.6 W/m² in August, the atmosphere gains about 3.3 and the surface loses about 3.9 (the design study's offline estimate on twelve August N = 128 states). The defaults of the page's states were spun up without it. Using it for a run needs an A/B at fixed sea-surface temperature and then a coupled run; neither has been done.
+- The default moves the calibrated state: in August the all-sky top of atmosphere absorbs 0.5 W/m² less, the atmosphere 3.3 W/m² more and the surface 3.8 W/m² less (above), and the page's default states were spun up with the flat aerosol, so a run from them adjusts to the climatology. The A/B behind the default is at fixed sea-surface temperature, on the earlier file; a coupled run with the climatology has not been done.

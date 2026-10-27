@@ -6,7 +6,7 @@ import { createSigmaCore, sigmaInterfaces, GRAVITY } from '../js/dynamics/sigmaC
 import { createModel } from '../js/model.module.js';
 import { createRadiation } from '../js/physics/radiation.module.js';
 import { AEROSOL_SPECTRA } from '../js/physics/aerosolSpectra.module.js';
-import { WAVELENGTHS, MIXED_DEPTH, MIXED_CAP, modeBand, streamOptics, aerosolTable, profileFractions } from '../js/aerosol.module.js';
+import { WAVELENGTHS, MIXED_DEPTH, MIXED_CAP, DEFAULT_AEROSOL, climatologyOn, modeBand, streamOptics, aerosolTable, profileFractions } from '../js/aerosol.module.js';
 import { BENCHMARK, modelColumn } from '../scripts/standardAtmospheres.mjs';
 import { syntheticAerosol, fillAerosol } from './helpers/aerosol.mjs';
 
@@ -142,18 +142,26 @@ test('over 4.5 km of terrain the aerosol sits by its height above the ground, as
   assert.ok(heights[sea.K - 1] > 0 && heights[sea.K - 1] < 0.1 && heights[0] > 20, `layer heights above the ground from ${heights[sea.K - 1]} to ${heights[0]} km`);
 });
 
-test('aerosol takes \'flat\' or \'mac\', mac needs the CLIRAD gases and no cloud-top shielding, and aerosolScale a factor of 0 or more', () => {
+test('aerosol takes \'flat\' or \'mac\', \'mac\' is the default and needs the CLIRAD gases and no cloud-top shielding, and aerosolScale a factor of 0 or more', () => {
+  assert.equal(DEFAULT_AEROSOL, 'mac');
+  assert.deepEqual([climatologyOn(undefined), climatologyOn({}), climatologyOn({ aerosol: 'mac' }), climatologyOn({ aerosol: 'flat' })], [true, true, true, false]);
   const { core } = column(0), make = (extra) => createRadiation(mesh, core, extra);
   assert.doesNotThrow(() => make({}));
   assert.doesNotThrow(() => make({ aerosol: 'flat', aerosolScale: 3 }));
+  assert.doesNotThrow(() => make({ aerosol: 'flat', shortwave: 'sequential', solarGases: 'lacisHansen' }));
+  assert.doesNotThrow(() => make({ aerosol: 'flat', shortwave: 'sequential', vaporShielding: 'cloudTop' }));
   for (const extra of [{}, { shortwave: 'sequential' }, { nearInfrared: 'clirad', shortwave: 'sequential' }, { aerosolScale: 0 }, { aerosolScale: 2.5 }]) assert.doesNotThrow(() => make({ aerosol: 'mac', ...extra }), JSON.stringify(extra));
-  for (const [bad, message] of [[{ aerosol: 'dust' }, /aerosol must be 'flat' or 'mac', not dust/], [{ aerosol: 'mac', solarGases: 'lacisHansen' }, /aerosol 'mac' needs solarGases 'clirad'/],
-    [{ aerosol: 'mac', shortwave: 'sequential', vaporShielding: 'cloudTop' }, /aerosol 'mac' does not run with vaporShielding 'cloudTop'/], [{ aerosolScale: -1 }, /aerosolScale/], [{ aerosolScale: NaN }, /aerosolScale/], [{ aerosolScale: Infinity }, /aerosolScale/],
+  const gases = /aerosol 'mac' needs solarGases 'clirad', not lacisHansen: give aerosol: 'flat' to use it/, shielding = /aerosol 'mac' does not run with vaporShielding 'cloudTop': give aerosol: 'flat' to use it/;
+  for (const [bad, message] of [[{ aerosol: 'dust' }, /aerosol must be 'flat' or 'mac', not dust/], [{ aerosol: 'mac', solarGases: 'lacisHansen' }, gases], [{ shortwave: 'sequential', solarGases: 'lacisHansen' }, gases],
+    [{ aerosol: 'mac', shortwave: 'sequential', vaporShielding: 'cloudTop' }, shielding], [{ shortwave: 'sequential', vaporShielding: 'cloudTop' }, shielding], [{ aerosolScale: -1 }, /aerosolScale/], [{ aerosolScale: NaN }, /aerosolScale/], [{ aerosolScale: Infinity }, /aerosolScale/],
     [{ aerosol: 'mac', aerosolFields: new Float32Array(5) }, /aerosolFields must hold 8 fields/]]) assert.throws(() => make(bad), message, JSON.stringify(bad));
   const { bytes } = syntheticAerosol();
   assert.throws(() => createModel(new Grid(16), { ocean: false, radiation: { aerosol: 'mac', aerosolData: new Uint8Array(100) } }), /not an aerosol climatology|bytes, not/);
+  assert.throws(() => createModel(new Grid(16), { ocean: false, radiation: { aerosolData: new Uint8Array(100) } }), /not an aerosol climatology|bytes, not/);
   const model = createModel(new Grid(16), { ocean: false, radiation: { aerosol: 'mac', aerosolData: bytes } });
   assert.equal(model.radiation.aerosolFields.length, 8 * C);
-  assert.equal(model.aerosol.fields, model.radiation.aerosolFields);
-  assert.equal(createModel(new Grid(16), { ocean: false }).aerosol, null);
+  assert.ok(model.aerosol.fields === model.radiation.aerosolFields);
+  const plain = createModel(new Grid(16), { ocean: false }), flat = createModel(new Grid(16), { ocean: false, radiation: { aerosol: 'flat' } }), bare = createModel(new Grid(16), { ocean: false, physics: false });
+  assert.ok(plain.aerosol !== null && flat.aerosol === null && bare.aerosol === null, 'a model has the climatology unless asked for the flat aerosol or built without physics');
+  assert.ok(plain.radiation.aerosolFields === plain.aerosol.fields && flat.radiation.aerosolFields === null);
 });

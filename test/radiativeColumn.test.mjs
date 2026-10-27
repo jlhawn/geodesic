@@ -7,6 +7,7 @@ import { createSigmaCore } from '../js/dynamics/sigmaCore.module.js';
 import { createRadiation, DAY } from '../js/physics/radiation.module.js';
 import { makeColumn, readColumn, ozoneAt, meanOzone, meanSunlight, LEVELS, K } from '../explain/radiativeColumn.module.js';
 import { insolationMap } from '../explain/insolation.module.js';
+import { PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
 
 const MLS = readColumn(JSON.parse(readFileSync(new URL('../explain/data/mls_bl36.json', import.meta.url))));
 const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
@@ -100,7 +101,7 @@ test('restart returns the column to its start', () => {
 test('ozoneAt is the model\'s own climatology at that latitude and day', () => {
   const mesh = buildMesh(new Grid(16)), core = createSigmaCore(mesh, { levels: LEVELS }), { C, exnerLayer } = core.diagnostics;
   const cellAt = (degrees) => { let best = 0; for (let i = 1; i < mesh.nCells; i++) if (Math.abs(mesh.latCell[i] - degrees * Math.PI / 180) < Math.abs(mesh.latCell[best] - degrees * Math.PI / 180)) best = i; return best; };
-  const radiation = createRadiation(mesh, core, { longwaveLines: 'scaled' });
+  const radiation = createRadiation(mesh, core, { ...PREVIOUS_AEROSOL, longwaveLines: 'scaled' });
   const pi = new Float64Array(C).fill(101325), theta = new Float64Array(K * C), q = new Float64Array(K * C);
   for (const [i, day] of [[cellAt(31.7), 0], [cellAt(58.3), 120], [cellAt(-58.3), 120], [cellAt(-90), 250]]) {
     radiation.setTime(day * DAY);

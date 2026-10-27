@@ -51,7 +51,7 @@ function gridFor(state, topography) {
 }
 function modelFor(state, found) {
   const levels = savedLevels(state), key = `${state.N} ${found.relax} ${levels.join(' ')}`;
-  if (!models.has(key)) models.set(key, createModel(found.mesh, { levels }));
+  if (!models.has(key)) models.set(key, createModel(found.mesh, { levels, radiation: { aerosol: 'flat' } }));
   return models.get(key);
 }
 
