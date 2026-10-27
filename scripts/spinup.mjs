@@ -173,6 +173,7 @@ import { convectionLine, equatorLine } from '../js/audit.module.js';
 import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
 import { watchSkin } from './skinWatch.mjs';
 import { lakeArrays, savedLake } from '../js/physics/lake.module.js';
+import { loadSavedLand } from './savedLand.mjs';
 
 const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
@@ -251,7 +252,7 @@ function loadSaved(saved) {
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
-  model.land.load(saved.land, null, saved.time);
+  loadSavedLand(model, saved);
   if (model.lake && savedLake(saved)) model.lake.load(savedLake(saved));
   if (saved.energyRecord) model.energyRecord.load(saved.energyRecord);
 }
@@ -302,7 +303,7 @@ if (saved) {
   if (from) {
     const started = oceanFromAtlas ? model.ocean.initialize(state[3], state[6]) : null;
     if (!oceanFromAtlas) model.ocean.load(from.ocean, state[3], state[6]);
-    model.land.load(from.land, iceFrom ? state[6] : null, model.time);
+    model.land.load(from.land, iceFrom ? state[6] : null, model.time, state[3]);
     log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${fromGrid}): ${oceanFromAtlas ? '' : 'the ocean, '}the land (soil, snow, ${from.land.snowAlbedo ? 'snow albedo, ' : ''}${from.land.vegetation ? 'vegetation, ' : ''}${from.land.canopy ? 'standing cover, ' : ''}${from.land.seasonLength ? 'season means, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature)${oceanFromAtlas ? '' : ' and the sea-surface temperature of its mixed layer'}, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; ${atmosphere}; the clock at day 0`);
     if (started) log(`ocean and the open sea's surface from ${climatology}: ${started.atlas} sea cells, ${started.analytic} from the analytic climatology where it has no water`);
   } else {
@@ -315,7 +316,7 @@ if (saved) {
     const seedGeography = stateGeography(seed), sameGround = JSON.stringify(seedGeography.record) === JSON.stringify(GEOGRAPHY);
     const sourceMesh = seed.N === N ? mesh : stateGrid(seed, seedGeography.topography).mesh;
     const source = { mesh: sourceMesh, geography: seed.N === N && sameGround ? model.geography : createGeography(sourceMesh, seedGeography.topography, seedGeography.geography) };
-    model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6], model.time);
+    model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6], model.time, state[3]);
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
   }
   const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at'][record[1]];
