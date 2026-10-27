@@ -885,12 +885,33 @@ dumped at 0, 1, 2, 8 and 32 steps, is identical in all 164 arrays of each dump t
 defaults, and the tree on its own defaults differs after 32 steps (40902 of 40962 surface pressures, the
 first by 0.35 Pa), from the layered scheme's different heating.
 
+`land.soil` is `'layers'` by default on both engines (October 27): `DEFAULT_SOIL` in
+`js/physics/land.module.js`, which the CPU land surface, the GPU model's `soilColumn(landOptions)` and
+`scripts/stateOptions.mjs` take; the column, its start and its measurements are in `docs/land-soil.md`.
+The skin is the first of four conducting layers, and `soilT2`, `soilT3` and `soilT4` are three more floats
+per land cell in the state and in the PH buffer. `PREVIOUS_LAND` in `test/helpers/previousDefaults.mjs`
+is `{ soil: 'slab' }`, the skin alone with `heatCapacity`. Asked for it, this tree's land update, saved
+land, WGSL text and PH layout are those of 5738db9: the 85 shaders of a model with `soil: 'slab'` hash alike
+(`0529e530ac8634ff`) in the stage-3 tree and in this one, and the default model's differ
+(`9ae1d39657b7cc57`). The page's default states record no soil option and no soil arrays, so the layers
+apply on loading them, with the deep layers started on the periodic profile of the column about the saved
+skin (`test/layeredDefault.test.mjs` reads their headers). A heat capacity given without `soil: 'slab'` is
+refused.
+
+The suite with the layers as the default: the CPU files in four jobs (883 tests) and every GPU file at
+level 1 (407 tests in 54 files; `atmosphereConservation` took 32 minutes there). The tests that assume the
+slab name it: `land` (the heat-capacity energy and the vegetation's time scales), `landIce` (the bare-ice
+melt in the CPU land and in both engines), `snowAlbedo` (the snow's ageing under a constant skin),
+`frameGpu` (its 5e-4 m/s bound on the wind speed is crossed at 850 hPa, 7.1e-4 at one cell after 12 steps,
+by the winds the layers give) and the load digests of `landLoadPath`; `land`'s expected keys,
+`splitState`'s options and `soilCarbon`'s option list take the layers' names. No digest pin moved.
+
 A saved state's header names the options its run was made with (`options`, by group), and the page
 starts it with them. The page's default states (`runs/fourteen64_day1825.parts.json`,
 `runs/fourteen128_day1825.parts.json`, `runs/twelve192_day0020.parts.json`) record cloudColumns and
 the other options of their spin-ups and neither a shortwave scheme nor the Bergeron option, so the defaults
 apply on loading them (`test/layeredDefault.test.mjs` reads their headers). `scripts/spinup.mjs`
-writes the scheme and the option, with the RADIATION and MOIST it was given, in the header of every
+writes the scheme, the option and the land's soil, with the RADIATION, MOIST and LAND it was given, in the header of every
 state it saves, and `scripts/splitState.mjs` adds them to the options it stamps
 (`scripts/stateOptions.mjs`), so that a state made now starts on the page as it was made when the
 defaults move again.
