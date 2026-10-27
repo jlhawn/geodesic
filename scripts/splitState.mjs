@@ -5,17 +5,18 @@
 // part listed with its SHA-256 and the run with its id, the SHA-256 of
 // those hashes one per line. A binary state goes in without its SST ring
 // (js/sstMeans.module.js), which the page keeps no recorder for, and with
-// RADIATION and MOIST (JSON, as scripts/spinup.mjs takes them) recorded in
-// its header as the options the page's model starts it with, with the
-// radiation's shortwave scheme and the moist physics' bergeronAutoconversion
-// at their defaults where not given (scripts/stateOptions.mjs). Given a
+// RADIATION, MOIST and LAND (JSON, as scripts/spinup.mjs takes them; of LAND
+// the soil options) recorded in its header as the options the page's model
+// starts it with, with the radiation's shortwave scheme, the moist physics'
+// bergeronAutoconversion and the land's soil at their defaults where not
+// given (scripts/stateOptions.mjs). Given a
 // manifest, rewrites it with the hashes of the parts it lists.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { SST_FIELDS, withoutSstRing } from '../js/sstMeans.module.js';
-import { recordedOptions } from './stateOptions.mjs';
+import { recordedOptions, soilOptions } from './stateOptions.mjs';
 
 const [file, mib = '10'] = process.argv.slice(2);
 if (!file) { console.error('usage: node scripts/splitState.mjs <state.json|state.bin[.gz]|name.parts.json> [chunkMiB]'); process.exit(1); }
@@ -31,7 +32,7 @@ if (file.endsWith('.parts.json')) {
   const chunk = Number(mib) * 1048576;
   const kind = /\.bin(?:\.gz)?$/.test(file) ? 'bin' : 'json';
   const base = file.replace(/\.(?:json|bin)(?:\.gz)?$/, '');
-  const given = Object.fromEntries([['radiation', process.env.RADIATION], ['moist', process.env.MOIST]].filter(([, json]) => json).map(([group, json]) => [group, JSON.parse(json)]));
+  const given = Object.fromEntries([['radiation', process.env.RADIATION], ['moist', process.env.MOIST], ['land', process.env.LAND]].filter(([, json]) => json).map(([group, json]) => [group, group === 'land' ? soilOptions(JSON.parse(json)) : JSON.parse(json)]));
   const stamped = Object.keys(given).length > 0;
   const raw = readFileSync(file), saved = kind === 'bin' ? await decodeState(new Uint8Array(raw)) : null;
   if (stamped && !saved) throw new Error('RADIATION and MOIST are recorded in binary states only');

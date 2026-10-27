@@ -20,7 +20,8 @@
 //                --gpu-dump run of the same state, options and STEPS: the CPU half, which needs no GPU
 //   --out FILE   also writes the report to FILE;  env FLAGS sets Dawn toggles for the GPU adapter,
 //                env OCEAN a JSON object of ocean options for both models, env RADIATION one of
-//                radiation options, env MOIST one of moist options and env SURFACE one of surface options
+//                radiation options, env MOIST one of moist options, env SURFACE one of surface options and
+//                env LAND one of land options
 // Run it with the GPU free (CLAUDE.md): one GPU model at a time.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { serialize, deserialize } from 'node:v8';
@@ -51,7 +52,7 @@ export const PH_MAP = {
   CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
   PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo',
   SURF: 'land.surface', SOIL: 'land.soil', RUNOFF: 'land.runoff', DISCHARGE: 'land.discharge', ICELOSS: 'land.iceLoss', MLMK: 'radiation.mlmLayer', MLMM: 'radiation.mlmShare', DECKK: 'radiation.deckLayer', DECKFROM: 'radiation.deckFrom', VEG: 'land.vegetation', CANOPY: 'land.canopy', SEASONL: 'land.seasonLength', SEASONW: 'land.seasonWarmth', DEMAND: 'land.demandMean', RAINMEAN: 'land.rainMean',
-  LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover',
+  LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4',
   GWE: 'gravityWaves.east', GWN: 'gravityWaves.north', OLAUNCH: 'orography.launch', OWAVE: 'orography.wave', OSTRESS: 'orography.stress', OBETA: 'orography.beta', OBLOCK: 'orography.blocking', ODIR: 'orography.direction',
   OSTD: 'orography.fields.deviation', OORI: 'orography.fields.orientation', OANI: 'orography.fields.anisotropy', OSLP: 'orography.fields.slope',
   RADT: 'radiation.held.escape', RADTC: 'radiation.held.clearEscape', RADDF: 'radiation.held.share', RADDIR: 'radiation.held.direct', RADREFL: 'radiation.held.reflected', RADABS: 'radiation.held.absorbed',
@@ -107,7 +108,7 @@ async function build(file) {
   const saved = await fs.readState(file), sg = stateGeography(saved), topography = sg.topography, dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
   const subgridOf = () => { if (process.env.NO_SUBGRID) return undefined; try { const b = readFileSync(subgridUrl(saved.N, sg.record.topography)); return decodeSubgrid(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); } catch { return undefined; } };
-  const options = { topography, geography: sg.geography, land: { ...sg.land }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
+  const options = { topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
   const load = (model) => {
     const { state } = model, C = model.mesh.nCells, K = model.core.K;
     ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
@@ -135,7 +136,7 @@ async function build(file) {
     model.time = saved.time;
     if (model.load) model.load();
     model.ocean.load(saved.ocean, state[3], state[6]);
-    if (saved.land) model.land.load(saved.land, state[6]);
+    if (saved.land) model.land.load(saved.land, state[6], saved.time, state[3]);
     return model;
   };
   const cpu = GPU_DUMP ? null : load(createModel(mesh, { ...options, subgrid: subgridOf() }));

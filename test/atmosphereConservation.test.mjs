@@ -147,6 +147,35 @@ for (const [label, build] of [['over a slab', spunUp], ['over a slab with berger
   assert.ok(Math.abs(mean(record.dynamics)) < 0.02, `dynamics: ${mean(record.dynamics)} W/m²`);
 });
 
+test("in double precision the CPU's adjustment keeps the energy of the air and its water while plumes root above the 50 hPa stack under plumeDeparture 'elevated', over a spun-up slab with its lowest 60 hPa cooled by 6 K in two columns of five", () => {
+  const model = createModel(new Grid(N), { ...OPTIONS, moist: { plumeDeparture: 'elevated', stratocumulusInversion: null } });
+  initializeState(model).forEach((values, s) => model.state[s].set(values));
+  for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
+  const { K, C, sigmaMid, exnerLayer } = model.core.diagnostics, [pi, theta] = model.state, { phases, moist } = model;
+  for (let i = 0; i < C; i++) {
+    if (i % 5 > 1) continue;
+    model.core.diagnoseColumn(i, pi, theta, model.state[4], model.state[5]);
+    for (let k = 0; k < K; k++) if (sigmaMid[k] > 1 - 60e2 / pi[i]) theta[k * C + i] -= 6 / exnerLayer[k * C + i];
+  }
+  const books = bookkeeper(model), rows = [];
+  let elevated = 0;
+  for (let n = 0; n < MEASURED_STEPS; n++) {
+    model.step(DT);
+    const a = books(model.state);
+    phases.adjust(0, C, DT);
+    const b = books(model.state);
+    rows.push((b.H + b.Lq + b.S - a.H - a.Lq - a.S) / DT);
+    for (let i = 0; i < C; i++) {
+      let stack = K - 1;
+      while (stack > 0 && pi[i] * sigmaMid[stack - 1] >= pi[i] - 50e2) stack--;
+      if (moist.momentum.source[i] < stack) elevated++;
+    }
+  }
+  console.log(`CPU over a slab with plumeDeparture elevated, ${elevated} plume-steps rooted above the stack: adjust ${show(mean(rows))} W/m² on average, ${show(largest(rows))} at most`);
+  assert.ok(elevated > 0, 'plumes rooted above the stack');
+  assert.ok(largest(rows) < 1e-6, `adjust: ${largest(rows)} W/m²`);
+});
+
 /*
  * The energy tendency (W/m²) of one evaluation of the dynamics, from the
  * tendencies of π, θ and u in `out`: Σ c_p Π (π dθ/dt + (1 + κ) θ dπ/dt)

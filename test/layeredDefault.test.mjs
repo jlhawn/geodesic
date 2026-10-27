@@ -9,7 +9,9 @@ import { DEFAULT_SHORTWAVE, SOLAR_CONSTANT } from '../js/physics/radiation.modul
 import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { DEFAULT_RUNS } from '../js/defaultRun.module.js';
-import { PREVIOUS_SHORTWAVE, PREVIOUS_BERGERON, PREVIOUS_RADIATION, PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
+import { DEFAULT_SOIL } from '../js/physics/land.module.js';
+import { syntheticTopography } from '../js/geography.module.js';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_BERGERON, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -76,9 +78,19 @@ test('the page\'s default states record no shortwave scheme and no Bergeron opti
     const { options = {} } = JSON.parse(new TextDecoder().decode(head.subarray(8, 8 + head.readUInt32LE(4))));
     assert.equal(options.radiation?.shortwave, undefined, `${manifest} records no shortwave scheme`);
     assert.equal(options.moist?.bergeronAutoconversion, undefined, `${manifest} records no Bergeron option`);
+    assert.equal(options.land?.soil, undefined, `${manifest} records no soil option`);
     const every = withCadence({ radiation: options.radiation ?? {} }, 1350 * 16 / Number(N), Number(N)).radiation.radiationEvery;
     assert.equal(every, { 64: 8, 128: 16, 192: 24 }[N], `the page's radiation cadence at N = ${N}`);
   }
+});
+
+test('land.soil defaults to the layers and the previous default is the slab: a model built without the option has the layers and one asked for the previous option has the slab', () => {
+  assert.equal(DEFAULT_SOIL, 'layers');
+  assert.deepEqual(PREVIOUS_LAND, { soil: 'slab' });
+  const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 300 : -4000));
+  const plain = createModel(new Grid(16), { ocean: false, topography }), previous = createModel(new Grid(16), { ocean: false, topography, land: PREVIOUS_LAND });
+  assert.deepEqual([plain.land.layered, plain.land.deepNames], [true, ['soilT2', 'soilT3', 'soilT4']]);
+  assert.deepEqual([previous.land.layered, previous.land.deepNames], [false, []]);
 });
 
 test('the GPU engine takes the same defaults: PHYSICS_DEFAULTS names the layered shortwave and the Bergeron factor, and a model asked for the previous options keeps them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -89,4 +101,8 @@ test('the GPU engine takes the same defaults: PHYSICS_DEFAULTS names the layered
   const plain = await createGpuModel(new Grid(16), { ocean: false }), previous = await createGpuModel(new Grid(16), { ocean: false, radiation: PREVIOUS_SHORTWAVE, moist: PREVIOUS_BERGERON });
   assert.deepEqual([plain.gpu.physics.shortwave, plain.gpu.physics.bergeronAutoconversion], ['layered', true]);
   assert.deepEqual([previous.gpu.physics.shortwave, previous.gpu.physics.bergeronAutoconversion], ['sequential', false]);
+  const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 300 : -4000));
+  const land = await createGpuModel(new Grid(16), { ocean: false, topography }), slab = await createGpuModel(new Grid(16), { ocean: false, topography, land: PREVIOUS_LAND });
+  assert.deepEqual([land.gpu.physics.soilColumn.depths.length, land.land.deepNames], [4, ['soilT2', 'soilT3', 'soilT4']]);
+  assert.deepEqual([slab.gpu.physics.soilColumn, slab.land.deepNames, slab.gpu.layout.PH.SOILT2], [null, [], undefined]);
 });
