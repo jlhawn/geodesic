@@ -326,19 +326,30 @@ function sineYearRates(mean, amplitude, fill, { decompositionWilting, seasonThre
  * soilT3, …; `heatCapacity` belongs to the slab and is refused.
  *
  * A land state that lacks those arrays starts them on the annual
- * temperature wave of a homogeneous half-space (Carslaw and Jaeger 1959;
- * Hillel 1982): T_k = T̄ + A exp(−z_k/d) cos(ω(t − t_peak) − z_k/d), z_k the
- * layer's mid-depth, d = √(2κ/ω) the damping depth for the cell's κ = λ/ρC
- * and ω = 2π/year, T̄ and A the mean and amplitude of airCycle(lat,
- * elevation) and t_peak the peak of the surface temperature: the summer
- * solstice of the cell's hemisphere on insolationCycle's year, which starts
- * at the March equinox, plus SOIL_LAG. Nothing in the model records the lag
- * of the land's seasonal maximum behind the solstice; SOIL_LAG is the usual
- * three to five weeks of the observed continental cycle.
+ * temperature wave of the column: the periodic solution of the heat
+ * equation in a homogeneous soil of depth H, the layers' total, with no
+ * flux through its bottom (Carslaw and Jaeger 1959, §2.6; Hillel 1982),
+ * T(z, t) = T₀ + A F(z, t), F = Re[e^{iω(t − t_peak)} cosh(k(H − z)) /
+ * cosh(kH)], k = (1 + i)/d, d = √(2κ/ω) the damping depth for the cell's
+ * κ = λ/ρC (soil or firn) and ω = 2π/year, taken at each layer's
+ * mid-depth z_k. A is the amplitude of airCycle(lat, elevation) and t_peak
+ * the peak of the surface temperature: the summer solstice of the cell's
+ * hemisphere on insolationCycle's year, which starts at the March equinox,
+ * plus SOIL_LAG. With the state's skin temperature the wave's surface
+ * value is that skin, T_k = T_skin + A (F(z_k, t) − F(0, t)); without a
+ * skin (initialize) T₀ is airCycle's mean. Nothing in the model records
+ * the lag of the land's seasonal maximum behind the solstice; SOIL_LAG is
+ * the usual three to five weeks of the observed continental cycle.
  */
 export const SOIL_LAYERS = { depths: [0.07, 0.21, 0.72, 1.89], heatCapacity: 2.19e6, conductivity: 0.7, firnDensity: 400, ice: { heatCapacity: 2.05e6, conductivity: 2.2, density: 917, exponent: 1.88 } };
 export const SOIL_LAG = 30 * 86400;
 const WAVE = 2 * Math.PI / YEAR;
+const coshWave = (u) => [Math.cosh(u) * Math.cos(u), Math.sinh(u) * Math.sin(u)];
+
+function columnWave(z, depth, damping, phase) {
+  const [nr, ni] = coshWave((depth - z) / damping), [dr, di] = coshWave(depth / damping);
+  return ((nr * dr + ni * di) * Math.cos(phase) - (ni * dr - nr * di) * Math.sin(phase)) / (dr * dr + di * di);
+}
 
 export function soilColumn({ soil = 'slab', heatCapacity, soilDepths = SOIL_LAYERS.depths, soilHeatCapacity = SOIL_LAYERS.heatCapacity, soilConductivity = SOIL_LAYERS.conductivity, firnDensity = SOIL_LAYERS.firnDensity } = {}) {
   if (soil === 'slab') return null;
@@ -351,7 +362,7 @@ export function soilColumn({ soil = 'slab', heatCapacity, soilDepths = SOIL_LAYE
   const depths = Array.from(soilDepths);
   const column = (heat, conductivity) => ({ heatCapacity: heat, conductivity, diffusivity: conductivity / heat, capacity: depths.map((d) => heat * d), conductance: depths.slice(1).map((d, k) => conductivity / (0.5 * (depths[k] + d))) });
   const middles = depths.map((d, k) => depths.slice(0, k).reduce((a, b) => a + b, 0) + 0.5 * d);
-  return { depths, middles, soil: column(soilHeatCapacity, soilConductivity), firn: column(ice.heatCapacity * firnDensity / ice.density, ice.conductivity * (firnDensity / ice.density) ** ice.exponent) };
+  return { depths, middles, total: depths.reduce((a, b) => a + b, 0), soil: column(soilHeatCapacity, soilConductivity), firn: column(ice.heatCapacity * firnDensity / ice.density, ice.conductivity * (firnDensity / ice.density) ** ice.exponent) };
 }
 
 export function createLandSurface(mesh, geography, {
@@ -412,13 +423,13 @@ export function createLandSurface(mesh, geography, {
     for (let k = 1; k < layers; k++) deep[k - 1][i] += reach[k];
   }
 
-  function startDeep(i, time) {
+  function startDeep(i, time, skinT = null) {
     const lat = mesh.latCell[i], { mean, amplitude } = airCycle(lat, geography.elevation ? geography.elevation[i] : 0);
-    const { diffusivity } = onIceSheet(i) ? column.firn : column.soil, damping = Math.sqrt(2 * diffusivity / WAVE);
-    const peak = (lat >= 0 ? 0.25 : 0.75) * YEAR + SOIL_LAG;
+    const damping = Math.sqrt(2 * (onIceSheet(i) ? column.firn : column.soil).diffusivity / WAVE);
+    const phase = WAVE * (time - (lat >= 0 ? 0.25 : 0.75) * YEAR - SOIL_LAG), anchored = skinT > 0;
     for (let k = 1; k < layers; k++) {
-      const z = column.middles[k] / damping;
-      deep[k - 1][i] = MELTING_POINT + mean + amplitude * Math.exp(-z) * Math.cos(WAVE * (time - peak) - z);
+      const wave = columnWave(column.middles[k], column.total, damping, phase);
+      deep[k - 1][i] = anchored ? skinT + amplitude * (wave - Math.cos(phase)) : MELTING_POINT + mean + amplitude * wave;
     }
   }
   const startDeepLayers = (time) => { for (let i = 0; i < C; i++) if (land[i]) startDeep(i, time); else for (const layer of deep) layer[i] = 0; };
@@ -700,7 +711,7 @@ export function createLandSurface(mesh, geography, {
    * age −1: its means are exponential running means, and nothing is
    * held. One saved without a snow-free cover takes its cover for it.
    */
-  function load(saved, ice = null, time = 0) {
+  function load(saved, ice = null, time = 0, skin = null) {
     if (saved.record && saved.record.length >= 3) { record[0] = saved.record[0]; record[1] = vegetated ? saved.record[1] : 0; record[2] = saved.record[2]; }
     else { record[0] = -1; record[1] = 0; record[2] = 0; }
     const seasoned = !!(saved.seasonLength && saved.seasonWarmth), moistened = !!(saved.rainMean && saved.demandMean);
@@ -733,7 +744,7 @@ export function createLandSurface(mesh, geography, {
     for (let i = 0; i < C; i++) {
       if (!land[i]) { for (const layer of deep) layer[i] = 0; continue; }
       if (kept && deepNames.every((name) => saved[name][i] > 0)) deepNames.forEach((name, k) => { deep[k][i] = saved[name][i]; });
-      else startDeep(i, time);
+      else startDeep(i, time, skin ? skin[i] : null);
     }
   }
 

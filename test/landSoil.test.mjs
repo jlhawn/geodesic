@@ -169,97 +169,103 @@ test('a column of one layer is the slab with that layer\'s capacity, in soil and
   }
 });
 
-// the annual wave of a homogeneous half-space, written out from its constants
-function wave(cell, depth, time, firn) {
-  const { mean, amplitude } = airCycle(mesh.latCell[cell], geography.elevation[cell]);
-  const kappa = (firn ? firnClass : soilClass).conductivity / (firn ? firnClass : soilClass).heat, omega = 2 * Math.PI / YEAR, d = Math.sqrt(2 * kappa / omega);
-  const peak = (mesh.latCell[cell] >= 0 ? YEAR / 4 : 3 * YEAR / 4) + 30 * 86400;
-  return MELTING_POINT + mean + amplitude * Math.exp(-depth / d) * Math.cos(omega * (time - peak) - depth / d);
+// the periodic profile of a soil of depth H with no flux at its bottom, F(z, t) = Re[e^{iω(t − t_peak)} cosh(k(H − z)) / cosh(kH)], written out from its constants
+const coshWave = (u) => complex(Math.cosh(u) * Math.cos(u), Math.sinh(u) * Math.sin(u));
+const DEPTH = DEPTHS.reduce((a, b) => a + b, 0), OMEGA = 2 * Math.PI / YEAR;
+const dampingOf = (firn) => Math.sqrt(2 * (firn ? firnClass : soilClass).conductivity / (firn ? firnClass : soilClass).heat / OMEGA);
+const peakOf = (cell) => (mesh.latCell[cell] >= 0 ? YEAR / 4 : 3 * YEAR / 4) + 30 * 86400;
+const ratioAt = (depth, firn) => div(coshWave((DEPTH - depth) / dampingOf(firn)), coshWave(DEPTH / dampingOf(firn)));
+function profile(cell, depth, time, firn) {
+  const ratio = ratioAt(depth, firn), phase = OMEGA * (time - peakOf(cell));
+  return ratio.re * Math.cos(phase) - ratio.im * Math.sin(phase);
 }
+const cycleOf = (cell) => airCycle(mesh.latCell[cell], geography.elevation[cell]);
+const anchored = (cell, depth, time, firn, skin) => skin + cycleOf(cell).amplitude * (profile(cell, depth, time, firn) - profile(cell, 0, time, firn));
+const unanchored = (cell, depth, time, firn) => MELTING_POINT + cycleOf(cell).mean + cycleOf(cell).amplitude * profile(cell, depth, time, firn);
+const skins = (value) => new Float64Array(C).fill(value);
+const bare = () => ({ soil: new Float64Array(C).fill(100), snow: new Float64Array(C) });
 
-test('a land state without the deep layers starts them on the annual wave of a half-space, whose mean and amplitude by depth match the formula in soil and in firn, in either hemisphere', () => {
+test('a land state without the deep layers starts them on the periodic profile of the column, anchored to the saved skin: the mean over a year is the skin and the amplitude by depth is the formula\'s, in soil and in firn, in either hemisphere', () => {
   assert.equal(SOIL_LAG, 30 * 86400);
+  assert.ok(Math.abs(profile(northCell, 0, 1e7, false) - Math.cos(OMEGA * (1e7 - peakOf(northCell)))) < 1e-12);
   for (const cell of [northCell, southCell, firnCell]) {
-    const firn = geography.iceSheet[cell] > 0, land = build(), samples = 48, series = [0, 1, 2].map(() => []);
+    const firn = geography.iceSheet[cell] > 0, land = build(), samples = 48, skin = 281.3, series = [0, 1, 2].map(() => []);
     for (let s = 0; s < samples; s++) {
       const time = (s + 0.37) * YEAR / samples;
-      land.load({ soil: new Float64Array(C).fill(100), snow: new Float64Array(C) }, null, time);
+      land.load(bare(), null, time, skins(skin));
       for (let k = 1; k < 4; k++) {
-        const expected = wave(cell, middles[k], time, firn);
+        const expected = anchored(cell, middles[k], time, firn, skin);
         assert.ok(Math.abs(land.deep[k - 1][cell] - expected) < 1e-9, `cell ${cell} layer ${k + 1} at ${time}: ${land.deep[k - 1][cell]} against ${expected}`);
         series[k - 1].push(land.deep[k - 1][cell]);
       }
     }
-    const { mean, amplitude } = airCycle(mesh.latCell[cell], geography.elevation[cell]);
-    const kappa = (firn ? firnClass : soilClass).conductivity / (firn ? firnClass : soilClass).heat, d = Math.sqrt(2 * kappa / (2 * Math.PI / YEAR));
     series.forEach((values, n) => {
-      const k = n + 1, average = values.reduce((a, b) => a + b, 0) / samples;
+      const k = n + 1, average = values.reduce((a, b) => a + b, 0) / samples, ratio = ratioAt(middles[k], firn);
       let cosine = 0, sine = 0;
       values.forEach((v, s) => { const w = 2 * Math.PI * (s + 0.37) / samples; cosine += 2 * (v - average) * Math.cos(w) / samples; sine += 2 * (v - average) * Math.sin(w) / samples; });
-      assert.ok(Math.abs(average - MELTING_POINT - mean) < 1e-9, `layer ${k + 1} mean ${average}`);
-      assert.ok(Math.abs(Math.hypot(cosine, sine) - amplitude * Math.exp(-middles[k] / d)) < 1e-9, `layer ${k + 1} amplitude ${Math.hypot(cosine, sine)} against ${amplitude * Math.exp(-middles[k] / d)}`);
-      const peakDay = ((Math.atan2(sine, cosine) / (2 * Math.PI) + 1) % 1) * 365, expectedDay = (((mesh.latCell[cell] >= 0 ? 0.25 : 0.75) * 365 + 30 + 365 * middles[k] / d / (2 * Math.PI)) % 365);
-      assert.ok(Math.abs(peakDay - expectedDay) < 0.01 || Math.abs(Math.abs(peakDay - expectedDay) - 365) < 0.01, `layer ${k + 1} peaks on day ${peakDay.toFixed(2)}, expected ${expectedDay.toFixed(2)}`);
+      const expected = cycleOf(cell).amplitude * Math.hypot(ratio.re - 1, ratio.im);
+      assert.ok(Math.abs(average - skin) < 1e-9, `layer ${k + 1} mean ${average}`);
+      assert.ok(Math.abs(Math.hypot(cosine, sine) - expected) < 1e-9, `layer ${k + 1} amplitude ${Math.hypot(cosine, sine)} against ${expected}`);
     });
   }
 });
 
-test('initialize starts the layers on the wave at the given time, the layers the state carries are used as saved, and a state with some layers missing or empty starts them all', () => {
+test('initialize starts the layers on the profile about airCycle\'s mean, a skin that is missing or not above zero leaves a cell on that start, the layers a state carries are used as saved, and a state with some layers missing or empty starts them all from the skin', () => {
   const land = build(), time = 100 * 86400;
   land.initialize(time);
-  for (const cell of [northCell, southCell, firnCell]) for (let k = 1; k < 4; k++) assert.ok(Math.abs(land.deep[k - 1][cell] - wave(cell, middles[k], time, geography.iceSheet[cell] > 0)) < 1e-9);
+  for (const cell of [northCell, southCell, firnCell]) for (let k = 1; k < 4; k++) assert.ok(Math.abs(land.deep[k - 1][cell] - unanchored(cell, middles[k], time, geography.iceSheet[cell] > 0)) < 1e-9);
   for (let i = 0; i < C; i++) if (!geography.land[i]) for (const layer of land.deep) assert.equal(layer[i], 0);
-  const saved = { soil: new Float64Array(C).fill(100), snow: new Float64Array(C) };
+  const saved = bare();
   const arrays = Object.fromEntries(land.deepNames.map((name, k) => [name, Float64Array.from({ length: C }, (_, i) => (geography.land[i] ? 250 + k + (i % 11) : 7))]));
   const used = build();
-  used.load({ ...saved, ...arrays }, null, 12345);
+  used.load({ ...saved, ...arrays }, null, 12345, skins(281));
   land.deepNames.forEach((name, k) => { for (let i = 0; i < C; i++) assert.equal(used.deep[k][i], geography.land[i] ? 250 + k + (i % 11) : 0, `${name} at ${i}`); });
-  const partial = build();
-  partial.load({ ...saved, soilT2: arrays.soilT2 }, null, time);
-  const started = build();
-  started.initialize(time);
+  for (const missing of [null, skins(0), skins(NaN)]) {
+    const none = build();
+    none.load(saved, null, time, missing);
+    land.deepNames.forEach((name, k) => assert.deepEqual(Array.from(none.deep[k]), Array.from(land.deep[k]), `${name} without a usable skin`));
+  }
+  const partial = build(), started = build();
+  partial.load({ ...saved, soilT2: arrays.soilT2 }, null, time, skins(281));
+  started.load(saved, null, time, skins(281));
   land.deepNames.forEach((name, k) => assert.deepEqual(Array.from(partial.deep[k]), Array.from(started.deep[k]), `${name} of a partial save`));
+  for (let k = 1; k < 4; k++) assert.ok(Math.abs(started.deep[k - 1][northCell] - anchored(northCell, middles[k], time, false, 281)) < 1e-9);
   const holed = build();
-  holed.load({ ...saved, ...arrays, soilT3: Float64Array.from(arrays.soilT3, (v, i) => (i === northCell ? 0 : v)) }, null, time);
-  assert.ok(Math.abs(holed.soilT3[northCell] - wave(northCell, middles[2], time, false)) < 1e-9, 'a cell with an empty layer starts on the wave');
-  assert.ok(Math.abs(holed.soilT2[northCell] - wave(northCell, middles[1], time, false)) < 1e-9, 'and takes all its layers from it');
+  holed.load({ ...saved, ...arrays, soilT3: Float64Array.from(arrays.soilT3, (v, i) => (i === northCell ? 0 : v)) }, null, time, skins(281));
+  for (let k = 1; k < 4; k++) assert.ok(Math.abs(holed.deep[k - 1][northCell] - anchored(northCell, middles[k], time, false, 281)) < 1e-9, `layer ${k + 1} of a cell with an empty layer`);
+  assert.equal(holed.soilT2[southCell], arrays.soilT2[southCell]);
   const slab = createLandSurface(mesh, geography, {});
-  slab.load({ ...saved, ...arrays }, null, time);
+  slab.load({ ...saved, ...arrays }, null, time, skins(281));
   assert.equal(slab.soilT2, undefined);
   assert.deepEqual(Object.keys(slab.serialize()).filter((key) => key.startsWith('soilT')), []);
 });
 
-test('started on the half-space wave and forced by the wave at its top, the column drifts over a simulated year by a third (soil) or half (firn) of what a start at the skin temperature does', () => {
+test('started on the column\'s profile about the saved skin and forced at its top by the wave, the layers keep their annual means within 0.3 K and end the year within 0.7 K of where they began, a third or less of what a start at the skin temperature does', () => {
   const report = [], checks = [];
   for (const cell of [northCell, southCell, firnCell]) {
-    const firn = geography.iceSheet[cell] > 0, drift = {};
-    for (const start of ['wave', 'skin']) {
-      const land = fresh(), surfaceT = new Float64Array(C), flux = new Float64Array(C);
-      const begin = 200 * 86400, skin0 = wave(cell, middles[0], begin, firn);
-      land.load({ soil: new Float64Array(C).fill(100), snow: new Float64Array(C) }, null, begin);
+    const firn = geography.iceSheet[cell] > 0, drift = {}, { mean, amplitude } = cycleOf(cell);
+    const surface = (time) => MELTING_POINT + mean + amplitude * Math.cos(OMEGA * (time - peakOf(cell)));
+    for (const start of ['profile', 'skin']) {
+      const land = fresh(), surfaceT = new Float64Array(C), flux = new Float64Array(C), begin = 200 * 86400, skin0 = surface(begin);
+      land.load(bare(), null, begin, skins(skin0));
       if (start === 'skin') land.deep.forEach((layer) => { layer[cell] = skin0; });
       surfaceT[cell] = skin0;
       const initial = spread(land, surfaceT, cell), sums = initial.map(() => 0), steps = Math.round(YEAR / DT);
       for (let n = 0; n < steps; n++) {
-        const time = begin + n * DT, target = wave(cell, middles[0], time + 0.5 * DT, firn);
-        flux[cell] = 50 * (target - surfaceT[cell]);
+        flux[cell] = 50 * (surface(begin + (n + 0.5) * DT) - surfaceT[cell]);
         land.update(cell, surfaceT, flux, 0, DT);
         spread(land, surfaceT, cell).forEach((t, k) => { sums[k] += t / steps; });
       }
-      const final = spread(land, surfaceT, cell), { mean } = airCycle(mesh.latCell[cell], geography.elevation[cell]);
-      drift[start] = {
-        mean: sums.map((s) => s - MELTING_POINT - mean),
-        end: final.map((t, k) => t - initial[k]),
-      };
+      drift[start] = { mean: sums.map((v) => v - MELTING_POINT - mean), end: spread(land, surfaceT, cell).map((t, k) => t - initial[k]) };
     }
-    const worstMean = (d) => Math.max(...d.mean.map(Math.abs)), worstEnd = (d) => Math.max(...d.end.map(Math.abs));
-    report.push(`${firn ? 'firn' : mesh.latCell[cell] > 0 ? 'north' : 'south'} cell: layer means over the year depart from the wave's by ${worstMean(drift.wave).toFixed(3)} K (${worstMean(drift.skin).toFixed(3)} from the skin start), year end minus start ${worstEnd(drift.wave).toFixed(3)} K (${worstEnd(drift.skin).toFixed(3)}), by layer ${drift.wave.end.map((d) => d.toFixed(2)).join(' ')}`);
-    checks.push([worstMean(drift.wave), worstMean(drift.skin), worstEnd(drift.wave), worstEnd(drift.skin), report.at(-1), firn]);
+    const worst = (values) => Math.max(...values.map(Math.abs));
+    report.push(`${firn ? 'firn' : mesh.latCell[cell] > 0 ? 'north' : 'south'} cell: layer means over the year depart from the mean by ${worst(drift.profile.mean).toFixed(3)} K (${worst(drift.skin.mean).toFixed(3)} from the skin start), year end minus start ${worst(drift.profile.end).toFixed(3)} K (${worst(drift.skin.end).toFixed(3)}), by layer ${drift.profile.end.map((d) => d.toFixed(2)).join(' ')}`);
+    checks.push([worst(drift.profile.mean), worst(drift.skin.mean), worst(drift.profile.end), worst(drift.skin.end), report.at(-1)]);
   }
   console.log(report.join('\n'));
-  for (const [mean, skinMean, end, skinEnd, line, firn] of checks) {
-    assert.ok(mean < (firn ? 0.7 : 0.3) && end < (firn ? 2.6 : 0.8), line);
-    assert.ok((firn ? 1.8 : 3) * mean < skinMean && (firn ? 1.8 : 3) * end < skinEnd, line);
+  for (const [mean, skinMean, end, skinEnd, line] of checks) {
+    assert.ok(mean < 0.3 && end < 0.7, line);
+    assert.ok(3 * mean < skinMean && 3 * end < skinEnd, line);
   }
 });
 

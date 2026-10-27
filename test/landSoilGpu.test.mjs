@@ -33,7 +33,7 @@ function prepare(model) {
   model.ocean.initialize(model.state[3], model.state[6]);
   model.land.initialize();
   for (let i = 0; i < C; i++) if (geography.land[i]) { model.land.soil[i] = 40; model.land.snow[i] = mesh.latCell[i] > 1.0 ? 5 : 0; }
-  model.land.load({ soil: Float64Array.from(model.land.soil), snow: Float64Array.from(model.land.snow), vegetation: new Float64Array(C).fill(0.5) });
+  model.land.load({ soil: Float64Array.from(model.land.soil), snow: Float64Array.from(model.land.snow), vegetation: new Float64Array(C).fill(0.5) }, undefined, 0, model.state[3]);
   return model;
 }
 

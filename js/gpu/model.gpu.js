@@ -326,7 +326,7 @@ export async function createGpuModel(gridOrMesh, {
     ...Object.fromEntries(landCpu.deepNames.map((name) => [name, landCpu[name]])), layered: landCpu.layered, column: landCpu.column, deepNames: landCpu.deepNames, deep: landCpu.deep,
     soil: landCpu.soil, surface: landCpu.surface, snow: landCpu.snow, runoff: landCpu.runoff, vegetation: landCpu.vegetation, snowAlbedo: landCpu.snowAlbedo, canopy: landCpu.canopy, seasonLength: landCpu.seasonLength, seasonWarmth: landCpu.seasonWarmth, rainMean: landCpu.rainMean, demandMean: landCpu.demandMean, soilCarbon: landCpu.soilCarbon, litterMean: landCpu.litterMean, decayMean: landCpu.decayMean, snowFreeCover: landCpu.snowFreeCover, iceLoss: landCpu.iceLoss, record: landCpu.record, placeholders: landCpu.placeholders, dryAlbedo: landCpu.dryAlbedo, treeFactor: landCpu.treeFactor, moistureFactor: landCpu.moistureFactor, capacity: landCpu.capacity, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
     initialize(time = 0) { landCpu.initialize(time); gpu.uploadLand(uploaded()); },
-    load(saved, ice = state[6], time = 0) { landCpu.load(saved, ice, time); gpu.uploadLand(uploaded()); },
+    load(saved, ice = state[6], time = 0, skin = null) { landCpu.load(saved, ice, time, skin); gpu.uploadLand(uploaded()); },
     async serialize() {
       await pullLand();
       return landCpu.serialize();
