@@ -2046,11 +2046,18 @@ fn stratocumulusTopped(i: i32, pi: f32) -> bool {
   let height = (D[D_GEO + upper] - D[D_GEO + bottom] + LV[L_GABS + STABILITY_K] - LV[L_GABS + K - 1]) / GRAV;
   return inversionStrength(IN[S_TH + upper] - IN[S_TH + bottom], lowerT, IN[S_TH + upper] * D[D_EXM + upper], height - base) > SC_INVERSION;
 }
+fn cloudBaseFound(i: i32, pi: f32) -> bool {
+  let bottom = (K - 1) * C + i;
+  if (!(PH[PH_BUOY + i] > 0.0) || !(IN[S_Q + bottom] > 0.0)) { return false; }
+  let lowerT = IN[S_TH + bottom] * D[D_EXM + bottom];
+  let lcl = condensationLevel(lowerT, IN[S_Q + bottom], pi * LV[L_SM + K - 1]);
+  return PH[PH_DEPTH + i] >= CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom]) / GRAV + max(0.0, CP * (lowerT - lcl.x) / GRAV);
+}
 // the shallow cumulus mass flux of moist.module.js's cumulusColumn; returns its rain
 fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   clearCumulus(i);
   cuSnow = 0.0;
-  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0) * select(1.0, 0.0, SC_SWITCH && stratocumulusTopped(i, pi));
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0) * select(1.0, 0.0, SC_SWITCH && cloudBaseFound(i, pi) && stratocumulusTopped(i, pi));
   let buoyancy = PH[PH_BUOY + i];
   if (!(open > 0.0) || !(buoyancy > 0.0)) { return 0.0; }
   let bottom = K - 1;
@@ -2236,7 +2243,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     for (var k = 0; k <= K; k++) { PH[PH_MOMU + k * C + i] = 0.0; PH[PH_MOMD + k * C + i] = 0.0; }
     for (var k = 0; k < K; k++) { PH[PH_MOMK + k * C + i] = 1.0; PH[PH_MOMKD + k * C + i] = 1.0; }
   }
-  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0) * select(1.0, 0.0, SC_SWITCH && stratocumulusTopped(i, pi));
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0);
   if (!(open > 0.0)) { return cumulusColumn(i, pi, dt); }
   let bottom = K - 1;
   let depthTop = PH[PH_DEPTH + i];

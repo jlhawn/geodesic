@@ -185,10 +185,13 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * 1 everywhere), and with `coupledVeto` not at all where the moist
  * boundary layer (`boundaryRegime`) is a coupled stratocumulus-topped
  * layer, COUPLED_REGIME. With `stratocumulusInversion` (K, 7 by default; null: none)
- * neither runs where the column's estimated inversion strength exceeds it,
- * the IFS's switch between a well-mixed stratocumulus-topped boundary
- * layer and a decoupled one that convects (7 K; Bechtold et al. 2014,
- * ECMWF Tech. Memo. 725, §2.1): the EIS of Wood and Bretherton (2006) as
+ * the shallow branch does not run where the boundary layer, under a
+ * positive surface buoyancy flux, reaches the lowest layer's LCL and the
+ * column's estimated inversion strength exceeds it: the IFS's switch
+ * between a well-mixed stratocumulus-topped boundary layer and a
+ * decoupled one that convects, over land and sea, once the parcel finds
+ * a cloud base, and for shallow convection only (7 K; Bechtold et al.
+ * 2014, ECMWF Tech. Memo. 725, §2.1): the EIS of Wood and Bretherton (2006) as
  * the radiation takes it, the layer `stabilityLayer` (σ = 0.7) against the
  * lowest one, moist-adiabatic above that layer's LCL, from the column the
  * plume starts on.
@@ -926,6 +929,13 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     return inversionStrength(theta[upper] - theta[lower], lowerT, theta[upper] * exnerLayer[upper], (geopotential[upper] - geopotential[lower]) / g - base, cp, R, g, latentHeat) > stratocumulusInversion;
   }
 
+  function cloudBaseFound(i, pi, theta, q) {
+    const lower = (K - 1) * C + i;
+    if (!(surfaceBuoyancy && surfaceBuoyancy[i] > 0) || !boundaryDepth || !(q[lower] > 0)) return false;
+    const lowerT = theta[lower] * exnerLayer[lower], lcl = liftingCondensationLevel(lowerT, q[lower], pi[i] * sigmaMid[K - 1], kappa);
+    return boundaryDepth[i] >= cp * thetaV[lower] * (exnerLower[lower] - exnerLayer[lower]) / g + Math.max(0, cp * (lowerT - lcl.temperature) / g);
+  }
+
   function plumeKinetic(w2, work, depth, mixing) {
     const x = 2 * mixing * depth;
     return w2 * Math.exp(-x) + 2 * plumeAcceleration * work * (x > 0 ? -Math.expm1(-x) / x : 1);
@@ -947,7 +957,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     const bottom = K - 1;
     cumulus.top = -1; cumulus.inhibition = 0; cumulus.baseFlux = 0; cumulus.velocity = 0; cumulus.snow = 0; cumulus.overshoot = 1;
     clearCumulus(i);
-    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1) * (capped && stratocumulusTopped(i, pi, theta, q) ? 0 : 1);
+    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1) * (capped && cloudBaseFound(i, pi, theta, q) && stratocumulusTopped(i, pi, theta, q) ? 0 : 1);
     const buoyancy = surfaceBuoyancy ? surfaceBuoyancy[i] : 0;
     if (!(open > 0) || !(buoyancy > 0) || !boundaryDepth) return 0;
     fillEnvironment(i, pi, theta, q, qc);
@@ -1146,7 +1156,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       for (let k = 0; k <= K; k++) { momentumUp[k * C + i] = 0; momentumDown[k * C + i] = 0; }
       for (let k = 0; k < K; k++) { momentumUpKeep[k * C + i] = 1; momentumDownKeep[k * C + i] = 1; }
     }
-    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1) * (capped && stratocumulusTopped(i, pi, theta, q) ? 0 : 1);
+    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1);
     if (!(open > 0) || !boundaryDepth) return cumulusColumn(i, pi, theta, q, qc, dt);
     fillEnvironment(i, pi, theta, q, qc);
     const stack = sourceLayers(i, pi, false, surfaceSource);
