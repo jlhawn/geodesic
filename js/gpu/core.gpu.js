@@ -1302,6 +1302,7 @@ export async function createGpuCore(mesh, {
     submitNow((encoder) => {
       encoder.copyBufferToBuffer(buffers.S, 0, buffers.T, 0, 4 * L.S.total);
       for (const b of [buffers.K1, buffers.K2, buffers.K3, buffers.K4]) encoder.clearBuffer(b, 0, 4 * L.S.total);
+      if (macOn) { encoder.clearBuffer(buffers.K1, 0, buffers.K1.size); encoder.clearBuffer(buffers.AERSTAGE, 0, buffers.AERSTAGE.size); }
       encoder.clearBuffer(buffers.D, 0, 4 * L.D.total);
     });
   }
