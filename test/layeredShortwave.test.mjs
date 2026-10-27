@@ -11,6 +11,7 @@ import { LAYERED_TABLE } from '../js/physics/layeredTable.module.js';
 import { NEAR_INFRARED_TABLE } from '../js/physics/nearInfraredTable.module.js';
 import { nearInfraredBands, NEAR_INFRARED_MOLAR, OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { BENCHMARK, modelColumn, meanMixingRatio } from '../scripts/standardAtmospheres.mjs';
+import { PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
 
 const levels = sigmaInterfaces('bl48'), mesh = buildMesh(new Grid(16)), core = createSigmaCore(mesh, { levels });
 const { K, C, dSigma, sigmaMid } = core.diagnostics;
@@ -38,7 +39,7 @@ function columnBudgets(column, { zenith, clouds, albedo = 0.06, options = {} }) 
   const out = {};
   let time = null;
   for (const [name, scheme] of [['sequential', { shortwave: 'sequential' }], ['layered', { shortwave: 'layered' }]]) {
-    const radiation = createRadiation(mesh, core, { landAerosol: 0, seaAerosol: 0, clearSkyPass: true, cloudCover: 'overcast', cloudColumns: false, solarConstant: S0, ...gasesOf(column), ...options, ...scheme });
+    const radiation = createRadiation(mesh, core, { ...PREVIOUS_AEROSOL, landAerosol: 0, seaAerosol: 0, clearSkyPass: true, cloudCover: 'overcast', cloudColumns: false, solarConstant: S0, ...gasesOf(column), ...options, ...scheme });
     time ??= sunAt(radiation, zenith);
     radiation.setTime(time);
     const pi = new Float64Array(C).fill(column.ps), theta = new Float64Array(K * C).fill(280), q = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -74,7 +75,7 @@ function slab(n, tau, c, g, mu, surfaceAlbedo, diffuseAlbedo) {
 }
 
 test('shortwave is sequential or layered, and layered needs the band gases, a scattering atmosphere, no shielding and no gray cloud', () => {
-  const make = (extra) => createRadiation(mesh, core, extra);
+  const make = (extra) => createRadiation(mesh, core, { ...PREVIOUS_AEROSOL, ...extra });
   assert.doesNotThrow(() => make({}));
   assert.doesNotThrow(() => make({ shortwave: 'sequential' }));
   assert.doesNotThrow(() => make({ shortwave: 'layered' }));

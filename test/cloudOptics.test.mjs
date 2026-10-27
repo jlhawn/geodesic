@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { PREVIOUS_SHORTWAVE } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
 import { sunDirection, sunDistance, orbitOf, cloudOptics, liquidShare, iceRadius, CLOUD_OPTICS, SOLAR_CONSTANT, STEFAN_BOLTZMANN, YEAR } from '../js/physics/radiation.module.js';
 
 let gpuAvailable = true;
@@ -32,7 +32,7 @@ test('the optics of a kilogram of condensate: liquid above 273.15 K with the dro
 });
 
 function singleLayer(radiation, T, path) {
-  const model = createModel(new Grid(16), { ocean: false, radiation: { ...PREVIOUS_SHORTWAVE, cloudCover: 'overcast', window: 1, gasFraction: 0, ozoneAbsorption: 0, cloudSolarAbsorption: 0, ...UNSCATTERED, skylight: 0, ...radiation } });
+  const model = createModel(new Grid(16), { ocean: false, radiation: { ...PREVIOUS_SHORTWAVE, ...PREVIOUS_AEROSOL, cloudCover: 'overcast', window: 1, gasFraction: 0, ozoneAbsorption: 0, cloudSolarAbsorption: 0, ...UNSCATTERED, skylight: 0, ...radiation } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   const { core, radiation: rad, mesh } = model, { K } = core.diagnostics, C = mesh.nCells, [pi, theta] = model.state;
   const i = 0, k = Math.floor(K / 2), dry = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -86,7 +86,7 @@ function cloudColumns() {
 }
 
 async function physicsPair(base, options, dt = 864000) {
-  const physics = { ...PREVIOUS_SHORTWAVE, stratus: true, mixedLayerDeck: false, clearSkyPass: true, ...options };
+  const physics = { ...PREVIOUS_SHORTWAVE, ...PREVIOUS_AEROSOL, stratus: true, mixedLayerDeck: false, clearSkyPass: true, ...options };
   const model = createModel(base.mesh, { ocean: false, radiation: physics });
   model.state.forEach((a, n) => a.set(base.state[n]));
   model.seaIce.concentration.set(base.seaIce.concentration);

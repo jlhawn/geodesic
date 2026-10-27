@@ -10,8 +10,10 @@ import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { DEFAULT_RUNS } from '../js/defaultRun.module.js';
 import { DEFAULT_SOIL } from '../js/physics/land.module.js';
+import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
+import { recordedOptions } from '../scripts/stateOptions.mjs';
 import { syntheticTopography } from '../js/geography.module.js';
-import { PREVIOUS_SHORTWAVE, PREVIOUS_BERGERON, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_BERGERON, PREVIOUS_AEROSOL, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -69,7 +71,7 @@ test('the drivers hold the default radiation 45 minutes and the sequential one 1
   assert.ok(kept < previousKept, `the cold liquid left in the layer, ${kept} against ${previousKept} with the factor off`);
 });
 
-test('the page\'s default states record no shortwave scheme and no Bergeron option, so the defaults apply on load and set the drivers\' cadence', () => {
+test('the page\'s default states record no shortwave scheme, no aerosol, no soil and no Bergeron option, so the defaults apply on load and set the drivers\' cadence', () => {
   const root = new URL('..', import.meta.url).pathname;
   for (const [N, manifest] of Object.entries(DEFAULT_RUNS)) {
     const { parts } = JSON.parse(readFileSync(root + manifest, 'utf8'));
@@ -79,6 +81,7 @@ test('the page\'s default states record no shortwave scheme and no Bergeron opti
     assert.equal(options.radiation?.shortwave, undefined, `${manifest} records no shortwave scheme`);
     assert.equal(options.moist?.bergeronAutoconversion, undefined, `${manifest} records no Bergeron option`);
     assert.equal(options.land?.soil, undefined, `${manifest} records no soil option`);
+    assert.equal(options.radiation?.aerosol, undefined, `${manifest} records no aerosol option`);
     const every = withCadence({ radiation: options.radiation ?? {} }, 1350 * 16 / Number(N), Number(N)).radiation.radiationEvery;
     assert.equal(every, { 64: 8, 128: 16, 192: 24 }[N], `the page's radiation cadence at N = ${N}`);
   }
@@ -93,6 +96,16 @@ test('land.soil defaults to the layers and the previous default is the slab: a m
   assert.deepEqual([previous.land.layered, previous.land.deepNames], [false, []]);
 });
 
+test('radiation.aerosol defaults to the MACv2 climatology and the previous default is the flat aerosol: a model built without the option has the sampler and one asked for the previous option has none, and a state records the default', () => {
+  assert.equal(DEFAULT_AEROSOL, 'mac');
+  assert.deepEqual(PREVIOUS_AEROSOL, { aerosol: 'flat' });
+  assert.equal(PREVIOUS_RADIATION.aerosol, 'flat');
+  const plain = createModel(new Grid(16), { ocean: false }), previous = createModel(new Grid(16), { ocean: false, radiation: PREVIOUS_AEROSOL });
+  assert.ok(plain.aerosol !== null && plain.radiation.aerosolFields === plain.aerosol.fields && previous.aerosol === null && previous.radiation.aerosolFields === null);
+  assert.deepEqual(recordedOptions().radiation, { shortwave: DEFAULT_SHORTWAVE, aerosol: DEFAULT_AEROSOL });
+  assert.deepEqual(recordedOptions({ radiation: PREVIOUS_AEROSOL }).radiation, { shortwave: DEFAULT_SHORTWAVE, aerosol: 'flat' });
+});
+
 test('the GPU engine takes the same defaults: PHYSICS_DEFAULTS names the layered shortwave and the Bergeron factor, and a model asked for the previous options keeps them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
   assert.equal(PHYSICS_DEFAULTS.shortwave, DEFAULT_SHORTWAVE);
@@ -105,4 +118,8 @@ test('the GPU engine takes the same defaults: PHYSICS_DEFAULTS names the layered
   const land = await createGpuModel(new Grid(16), { ocean: false, topography }), slab = await createGpuModel(new Grid(16), { ocean: false, topography, land: PREVIOUS_LAND });
   assert.deepEqual([land.gpu.physics.soilColumn.depths.length, land.land.deepNames], [4, ['soilT2', 'soilT3', 'soilT4']]);
   assert.deepEqual([slab.gpu.physics.soilColumn, slab.land.deepNames, slab.gpu.layout.PH.SOILT2], [null, [], undefined]);
+  assert.equal(PHYSICS_DEFAULTS.aerosol, DEFAULT_AEROSOL);
+  const flat = await createGpuModel(new Grid(16), { ocean: false, radiation: PREVIOUS_AEROSOL });
+  assert.deepEqual([plain.gpu.physics.aerosol, flat.gpu.physics.aerosol], ['mac', 'flat']);
+  assert.ok(plain.gpu.layout.PH.AER > 0 && flat.gpu.layout.PH.AER === undefined, 'the climatology\'s eight fields are in the default physics buffer and not in the flat one');
 });

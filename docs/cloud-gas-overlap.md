@@ -906,12 +906,56 @@ melt in the CPU land and in both engines), `snowAlbedo` (the snow's ageing under
 by the winds the layers give) and the load digests of `landLoadPath`; `land`'s expected keys,
 `splitState`'s options and `soilCarbon`'s option list take the layers' names. No digest pin moved.
 
+`radiation.aerosol` is `'mac'` by default on both engines (October 27): `DEFAULT_AEROSOL` in
+`js/aerosol.module.js`, which the CPU radiation, the GPU's `PHYSICS_DEFAULTS`, `climatologyOn` (the
+sampler of `createModel` and the page worker's fetch of `data/aerosol_mac_2deg.bin`, 1.56 MB) and
+`scripts/stateOptions.mjs` take. The climatology, its measurements and the evidence for the default are in
+`docs/aerosol-climatology.md`, the file's sources and attribution in `docs/aerosol-data-notice.md`.
+`PREVIOUS_AEROSOL` in `test/helpers/previousDefaults.mjs` is `{ aerosol: 'flat' }` (also inside
+`PREVIOUS_RADIATION`), and the explainers keep it (`PUBLISHED_RADIATION` in `explain/published.module.js`,
+which `scripts/explainOcean.mjs` and `scripts/explainLayers.mjs` pass on; their figures and data are
+unchanged), as does `js/charts.module.js`, whose model serves its core alone. Asked for it, this tree is
+10aa5d7's on both engines: the 661 WGSL modules of sixteen GPU configurations at N = 16 hash alike, the CPU
+model's arrays after 24 steps in ten configurations have the same SHA-256, and a model day from the cold start
+(an aquaplanet and the fresh geography with the default ocean, with and without the page's options) leaves the
+state, the ocean and the land bit-identical on the CPU and on the GPU. The 85 shaders of the default model
+(N = 16, the fresh geography, the default ocean) hash `3fbb9c19778b60e1` (`2588fd1219dbd54f` with the page's
+options) where `aerosol: 'flat'` and 10aa5d7 give `b41944bfabf0ff2d` (`265d9092be2dcae5`). The page's default
+states record no aerosol option, so the climatology applies on loading them
+(`test/layeredDefault.test.mjs` reads their headers), and `'mac'` is refused with `solarGases` other than
+`'clirad'` and with `vaporShielding: 'cloudTop'`, the message naming `aerosol: 'flat'`. The cold start of
+`initializeState` is the previous default's, bit for bit, on both engines and without physics: its mean column
+meets the flat aerosol whatever the option. The default model
+absorbs 0.5 W/m² less sunlight at the top in August, 3.3 more in the atmosphere and 3.8 less at the surface; the
+heights of the aerosol in each month, the A/B of the fixed-SST control behind the decision and what the
+option leaves out are in its document, which also records that the A/B ran before the file had each month's
+heights and has not been repeated.
+
+The suite with the climatology as the default: the CPU files in four jobs (911 tests) and every GPU file at
+level 1 (410 tests in 54 files), and `atmosphereConservation` at level 3 (9 tests, 25.5 minutes, no
+command-buffer abort). The tests that assume the flat aerosol name it: `clearScattering`, `cloudOptics`,
+`gasCloud`, `gasRadiation`, `radiativeColumn`, `layeredShortwave`, `layeredShortwaveGpu`, `skinGpu` and the
+columns of `layeredConservation` take it for their hand-made expectations, and `vaporShielding` and
+`vaporShieldingGpu` for the `solarGases` and the `vaporShielding: 'cloudTop'` that `'mac'` refuses;
+`splitState`'s expected options and the headers `layeredDefault` reads include the aerosol; the load digests of
+`landLoadPath` and the divergence-damping parity of `gpuModel` keep the flat aerosol for their states (the
+latter has one column, 105, whose convective adjustment parts between the engines by 1.9e-2 K against a
+bound of 2e-3 with the climatology on the old cold start, an outlier that the flat physics gives as well when
+the cold start is perturbed by 1e-4 K). No pinned digest changed its value. Running it found three faults,
+each fixed in its own commit: the clear-sky sum added the near-infrared slab's term in an order that differed
+from the all-sky column's in the last bit (`cloudEffect`), `upload()` kept the radiation stash and the staged
+fields of an earlier run (`gpuReload`), and the cold start's mean column met the climatology of cell 0 on the
+CPU engine and none on the GPU's, so that every parity test that starts both from `initializeState` diverged
+from its first step (`levels`, `landGpu`, `landIce`, `iceShelfCavity`, `exchange`, `formDrag`, `orography`,
+`landSoilGpu`, `gpu` and others); the column now meets the flat aerosol, which makes the cold start the
+previous default's.
+
 A saved state's header names the options its run was made with (`options`, by group), and the page
 starts it with them. The page's default states (`runs/fourteen64_day1825.parts.json`,
 `runs/fourteen128_day1825.parts.json`, `runs/twelve192_day0020.parts.json`) record cloudColumns and
 the other options of their spin-ups and neither a shortwave scheme nor the Bergeron option, so the defaults
 apply on loading them (`test/layeredDefault.test.mjs` reads their headers). `scripts/spinup.mjs`
-writes the scheme, the option and the land's soil, with the RADIATION, MOIST and LAND it was given, in the header of every
+writes the scheme, the option, the aerosol and the land's soil, with the RADIATION, MOIST and LAND it was given, in the header of every
 state it saves, and `scripts/splitState.mjs` adds them to the options it stamps
 (`scripts/stateOptions.mjs`), so that a state made now starts on the page as it was made when the
 defaults move again.

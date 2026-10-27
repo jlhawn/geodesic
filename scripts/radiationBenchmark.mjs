@@ -36,7 +36,7 @@ const LEVELS = process.env.LEVELS ?? 'bl34', levels = sigmaInterfaces(LEVELS);
 const mesh = buildMesh(new Grid(2));
 const core = createSigmaCore(mesh, { levels });
 const { K, C } = core.diagnostics;
-const CLEAN = { shortwave: 'sequential', landAerosol: 0, seaAerosol: 0, clearSkyPass: true };
+const CLEAN = { shortwave: 'sequential', aerosol: 'flat', landAerosol: 0, seaAerosol: 0, clearSkyPass: true };
 
 function gasesOf(column) {
   const ozone = Array.from(column.o3, (x, k) => x * (levels[k + 1] - levels[k]) * column.ps / GRAVITY / OZONE_CM_ATM);

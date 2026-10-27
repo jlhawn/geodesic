@@ -58,6 +58,7 @@ export const PH_MAP = {
   RADT: 'radiation.held.escape', RADTC: 'radiation.held.clearEscape', RADDF: 'radiation.held.share', RADDIR: 'radiation.held.direct', RADREFL: 'radiation.held.reflected', RADABS: 'radiation.held.absorbed',
   RADSWDN: 'radiation.held.down', RADSW: 'radiation.held.shortwave', RADTOA: 'radiation.held.top', RADBACK: 'radiation.held.back', RADOLR: 'radiation.held.outgoing', RADATM: 'radiation.held.atmosphere',
   RADCLROLR: 'radiation.held.clearOutgoing', RADCLRSW: 'radiation.held.clearAbsorbed', RADEMIT: 'radiation.held.emission', RADMU: 'radiation.held.mu',
+  AER: 'radiation.aerosolFields',
 };
 // regions that are inputs or hand-offs with no CPU array of their own (they are checked for non-finite values only)
 export const PH_INPUT = {

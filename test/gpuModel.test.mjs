@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { sunDirection, sunDistance, orbitOf, YEAR } from '../js/physics/radiation.module.js';
 import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, DECISION_KINDS } from './helpers/decisions.mjs';
-import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -123,10 +123,10 @@ test('the stratiform share of the estimated inversion strength and the boundary-
 
 test('with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (divergenceDamping) => {
-    const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping });
+    const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping, radiation: PREVIOUS_AEROSOL });
     const init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model) });
+    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model), physics: PREVIOUS_AEROSOL });
     gpu.upload(model.state);
     gpu.uploadPhysics();
     const decisions = decisionTracker(model.core.K, model.mesh.nCells);
