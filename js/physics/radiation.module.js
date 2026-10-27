@@ -1920,7 +1920,7 @@ export function createRadiation(mesh, core, {
     }
     if (clearSkyPass) {
       shortwave(clearSky, 0, 1, mu, surfaceAlbedo, diffuseAlbedo);
-      const clearUpward = restLoss > 0 || visibleLoss > 0 || aerosolLossN > 0 ? incident * clearSky.restEscape * restLoss + (aerosolLossN > 0 ? incident * clearSky.restEscape * (1 - restLoss) * aerosolLossN : 0) + incident * clearSky.visibleEscape * aerosolLoss + (ozoneLoss > 0 ? incident * (clearSky.visibleEscape * (1 - aerosolLoss) + clearSky.visibleReflectance) * ozoneLoss : 0) : 0;
+      const clearUpward = restLoss > 0 || visibleLoss > 0 || aerosolLossN > 0 ? incident * clearSky.restEscape * restLoss + incident * clearSky.visibleEscape * aerosolLoss + (aerosolLossN > 0 ? incident * clearSky.restEscape * (1 - restLoss) * aerosolLossN : 0) + (ozoneLoss > 0 ? incident * (clearSky.visibleEscape * (1 - aerosolLoss) + clearSky.visibleReflectance) * ozoneLoss : 0) : 0;
       budget.clearAbsorbedSolar = incident * clearSky.absorbed + ozoneHeating + vaporHeating + aerosolHeating + aerosolHeatingN + clearUpward;
       budget.clearSurfaceSolar = incident * clearSky.absorbed;
       budget.clearOutgoingLongwave = clearOutgoing;
