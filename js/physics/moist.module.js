@@ -933,7 +933,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     const lower = (K - 1) * C + i;
     if (!(surfaceBuoyancy && surfaceBuoyancy[i] > 0) || !boundaryDepth || !(q[lower] > 0)) return false;
     const lowerT = theta[lower] * exnerLayer[lower], lcl = liftingCondensationLevel(lowerT, q[lower], pi[i] * sigmaMid[K - 1], kappa);
-    return boundaryDepth[i] >= cp * thetaV[lower] * (exnerLower[lower] - exnerLayer[lower]) / g + Math.max(0, cp * (lowerT - lcl.temperature) / g);
+    return boundaryDepth[i] - geopotential[lower] / g >= Math.max(0, cp * (lowerT - lcl.temperature) / g);
   }
 
   function plumeKinetic(w2, work, depth, mixing) {
