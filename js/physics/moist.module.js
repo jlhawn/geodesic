@@ -638,7 +638,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const deepCover = new Float64Array(K), deepWater = new Float64Array(K), tendencyS = new Float64Array(K), tendencyQ = new Float64Array(K), convectiveFall = new Float64Array(K), convectiveReserve = new Float64Array(K);
   const plumeCarried = new Float64Array(K), plumeInterfaceT = new Float64Array(K), plumeFrozen = new Float64Array(K), convectiveMelted = new Float64Array(K), convectiveFrozen = new Float64Array(K), convectiveSnow = new Float64Array(C);
   const plume = { T: 0, liquid: 0, ice: 0 }, draft = { q: 0, s: 0 }, plumeSaturated = { qs: 0, slope: 0, liquid: 1 };
-  const plumeExits = plumeTrace ? Object.fromEntries(['excessT', 'excessQ', 'lcl', 'stop', 'parcelBase', 'parcelTop', 'top', 'cape', 'inhibition', 'baseFlux'].map((name) => [name, new Float32Array(C)])) : null;
+  const plumeExits = plumeTrace ? Object.fromEntries(['excessT', 'excessQ', 'lcl', 'stop', 'parcelBase', 'parcelTop', 'top', 'cape', 'inhibition', 'baseFlux', 'pcape', 'pcapeBoundary', 'tau', 'consumptionP', 'halfEntrainment', 'doubleExcess', 'fastStart'].map((name) => [name, new Float32Array(C)])) : null;
   if (plumeExits) plumeExits.exit = new Uint8Array(C);
   let parcelStop = 0, lclPressure = 0;
   function traceExit(i, code, topPressure = 0, baseFlux = 0) {
@@ -646,6 +646,18 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     t.exit[i] = code; t.excessT[i] = deep.excessT; t.excessQ[i] = deep.excessQ; t.lcl[i] = lclPressure; t.stop[i] = parcelStop;
     t.parcelBase[i] = deep.parcelBase; t.parcelTop[i] = deep.parcelTop; t.top[i] = topPressure; t.cape[i] = code === 6 || code === 7 ? deep.cape : 0;
     t.inhibition[i] = code === 6 || code === 7 ? deep.inhibition : 0; t.baseFlux[i] = baseFlux;
+    const closed = code === 6 || code === 7;
+    t.pcape[i] = closed ? deep.pcape : 0; t.pcapeBoundary[i] = closed ? deep.pcapeBoundary : 0; t.tau[i] = closed ? deep.tau : 0; t.consumptionP[i] = closed ? deep.consumptionP : 0;
+    t.halfEntrainment[i] = 0; t.doubleExcess[i] = 0; t.fastStart[i] = 0;
+  }
+  function traceWhatIf(i, pi, q, qc, source, s, w, reference, start) {
+    const t = plumeExits, kept = [deep.typeMargin, deep.parcelBase, deep.parcelTop, deep.parcelDeep], stop = parcelStop, entrainment = TEST_PARCEL.entrainment;
+    TEST_PARCEL.entrainment = entrainment / 2;
+    t.halfEntrainment[i] = parcelDeep(i, pi, q, qc, source, s, w, reference) ? 1 : 0;
+    TEST_PARCEL.entrainment = entrainment;
+    t.doubleExcess[i] = parcelDeep(i, pi, q, qc, source, s + cp * deep.excessT, w + deep.excessQ, reference) ? 1 : 0;
+    t.fastStart[i] = parcelDeep(i, pi, q, qc, source, s, w, reference, start * start) ? 1 : 0;
+    [deep.typeMargin, deep.parcelBase, deep.parcelTop, deep.parcelDeep] = kept; parcelStop = stop;
   }
   const deep = { deep: false, rooted: true, departure: -1, shallowRain: 0, shallowSnow: 0, top: -1, base: K, cape: 0, consumption: 0, inhibition: 0, start: -1, baseFlux: 0, downdraft: 0, pcape: 0, pcapeBoundary: 0, consumptionP: 0, tau: 0, speed: 0, depth: 0, boundaryWind: 0, boundaryTime: 0, excessT: 0, excessQ: 0, sourceS: 0, sourceQ: 0, sourceMass: 0, parcelDeep: false, parcelBase: 0, parcelTop: 0, conversionMargin: Infinity, typeMargin: Infinity };
   let cumulusK0 = K;
@@ -1108,9 +1120,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
    * least distance from a decision it came to, relative to 200 hPa for the
    * cloud's depth and to w² at departure for the layer where it stops.
    */
-  function parcelDeep(i, pi, q, qc, source, s, w, reference) {
+  function parcelDeep(i, pi, q, qc, source, s, w, reference, start = plumeVelocity * plumeVelocity) {
     const bottom = K - 1, virtual = virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = virtualBuoyancy ? 1 : 0;
-    let w2 = plumeVelocity * plumeVelocity, guess = 0, base = 0;
+    let w2 = start, guess = 0, base = 0;
     deep.typeMargin = Infinity;
     for (let k = source - 1; k > 0; k--) {
       const lower = upperInterface(i, k + 1), upper = upperInterface(i, k), depth = upper - lower;
@@ -1207,7 +1219,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       deep.typeMargin = margin;
     }
-    if (!typed) { if (plumeExits) traceExit(i, failure); return cumulusColumn(i, pi, theta, q, qc, dt); }
+    if (!typed) {
+      if (plumeExits) {
+        traceExit(i, failure);
+        const buoyancy = surfaceBuoyancy ? surfaceBuoyancy[i] : 0, convective = buoyancy > 0 ? Math.cbrt(buoyancy * Math.max(0, boundaryDepth[i] - z[bottom])) : 0;
+        if (failure === 3 || failure === 4) traceWhatIf(i, pi, q, qc, source, sourceS, sourceQ, lowestSaturation, Math.max(plumeVelocity, convective));
+      }
+      return cumulusColumn(i, pi, theta, q, qc, dt);
+    }
     const virtual = virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = virtualBuoyancy ? 1 : 0;
     let s = sourceS, w = sourceQ, w2 = 0, below = 0, inhibition = 0, cloudy = false, started = false, top = -1, guess = 0, cape = 0, base = -1, pcape = 0, baseSaturation = 0;
     plumeS[source] = s; plumeQ[source] = w;
