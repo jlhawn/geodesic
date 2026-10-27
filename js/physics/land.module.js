@@ -311,8 +311,8 @@ function sineYearRates(mean, amplitude, fill, { decompositionWilting, seasonThre
 }
 
 /*
- * The soil under the skin. With soil 'layers' the skin is the first of
- * soilDepths.length conducting layers, the IFS's (Cy41r2 Part IV ch. 8:
+ * The soil under the skin. With soil 'layers', the default, the skin is the
+ * first of soilDepths.length conducting layers, the IFS's (Cy41r2 Part IV ch. 8:
  * thicknesses of Table 8.7, a constant volumetric heat capacity
  * soilHeatCapacity, §8.5.1, a conductivity soilConductivity, after
  * Peters-Lidard et al. 1998 for a dry to moderately wet topsoil, and no
@@ -323,7 +323,8 @@ function sineYearRates(mean, amplitude, fill, { decompositionWilting, seasonThre
  * changes by exactly Q dt. A cell on an ice sheet has firn of density
  * firnDensity for soil: (ρC, λ) = (2.05e6 ρ/917, 2.2 (ρ/917)^1.88), eqs.
  * 8.29 and 8.44. The layers below the skin are the cells' arrays soilT2,
- * soilT3, …; `heatCapacity` belongs to the slab and is refused.
+ * soilT3, …. soil 'slab' is the skin alone, a slab of capacity heatCapacity
+ * (1e6 J/m²/K by default); with the layers `heatCapacity` is refused.
  *
  * A land state that lacks those arrays starts them on the annual
  * temperature wave of the column: the periodic solution of the heat
@@ -341,6 +342,7 @@ function sineYearRates(mean, amplitude, fill, { decompositionWilting, seasonThre
  * the lag of the land's seasonal maximum behind the solstice; SOIL_LAG is
  * the usual three to five weeks of the observed continental cycle.
  */
+export const DEFAULT_SOIL = 'layers';
 export const SOIL_LAYERS = { depths: [0.07, 0.21, 0.72, 1.89], heatCapacity: 2.19e6, conductivity: 0.7, firnDensity: 400, ice: { heatCapacity: 2.05e6, conductivity: 2.2, density: 917, exponent: 1.88 } };
 export const SOIL_LAG = 30 * 86400;
 const WAVE = 2 * Math.PI / YEAR;
@@ -351,10 +353,10 @@ function columnWave(z, depth, damping, phase) {
   return ((nr * dr + ni * di) * Math.cos(phase) - (ni * dr - nr * di) * Math.sin(phase)) / (dr * dr + di * di);
 }
 
-export function soilColumn({ soil = 'slab', heatCapacity, soilDepths = SOIL_LAYERS.depths, soilHeatCapacity = SOIL_LAYERS.heatCapacity, soilConductivity = SOIL_LAYERS.conductivity, firnDensity = SOIL_LAYERS.firnDensity } = {}) {
+export function soilColumn({ soil = DEFAULT_SOIL, heatCapacity, soilDepths = SOIL_LAYERS.depths, soilHeatCapacity = SOIL_LAYERS.heatCapacity, soilConductivity = SOIL_LAYERS.conductivity, firnDensity = SOIL_LAYERS.firnDensity } = {}) {
   if (soil === 'slab') return null;
   if (soil !== 'layers') throw new Error(`soil is 'slab' or 'layers', not ${soil}`);
-  if (heatCapacity !== undefined) throw new Error(`heatCapacity is the slab's: with soil 'layers' the skin has soilHeatCapacity × soilDepths[0], not ${heatCapacity}`);
+  if (heatCapacity !== undefined) throw new Error(`heatCapacity is the slab's: give soil: 'slab' to use it, or soilHeatCapacity and soilDepths for the layered skin (soilHeatCapacity × soilDepths[0]), not ${heatCapacity}`);
   if (!(Array.isArray(soilDepths) && soilDepths.length >= 1 && soilDepths.every((d) => d > 0))) throw new Error(`soilDepths must be one or more layer thicknesses above 0 m, not ${soilDepths}`);
   if (!(soilHeatCapacity > 0 && soilConductivity > 0)) throw new Error(`soilHeatCapacity and soilConductivity must be above 0, not ${soilHeatCapacity} and ${soilConductivity}`);
   const { ice } = SOIL_LAYERS;
@@ -378,7 +380,7 @@ export function createLandSurface(mesh, geography, {
   soilCarbon: carbonOn = SOIL_CARBON.soilCarbon, mineralAlbedo = SOIL_CARBON.mineralAlbedo, humusAlbedo = SOIL_CARBON.humusAlbedo, organicScale = SOIL_CARBON.organicScale, topsoilMass = SOIL_CARBON.topsoilMass,
   soilTurnover = SOIL_CARBON.soilTurnover, litterInput = SOIL_CARBON.litterInput, treeLitter = SOIL_CARBON.treeLitter, grassLitter = SOIL_CARBON.grassLitter, decompositionWilting = SOIL_CARBON.decompositionWilting,
   carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'neutral', buffers = null,
-  soil: soilModel = 'slab', soilDepths, soilHeatCapacity, soilConductivity, firnDensity,
+  soil: soilModel = DEFAULT_SOIL, soilDepths, soilHeatCapacity, soilConductivity, firnDensity,
 } = {}) {
   const C = mesh.nCells;
   const column = soilColumn({ soil: soilModel, heatCapacity: givenCapacity, soilDepths, soilHeatCapacity, soilConductivity, firnDensity });

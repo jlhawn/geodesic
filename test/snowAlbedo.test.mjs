@@ -1,3 +1,4 @@
+import { PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
@@ -30,7 +31,7 @@ test('snow ages as Douville et al. (1995): cold snow loses 0.008 a day slowed by
 });
 
 test('the land ages its snow after each update, refreshes it with snowfall and starts the next snow fresh once the ground is bare', () => {
-  const land = createLandSurface(mesh, flat());
+  const land = createLandSurface(mesh, flat(), PREVIOUS_LAND);
   land.initialize();
   const i = 3, surfaceT = new Float64Array(mesh.nCells).fill(MELTING_POINT - 20), flux = new Float64Array(mesh.nCells);
   assert.equal(land.snowAlbedo[i], 0.85);

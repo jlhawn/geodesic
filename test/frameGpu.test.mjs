@@ -10,7 +10,7 @@ import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
 import { createModel } from '../js/model.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
-import { PREVIOUS_LEVELS } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -30,7 +30,7 @@ function worst(reference, got, { skipNaN = false } = {}) {
 }
 
 test('the GPU frame matches the fields and diagnostics computed from the full state in double precision', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const model = await createGpuModel(new Grid(N), { topography });
+  const model = await createGpuModel(new Grid(N), { topography, land: PREVIOUS_LAND });
   const { mesh, core, state } = model;
   const C = mesh.nCells, E = mesh.nEdges;
   const init = initializeState(model, {});

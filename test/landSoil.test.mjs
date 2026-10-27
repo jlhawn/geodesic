@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
-import { createLandSurface, soilColumn, airCycle, SOIL_LAG } from '../js/physics/land.module.js';
+import { createLandSurface, soilColumn, airCycle, SOIL_LAG, DEFAULT_SOIL } from '../js/physics/land.module.js';
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { regridLand } from '../js/physics/regrid.module.js';
@@ -48,7 +48,7 @@ test('the layers take the IFS thicknesses and heat capacity, the conductances jo
   assert.deepEqual(tuned.depths, [0.1, 0.3]);
   assert.ok(Math.abs(tuned.soil.conductance[0] - 1 / 0.2) < 1e-12 && Math.abs(tuned.firn.heatCapacity - 2.05e6 * 300 / 917) < 1e-6);
   assert.equal(soilColumn({ soil: 'slab' }), null);
-  assert.equal(soilColumn({}), null);
+  assert.equal(soilColumn({}).depths.length, 4);
   assert.throws(() => soilColumn({ soil: 'layers', heatCapacity: 1e6 }), /heatCapacity is the slab's/);
   assert.throws(() => soilColumn({ soil: 'deep' }), /'slab' or 'layers'/);
   assert.throws(() => soilColumn({ soil: 'layers', soilDepths: [] }), /layer thicknesses/);
@@ -56,6 +56,8 @@ test('the layers take the IFS thicknesses and heat capacity, the conductances jo
   assert.throws(() => soilColumn({ soil: 'layers', soilConductivity: 0 }), /above 0/);
   assert.throws(() => soilColumn({ soil: 'layers', firnDensity: 1000 }), /firnDensity/);
   assert.throws(() => createLandSurface(mesh, geography, { soil: 'layers', heatCapacity: 1.5e5 }), /heatCapacity is the slab's/);
+  assert.throws(() => createLandSurface(mesh, geography, { heatCapacity: 1.5e5 }), /give soil: 'slab'/);
+  assert.equal(createLandSurface(mesh, geography, { soil: 'slab', heatCapacity: 1.5e5 }).heatCapacity, 1.5e5);
 });
 
 test('the land energy row: the layers\' heat content changes by the surface flux times the step, less the fusion heat of the snow and glacier ice that went, in soil and firn columns', () => {
@@ -156,7 +158,7 @@ test('under a sinusoidal flux the stepped column follows the backward-step solut
 test('a column of one layer is the slab with that layer\'s capacity, in soil and in firn', () => {
   const D = 0.2;
   for (const [i, heat] of [[landCell, 2.19e6], [firnCell, firnClass.heat]]) {
-    const layered = build({ soilDepths: [D] }), slab = createLandSurface(mesh, geography, { heatCapacity: heat * D });
+    const layered = build({ soilDepths: [D] }), slab = createLandSurface(mesh, geography, { soil: 'slab', heatCapacity: heat * D });
     layered.initialize(); slab.initialize();
     assert.equal(layered.deepNames.length, 0);
     const a = new Float64Array(C).fill(275), b = new Float64Array(C).fill(275), flux = new Float64Array(C);
@@ -234,7 +236,7 @@ test('initialize starts the layers on the profile about airCycle\'s mean, a skin
   holed.load({ ...saved, ...arrays, soilT3: Float64Array.from(arrays.soilT3, (v, i) => (i === northCell ? 0 : v)) }, null, time, skins(281));
   for (let k = 1; k < 4; k++) assert.ok(Math.abs(holed.deep[k - 1][northCell] - anchored(northCell, middles[k], time, false, 281)) < 1e-9, `layer ${k + 1} of a cell with an empty layer`);
   assert.equal(holed.soilT2[southCell], arrays.soilT2[southCell]);
-  const slab = createLandSurface(mesh, geography, {});
+  const slab = createLandSurface(mesh, geography, { soil: 'slab' });
   slab.load({ ...saved, ...arrays }, null, time, skins(281));
   assert.equal(slab.soilT2, undefined);
   assert.deepEqual(Object.keys(slab.serialize()).filter((key) => key.startsWith('soilT')), []);
@@ -271,7 +273,7 @@ test('started on the column\'s profile about the saved skin and forced at its to
 
 const hashOf = (arrays) => { const hash = createHash('sha256'); for (const a of arrays) hash.update(Buffer.from(Float64Array.from(a).buffer)); return hash.digest('hex'); };
 function slabRun() {
-  const land = createLandSurface(mesh, geography, { iceSheetBalance: true });
+  const land = createLandSurface(mesh, geography, { iceSheetBalance: true, soil: 'slab' });
   land.initialize();
   const surfaceT = Float64Array.from({ length: C }, (_, i) => 255 + 40 * Math.cos(mesh.latCell[i]));
   const cells = [landCell, northCell, southCell, firnCell], flux = new Float64Array(C);
@@ -289,13 +291,18 @@ function slabRun() {
   return { surfaceT, saved, hash: hashOf([surfaceT, ...Object.keys(saved).sort().map((key) => saved[key])]) };
 }
 
-test('the default slab leaves land.update bit-identical and the serialized land without a new key', () => {
+test('the slab option leaves land.update bit-identical and the serialized land without a new key, and the layers are the default', () => {
   const { saved, hash } = slabRun();
   assert.ok(!Object.keys(saved).some((key) => key.startsWith('soilT')));
   assert.deepEqual(Object.keys(saved).sort(), ['canopy', 'decayMean', 'demandMean', 'litterMean', 'rainMean', 'record', 'seasonLength', 'seasonWarmth', 'snow', 'snowAlbedo', 'snowFreeCover', 'soil', 'soilCarbon', 'surface', 'vegetation']);
   assert.equal(hash, '35dd36e1e87b759003e37cf0e3a0e3cacd906ced069f8e643d29eb5c64a56e57');
-  assert.equal(recordedOptions().land.soil, 'slab');
-  assert.equal(recordedOptions({ land: { soil: 'layers' } }).land.soil, 'layers');
+  assert.equal(DEFAULT_SOIL, 'layers');
+  assert.equal(recordedOptions().land.soil, 'layers');
+  assert.equal(recordedOptions({ land: { soil: 'slab' } }).land.soil, 'slab');
+  const plain = createLandSurface(mesh, geography, {});
+  plain.initialize();
+  assert.deepEqual([plain.layered, plain.deepNames], [true, ['soilT2', 'soilT3', 'soilT4']]);
+  assert.deepEqual(Object.keys(plain.serialize()).filter((key) => key.startsWith('soilT')), ['soilT2', 'soilT3', 'soilT4']);
 });
 
 test('a layered land state round-trips through the state file, and regridding carries the layers between resolutions', async () => {

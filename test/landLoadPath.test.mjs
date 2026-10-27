@@ -13,8 +13,8 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const LAND_AFTER_LOAD = 'edf240830ae56066578fd689da9ecc94759cf7b9d6da46018ffa60ae5989b33d';
 const CPU_ONE_STEP = 'c930fecc36dc27f81d621a6f49029dc61e84ef83b0ffcd67ceefd5aa6e5b88ff';
 
-async function gpuLoaded(fixture) {
-  const model = await createGpuModel(new Grid(16), options);
+async function gpuLoaded(fixture, land = options.land) {
+  const model = await createGpuModel(new Grid(16), { ...options, land });
   fixture.state.forEach((a, k) => model.state[k].set(a));
   model.load({ ocean: false });
   return model;
@@ -23,7 +23,7 @@ async function gpuLoaded(fixture) {
 test('a slab land loaded the way the scripts load it, from a save with snow on sea ice, is bit-identical to the load of 5738db9, and a CPU model steps from it to the same digest', () => {
   const f = savedFixture();
   assert.ok(f.iced.length > 10);
-  const before = createLandSurface(f.mesh, f.geography, {}), now = createLandSurface(f.mesh, f.geography, { soil: 'slab' });
+  const before = createLandSurface(f.mesh, f.geography, { soil: 'slab' }), now = createLandSurface(f.mesh, f.geography, { soil: 'slab' });
   before.load(f.saved.land, f.state[6]);
   now.load(f.saved.land, f.state[6], f.saved.time, f.state[3]);
   assert.equal(digest(landArrays(before.serialize())), LAND_AFTER_LOAD);
@@ -31,14 +31,19 @@ test('a slab land loaded the way the scripts load it, from a save with snow on s
   for (const i of f.iced) assert.equal(now.snow[i], 12, `sea ice cell ${i}`);
   assert.equal(cpuStepped(f, (model, saved) => model.land.load(saved.land, model.state[6])), CPU_ONE_STEP);
   assert.equal(cpuStepped(f, (model, saved) => model.land.load(saved.land, model.state[6], saved.time, model.state[3])), CPU_ONE_STEP);
-  const dropped = createLandSurface(f.mesh, f.geography, {});
+  const dropped = createLandSurface(f.mesh, f.geography, { soil: 'slab' });
   dropped.load(f.saved.land, null, f.saved.time, f.state[3]);
   for (const i of f.iced) assert.equal(dropped.snow[i], 0);
   assert.notEqual(digest(landArrays(dropped.serialize())), LAND_AFTER_LOAD);
 });
 
-test('the scripts\' load keeps the snow a save carries on sea ice on the GPU model, where a null ice argument drops it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const f = savedFixture(), model = await gpuLoaded(f);
+test('the scripts\' load keeps the snow a save carries on sea ice on the GPU model, with the layers (the default) and the slab, where a null ice argument drops it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const f = savedFixture(), layered = await gpuLoaded(f, {});
+  loadSavedLand(layered, f.saved);
+  assert.equal(layered.land.layered, true);
+  for (const i of f.iced) assert.equal(layered.land.snow[i], 12, `sea ice cell ${i} with the layers`);
+  for (let i = 0; i < f.mesh.nCells; i++) if (f.geography.land[i]) assert.ok(layered.land.soilT3[i] > 150 && layered.land.soilT3[i] < 340, `layer 3 of cell ${i}: ${layered.land.soilT3[i]}`);
+  const model = await gpuLoaded(f);
   loadSavedLand(model, f.saved);
   for (const i of f.iced) assert.equal(model.land.snow[i], 12, `sea ice cell ${i}`);
   const open = Array.from({ length: f.mesh.nCells }, (_, i) => i).filter((i) => !f.geography.land[i] && !(f.state[6][i] > 0));
