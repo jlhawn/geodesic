@@ -13,7 +13,7 @@ import { createLayeredOcean, oceanStateLength, OCEAN_DEFAULTS } from './layeredO
 import { createGeography, surfaceGeopotential, geographyRecordOf } from '../geography.module.js';
 import { readRanges } from './device.module.js';
 import { RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH } from '../frames.module.js';
-import { createLandSurface, SOIL_CARBON } from '../physics/land.module.js';
+import { createLandSurface, soilColumn, SOIL_CARBON } from '../physics/land.module.js';
 import { loadClimatology } from '../ocean/climatology.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from '../physics/exchange.module.js';
 import { skinOptions, skinRequiresRoughness } from '../physics/skin.module.js';
@@ -93,7 +93,7 @@ export async function createGpuModel(gridOrMesh, {
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
     keepSmallIce: ice.keepSmallIce ?? (oceanOptions !== false && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift)),
     ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],
-    landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
+    landed: !!geography, soilColumn: geography ? soilColumn(landOptions) : null, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
     ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
   };
@@ -135,7 +135,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState(ocean) {
     gpu.upload(state);
-    gpu.uploadPhysics({ orography: subgrid, wind: exchange ? exchange.wind : null, land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : lakeCpu && lakeCpu.isLake[i] ? -1 : 0)) : null, drag: exchange ? exchange.drag : null, heat: exchange && !exchange.fixed ? exchange.heat : null, reference: exchange && !exchange.fixed ? exchange.reference : null, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, snowAlbedo: landCpu ? landCpu.snowAlbedo : null, canopy: landCpu ? landCpu.canopy : null, seasonLength: landCpu ? landCpu.seasonLength : null, seasonWarmth: landCpu ? landCpu.seasonWarmth : null, rainMean: landCpu ? landCpu.rainMean : null, demandMean: landCpu ? landCpu.demandMean : null, soilCarbon: landCpu ? landCpu.soilCarbon : null, litterMean: landCpu ? landCpu.litterMean : null, decayMean: landCpu ? landCpu.decayMean : null, snowFreeCover: landCpu ? landCpu.snowFreeCover : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux, evaporation: radiationCpu.evaporation, cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, ...(skin ? { warmLayer: skin.warm, coolSkin: skin.cool } : {}) });
+    gpu.uploadPhysics({ orography: subgrid, wind: exchange ? exchange.wind : null, land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : lakeCpu && lakeCpu.isLake[i] ? -1 : 0)) : null, drag: exchange ? exchange.drag : null, heat: exchange && !exchange.fixed ? exchange.heat : null, reference: exchange && !exchange.fixed ? exchange.reference : null, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, snowAlbedo: landCpu ? landCpu.snowAlbedo : null, canopy: landCpu ? landCpu.canopy : null, seasonLength: landCpu ? landCpu.seasonLength : null, seasonWarmth: landCpu ? landCpu.seasonWarmth : null, rainMean: landCpu ? landCpu.rainMean : null, demandMean: landCpu ? landCpu.demandMean : null, soilCarbon: landCpu ? landCpu.soilCarbon : null, litterMean: landCpu ? landCpu.litterMean : null, decayMean: landCpu ? landCpu.decayMean : null, snowFreeCover: landCpu ? landCpu.snowFreeCover : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux, evaporation: radiationCpu.evaporation, cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, ...(skin ? { warmLayer: skin.warm, coolSkin: skin.cool } : {}), ...(landCpu && landCpu.layered ? { soilDeep: landCpu.deep } : {}) });
     gpu.setWindSpeed(surfaceCpu.windSpeed);
     if (lakeCpu) pushLake();
     gpu.clearFrame();
@@ -310,8 +310,8 @@ export async function createGpuModel(gridOrMesh, {
     async serialize({ restart = false } = {}) { return restart ? { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) } : gpuOcean.serialize(); },
   } : null;
 
-  const LAND_BUFFERS = { soil: 'SOIL', snow: 'SNOW', vegetation: 'VEG', surface: 'SURF', snowAlbedo: 'SNOWALB', canopy: 'CANOPY', seasonLength: 'SEASONL', seasonWarmth: 'SEASONW', rainMean: 'RAINMEAN', demandMean: 'DEMAND', soilCarbon: 'SOILC', litterMean: 'LITTERM', decayMean: 'DECAYM', snowFreeCover: 'SNOWFREEV', iceLoss: 'ICELOSS' };
-  const uploaded = () => Object.fromEntries(Object.keys(LAND_BUFFERS).map((name) => [name, landCpu[name]]));
+  const LAND_BUFFERS = { soil: 'SOIL', snow: 'SNOW', vegetation: 'VEG', surface: 'SURF', snowAlbedo: 'SNOWALB', canopy: 'CANOPY', seasonLength: 'SEASONL', seasonWarmth: 'SEASONW', rainMean: 'RAINMEAN', demandMean: 'DEMAND', soilCarbon: 'SOILC', litterMean: 'LITTERM', decayMean: 'DECAYM', snowFreeCover: 'SNOWFREEV', iceLoss: 'ICELOSS', ...Object.fromEntries((landCpu ? landCpu.deepNames : []).map((name) => [name, name.toUpperCase()])) };
+  const uploaded = () => ({ ...Object.fromEntries(Object.keys(LAND_BUFFERS).map((name) => [name, landCpu[name]])), ...(landCpu.layered ? { soilDeep: landCpu.deep } : {}) });
   async function pullLand() {
     const fields = await readRanges(gpu.device, gpu.buffers.PH, Object.values(LAND_BUFFERS).map((name) => ({ offset: gpu.layout.PH[name], length: C })));
     Object.keys(LAND_BUFFERS).forEach((name, n) => landCpu[name].set(fields[n]));
@@ -323,9 +323,10 @@ export async function createGpuModel(gridOrMesh, {
    * with it.
    */
   model.land = landCpu ? {
+    ...Object.fromEntries(landCpu.deepNames.map((name) => [name, landCpu[name]])), layered: landCpu.layered, column: landCpu.column, deepNames: landCpu.deepNames, deep: landCpu.deep,
     soil: landCpu.soil, surface: landCpu.surface, snow: landCpu.snow, runoff: landCpu.runoff, vegetation: landCpu.vegetation, snowAlbedo: landCpu.snowAlbedo, canopy: landCpu.canopy, seasonLength: landCpu.seasonLength, seasonWarmth: landCpu.seasonWarmth, rainMean: landCpu.rainMean, demandMean: landCpu.demandMean, soilCarbon: landCpu.soilCarbon, litterMean: landCpu.litterMean, decayMean: landCpu.decayMean, snowFreeCover: landCpu.snowFreeCover, iceLoss: landCpu.iceLoss, record: landCpu.record, placeholders: landCpu.placeholders, dryAlbedo: landCpu.dryAlbedo, treeFactor: landCpu.treeFactor, moistureFactor: landCpu.moistureFactor, capacity: landCpu.capacity, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
-    initialize() { landCpu.initialize(); gpu.uploadLand(uploaded()); },
-    load(saved, ice = state[6]) { landCpu.load(saved, ice); gpu.uploadLand(uploaded()); },
+    initialize(time = 0) { landCpu.initialize(time); gpu.uploadLand(uploaded()); },
+    load(saved, ice = state[6], time = 0) { landCpu.load(saved, ice, time); gpu.uploadLand(uploaded()); },
     async serialize() {
       await pullLand();
       return landCpu.serialize();

@@ -12,6 +12,7 @@ import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VA
 import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
 import { SKIN, SEA_RHO_CP } from '../physics/skin.module.js';
 import { layeredKernel, LAYERED_SLOTS } from './layered.gpu.js';
+import { soilConstants, soilStep, SOIL_SKIN } from './soil.gpu.js';
 
 /*
  * The column physics of the model as WGSL, one thread per column (or per
@@ -395,7 +396,7 @@ const HUMIC: bool = ${!!o.soilCarbon && !!o.vegetation}; const ALB_MINERAL: f32 
 const LITTER_IN: f32 = ${o.litterInput}; const LITTER_TREE: f32 = ${o.treeLitter}; const LITTER_GRASS: f32 = ${o.grassLitter}; const DECAY_RATE: f32 = ${1 / o.soilTurnover}; const DECAY_WILT: f32 = ${o.decompositionWilting}; const DECAY_OPT: f32 = ${0.5 * (1 + o.decompositionWilting)}; const CARBON_ACC: f32 = ${o.carbonAcceleration};
 const LT_E: f32 = ${LLOYD_TAYLOR.activation}; const LT_REF: f32 = ${1 / LLOYD_TAYLOR.reference}; const LT_T0: f32 = ${LLOYD_TAYLOR.offset}; const MIAMI_A: f32 = ${MIAMI[0]}; const MIAMI_B: f32 = ${MIAMI[1]};
 const HELD_SHARE: f32 = ${startPlaceholders(o).neutral.share}; const HELD_NEUTRAL_C: f32 = ${startPlaceholders(o).neutral.carbon}; const HELD_GREEN_C: f32 = ${startPlaceholders(o).green.carbon};
-${exchangeConstants(o)}`;
+${exchangeConstants(o)}${o.soilColumn ? `\n${soilConstants(o.soilColumn)}` : ''}`;
 }
 
 export const PHYSICS_FUNCTIONS = `
@@ -1782,7 +1783,7 @@ ${held ? `  PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT 
   if (CLEAR_SKY) { PH[PH_RADCLROLR + i] = clearOutgoing; PH[PH_RADTC + i] = clearEscape; }` : `  stash(20, i, back); stash(21, i, outgoing);
   if (CLEAR_SKY) { PH[PH_OLRCLRSUM + i] += clearOutgoing; }`}
 }`;
-export const physicsSurfaceKernel = (held, seaSkin = false) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}
+export const physicsSurfaceKernel = (held, seaSkin = false, soil = null) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
 ${HAND_OFF(held)}  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
@@ -1818,11 +1819,11 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
   var T = skin; var h = ice;
   if (onLand) {
     var soil = soil0; var snow = snow0; var surf = surf0;
-    T += dt * net / LANDC;
+    ${soil ? soilStep(soil) : 'T += dt * net / LANDC;'}
     var left = evap * dt;
     let fromSnow = min(snow, left);
     snow -= fromSnow; left -= fromSnow;
-    T -= LFUS * fromSnow / LANDC;
+    T -= LFUS * fromSnow / ${soil ? SOIL_SKIN : 'LANDC'};
     if (VEGETATED) {
       let fromSurface = min(surf, left * bareShare);
       surf -= fromSurface; left -= fromSurface;
@@ -1831,13 +1832,13 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
     }
     soil = max(0.0, soil - left);
     if (snow > 0.0 && T > MELTING) {
-      let energy = (T - MELTING) * LANDC;
+      let energy = (T - MELTING) * ${soil ? SOIL_SKIN : 'LANDC'};
       let melt = min(snow, energy / LFUS);
       snow -= melt; soil += melt;
-      T = MELTING + (energy - melt * LFUS) / LANDC;
+      T = MELTING + (energy - melt * LFUS) / ${soil ? SOIL_SKIN : 'LANDC'};
     }
     if (ICE_BALANCE && onIceSheet && snow <= 0.0 && T > MELTING) {
-      let melt = (T - MELTING) * LANDC / LFUS;
+      let melt = (T - MELTING) * ${soil ? SOIL_SKIN : 'LANDC'} / LFUS;
       PH[PH_RUNOFF + i] += melt; PH[PH_ICELOSS + i] += melt;
       T = MELTING;
     }
