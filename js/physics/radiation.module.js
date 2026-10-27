@@ -944,6 +944,12 @@ export function createRadiation(mesh, core, {
     macOptics.tauN = 0; macOptics.omegaN = 1; macOptics.gN = 0;
   }
 
+  function flatAerosol(i) {
+    darkAerosol();
+    macOptics.tauV = aerosolCell[i]; macOptics.omegaV = aerosolAlbedo; macOptics.gV = aerosolAsymmetry;
+    macProfileV.set(aerosolFraction);
+  }
+
   // Fills out.tau, abs, sca and gs [k] with a slice's aerosol in each layer, the wavelengths weighted by `weights`.
   function aerosolLayersOf(weights, out) {
     let q0 = 0, a0 = 0, s0 = 0, p0 = 0, q1 = 0, a1 = 0, s1 = 0, p1 = 0;
@@ -1450,7 +1456,8 @@ export function createRadiation(mesh, core, {
    * `sunlight` is undefined for the cell's own sun, 0 for night, or { beam, mu }:
    * the flux on a horizontal surface at the top of the air and the cosine of the
    * zenith angle it comes from, given together because a beam carries the sun's
-   * distance factor and its cosine cannot be read back from it.
+   * distance factor and its cosine cannot be read back from it. A { beam, mu } with
+   * `aerosol` 'flat' meets the flat aerosol of the cell under aerosol 'mac' and changes nothing under 'flat'.
    */
   function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], sunlight, qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient, openSea = 0, mixedDepth = 0, dt = 0, mixingDepth = 0, part = 'all') {
     let beam, mu;
@@ -1583,7 +1590,7 @@ export function createRadiation(mesh, core, {
     const sunlit = beam - ozoneHeating, vaporHeating = solarPaths ? beam * (visibleVaporTaken[K - 1] + nearInfraredTaken[K - 1]) : lit ? sunlit * vaporTaken[K - 1] : 0;
     let incident = sunlit - vaporHeating, aerosolHeating = 0, aerosolHeatingN = 0, restLoss = 0, visibleLoss = 0, aerosolLoss = 0, aerosolLossN = 0, ozoneLoss = 0;
     light.share = 0; light.aerosolN = 0;
-    if (mac) { if (mu > 0 && beam > 0) prepareAerosol(i); else darkAerosol(); }
+    if (mac) { if (!(mu > 0 && beam > 0)) darkAerosol(); else if (sunlight?.aerosol === 'flat') flatAerosol(i); else prepareAerosol(i); }
     if (scatters || upwardAbsorption) {
       const visible = Math.max(0, visibleFraction * beam - ozoneHeating - (solarPaths ? beam * visibleVaporTaken[K - 1] : 0)), aerosol = mac ? macOptics.tauV : aerosolCell[i];
       const albedoV = mac ? macOptics.omegaV : aerosolAlbedo, asymmetryV = mac ? macOptics.gV : aerosolAsymmetry;

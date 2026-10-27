@@ -63,6 +63,13 @@ test('the GPU refuses the options the CPU radiation refuses, with the same words
     [{ aerosol: 'mac', shortwave: 'sequential', vaporShielding: 'cloudTop' }, shielding], [{ shortwave: 'sequential', vaporShielding: 'cloudTop' }, shielding], [{ aerosol: 'mac', aerosolScale: -1 }, /aerosolScale must be a factor of the aerosol's depth, 0 or more, not -1/]]) assert.throws(() => given(bad), message, JSON.stringify(bad));
 });
 
+test('a cold start is the same state on both engines and without physics, whatever the climatology', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const cpu = createModel(new Grid(N), { ocean: false }), gpu = await createGpuModel(new Grid(N), { ocean: false }), bare = createModel(new Grid(N), { ocean: false, physics: false });
+  assert.ok(cpu.radiation.aerosolFields.some((value) => value > 0), 'the CPU radiation has the climatology');
+  const fromCpu = initializeState(cpu, {}), fromGpu = initializeState(gpu, {}), fromBare = initializeState(bare, {});
+  fromCpu.forEach((values, a) => assert.ok(values.every((value, x) => value === fromGpu[a][x] && value === fromBare[a][x]), `state array ${a}`));
+});
+
 function meanTheta(model) {
   const { K } = model.core, theta = model.state[1];
   return Float64Array.from({ length: K }, (_, k) => { let s = 0, a = 0; for (let i = 0; i < C; i++) { s += model.mesh.areaCell[i] * theta[k * C + i]; a += model.mesh.areaCell[i]; } return s / a; });

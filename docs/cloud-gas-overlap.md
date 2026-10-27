@@ -915,7 +915,9 @@ state, the ocean and the land bit-identical on the CPU and on the GPU. The 85 sh
 options) where `aerosol: 'flat'` and 10aa5d7 give `b41944bfabf0ff2d` (`265d9092be2dcae5`). The page's default
 states record no aerosol option, so the climatology applies on loading them
 (`test/layeredDefault.test.mjs` reads their headers), and `'mac'` is refused with `solarGases` other than
-`'clirad'` and with `vaporShielding: 'cloudTop'`, the message naming `aerosol: 'flat'`. The default model
+`'clirad'` and with `vaporShielding: 'cloudTop'`, the message naming `aerosol: 'flat'`. The cold start of
+`initializeState` is the previous default's, bit for bit, on both engines and without physics: its mean column
+meets the flat aerosol whatever the option. The default model
 absorbs 0.5 W/m² less sunlight at the top in August, 3.3 more in the atmosphere and 3.8 less at the surface; the
 heights of the aerosol in each month, the A/B of the fixed-SST control behind the decision and what the
 option leaves out are in its document, which also records that the A/B ran before the file had each month's

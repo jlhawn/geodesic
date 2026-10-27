@@ -12,7 +12,8 @@ const STRATOSPHERE_BLEND = [0.1, 0.3];
  * Radiative–convective equilibrium θ(σ) of a single column over a surface
  * held at surfaceT: the model's own gray radiation and sensible heat
  * flux, with convective adjustment after every step, integrated until
- * the column stops changing. Computed on column 0 of the given model.
+ * the column stops changing. Computed on column 0 of the given model, with
+ * the flat aerosol whatever its option: the column describes no place.
  */
 export function equilibriumProfile(model, { surfaceT = REFERENCE_SURFACE_T, days = 1200, dt = 900, windSpeed = 3, p0 = 101325 } = {}) {
   const { core, radiation, surface } = model;
@@ -25,7 +26,7 @@ export function equilibriumProfile(model, { surfaceT = REFERENCE_SURFACE_T, days
   const meanOpticalDepth = radiation.opticalDepth(Math.asin(Math.sqrt(1 / 3)));
   for (let n = 0; n < steps; n++) {
     core.diagnoseColumn(0, pi, theta);
-    radiation.column(0, p0, theta, surfaceT, windSpeed, meanOpticalDepth, { beam: SOLAR_CONSTANT / 4, mu: 1 / 4 });
+    radiation.column(0, p0, theta, surfaceT, windSpeed, meanOpticalDepth, { beam: SOLAR_CONSTANT / 4, mu: 1 / 4, aerosol: 'flat' });
     for (let k = 0; k < K; k++) {
       const massPerArea = p0 * dSigma[k] / g;
       theta[k * C] += dt * radiation.layerFlux[k] / (cp * massPerArea) / exnerLayer[k * C];

@@ -4,6 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, sigmaInterfaces, GRAVITY } from '../js/dynamics/sigmaCore.module.js';
 import { createModel } from '../js/model.module.js';
+import { equilibriumProfile } from '../js/physics/init.module.js';
 import { createRadiation } from '../js/physics/radiation.module.js';
 import { AEROSOL_SPECTRA } from '../js/physics/aerosolSpectra.module.js';
 import { WAVELENGTHS, MIXED_DEPTH, MIXED_CAP, DEFAULT_AEROSOL, climatologyOn, modeBand, streamOptics, aerosolTable, profileFractions } from '../js/aerosol.module.js';
@@ -140,6 +141,26 @@ test('over 4.5 km of terrain the aerosol sits by its height above the ground, as
     assert.ok(Math.abs(below - wanted) < 1e-6, `the fine mode holds ${below} of its column below the interface ${height} km above the ground, the profile ${wanted}`);
   }
   assert.ok(heights[sea.K - 1] > 0 && heights[sea.K - 1] < 0.1 && heights[0] > 20, `layer heights above the ground from ${heights[sea.K - 1]} to ${heights[0]} km`);
+});
+
+test('a sunlight with aerosol \'flat\' gives a model with the climatology the flat model\'s column and changes nothing under \'flat\', and the cold start of the default model is the flat model\'s', () => {
+  const { core, atmosphere, theta } = column(0), sun = { beam: 340.5, mu: 0.25 };
+  const fields = fillAerosol(new Float32Array(8 * C), [0.12, 0.08, 0.06, 0.02, 0.65, 0.76, 2.2, 1.4]);
+  const flux = (options, sunlight) => {
+    const radiation = createRadiation(mesh, core, options);
+    radiation.setTime(0);
+    radiation.column(0, atmosphere.ps, theta, atmosphere.Ts, 3, undefined, sunlight);
+    return Float64Array.from(radiation.layerFlux);
+  };
+  const same = (a, b) => a.every((value, k) => value === b[k]);
+  for (const shortwave of ['layered', 'sequential']) {
+    const mac = { aerosol: 'mac', aerosolFields: fields, shortwave }, flat = { aerosol: 'flat', shortwave };
+    assert.ok(!same(flux(mac, sun), flux(flat, sun)), `${shortwave}: the climatology heats the column otherwise`);
+    assert.ok(same(flux(mac, { ...sun, aerosol: 'flat' }), flux(flat, sun)), `${shortwave}: the flag gives the flat column`);
+    assert.ok(same(flux(flat, sun), flux(flat, { ...sun, aerosol: 'flat' })), `${shortwave}: the flat aerosol stays`);
+  }
+  const profile = (options) => equilibriumProfile(createModel(new Grid(16), { ocean: false, ...options }), { days: 200 }), flat = profile({ radiation: { aerosol: 'flat' } });
+  for (const given of [{}, { physics: false }, { radiation: { shortwave: 'sequential' } }]) assert.ok(same(profile(given), flat), `the cold start of ${JSON.stringify(given)}`);
 });
 
 test('aerosol takes \'flat\' or \'mac\', \'mac\' is the default and needs the CLIRAD gases and no cloud-top shielding, and aerosolScale a factor of 0 or more', () => {
