@@ -391,8 +391,8 @@ function sourceFor(saved) {
  */
 function placeLand(model, saved, N) {
   if (!model.land) return;
-  if (saved && saved.land) model.land.load(saved.N === N ? saved.land : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }), model.state[6]);
-  else model.land.initialize();
+  if (saved && saved.land) model.land.load(saved.N === N ? saved.land : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }), model.state[6], saved.time);
+  else model.land.initialize(model.time);
 }
 
 let currentTopography = null;

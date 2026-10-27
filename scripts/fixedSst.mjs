@@ -83,7 +83,7 @@ function setSst(day) {
 const [changed, shift] = sst ? setSst(saved.day) : [0, 0];
 console.log(`${TAG}: day ${saved.day}, SST ${SST}${changed ? ` set on ${changed} open-sea cells, mean shift ${(shift / changed).toFixed(2)} K` : ''}, slab ${CAP.toExponential(0)} J/m²/K, ${DAYS} days`);
 model.load({ ocean: false });
-model.land.load(saved.land);
+model.land.load(saved.land, null, saved.time);
 mkdirSync(OUT, { recursive: true });
 const every = TEM_HOURS ? Math.round(TEM_HOURS * 3600 / dt) : Infinity, pressures = TEM_PRESSURES.map((p) => 100 * p), tem = temSums();
 const temCore = TEM_HOURS ? createSigmaCore(mesh, { levels }) : null, K = levels.length - 1, BANDS = 72;

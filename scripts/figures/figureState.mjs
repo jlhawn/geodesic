@@ -65,7 +65,7 @@ export async function gpuModelFrom(saved) {
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
-  model.land.load(saved.land);
+  model.land.load(saved.land, null, saved.time);
   return model;
 }
 
