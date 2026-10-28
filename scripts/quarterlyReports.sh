@@ -9,13 +9,14 @@
 # the five figures of scripts/figures/snapshot.sh per resolution, which sit
 # beside it; the tools' raw outputs stay under <REPORTS>/dayDDDD/parts, and a
 # part that failed is marked <name>.failed there and not retried (delete the
-# marker to retry). The figure dumps use the GPU: with GPU_QUEUE each one
-# waits its turn in that queue (scripts/gpuQueue.mjs run) in the background,
-# one dump at a time, while the passes go on with the parts; without it they
-# wait while another node script or a page server on port 8000 has it. A
-# report is rewritten whenever a part or figure lands. Loops every INTERVAL
-# seconds until every report up to UNTIL is complete; ONCE=1 makes a single
-# pass.
+# marker to retry). With GPU_QUEUE one resolution's figures at a time are
+# made in the background while the passes go on with the parts, the two
+# dumps that step the state on the GPU each waiting for it in that queue at
+# level 1 (scripts/gpuQueue.mjs share) and the rest running off it; without
+# it the figures wait while another node script or a page server on port
+# 8000 has the GPU. A report is rewritten whenever a part or figure lands.
+# Loops every INTERVAL seconds until every report up to UNTIL is complete;
+# ONCE=1 makes a single pass.
 #
 #   OUT=runs/thirteen DIR_128=runs/verda-thirteen UNTIL=1825 scripts/quarterlyReports.sh
 #
@@ -112,17 +113,12 @@ figures_missing() { # <N> <day>: 0 when a figure is still to be dumped
   local F; for F in $FIGURES; do [ -s "$(figure_png "$1" "$F" "$2")" ] || return 0; done; return 1
 }
 
-dump_figures() { # <N> <day>: one resolution's figures, through GPU_QUEUE when it is set
+dump_figures() { # <N> <day>: one resolution's figures, their GPU dumps through GPU_QUEUE when it is set
   local N=$1 D=$2 parts=$(parts_of "$2") F tmp start png aborts
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/quarterly-figures.XXXXXX"); start=$(date +%s)
-  if [ -n "$GPU_QUEUE" ]; then
-    log "$(tag_of "$D"): figures N=$N queued"
-    rm -f "$parts/figures$N.log"
-    "$NODE" "$GPU_QUEUE" run "$parts/figures$N.log" bash "$SNAPSHOT" "$(state_of "$N" "$D")" "$tmp" "$PREFIX N=$N, day $D" 2>> "$parts/figures$N.queue.err"
-  else
-    log "$(tag_of "$D"): figures N=$N"
+  log "$(tag_of "$D"): figures N=$N"
+  GPU_QUEUE=$GPU_QUEUE GPU_JOB="$PREFIX N=$N report figures" NODE=$NODE PYTHON=$PYTHON \
     bash "$SNAPSHOT" "$(state_of "$N" "$D")" "$tmp" "$PREFIX N=$N, day $D" > "$parts/figures$N.log" 2>&1
-  fi
   for F in $FIGURES; do
     png=$(ls "$tmp"/*_"$F"_day*.png 2> /dev/null | head -n 1)
     [ -n "$png" ] && mv "$png" "$(figure_png "$N" "$F" "$D")"
@@ -130,8 +126,8 @@ dump_figures() { # <N> <day>: one resolution's figures, through GPU_QUEUE when i
   done
   rm -rf "$tmp"
   if [ -n "$GPU_QUEUE" ]; then
-    aborts=$(grep -E '^aborted ' "$parts/figures$N.log" | tail -n 1 | cut -d' ' -f2)
-    log "$(tag_of "$D"): figures N=$N done $(( $(date +%s) - start )) s after queueing; GPU command-buffer aborts over the dump: ${aborts:-?}"
+    aborts=$(grep -E '^aborted ' "$parts/figures$N.log" | awk '{ if ($2 ~ /^[0-9]+$/) s += $2; else q = 1; n++ } END { print (n && !q) ? s : "?" }')
+    log "$(tag_of "$D"): figures N=$N done in $(( $(date +%s) - start )) s; GPU command-buffer aborts over its GPU dumps: $aborts"
   else
     aborts=$(/usr/bin/log show --last "$(( ($(date +%s) - start) / 60 + 2 ))m" --predicate 'eventMessage CONTAINS "aborted"' --style compact 2> /dev/null | grep 'aborted' | grep -vc 'com.apple.log')
     log "$(tag_of "$D"): figures N=$N done in $(( $(date +%s) - start )) s; 'aborted' lines in the system log over the dump: $aborts"
@@ -228,7 +224,7 @@ pass() { # 0 once every report up to UNTIL is complete
   [ "$complete" = 1 ]
 }
 
-log "reports of $PREFIX N=$NS under $REPORTS (states from$(for N in $NS; do printf ' %s' "$(dir_of "$N")"; done)), $PER_YEAR a year up to day $UNTIL${GPU_QUEUE:+, figures through $GPU_QUEUE}"
+log "reports of $PREFIX N=$NS under $REPORTS (states from$(for N in $NS; do printf ' %s' "$(dir_of "$N")"; done)), $PER_YEAR a year up to day $UNTIL${GPU_QUEUE:+, the GPU dumps of the figures through $GPU_QUEUE}"
 while :; do
   pass && { log "every report up to day $UNTIL is complete"; exit 0; }
   [ -n "$ONCE" ] && { wait; exit 0; }
