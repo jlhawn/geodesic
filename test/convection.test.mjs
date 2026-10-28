@@ -1693,6 +1693,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1 });
   await parity({ cumulusAscent: 'kinetic', cumulusSource: 'lowest', cumulusRain: 5e-4 });
   await parity({ stratocumulusInversion: 2 });
+  await parity({ stratocumulusInversion: -1e3 });
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
@@ -1756,31 +1757,52 @@ test("a cumulusAscent other than 'buoyant' or 'kinetic', the kinetic ascent with
   for (const options of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), /cumulusAscent|cumulusEntrainmentHeight/, `GPU: ${JSON.stringify(options)}`);
 });
 
-test("stratocumulusInversion shuts both plumes where the column's estimated inversion strength exceeds it: under a threshold below every column's EIS no plume runs, above every one the step is the default's, and at 2 K every column whose plume still runs steps as by default", () => {
-  const step = (options) => {
-    const model = build(options), C = model.mesh.nCells;
+test("stratocumulusInversion shuts the shallow plume, never the deep one, where the boundary layer reaches the lowest layer's LCL and the column's estimated inversion strength exceeds it: above every column's EIS the step is the default's; below every one, or at 2 K, every deep plume runs as by default and every column whose shallow plume runs steps as by default; and below every one with every boundary layer under its lowest layer's midpoint the step is the default's; all of it on a sea-level world and on one raised 1500 m", () => {
+  const step = (options, { below = false, topography = null } = {}) => {
+    const model = createModel(new Grid(16), { ocean: false, levels, moist: options, topography }), C = model.mesh.nCells, { deep } = model.moist, deepFlux = new Float64Array(C), deepTop = new Int32Array(C);
     randomColumns(model);
-    model.phases.adjust(0, C, 900);
-    return { C, flux: Float64Array.from(model.moist.cumulusBaseFlux), rain: Float64Array.from(model.moist.convectivePrecipitation), state: model.state.map((a) => Float64Array.from(a)) };
+    if (below) {
+      const [pi, theta, , , q, qc] = model.state, { geopotential, g, K } = model.core.diagnostics;
+      for (let i = 0; i < C; i++) { model.core.diagnoseColumn(i, pi, theta, q, qc); model.boundaryLayer.depth[i] = geopotential[(K - 1) * C + i] / g - 1; }
+    }
+    for (let i = 0; i < C; i++) {
+      deep.deep = false;
+      model.phases.adjust(i, i + 1, 900);
+      deepFlux[i] = deep.deep ? deep.baseFlux : 0; deepTop[i] = deep.deep ? deep.top : -1;
+    }
+    const flux = Float64Array.from(model.moist.cumulusBaseFlux);
+    return { C, deepFlux, deepTop, flux, shallow: flux.map((f, i) => f - deepFlux[i]), rain: Float64Array.from(model.moist.convectivePrecipitation), state: model.state.map((a) => Float64Array.from(a)) };
   };
-  const base = step({ stratocumulusInversion: null }), none = step({ stratocumulusInversion: -1e3 }), every = step({ stratocumulusInversion: 1e3 }), capped = step({ stratocumulusInversion: 2 }), C = base.C;
-  const plumes = (run) => run.flux.reduce((n, flux) => n + (flux > 0 ? 1 : 0), 0);
-  let shut = 0, kept = 0;
-  for (let i = 0; i < C; i++) {
-    if (base.flux[i] > 0 && !(capped.flux[i] > 0)) shut++;
-    if (!(capped.flux[i] > 0)) continue;
-    kept++;
-    assert.equal(capped.flux[i], base.flux[i], `column ${i}'s base flux`);
-    assert.equal(capped.rain[i], base.rain[i], `column ${i}'s convective rain`);
-    capped.state.forEach((field, n) => { if (n !== 2 && field.length % C === 0) for (let x = i; x < field.length; x += C) assert.equal(field[x], base.state[n][x], `column ${i}, field ${n}`); });
-  }
-  console.log(`${C} random columns: ${plumes(base)} plumes by default, ${plumes(none)} under a threshold of -1000 K, ${plumes(every)} under 1000 K; at 2 K ${shut} shut and ${kept} kept`);
-  assert.ok(plumes(base) > C / 10, `${plumes(base)} plumes by default`);
-  assert.equal(plumes(none), 0);
-  assert.ok(none.rain.every((rain) => rain === 0), 'convective rain under the lowest threshold');
+  const same = (run, base, i, label) => {
+    assert.equal(run.flux[i], base.flux[i], `${label}: column ${i}'s base flux`);
+    assert.equal(run.rain[i], base.rain[i], `${label}: column ${i}'s convective rain`);
+    run.state.forEach((field, n) => { if (n !== 2 && field.length % run.C === 0) for (let x = i; x < field.length; x += run.C) assert.equal(field[x], base.state[n][x], `${label}: column ${i}, field ${n}`); });
+  };
+  const RAISED = syntheticTopography(90, 180, () => 1500);
+  const base = step({ stratocumulusInversion: null }), every = step({ stratocumulusInversion: 1e3 }), C = base.C;
   assert.deepEqual(every.flux, base.flux);
   for (const [n, field] of every.state.entries()) assert.deepEqual(field, base.state[n], `field ${n} under the highest threshold`);
-  assert.ok(shut > C / 40 && kept > C / 20, `${shut} shut, ${kept} kept at 2 K`);
+  const plumes = (values) => values.reduce((n, x) => n + (x > 0 ? 1 : 0), 0), counts = [];
+  const raised = step({ stratocumulusInversion: null }, { topography: RAISED });
+  for (const [label, threshold, world, control] of [['-1000 K', -1e3, null, base], ['2 K', 2, null, base], ['-1000 K, 1500 m up', -1e3, RAISED, raised]]) {
+    const run = step({ stratocumulusInversion: threshold }, { topography: world });
+    assert.deepEqual(run.deepFlux, control.deepFlux, `the deep base flux under ${label}`);
+    assert.deepEqual(run.deepTop, control.deepTop, `the deep plume's top under ${label}`);
+    let shut = 0;
+    for (let i = 0; i < C; i++) {
+      if (run.shallow[i] === control.shallow[i]) same(run, control, i, label);
+      else { assert.equal(run.shallow[i], 0, `${label}: column ${i}'s shallow flux`); shut++; }
+    }
+    counts.push([label, shut, plumes(run.shallow), world ? C / 100 : C / 40]);
+  }
+  const low = step({ stratocumulusInversion: null }, { below: true }), lowShut = step({ stratocumulusInversion: -1e3 }, { below: true });
+  for (let i = 0; i < C; i++) same(lowShut, low, i, 'below every LCL');
+  const raisedLow = step({ stratocumulusInversion: null }, { below: true, topography: RAISED }), raisedLowShut = step({ stratocumulusInversion: -1e3 }, { below: true, topography: RAISED });
+  for (let i = 0; i < C; i++) same(raisedLowShut, raisedLow, i, 'below every LCL, 1500 m up');
+  console.log(`${C} random columns: ${plumes(base.deepFlux)} deep and ${plumes(base.shallow)} shallow plumes by default; ${counts.map(([label, shut, kept]) => `under ${label} ${shut} shallow plumes shut and ${kept} kept`).join('; ')}; ${plumes(low.shallow)} shallow plumes with every boundary layer under its lowest layer's midpoint, ${plumes(raisedLow.shallow)} 1500 m up`);
+  assert.ok(plumes(base.deepFlux) > C / 40 && plumes(base.shallow) > C / 10, 'deep and shallow plumes by default');
+  for (const [label, shut, kept, least] of counts) assert.ok(shut > least && kept > least, `${shut} shut, ${kept} kept under ${label}`);
+  assert.ok(plumes(low.shallow) > C / 40 && plumes(raisedLow.shallow) > C / 40, "shallow plumes with every boundary layer under its lowest layer's midpoint");
 });
 
 test('a stratocumulusInversion other than null or a finite EIS is refused on both engines', async () => {
