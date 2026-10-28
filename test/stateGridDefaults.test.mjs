@@ -2,25 +2,28 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createOcean } from '../js/ocean/layered.module.js';
-import { createGeography, topographyFromInt16 } from '../js/geography.module.js';
+import { createGeography, stateGeography } from '../js/geography.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 import { stateGrid, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
 import { DEFAULT_RUNS } from '../js/defaultRun.module.js';
 
 const runs = new URL('../runs/', import.meta.url);
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const readParts = async (manifest) => decodeState(Buffer.concat(JSON.parse(readFileSync(new URL(manifest, runs))).parts.map(({ file }) => readFileSync(new URL(file, runs)))));
 
 for (const N of [64, 128]) {
   const manifest = DEFAULT_RUNS[N].replace(/^runs\//, '');
-  test(`the N=${N} default, ${manifest}, loads on the grid it was made on with no cell off its coast, and without a grid header its coast finds that grid`, async () => {
+  test(`the N=${N} default, ${manifest}, loads on the grid it was made on with no cell off its coast, and on the raster mask without a grid header its coast finds that grid`, async () => {
     const saved = await readParts(manifest);
-    const found = stateGrid(saved, topography);
-    assert.equal(maskMismatches(savedDryColumns(saved), createGeography(found.mesh, topography).land), 0);
-    const bare = stateGrid({ ...saved, grid: undefined }, topography);
-    assert.deepEqual({ relax: bare.relax, source: bare.source, mismatches: bare.mismatches }, { relax: found.relax, source: 'mask', mismatches: 0 });
+    const { topography, geography } = stateGeography(saved);
+    const found = stateGrid(saved, topography, { geography });
+    const made = createGeography(found.mesh, topography, geography), water = made.ocean ?? made;
+    assert.equal(maskMismatches(savedDryColumns(saved), Uint8Array.from(water.land, (land, i) => land || made.lake?.[i] || 0)), 0);
+    if (!geography.mask) {
+      const bare = stateGrid({ ...saved, grid: undefined }, topography, { geography });
+      assert.deepEqual({ relax: bare.relax, source: bare.source, mismatches: bare.mismatches }, { relax: found.relax, source: 'mask', mismatches: 0 });
+    }
     if (saved.N > 64) return;
-    const ocean = createOcean(found.mesh, { geography: createGeography(found.mesh, topography) });
+    const ocean = createOcean(found.mesh, { geography: made });
     const surfaceT = Float64Array.from(saved.surfaceT), ice = Float64Array.from(saved.ice);
     ocean.load(saved.ocean, surfaceT, ice, Float64Array.from(saved.concentration));
     const C = found.mesh.nCells, L = ocean.layers, Ls = saved.ocean.h.length / C;
