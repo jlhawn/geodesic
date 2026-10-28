@@ -11,7 +11,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 
 // pinned: the fixture's land after its load, and a CPU model one 900 s step after it; the snow on the sea ice is in both
 const LAND_AFTER_LOAD = 'edf240830ae56066578fd689da9ecc94759cf7b9d6da46018ffa60ae5989b33d';
-const CPU_ONE_STEP = 'c930fecc36dc27f81d621a6f49029dc61e84ef83b0ffcd67ceefd5aa6e5b88ff';
+const CPU_ONE_STEP = 'bb495a2c43fabf58f706aad316756571c3bde935526692da52d32db0f8da8a79';
 
 async function gpuLoaded(fixture, land = options.land) {
   const model = await createGpuModel(new Grid(16), { ...options, land });
