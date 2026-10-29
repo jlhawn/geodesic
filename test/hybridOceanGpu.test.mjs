@@ -8,6 +8,7 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 import { HYBRID_LAYERS, labelBoundaries } from '../js/ocean/column.module.js';
 import { SEAWATER, seawaterDensity, salinityForDensity } from '../js/ocean/seawater.module.js';
+import { zonalWindOnEdges } from './helpers/layered.mjs';
 
 /*
  * The GPU hybrid ocean (vertical: 'hybrid' in js/gpu/layeredOcean.gpu.js)
@@ -139,6 +140,40 @@ async function tracking(options) {
 const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
 test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
 test(`${TRACKING}, with coriolis cd`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(CD));
+test('the GPU regrid adds the shift that keeps each edge\'s transport to v as well, so a depth-uniform flow keeps v equal to R(u) through it, with coriolis cd', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice } = scenario(N, CD), C = mesh.nCells, E = mesh.nEdges;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: CD });
+  const gpu = gpuModel.oceanEngine;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  gpu.initialize(Float64Array.from(surfaceT), ice);
+  const flow = zonalWindOnEdges(mesh, (lat) => 3 * Math.cos(lat)), reconstructed = new Float64Array(E);
+  const results = [];
+  for (const warmed of [false, true]) {
+    const saved = cpu.serialize(), Q = Float64Array.from(cpu.Q);
+    for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) saved.u[k * E + e] = cpu.edgeOcean[e] ? flow[e] : 0;
+    if (warmed) for (let k = 20; k < 40; k++) for (let i = 0; i < C; i += 2) Q[k * C + i] += cpu.h[k * C + i];
+    await gpu.upload({ ...saved, Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
+    gpu.readSurface(Float64Array.from(surfaceT), ice);
+    gpu.phases.regrid(DT);
+    const after = await gpu.download();
+    let moved = 0, misfit = 0, off = 0;
+    for (let k = 0; k < cpu.layers; k++) {
+      cpu.reconstruct(Float64Array.from(after.u), k * E, reconstructed);
+      for (let e = 0; e < E; e++) {
+        if (!cpu.edgeOcean[e]) continue;
+        const gap = Math.abs(after.v[k * E + e] - reconstructed[e]);
+        moved = Math.max(moved, Math.abs(after.u[k * E + e] - flow[e]));
+        misfit = Math.max(misfit, gap);
+        if (gap > 1e-3) off++;
+      }
+    }
+    console.log(`GPU regrid with coriolis cd${warmed ? ', warmed' : ''}: the shift moved u by up to ${moved.toExponential(2)} m/s, v - R(u) is ${misfit.toExponential(2)} m/s at most, over 1e-3 at ${off} edge layers`);
+    results.push({ moved, misfit });
+  }
+  assert.ok(results[1].moved > 1e-3, `the regrid moved the transport by ${results[1].moved} m/s`);
+  assert.ok(results[1].misfit < 0.05 * results[1].moved, `v is ${results[1].misfit} m/s from R(u) after a shift of ${results[1].moved} m/s`);
+  gpuModel.destroy();
+});
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
 test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
 test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));

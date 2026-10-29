@@ -215,7 +215,7 @@ function hybridKernels(o, K, idx) {
 ` : '';
   const stateThickness = (c) => `IN[hOff(k) + ${c}]`, targetThickness = (c) => `OD[O_TARGET + (k + 1) * C + ${c}] - OD[O_TARGET + k * C + ${c}]`;
   const keepFlow = (thickness, before) => `  var keptAfter = 0.0; var keptDepth = 0.0;
-${edgeFlow(thickness, 'keptAfter += he * IN[uOff(k) + e]; keptDepth += he;')}  if (keptDepth > EPSO) { let shift = (${before} - keptAfter) / keptDepth; for (var k = 0; k < L; k++) { IN[uOff(k) + e] += shift; } }
+${edgeFlow(thickness, 'keptAfter += he * IN[uOff(k) + e]; keptDepth += he;')}  if (keptDepth > EPSO) { let shift = (${before} - keptAfter) / keptDepth; for (var k = 0; k < L; k++) { IN[uOff(k) + e] += shift; }${o.cd ? ' OD[O_CDSHIFT + e] = shift;' : ''} }
 `;
   const cellVector = (field) => `vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
@@ -261,7 +261,7 @@ ${edgeFlow(thickness, 'keptAfter += he * IN[uOff(k) + e]; keptDepth += he;')}  i
         hn = 0.5 * (taH - taL + tbH - tbL); znHi = znLo + hn; acc = 0.0; }
 `;
       return `${K}  let e = ${idx}; if (e >= E) { return; }
-  if (OD[O_EMASK + e] < 0.5) { return; }
+${keep && o.cd ? '  OD[O_CDSHIFT + e] = 0.0;\n' : ''}  if (OD[O_EMASK + e] < 0.5) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
 ${keep ? `${sillTop}  var keptBefore = 0.0;
 ${edgeFlow(stateThickness, `keptBefore += he * IN[${off}(k) + e];`)}` : ''}  var hm1 = 0.0; var um1 = 0.0; var h0 = 0.0; var u0 = 0.0; var h1 = 0.0; var u1 = 0.0;
@@ -305,7 +305,7 @@ ${flush('true')}  }
 ${keep ? keepFlow(targetThickness, 'keptBefore') : ''}}`;
   };
   const columnEdgesKernel = (off, keep) => `${K}  let e = ${idx}; if (e >= E) { return; }
-  if (OD[O_EMASK + e] < 0.5) { return; }
+${keep && o.cd ? '  OD[O_CDSHIFT + e] = 0.0;\n' : ''}  if (OD[O_EMASK + e] < 0.5) { return; }
   ${declareArrays(['SQ', 'SG'])}
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1]; let dt = P[0];
 ${keep ? `${sillTop}  var keptBefore = 0.0;
@@ -817,6 +817,14 @@ fn transmitted(z: f32) -> f32 { let d = min(z, PENDEPTH); return JER_R1 * exp(-d
 ${hybridHead(o)}${o.drift ? iceDriftHead(o.drift) : ''}`;
   const idx = `(i32(id.x) + i32(id.y) * 4194240)`;
   const K = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n`;
+  // Adds R(CDSHIFT), the shift the u kernel dispatched just before added to every layer of an edge, to every layer of v; only the barotropic shift limits u, so only oCdShift limits v.
+  const cdFollowShift = (limited) => `${K}  let e = ${idx}; if (e >= E) { return; }
+  if (OD[O_EMASK + e] < 0.5) { return; }
+  var change = 0.0;
+  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; change += MF[F_PVW + slot] * OD[O_CDSHIFT + MI[EOE + slot]]; }
+  change = change / MF[F_DC + e];
+  for (var k = 0; k < L; k++) { let n = vOff(k) + e; IN[n] = ${limited ? 'clamp(IN[n] + change, -SPEEDLIM, SPEEDLIM)' : 'IN[n] + change'}; }
+}`;
   const eddyShared = `${constLine('EDDYSLACK', EDDY_SLACK)}
 fn eddyAllowance(k: i32, i: i32) -> f32 {
   return (max(0.0, IN[hOff(k) + i] - EPSO) + EDDYSLACK) * MF[F_AREA + i] / (f32(MI[NEC + i]) * P[0]);
@@ -1168,14 +1176,8 @@ ${K}  let i = ${idx}; if (i >= C) { return; }
   for (var k = 0; k < L; k++) { let n = uOff(k) + e; IN[n] = clamp(IN[n] + shift, -SPEEDLIM, SPEEDLIM); }
 }`,
     ...(o.cd ? {
-      // oCdShift: R(shift) added to every layer of v where oVelocityShiftClamp added the shift to u.
-      oCdShift: `${K}  let e = ${idx}; if (e >= E) { return; }
-  if (OD[O_EMASK + e] < 0.5) { return; }
-  var change = 0.0;
-  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; change += MF[F_PVW + slot] * OD[O_CDSHIFT + MI[EOE + slot]]; }
-  change = change / MF[F_DC + e];
-  for (var k = 0; k < L; k++) { let n = vOff(k) + e; IN[n] = clamp(IN[n] + change, -SPEEDLIM, SPEEDLIM); }
-}`,
+      oCdShift: cdFollowShift(true),
+      oCdKeep: cdFollowShift(false),
     } : {}),
     oGatherSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   let gi = gcell(i);
@@ -1389,7 +1391,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   if (o.langmuirScheme === 'rescale' && o.mstarScheme !== 'rh18') throw new Error("langmuirScheme 'rescale' multiplies the m* of mstarScheme 'rh18'");
   const given = !!o.iceDrift && typeof o.iceDrift === 'object' && o.iceDrift.airStress === 'given';
   const driftOptions = o.iceDrift ? iceDriftOptions(typeof o.iceDrift === 'object' ? Object.fromEntries(Object.entries(o.iceDrift).filter(([name]) => name !== 'airStress')) : o.iceDrift) : null;
-  const third = o.tracerAdvection === 'third', cd = o.coriolis === 'cd';
+  const third = o.tracerAdvection === 'third', cd = o.coriolis === 'cd', cdKeep = cd && o.edgeTransport === 'kept';
   if (third && !(o.shearDiffusivity > 0)) throw new Error('tracerAdvection third needs shearDiffusivity above zero');
   if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
   if (o.langmuir !== 0 && !(o.langmuir >= 1)) throw new Error(`langmuir caps a factor of at least 1, so it is 0 or at least 1, not ${o.langmuir}`);
@@ -1761,6 +1763,7 @@ ${core.fieldConstants}
       dispatch(pass, 'oRegridTargets', g, nC);
       dispatch(pass, 'oRegridEdges', g, nE);
       if (cd) dispatch(pass, 'oRegridEdgesV', g, nE);
+      if (cdKeep) dispatch(pass, 'oCdKeep', g, nE);
       dispatch(pass, 'oRegridCells', g, nC);
     });
     edgesCurrent = false;
@@ -1772,6 +1775,7 @@ ${core.fieldConstants}
       dispatch(pass, 'oColumnCells', g, nC);
       dispatch(pass, 'oColumnEdges', g, nE);
       if (cd) dispatch(pass, 'oColumnEdgesV', g, nE);
+      if (cdKeep) dispatch(pass, 'oCdKeep', g, nE);
     });
   }
 

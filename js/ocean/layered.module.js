@@ -544,7 +544,7 @@ export function createOcean(mesh, {
   const shared = (name, n) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * n));
   const h = shared('h', L * C), u = shared('u', L * E), Q = shared('Q', L * C), W = shared('W', L * C);
   const state = [h, u, Q, W];
-  const cd = coriolis === 'cd', cdRate = 1 / cdTau, cdV = cd ? shared('v', L * E) : null, cdShift = cd ? shared('cdShift', E) : null;
+  const cd = coriolis === 'cd', cdKeep = cd && edgeTransport === 'kept', cdRate = 1 / cdTau, cdV = cd ? shared('v', L * E) : null, cdShift = cd ? shared('cdShift', E) : null;
   if (cd) state.push(cdV);
   const eta = shared('eta', C);
   const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = shared('rhoMl', C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), iceVolume = new Float64Array(C), previousVolume = new Float64Array(C);
@@ -634,6 +634,7 @@ export function createOcean(mesh, {
     if (!(flowDepth > EPS)) return;
     const shift = (before - after) / flowDepth;
     for (let k = 0; k < L; k++) u[ae(k, e)] += shift;
+    if (cdKeep) cdShift[e] = shift;
   }
   const stateThickness = (k, i) => h[at(k, i)], targetThickness = (k, i) => targetZ[(k + 1) * C + i] - targetZ[k * C + i];
   function freeSurface() {
@@ -949,17 +950,18 @@ export function createOcean(mesh, {
       if (clamped) Atomics.add(counts, 1, 1);
     }
   }
+  function followShift(clamp) {
+    reconstruct(cdShift, 0, cdRu);
+    for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) {
+      if (!edgeOcean[e]) continue;
+      const n = ae(k, e), v = cdV[n] + cdRu[e];
+      cdV[n] = clamp && Math.abs(v) > SPEED_LIMIT ? Math.sign(v) * SPEED_LIMIT : v;
+    }
+  }
   function shiftVelocities() {
     Atomics.store(counts, 1, 0);
     if (columnRunner) columnRunner('shift'); else shiftEdges(0, E);
-    if (cd) {
-      reconstruct(cdShift, 0, cdRu);
-      for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) {
-        if (!edgeOcean[e]) continue;
-        const n = ae(k, e), v = cdV[n] + cdRu[e];
-        cdV[n] = Math.abs(v) > SPEED_LIMIT ? Math.sign(v) * SPEED_LIMIT : v;
-      }
-    }
+    if (cd) followShift(true);
     limited = Atomics.load(counts, 1);
   }
   function step(dt) {
@@ -1141,6 +1143,7 @@ export function createOcean(mesh, {
   function regridEdges(from, to) {
     const { amount, hOld, hEdgeNew, uCol } = cols, kept = edgeTransport === 'kept';
     for (let e = from; e < to; e++) {
+      if (cdKeep) cdShift[e] = 0;
       if (!edgeOcean[e]) continue;
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
       for (let k = 0; k < L; k++) {
@@ -1173,9 +1176,10 @@ export function createOcean(mesh, {
   }
   function regrid(dt) {
     params[2] = regridTime > 0 && Number.isFinite(dt) ? Math.min(1, dt / regridTime) : 1;
-    if (columnRunner) { columnRunner('targets'); columnRunner('uremap'); columnRunner('remap'); return; }
+    if (columnRunner) { columnRunner('targets'); columnRunner('uremap'); if (cdKeep) followShift(false); columnRunner('remap'); return; }
     regridTargets(0, C);
     regridEdges(0, E);
+    if (cdKeep) followShift(false);
     regridCells(0, C);
   }
   function cellVectorAt(k, i, out, o) {
@@ -1237,6 +1241,7 @@ export function createOcean(mesh, {
   function columnEdges(from, to) {
     const dt = params[1], { hOld, uCol, nuEdge } = cols, kept = edgeTransport === 'kept';
     for (let e = from; e < to; e++) {
+      if (cdKeep) cdShift[e] = 0;
       if (!edgeOcean[e]) continue;
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
       for (let k = 0; k < L; k++) { hOld[k] = 0.5 * (h[at(k, a)] + h[at(k, b)]); nuEdge[k] = 0.5 * (viscosity[at(k, a)] + viscosity[at(k, b)]); uCol[k] = u[ae(k, e)]; }
@@ -1252,9 +1257,10 @@ export function createOcean(mesh, {
   }
   function columnPhysics(dt) {
     params[1] = dt;
-    if (columnRunner) { columnRunner('column'); columnRunner('usolve'); return; }
+    if (columnRunner) { columnRunner('column'); columnRunner('usolve'); if (cdKeep) followShift(false); return; }
     columnCells(0, C);
     columnEdges(0, E);
+    if (cdKeep) followShift(false);
   }
 
   function setStress(total, ice, concentration = null) {

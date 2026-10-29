@@ -81,6 +81,29 @@ test('with coriolis cd the hybrid ocean conserves water, heat and salt to roundi
   assert.ok(misfit < 0.1, `v is ${misfit} of u away from R(u)`);
 });
 
+test('under coriolis cd the regrid adds the shift that keeps each edge\'s transport to v as well, so a depth-uniform flow keeps v equal to R(u) through it', () => {
+  const { mesh, ocean, surfaceT, ice, flux } = hybridOcean({ coriolis: 'cd' });
+  const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
+  for (let n = 0; n < 6; n++) ocean.advance(surfaceT, ice, flux, wind, DT);
+  const flow = zonalWindOnEdges(mesh, (lat) => 3 * Math.cos(lat)), reconstructed = new Float64Array(E);
+  ocean.reconstruct(flow, 0, reconstructed);
+  for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < E; e++) { ocean.u[k * E + e] = ocean.edgeOcean[e] ? flow[e] : 0; ocean.v[k * E + e] = reconstructed[e]; }
+  for (let k = 20; k < 40; k++) for (let i = 0; i < C; i += 2) ocean.Q[k * C + i] += ocean.h[k * C + i];
+  ocean.phases.regrid(Infinity);
+  let moved = 0, misfit = 0;
+  for (let k = 0; k < ocean.layers; k++) {
+    ocean.reconstruct(ocean.u, k * E, reconstructed);
+    for (let e = 0; e < E; e++) {
+      if (!ocean.edgeOcean[e]) continue;
+      moved = Math.max(moved, Math.abs(ocean.u[k * E + e] - flow[e]));
+      misfit = Math.max(misfit, Math.abs(ocean.v[k * E + e] - reconstructed[e]));
+    }
+  }
+  console.log(`coriolis cd regrid: the shift moved u by up to ${moved.toExponential(2)} m/s, v - R(u) is ${misfit.toExponential(2)} m/s`);
+  assert.ok(moved > 1e-4, `the regrid moved the transport by ${moved} m/s`);
+  assert.ok(misfit < 1e-10 * Math.max(moved, 1), `v is ${misfit} m/s from R(u)`);
+});
+
 test('coriolis cd is recorded in the saved ocean, an unknown scheme or a relaxation time that is not positive is refused, and a load starts v as the reconstruction of u', () => {
   const { mesh, ocean, surfaceT, ice, flux } = hybridOcean({ coriolis: 'cd', cdTau: 1e5 });
   const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
