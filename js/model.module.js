@@ -312,6 +312,7 @@ export function createModel(gridOrMesh, {
   };
 
   model.oceanFields = (depth = 0, upwellingDepth = depth) => (ocean ? ocean.fields(depth, upwellingDepth) : null);
+  model.foldUpwelling = (time = model.time) => { if (ocean) ocean.foldUpwelling(time); };
   model.dragsDue = () => dragStep.fill(-1);
   model.cloudWater = (i) => moistPhysics.columnWater(state[0], state[5], i) + moistPhysics.cumulusCloudPath(state[0], i) + radiation.stratusFraction[i] * radiation.stratus[i];
   model.cloudParts = (i) => {

@@ -8,6 +8,7 @@ import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval } fro
 import { iceDriftOptions, iceDriftPasses, ICE_REMNANT } from '../ocean/iceDrift.module.js';
 import { iceDriftHead, iceDriftKernels, driftStressKernel, driftSections } from './iceDrift.gpu.js';
 import { basalMeltWgsl, baseFreezing, SHELF_MELT } from '../ocean/iceShelfMelt.module.js';
+import { UPWELLING_FAST, UPWELLING_SLOW, UPWELLING_FAST_DEPTH, UPWELLING_SLOW_DEPTH } from '../frames.module.js';
 
 const waveFactor = (o) => (o.langmuirIce === 'tanh' ? 'select(1.0, 1.0 + (langmuirFactor(ustar, max(depth, 1.0)) - 1.0) * waves, ustar > 0.0)' : 'select(1.0, langmuirFactor(ustar, max(depth, 1.0)), ustar > 0.0 && waves)');
 const rescaleFactor = (o) => (o.langmuirIce === 'tanh' ? 'select(1.0, min(LTCAP, 1.0 + waves * LTCOEF * pow(langmuirInverse(ustar, max(depth, 1.0)), LTPOW)), ustar > 0.0)' : 'select(1.0, min(LTCAP, 1.0 + LTCOEF * pow(langmuirInverse(ustar, max(depth, 1.0)), LTPOW)), ustar > 0.0 && waves)');
@@ -736,6 +737,7 @@ ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundVisc
 ${constLine('TIDE2', o.tidalSpeed * o.tidalSpeed)} ${constLine('FRESHRHO', SHELF_MELT.freshDensity)} ${constLine('MELTLAYER', o.shelfMeltLayer)}
 ${basalMeltWgsl({ rho0: o.density, rhoCp: o.density * o.specificHeat, latentHeat: o.latentHeatFusion, heatTransfer: o.shelfHeatTransfer, saltTransfer: o.shelfSaltTransfer })}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('TREF', HEAT_REFERENCE)} ${constLine('SREF', SALT_REFERENCE)} ${constLine('GUSTO', o.gustiness)}
+${constLine('UPWFAST', UPWELLING_FAST)} ${constLine('UPWSLOW', UPWELLING_SLOW)} ${constLine('UPWFASTDEPTH', UPWELLING_FAST_DEPTH)} ${constLine('UPWSLOWDEPTH', UPWELLING_SLOW_DEPTH)}
 ${constLine('JER_R1', jerlov[0])} ${constLine('JER_R2', 1 - jerlov[0])} ${constLine('JER_Z1', jerlov[1])} ${constLine('JER_Z2', jerlov[2])} ${constLine('PENDEPTH', PENETRATION_DEPTH)} ${constLine('JER_FLOOR', jerlov[0] * Math.exp(-PENETRATION_DEPTH / jerlov[1]) + (1 - jerlov[0]) * Math.exp(-PENETRATION_DEPTH / jerlov[2]))}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
 @group(0) @binding(1) var<storage, read_write> MF: array<f32>;
@@ -1353,6 +1355,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const inertialLimit = inertialStepLimit(mesh);
   const salinityProfile = o.salinityProfile || defaultSalinityProfile;
   let seaCover = null;
+  let upwellingFolds = 0, upwellingTime = NaN, upwellingSteps = 0, upwellingSeen = 0;
 
   const OS = seq([['OH', L * C], ['OU', L * E], ['OQ', L * C], ['OW', L * C]]);
   const outlet = runoffOutlets(mesh, geography);
@@ -1376,7 +1379,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    * and PHI from oKineticPhi, dispatched just before oMomentum, to
    * oMomentum share another. After the combine the eddy passes leave
    * their fluxes in EDDYV, EDDYQ and EDDYW over FLUX, HEDGE and QE, which
-   * oEdgeThickness and every tendency recompute before reading them.
+   * oEdgeThickness and every tendency recompute before reading them. UPWM,
+   * the upwelling memory that oFoldUpwelling keeps between frames, shares
+   * its slot with nothing.
    */
   const OD = seq([
     [['FLUX', 'LAPA', 'LAPB', 'EDDYV', 'TARGET', 'VISC'], L * E],
@@ -1387,7 +1392,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
     ['RUNOFFSEEN', C], ['DISCHARGESEEN', C], ['CALVED', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
     ['EDDYK', E],
-    ['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C], ['SILL', E], ['SHELF', C], ['DRAFT', C], ['LOAD', C], ['LOADT', C], ['LOADS', C], ['LIQUIDUS', C], ['MELT', C], ['MELTSUM', C], ['DRAW', C], ['POOLS', 12],
+    ['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C], ['SILL', E], ['SHELF', C], ['DRAFT', C], ['LOAD', C], ['LOADT', C], ['LOADS', C], ['LIQUIDUS', C], ['MELT', C], ['MELTSUM', C], ['DRAW', C], ['POOLS', 12], ['UPWM', L * C],
     ...(third ? [['BEY', 2 * E], ['BED', 2 * E]] : []),
     ...(driftOptions ? driftSections(C, E) : []),
     ...(restrat ? [['MLED', C], ['MLEH', C], ['MLEB', C], ['MLEU', C], ['MLESCALE', E]] : []),
@@ -1423,24 +1428,50 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     return;
   }
   OUT[${OF.SST} + i] = IN[qOff(layer) + i] / max(EPSO, IN[hOff(layer) + i]) + TREF;
-  var w = vec3<f32>(0.0, 0.0, 0.0); var upwelling = 0.0;
+  var w = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m]; let s = f32(MI[ESC + MAXE * i + m]);
     w += abs(s) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * IN[uOff(layer) + e] * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
-    let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-    var above = 0.0; var transport = 0.0;
-    for (var k = 0; k < L; k++) {
-      if (above >= upwellingDepth) { break; }
-      let he = 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b]);
-      transport += IN[uOff(k) + e] * min(he, upwellingDepth - above);
-      above += he;
-    }
-    upwelling += s * MF[F_DV + e] * transport;
   }
   w = w / MF[F_AREA + i];
   OUT[${OF.CUR} + 3 * i] = w.x; OUT[${OF.CUR} + 3 * i + 1] = w.y; OUT[${OF.CUR} + 3 * i + 2] = w.z;
   OUT[${OF.CSPD} + i] = length(w);
-  OUT[${OF.UPW} + i] = upwelling / MF[F_AREA + i];
+  var layerTop = 0.0; var memoryTop = 0.0; var found = false; var upwelling = 0.0;
+  for (var k = 0; k < L; k++) {
+    let hk = IN[hOff(k) + i]; let memory = OD[O_UPWM + k * C + i];
+    if (!found && upwellingDepth < layerTop + hk) { upwelling = memoryTop + (upwellingDepth - layerTop) / hk * (memory - memoryTop); found = true; }
+    layerTop += hk; memoryTop = memory;
+  }
+  OUT[${OF.UPW} + i] = select(memoryTop, upwelling, found);
+}`;
+  /*
+   * oFoldUpwelling: every sea cell's upward velocity at the base of each
+   * layer, the running sum of the layers' outflow through its edges over its
+   * area, from the mass flux of oEdgeFluxPV, folded into UPWM as
+   * M ← M + α·(W − M) with α the larger of 1 − exp(−Δt / timescale at the
+   * depth of the layer's base) and 1 / (folds + 1); P[6] is Δt and P[7]
+   * the folds already in the memory, and the memory is replaced when P[7]
+   * is 0. The cell's edges are unrolled into one set of scalars each, the
+   * layers swept once from the top with the sums carried in scalars.
+   */
+  const slots = Array.from({ length: mesh.maxEdges }, (_, m) => m);
+  kernels.oFoldUpwelling = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  if (OD[O_CMASK + i] < 0.5) { return; }
+${slots.map((m) => `  let e${m} = MI[EOC + MAXE * i + ${m}]; let a${m} = MI[COE + 2 * e${m}]; let b${m} = MI[COE + 2 * e${m} + 1];
+  let width${m} = f32(MI[ESC + MAXE * i + ${m}]) * MF[F_DV + e${m}]; let wet${m} = e${m} >= 0 && OD[O_EMASK + e${m}] > 0.5;
+  let sill${m} = max(EPSO, OD[O_SILL + e${m}] + 0.5 * (OD[O_ETA + a${m}] + OD[O_ETA + b${m}])); var above${m} = 0.0;`).join('\n')}
+  let area = MF[F_AREA + i]; let dt = P[6]; let folds = P[7];
+  var outflow = 0.0; var base = 0.0;
+  for (var k = 0; k < L; k++) {
+${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b${m}]; let hk = select(min(ha, hb), 0.5 * (ha + hb), k == 0); let he = min(hk, max(0.0, sill${m} - above${m})); above${m} += hk;
+      let ue = IN[uOff(k) + e${m}]; outflow += width${m} * select(0.0, min(he, max(0.0, select(hb, ha, ue > 0.0))) * ue, wet${m}); }`).join('\n')}
+    base += IN[hOff(k) + i];
+    let timescale = UPWFAST + clamp((base - UPWFASTDEPTH) / (UPWSLOWDEPTH - UPWFASTDEPTH), 0.0, 1.0) * (UPWSLOW - UPWFAST);
+    let alpha = max(1.0 - exp(-dt / timescale), 1.0 / (folds + 1.0));
+    let n = O_UPWM + k * C + i; let velocity = outflow / area;
+    OD[n] = select(OD[n] + alpha * (velocity - OD[n]), velocity, folds < 0.5);
+  }
 }`;
   kernels.oReduce = HYBRID_THERMOCLINE + reductionKernel(HYBRID_REDUCED, { count: C, base: OF.PART, setup: hybridReducedSetup });
   const ob = {}, own = (name, size) => { const b = emptyBuffer(device, size); b.label = 'layeredOcean' + name; return b; };
@@ -1518,6 +1549,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
 
   function dynamics(dt) {
     relaxRate = Math.min(1 / 3600, 1 / dt); stepDt = dt;
+    upwellingSteps++;
     compute((pass) => dispatch(pass, 'oGradEta', group(ob.S, ob.T), E));
     tendency(ob.S, ob.K1);
     barotropicStep(dt, ob.K1);
@@ -1868,6 +1900,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   function uploadArrays({ h, u, Q, Qref, W, Wref, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart) {
     edgesCurrent = false;
+    upwellingFolds = 0; upwellingTime = NaN; upwellingSeen = upwellingSteps;
     const packed = new Float32Array(OS.total);
     packed.set(h, OS.OH); packed.set(u, OS.OU);
     packed.set(Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), OS.OQ);
@@ -2108,21 +2141,33 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   /*
    * Queues the fields the page asked for, those that vary with depth at
    * `depth` metres (0 for the top layer), the vertical velocity at
-   * `upwellingDepth` (`depth` by default), and, when asked, the
-   * diagnostics reduction, and reads back only those; fields over land
-   * or below the sea floor are NaN and current vectors zero there.
+   * `upwellingDepth` (`depth` by default) from the upwelling memory, and,
+   * when asked, the diagnostics reduction, and reads back only those;
+   * fields over land or below the sea floor are NaN and current vectors
+   * zero there. Given the model's `time` in seconds, the frame first folds
+   * the state into the memory (oFoldUpwelling) whenever the ocean has
+   * stepped since the last fold, whatever fields are asked for, and the
+   * memory restarts, the next fold replacing it, when time goes back and
+   * when the state is uploaded; the first frame that asks for the vertical
+   * velocity folds once without a time.
    */
   const FIELDS = { sst: ['SST', 1], sss: ['SSS', 1], layerDepth: ['H1', 1], thermocline: ['THD', 1], ssh: ['ETA', 1], currents: ['CUR', 3], current: ['CSPD', 1], upwelling: ['UPW', 1] };
-  function frame({ fields = [], diagnostics: summarize = false, depth = 0, upwellingDepth = depth } = {}) {
+  function frame({ fields = [], diagnostics: summarize = false, depth = 0, upwellingDepth = depth, time = null } = {}) {
     const wanted = fields.filter((name) => name in FIELDS);
-    if (!wanted.length && !summarize) return Promise.resolve({ fields: {}, diagnostics: null });
+    if (time !== null && time < upwellingTime) upwellingFolds = 0;
+    const folding = upwellingFolds === 0 ? time !== null || wanted.includes('upwelling') : time !== null && upwellingSteps !== upwellingSeen;
+    if (!wanted.length && !summarize && !folding) return Promise.resolve({ fields: {}, diagnostics: null });
     const g = group(ob.S, ob.OF);
-    setParams([0, 0, 0, 0, depth, upwellingDepth]);
+    const interval = upwellingFolds > 0 && time !== null && Number.isFinite(upwellingTime) ? time - upwellingTime : 0;
+    setParams([0, 0, 0, 0, depth, upwellingDepth, interval, upwellingFolds]);
     const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+    if (folding) dispatch(pass, 'oFoldUpwelling', g, C);
     if (wanted.length) dispatch(pass, 'oFrame', g, C);
     if (summarize) dispatch(pass, 'oReduce', g, C);
     pass.end();
     device.queue.submit([encoder.finish()]);
+    if (folding) { upwellingFolds++; upwellingSeen = upwellingSteps; if (time !== null) upwellingTime = time; }
+    if (!wanted.length && !summarize) return Promise.resolve({ fields: {}, diagnostics: null });
     const ranges = wanted.map((name) => ({ name, offset: OF[FIELDS[name][0]], length: FIELDS[name][1] * C }));
     if (summarize) ranges.push({ name: null, offset: OF.PART, length: reduced.length * reductionGroups(C) });
     return readRanges(device, ob.OF, ranges).then((views) => {
@@ -2140,7 +2185,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   async function diagnostics() { return (await frame({ diagnostics: true })).diagnostics; }
 
   return {
-    layers: L, everySteps: o.everySteps, options: o, D, sillEdge, cellOcean, vertical: 'hybrid', generator: o.generator, table,
+    layers: L, everySteps: o.everySteps, options: o, D, sillEdge, cellOcean, edgeOcean, vertical: 'hybrid', generator: o.generator, table,
     useSeaIce(concentration) { seaCover = concentration; },
     initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated, readShelfMelt, driftStep, setAirStress, iceDrift: driftOptions,
