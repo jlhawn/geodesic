@@ -264,7 +264,7 @@ export async function createGpuModel(gridOrMesh, {
     if (rainScale || meanScale) changes++;
     const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize, rainScale, meanScale });
     if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
-    const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth), upwellingDepth: depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth) }) : null;
+    const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth), upwellingDepth: depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth), time }) : null;
     return Promise.all([atmosphere, ocean]).then(([a, o]) => {
       const out = { time, level, depth, fields: { ...a.fields, ...(o ? o.fields : {}) }, diagnostics: null };
       if (!a.sums) return out;

@@ -6,6 +6,7 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { levelFields, verticalVelocity, smoothCells, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
 import { VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH } from '../js/frames.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
+import { layerVelocities, velocityAt } from './helpers/upwelling.mjs';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
 import { createModel } from '../js/model.module.js';
@@ -159,11 +160,14 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
 
   const column = await model.oceanEngine.serialize();
   const L = model.oceanEngine.layers, cellOcean = model.oceanEngine.cellOcean;
+  const upwellingOf = (state) => layerVelocities(mesh, L, { h: state.h, u: state.u, eta: state.eta, sillEdge: model.oceanEngine.sillEdge, edgeOcean: model.oceanEngine.edgeOcean }, cellOcean);
+  const velocities = upwellingOf(column);
   for (const depth of ['surface', 137, 903]) {
     const at = await model.beginFrame({ depth, fields: ['sst', 'current', 'currents', 'upwelling'] });
     assert.equal(at.depth, depth);
     const top = depth === 'surface';
-    const expected = depthFields(mesh, L, { h: column.h, u: column.u, temperature: (k, i) => column.T[k * C + i], cellOcean }, top ? 0 : depth, { upwellingDepth: top ? SURFACE_UPWELLING_DEPTH : depth });
+    const expected = depthFields(mesh, L, { h: column.h, u: column.u, temperature: (k, i) => column.T[k * C + i], cellOcean }, top ? 0 : depth, { upwellingDepth: null });
+    expected.upwelling = velocityAt(C, L, column.h, cellOcean, velocities, top ? 0 : depth, top ? SURFACE_UPWELLING_DEPTH : depth);
     const speed = expected.speed;
     let magnitude = 0;
     for (let i = 0; i < C; i++) if (!Number.isNaN(expected.upwelling[i])) magnitude = Math.max(magnitude, Math.abs(expected.upwelling[i]));
@@ -198,6 +202,20 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   const keep = Math.exp(-dt / VERTICAL_MEMORY);
   const blend = Float64Array.from(fresh, (w, i) => keep * held.fields.vertical[i] + (1 - keep) * w);
   { const { max, at } = worst(blend, later.fields.vertical); assert.ok(max < 2e-3, `the two-hour memory blends the new frame in: ${max} at ${at}`); }
+
+  await model.oceanEngine.frame({ time: -1 });
+  const beforeSteps = upwellingOf(await model.oceanEngine.serialize());
+  for (let n = 0; n < 4; n++) await model.step(900);
+  await model.beginFrame({ level: 'surface', fields: ['ps'] });
+  const moved = await model.oceanEngine.serialize();
+  const mean = Float64Array.from(upwellingOf(moved), (w, n) => 0.5 * (w + beforeSteps[n]));
+  let scale = 0;
+  for (const depth of [137, 903]) {
+    const averaged = (await model.beginFrame({ depth, fields: ['upwelling'] })).fields.upwelling, expected = velocityAt(C, L, moved.h, cellOcean, mean, depth);
+    for (let i = 0; i < C; i++) if (!Number.isNaN(expected[i])) scale = Math.max(scale, Math.abs(expected[i]));
+    const { max, at } = worst(expected, averaged, { skipNaN: true });
+    assert.ok(scale > 0 && max < 1e-3 * scale, `the memory at ${depth} m is the mean of the two states: ${max} at ${at} against ${scale}`);
+  }
 });
 
 test('the EIS deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

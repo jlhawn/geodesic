@@ -5,6 +5,7 @@ import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContr
 import { profileAt } from './climatology.module.js';
 import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, MSTAR_SCHEMES, LANGMUIR_SCHEMES, surfaceBuoyancy, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
 import { basalMelt, baseFreezing, SHELF_MELT } from './iceShelfMelt.module.js';
+import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
 
 /*
  * The ocean on the C-grid: the ALE hybrid vertical coordinate of
@@ -72,21 +73,26 @@ export const THERMOCLINE_DENSITY = 1024.0;
  * thicknesses and edge velocities, temperature(k, i) the layer
  * temperature. Cells that are land or whose water column ends above the
  * depth are NaN, their current vector zero. The vertical velocity is
- * taken at `upwellingDepth`, the depth itself by default.
+ * taken at `upwellingDepth`, the depth itself by default, with the mean of
+ * the two cells' thicknesses at each edge (cellUpwelling takes the
+ * thicknesses the model moves water with); with `upwellingDepth` null it
+ * is left out and `upwelling` is null.
  */
 export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth, { thin = 0, upwellingDepth = depth } = {}) {
   const { nCells: C, nEdges: E, maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dcEdge, dvEdge, nEdge, areaCell } = mesh;
-  const out = { temperature: new Float32Array(C), current: new Float32Array(3 * C), speed: new Float32Array(C), upwelling: new Float32Array(C) };
+  const withUpwelling = upwellingDepth !== null;
+  const out = { temperature: new Float32Array(C), current: new Float32Array(3 * C), speed: new Float32Array(C), upwelling: withUpwelling ? new Float32Array(C) : null };
   for (let i = 0; i < C; i++) {
     let layer = -1, top = 0;
     if (cellOcean[i]) for (let k = 0; k < L; k++) { const hk = h[k * C + i]; if (k > 0 && hk <= thin) continue; if (depth < top + hk) { layer = k; break; } top += hk; }
-    if (layer < 0) { out.temperature[i] = NaN; out.speed[i] = NaN; out.upwelling[i] = NaN; continue; }
+    if (layer < 0) { out.temperature[i] = NaN; out.speed[i] = NaN; if (withUpwelling) out.upwelling[i] = NaN; continue; }
     out.temperature[i] = temperature(layer, i);
     let x = 0, y = 0, z = 0, w = 0;
     for (let m = 0; m < nEdgesOnCell[i]; m++) {
       const e = edgesOnCell[maxEdges * i + m], s = edgeSignOnCell[maxEdges * i + m];
       const f = 0.5 * dcEdge[e] * dvEdge[e] * u[layer * E + e];
       x += f * nEdge[3 * e]; y += f * nEdge[3 * e + 1]; z += f * nEdge[3 * e + 2];
+      if (!withUpwelling) continue;
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
       let above = 0, transport = 0;
       for (let k = 0; k < L && above < upwellingDepth; k++) {
@@ -99,8 +105,41 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth, { 
     }
     out.current[3 * i] = x / areaCell[i]; out.current[3 * i + 1] = y / areaCell[i]; out.current[3 * i + 2] = z / areaCell[i];
     out.speed[i] = Math.hypot(x, y, z) / areaCell[i];
-    out.upwelling[i] = w / areaCell[i];
+    if (withUpwelling) out.upwelling[i] = w / areaCell[i];
   }
+  return out;
+}
+
+/*
+ * The upward velocity at the base of each layer of cell i with the free
+ * surface held, out[k] = Σ_{j ≤ k} Σ_e s·dv·F_j / area over the cell's
+ * edges, s being edgeSignOnCell (+1 at an edge's first cell) and F_j the
+ * mass flux per unit width the model moves layer j's water with: across an
+ * ocean edge, the edge's thickness (the mean of the two cells' at the top
+ * layer, the smaller below, each clipped under the edge's sill plus the
+ * mean free surface, as edgeColumn does) but no more than the thickness of
+ * the cell the water comes from, times the edge's velocity, as
+ * tendencyLayers does. h and u are the L layers' thicknesses and edge
+ * velocities, eta the free surface and sillEdge the edges' sills.
+ */
+export function cellUpwelling(mesh, L, { h, u, eta, sillEdge, edgeOcean }, i, out) {
+  const { nCells: C, nEdges: E, maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dvEdge, areaCell } = mesh;
+  out.fill(0, 0, L);
+  for (let m = 0; m < nEdgesOnCell[i]; m++) {
+    const e = edgesOnCell[maxEdges * i + m];
+    if (!edgeOcean[e]) continue;
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], width = edgeSignOnCell[maxEdges * i + m] * dvEdge[e];
+    const sill = Math.max(EPS, sillEdge[e] + 0.5 * (eta[a] + eta[b]));
+    let above = 0;
+    for (let k = 0; k < L; k++) {
+      const ha = h[k * C + a], hb = h[k * C + b], hk = k === 0 ? 0.5 * (ha + hb) : Math.min(ha, hb);
+      const he = Math.min(hk, Math.max(0, sill - above)), ue = u[k * E + e];
+      above += hk;
+      out[k] += width * Math.min(he, Math.max(0, ue > 0 ? ha : hb)) * ue;
+    }
+  }
+  let flow = 0;
+  for (let k = 0; k < L; k++) { flow += out[k]; out[k] = flow / areaCell[i]; }
   return out;
 }
 
@@ -513,6 +552,9 @@ export function createOcean(mesh, {
   if (!adopting) { params[0] = 1 / 3600; params[1] = 3600; }
   const buoyancyLoss = new Float64Array(C);
   let counter = 0, limited = 0, initialised = false, layerRunner = null, columnRunner = null, dried = 0;
+  let upwellingMemory = null, upwellingFolds = 0, upwellingTime = NaN, upwellingStale = false;
+  const upwellingColumn = new Float64Array(L);
+  const restartUpwelling = () => { upwellingFolds = 0; upwellingTime = NaN; upwellingStale = false; };
   const relaxRate = () => params[0];
   const shelfLoad = shared('shelfLoad', C);
   const melted = shared('melted', C), meltBase = shared('meltBase', C), shelfMelted = shared('shelfMelted', C), shelfDraw = shared('shelfDraw', C);
@@ -816,6 +858,7 @@ export function createOcean(mesh, {
     const [k1, k2, k3, k4] = stages;
     params[0] = Math.min(1 / 3600, 1 / dt);
     params[1] = dt;
+    upwellingStale = true;
     freeSurface();
     tendency(state, k1);
     barotropic(dt);
@@ -1330,6 +1373,7 @@ export function createOcean(mesh, {
     return H;
   }
   function build(surfaceT, ice, atlas, concentration = seaCover) {
+    restartUpwelling();
     u.fill(0); eta.fill(0); fresh.fill(0); calved.fill(0); buoyancyLoss.fill(0);
     if (restrat) mleDepths.fill(0);
     if (drift) drift.reset();
@@ -1548,6 +1592,7 @@ export function createOcean(mesh, {
   }
   let surfaceTAt = () => 288;
   function load(saved, surfaceT, ice, concentration = seaCover) {
+    restartUpwelling();
     if (!saved || !saved.h) { build(surfaceT, ice, climatology, concentration); return; }
     surfaceTAt = (i) => (ice[i] > 0 ? FREEZING_POINT : surfaceT[i]);
     const classes = savedDensities(saved, C), own = classes && sameDensities(classes, labels) && saved.h.length === L * C;
@@ -1619,11 +1664,60 @@ export function createOcean(mesh, {
     }
     return z;
   }
+  /*
+   * The upwelling memory holds the running mean of the upward velocity at
+   * the base of each layer of each cell (cellUpwelling, from the model's own
+   * mass fluxes). foldUpwelling(time) folds the state as it stands into it,
+   * M ← M + α·(W − M) with α = upwellingWeight(Δt, folds, timescale at the
+   * depth of the layer's base), Δt the time since the last fold; it folds
+   * only when the ocean has stepped since the last fold, and the memory
+   * restarts, the next fold replacing it, when time goes back and when the
+   * ocean initializes or loads. `fields` reads the vertical velocity at
+   * `upwellingDepth` from the memory, linear in depth between its values at
+   * the top (zero at the surface) and the base of the layer that holds the
+   * depth, and folds first when nothing has been folded; where the column
+   * ends above `upwellingDepth` it is the value at the floor, and NaN where
+   * no layer holds `depth`.
+   */
+  function foldUpwelling(time = NaN) {
+    if (time < upwellingTime) upwellingFolds = 0;
+    if (upwellingFolds > 0 && !upwellingStale) return;
+    const dt = upwellingFolds > 0 && Number.isFinite(upwellingTime) ? time - upwellingTime : 0;
+    upwellingMemory ??= new Float64Array(L * C);
+    const state = { h, u, eta, sillEdge, edgeOcean }, restarting = upwellingFolds === 0;
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) continue;
+      cellUpwelling(mesh, L, state, i, upwellingColumn);
+      let base = 0;
+      for (let k = 0; k < L; k++) {
+        const n = at(k, i);
+        base += h[n];
+        upwellingMemory[n] = restarting ? upwellingColumn[k] : upwellingMemory[n] + upwellingWeight(dt, upwellingFolds, upwellingTimescale(base)) * (upwellingColumn[k] - upwellingMemory[n]);
+      }
+    }
+    upwellingFolds++; upwellingTime = time; upwellingStale = false;
+  }
+  function upwellingAt(depth, upwellingDepth) {
+    if (upwellingFolds === 0) foldUpwelling();
+    const out = new Float32Array(C);
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) { out[i] = NaN; continue; }
+      let top = 0, previous = 0, held = false, found = false, value = 0;
+      for (let k = 0; k < L; k++) {
+        const n = at(k, i), hk = h[n];
+        held ||= depth < top + hk;
+        if (!found && upwellingDepth < top + hk) { value = previous + (upwellingDepth - top) / hk * (upwellingMemory[n] - previous); found = true; }
+        top += hk; previous = upwellingMemory[n];
+      }
+      out[i] = !held ? NaN : found ? value : previous;
+    }
+    return out;
+  }
   function fields(depth = 0, upwellingDepth = depth) {
     layerDensitiesAll();
     for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN;
     const layerT = (k, i) => (k === 0 ? T0[i] : Q[at(k, i)] / h[at(k, i)]);
-    return { h1: mixedDepths, T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0, upwellingDepth }) };
+    return { h1: mixedDepths, T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0, upwellingDepth: null }), upwelling: upwellingAt(depth, upwellingDepth) };
   }
 
   function diagnostics() {
@@ -1653,5 +1747,5 @@ export function createOcean(mesh, {
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
   Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, heatIn: heatIn.buffer, saltIn: saltIn.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer , ...(restrat ? { mleDepths: mleDepths.buffer, mleThickness: mleThickness.buffer, mleBuoyancy: mleBuoyancy.buffer, mleUstar: mleUstar.buffer } : {}) });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; seaFlux = seaIce ? seaIce.oceanFlux : null; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells };
+  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; seaFlux = seaIce ? seaIce.oceanFlux : null; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, foldUpwelling, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells };
 }
