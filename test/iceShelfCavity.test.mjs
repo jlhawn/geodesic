@@ -15,7 +15,6 @@ import { syntheticTopography, createGeography, encodeLandIce, decodeLandIce, rea
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
-const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
 const deg = 180 / Math.PI;
 
@@ -201,7 +200,7 @@ test(`both engines run the cavities alike at N=${N}: the water under the shelves
 test(`a saved state keeps the shelves' load at f64, so on each engine a restart melts beneath them from the same freezing point bit for bit at N=${N}`, { skip: !gpuAvailable && 'webgpu not available' }, async () => {
   const { raster, options } = shelfBands(), setup = { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { iceDrift: false } };
   const bits = (values) => new Uint32Array(Float64Array.from(values).buffer);
-  const liquidus = async (model) => { const { buffers, layout } = model.oceanEngine; return new Uint32Array((await readRanges(model.gpu.device, buffers.OD, [{ offset: layout.OD.LIQUIDUS, length: model.mesh.nCells }]))[0].buffer); };
+  const liquidus = async (model) => new Uint32Array((await model.oceanEngine.readSection('LIQUIDUS')).buffer);
   for (const make of [() => createModel(new Grid(N), setup), () => createGpuModel(new Grid(N), setup)]) {
     const first = await prepare(await make()), saved = await first.ocean.serialize();
     assert.ok(saved.shelfLoad.some((weight) => weight > 0), 'no shelf loads the water');

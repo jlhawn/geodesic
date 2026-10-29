@@ -1,4 +1,6 @@
-import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
+import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
+import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
+import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
 import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
@@ -6,7 +8,7 @@ import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEU
 import { profileAt } from '../ocean/climatology.module.js';
 import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval } from '../physics/ice.module.js';
 import { iceDriftOptions, iceDriftPasses, ICE_REMNANT } from '../ocean/iceDrift.module.js';
-import { iceDriftHead, iceDriftKernels, driftStressKernel, driftSections } from './iceDrift.gpu.js';
+import { iceDriftHead, iceDriftKernels, driftStressKernel, driftSections, DRIFT_EDGE_SECTIONS } from './iceDrift.gpu.js';
 import { basalMeltWgsl, baseFreezing, SHELF_MELT } from '../ocean/iceShelfMelt.module.js';
 import { UPWELLING_FAST, UPWELLING_SLOW, UPWELLING_FAST_DEPTH, UPWELLING_SLOW_DEPTH } from '../frames.module.js';
 
@@ -37,6 +39,13 @@ const rescaleFactor = (o) => (o.langmuirIce === 'tanh' ? 'select(1.0, min(LTCAP,
  * precision, exactly porting the CPU functions over plain arrays before
  * uploading; only the per-step work (tendency, barotropic, eddy
  * transport, regrid, column physics, salt, surface write-back) is WGSL.
+ *
+ * Every buffer here holds rows for the packed set of oceanPacking.gpu.js,
+ * not the mesh: the sea's cells, the edges of those cells and the vertices
+ * of the sea's edges. The kernels index MI, MF and the ocean's buffers by
+ * packed index and the atmosphere's PH, S and D by the mesh's, through
+ * gcell and gedge. The arrays callers and saved states hold stay on the
+ * mesh: they are packed on upload and unpacked on read.
  */
 const WORKGROUP = 64;
 export { HEAT_REFERENCE, SALT_REFERENCE };
@@ -533,7 +542,7 @@ ${flush('true')}  }
   var sv = vec3<f32>(0.0, 0.0, 0.0); var vt = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) { sv += weights[m] * OD[O_STRESS + edges[m]] * normals[m]; vt += weights[m] * IN[uOff(0) + edges[m]] * normals[m]; }
   sv = sv / area; vt = vt / area;
-  let capped = OD[O_SHELF + i] > 0.5; let ustar = select(sqrt(length(sv) / RHO0), sqrt(TOPDRAG) * length(vt), capped); let f = abs(OD[O_FCELL + i]);${o.langmuirIce === 'tanh' ? ' let waves = select(1.0 - tanh(ICEWAVES * select(0.0, select(1.0, PH[PH_CONC + i], PH[PH_CONC + i] > 0.0), OD[O_ICED + i] > 0.5)), 0.0, capped);' : ''}
+  let capped = OD[O_SHELF + i] > 0.5; let ustar = select(sqrt(length(sv) / RHO0), sqrt(TOPDRAG) * length(vt), capped); let f = abs(OD[O_FCELL + i]);${o.langmuirIce === 'tanh' ? ' let waves = select(1.0 - tanh(ICEWAVES * select(0.0, select(1.0, PH[PH_CONC + gcell(i)], PH[PH_CONC + gcell(i)] > 0.0), OD[O_ICED + i] > 0.5)), 0.0, capped);' : ''}
 ${o.mstarScheme === 'rh18' ? `  let buoy = select(OGRAV * (alphaT(CT[0] + TREF, CS[0] + SREF) * OD[O_HEATIN + i] - betaS(CT[0] + TREF, CS[0] + SREF) * OD[O_SALTIN + i]) / dt, 0.0, capped);
 ` : ''}${o.shelfMelt ? `  var freezing = false;
   if (capped) {
@@ -749,6 +758,8 @@ ${constLine('JER_R1', jerlov[0])} ${constLine('JER_R2', 1 - jerlov[0])} ${constL
 @group(0) @binding(7) var<storage, read_write> PH: array<f32>;
 @group(0) @binding(8) var<storage, read_write> S: array<f32>;
 @group(0) @binding(9) var<storage, read_write> D: array<f32>;
+fn gcell(i: i32) -> i32 { return MI[GCE + i]; }
+fn gedge(e: i32) -> i32 { return MI[GEE + e]; }
 fn hOff(k: i32) -> i32 { return OH + k * C; }
 fn uOff(k: i32) -> i32 { return OU + k * E; }
 fn qOff(k: i32) -> i32 { return OQ + k * C; }
@@ -1124,6 +1135,10 @@ ${K}  let i = ${idx}; if (i >= C) { return; }
   let shift = (OD[B_BAVG + C + e] - transport) / max(sumH, EPSO);
   for (var k = 0; k < L; k++) { let n = uOff(k) + e; IN[n] = clamp(IN[n] + shift, -SPEEDLIM, SPEEDLIM); }
 }`,
+    oGatherSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
+  let gi = gcell(i);
+  OD[O_SURFT + i] = S[S_TS + gi]; OD[O_SURFICE + i] = S[S_ICE + gi]; OD[O_SURFCONC + i] = PH[PH_CONC + gi];
+}`,
     oReadSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_SHELF + i] > 0.5) { OD[O_ICED + i] = 0.0; return; }
   let iced = OD[O_SURFICE + i] > 0.0;
@@ -1135,12 +1150,13 @@ ${o.drift ? `  let arrived = OD[O_ARRIVED + i] > 0.5;
 ` : `  let t0 = select(OD[O_SURFT + i], FREEZE, iced);
   // Open water adds the surface's change since PREVT0: reading T0 = Q/h back whole gains heat under fast-math division.
   if (iced) { IN[qOff(0) + i] = IN[hOff(0) + i] * (t0 - TREF); } else { IN[qOff(0) + i] += IN[hOff(0) + i] * (t0 - OD[O_PREVT0 + i]); }
-`}  let light = PH[PH_PEN + i];
+`}  let gi = gcell(i);
+  let light = PH[PH_PEN + gi];
 ${o.mstarScheme === 'rh18' ? `  { let h0 = max(IN[hOff(0) + i], 1.0e-6); let s0 = IN[wOff(0) + i] / h0 + SREF;
     OD[O_HEATIN + i] = h0 * (t0 - OD[O_PREVT0 + i]) + light / RHOCP;
     OD[O_SALTIN + i] = s0 * OD[O_FRESH + i] / 1000.0 + (s0 - ICESAL) * (iceVolume(i) - OD[O_PREVVOL + i]) * ICEDENS / 1000.0; }
 ` : ''}  if (light == 0.0) { return; }
-  let taken = PH[PH_TRANS + i];
+  let taken = PH[PH_TRANS + gi];
   var given = 0.0; var last = 0;
   if (taken > 0.0) {
     var z = IN[hOff(0) + i]; var top = transmitted(z); var carry = 0.0;
@@ -1160,24 +1176,26 @@ ${o.mstarScheme === 'rh18' ? `  { let h0 = max(IN[hOff(0) + i], 1.0e-6); let s0 
   }
   let rest = settle(IN[qOff(last) + i], (light - given) / RHOCP);
   IN[qOff(last) + i] += rest;
-  PH[PH_PEN + i] = light - given - RHOCP * rest;
+  PH[PH_PEN + gi] = light - given - RHOCP * rest;
 }`,
     oStressFromAtmosphere: o.drift ? driftStressKernel(K, idx) : `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   if (OD[O_EMASK + e] < 0.5) { OD[O_STRESS + e] = 0.0; return; }
-  let coverA = select(0.0, select(1.0, PH[PH_CONC + a], PH[PH_CONC + a] > 0.0), OD[O_ICED + a] > 0.5);
-  let coverB = select(0.0, select(1.0, PH[PH_CONC + b], PH[PH_CONC + b] > 0.0), OD[O_ICED + b] > 0.5);
+  let ga = gcell(a); let gb = gcell(b); let ge = gedge(e);
+  let coverA = select(0.0, select(1.0, PH[PH_CONC + ga], PH[PH_CONC + ga] > 0.0), OD[O_ICED + a] > 0.5);
+  let coverB = select(0.0, select(1.0, PH[PH_CONC + gb], PH[PH_CONC + gb] > 0.0), OD[O_ICED + b] > 0.5);
   let through = (1.0 - 0.5 * (coverA + coverB) * (1.0 - TRANSMIT)) * (1.0 - 0.5 * (OD[O_SHELF + a] + OD[O_SHELF + b]));
-${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through * PH[PH_STRESS + e]; return; }\n' : ''}  let bottom = (K - 1) * C;
-  let rhoA = S[S_PI + a] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + a] * D[D_EXM + bottom + a]);
-  let rhoB = S[S_PI + b] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + b] * D[D_EXM + bottom + b]);
-  let fa = PH[PH_DRAG + a] * rhoA * max(D[D_WIND + a], GUSTO); let fb = PH[PH_DRAG + b] * rhoB * max(D[D_WIND + b], GUSTO);
-  OD[O_STRESS + e] = through * 0.5 * (fa + fb) * S[S_U + (K - 1) * E + e];
+${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through * PH[PH_STRESS + ge]; return; }\n' : ''}  let bottom = (K - 1) * GC;
+  let rhoA = S[S_PI + ga] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + ga] * D[D_EXM + bottom + ga]);
+  let rhoB = S[S_PI + gb] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + gb] * D[D_EXM + bottom + gb]);
+  let fa = PH[PH_DRAG + ga] * rhoA * max(D[D_WIND + ga], GUSTO); let fb = PH[PH_DRAG + gb] * rhoB * max(D[D_WIND + gb], GUSTO);
+  OD[O_STRESS + e] = through * 0.5 * (fa + fb) * S[S_U + (K - 1) * GE + ge];
 }`,
     oShelfBudget: `var<workgroup> POOLED: array<vec4<f32>, ${WORKGROUP}>;
 ${K}  let t = i32(id.x);
   var sums = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-  for (var i = t; i < C; i += ${WORKGROUP}) {
+  for (var n = MI[PST + t]; n < MI[PST + t + 1]; n++) {
+    let i = MI[POS + n];
     let area = MF[F_AREA + i]; let south = OD[O_FCELL + i] < 0.0;
     if (OD[O_SHELF + i] > 0.5) { let m = OD[O_MELT + i] * area; sums += select(vec4<f32>(0.0, 0.0, 0.0, m), vec4<f32>(0.0, 0.0, m, 0.0), south); }
     else if (OD[O_CMASK + i] > 0.5) { let d = OD[O_CALVED + i] * area; sums += select(vec4<f32>(0.0, d, 0.0, 0.0), vec4<f32>(d, 0.0, 0.0, 0.0), south); }
@@ -1214,41 +1232,43 @@ ${K}  let t = i32(id.x);
   OD[O_CALVED + i] = 0.0;
 }`,
     oWriteSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
-  if (OD[O_CMASK + i] < 0.5) { PH[PH_OFLUX + i] = 0.0; return; }
+  let gi = gcell(i);
+  if (OD[O_CMASK + i] < 0.5) { PH[PH_OFLUX + gi] = 0.0; return; }
   if (OD[O_SHELF + i] > 0.5) {
-    PH[PH_OFLUX + i] = 0.0;
+    PH[PH_OFLUX + gi] = 0.0;
     OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
     OD[O_T0 + i] = IN[qOff(0) + i] / IN[hOff(0) + i] + TREF;
     OD[O_PREVT0 + i] = OD[O_T0 + i];
     return;
   }
-  PH[PH_CAP + i] = RHOCP * max(IN[hOff(0) + i], 1.0);
-${o.penetration ? '  PH[PH_TRANS + i] = transmitted(IN[hOff(0) + i]);\n' : ''}  OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
+  PH[PH_CAP + gi] = RHOCP * max(IN[hOff(0) + i], 1.0);
+${o.penetration ? '  PH[PH_TRANS + gi] = transmitted(IN[hOff(0) + i]);\n' : ''}  OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   if (OD[O_ICED + i] > 0.5) {
-    PH[PH_OFLUX + i] = RHOCP * (IN[qOff(0) + i] - IN[hOff(0) + i] * (FREEZE - TREF)) / P[6];
+    PH[PH_OFLUX + gi] = RHOCP * (IN[qOff(0) + i] - IN[hOff(0) + i] * (FREEZE - TREF)) / P[6];
     IN[qOff(0) + i] = IN[hOff(0) + i] * (FREEZE - TREF);
     OD[O_T0 + i] = FREEZE;
   } else {
     OD[O_T0 + i] = IN[qOff(0) + i] / IN[hOff(0) + i] + TREF;
-    S[S_TS + i] = OD[O_T0 + i];
-    PH[PH_OFLUX + i] = 0.0;
+    S[S_TS + gi] = OD[O_T0 + i];
+    PH[PH_OFLUX + gi] = 0.0;
   }
   OD[O_PREVT0 + i] = OD[O_T0 + i];
 }`,
     oAccumulateFresh: `${K}  let i = ${idx}; if (i >= C) { return; }
-  let rain = PH[PH_RAIN + i]; let seen = OD[O_RAINSEEN + i];
+  let gi = gcell(i);
+  let rain = PH[PH_RAIN + gi]; let seen = OD[O_RAINSEEN + i];
   let delta = select(rain, rain - seen, rain >= seen);
   if (OD[O_CMASK + i] > 0.5 && OD[O_SHELF + i] < 0.5) {
-    var fresh = PH[PH_EVAP + i] * P[6] - delta;
+    var fresh = PH[PH_EVAP + gi] * P[6] - delta;
     var calved = 0.0;
     for (var p = i32(OD[O_DRAINSTART + i]); p < i32(OD[O_DRAINSTART + i + 1]); p++) {
       let j = i32(OD[O_DRAINCELL + p]);
-      let runoff = PH[PH_RUNOFF + j]; let ran = OD[O_RUNOFFSEEN + j];
+      let runoff = PH[PH_RUNOFF + j]; let ran = OD[O_RUNOFFSEEN + p];
       fresh -= select(runoff, runoff - ran, runoff >= ran) * OD[O_DRAINW + p];
-      OD[O_RUNOFFSEEN + j] = runoff;
-      let shed = PH[PH_DISCHARGE + j]; let taken = OD[O_DISCHARGESEEN + j];
+      OD[O_RUNOFFSEEN + p] = runoff;
+      let shed = PH[PH_DISCHARGE + j]; let taken = OD[O_DISCHARGESEEN + p];
       calved += select(shed, shed - taken, shed >= taken) * OD[O_DRAINW + p];
-      OD[O_DISCHARGESEEN + j] = shed;
+      OD[O_DISCHARGESEEN + p] = shed;
 ${o.lakes ? LAKE_DRAIN_WGSL : ''}    }
     OD[O_FRESH + i] += fresh;
     OD[O_CALVED + i] += calved;
@@ -1311,7 +1331,7 @@ const hybridReducedSetup = `    let a = MF[F_AREA + i];
       transport = max(transport, abs(flow) * MF[F_DV + e]);
     }`;
 
-export function createLayeredOcean(core, { registers = null, ...options } = {}) {
+export function createLayeredOcean(core, { registers = null, packing = null, ...options } = {}) {
   const o = { ...OCEAN_DEFAULTS, ...options };
   if (o.vertical !== undefined && o.vertical !== 'hybrid') throw new Error(`the ocean's vertical coordinate is 'hybrid'; a saved slab ocean is converted on upload, not run (vertical ${o.vertical})`);
   if (!GENERATORS.includes(o.generator)) throw new Error(`the generator is one of ${GENERATORS.join(', ')}, not ${o.generator}`);
@@ -1343,6 +1363,8 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   let minSpacing = Infinity;
   for (let e = 0; e < E; e++) minSpacing = Math.min(minSpacing, mesh.dcEdge[e]);
   const geography = o.geography || null, { water, cellOcean, shelf, cellOpen, draft } = oceanCells(C, geography);
+  const pk = packing ?? oceanPacking(mesh, geography, { packed: o.packed !== false });
+  const nC = pk.C, nE = pk.E, nV = pk.V, cellCount = pk.cells.length, edgeCount = pk.edges.length;
   const edgeOcean = water ? water.edgeOcean : new Uint8Array(E).fill(1);
   const bed = new Float64Array(C);
   const smoothed = o.bathymetry ? null : bathymetryFrom(mesh, water, { minimumDepth: o.minimumDepth, flatDepth: o.flatDepth });
@@ -1357,17 +1379,19 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   let seaCover = null;
   let upwellingFolds = 0, upwellingTime = NaN, upwellingSteps = 0, upwellingSeen = 0;
 
-  const OS = seq([['OH', L * C], ['OU', L * E], ['OQ', L * C], ['OW', L * C]]);
+  const OS = seq([['OH', L * nC], ['OU', L * nE], ['OQ', L * nC], ['OW', L * nC]]);
   const outlet = runoffOutlets(mesh, geography);
-  const drainStart = new Float32Array(C + 1), drainCells = [], drainWeights = [];
+  const drainStart = new Float32Array(nC + 1), drainCells = [], drainWeights = [];
   {
     const byOutlet = Array.from({ length: C }, () => []);
     for (let j = 0; j < C; j++) if (!cellOpen[j] && outlet[j] >= 0) byOutlet[outlet[j]].push(j);
-    for (let i = 0; i < C; i++) {
-      drainStart[i] = drainCells.length;
+    for (let s = 0; s < nC; s++) {
+      drainStart[s] = drainCells.length;
+      if (s >= cellCount) continue;
+      const i = pk.cells[s];
       for (const j of byOutlet[i]) { drainCells.push(j); drainWeights.push(mesh.areaCell[j] / mesh.areaCell[i]); }
     }
-    drainStart[C] = drainCells.length;
+    drainStart[nC] = drainCells.length;
   }
   /*
    * The L-sized scratch lives within one tendency (tendency below, in
@@ -1383,24 +1407,30 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    * the upwelling memory that oFoldUpwelling keeps between frames, shares
    * its slot with nothing.
    */
+  const kinds = {}, count = { cell: nC, edge: nE, vertex: nV, drain: Math.max(1, drainCells.length) };
+  const sec = (name, kind, layers = 1, least = 0) => {
+    const length = Math.max(layers * count[kind], least);
+    for (const alias of [].concat(name)) kinds[alias] = { kind, layers, length };
+    return [name, length];
+  };
   const OD = seq([
-    [['FLUX', 'LAPA', 'LAPB', 'EDDYV', 'TARGET', 'VISC'], L * E],
-    [['HEDGE', 'EDDYQ'], L * E], [['AVORT', 'CURLS', 'PHI'], L * V], [['QE', 'EDDYW'], L * E], ['DIVS', L * C],
-    ['BUOY', C], ['GRADETA', E], ['SLOW', E], ['DEPTHEDGE', E],
-    ['ETA', C], ['FRESH', C], ['PREVT0', C], ['PREVVOL', C], ['ICED', C], ['HEATIN', C], ['SALTIN', C], ['STRESS', E],
-    ['SURFT', C], ['SURFICE', C], ['SURFCONC', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
-    ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
-    ['RUNOFFSEEN', C], ['DISCHARGESEEN', C], ['CALVED', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
-    ['EDDYK', E],
-    ['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C], ['SILL', E], ['SHELF', C], ['DRAFT', C], ['LOAD', C], ['LOADT', C], ['LOADS', C], ['LIQUIDUS', C], ['MELT', C], ['MELTSUM', C], ['DRAW', C], ['POOLS', 12], ['UPWM', L * C],
-    ...(third ? [['BEY', 2 * E], ['BED', 2 * E]] : []),
-    ...(driftOptions ? driftSections(C, E) : []),
-    ...(restrat ? [['MLED', C], ['MLEH', C], ['MLEB', C], ['MLEU', C], ['MLESCALE', E]] : []),
+    sec(['FLUX', 'LAPA', 'LAPB', 'EDDYV', 'TARGET', 'VISC'], 'edge', L, (L + 1) * nC),
+    sec(['HEDGE', 'EDDYQ'], 'edge', L), sec(['AVORT', 'CURLS', 'PHI'], 'vertex', L, L * nC), sec(['QE', 'EDDYW'], 'edge', L), sec('DIVS', 'cell', L),
+    sec('BUOY', 'cell'), sec('GRADETA', 'edge'), sec('SLOW', 'edge'), sec('DEPTHEDGE', 'edge'),
+    sec('ETA', 'cell'), sec('FRESH', 'cell'), sec('PREVT0', 'cell'), sec('PREVVOL', 'cell'), sec('ICED', 'cell'), sec('HEATIN', 'cell'), sec('SALTIN', 'cell'), sec('STRESS', 'edge'),
+    sec('SURFT', 'cell'), sec('SURFICE', 'cell'), sec('SURFCONC', 'cell'), sec('T0', 'cell'), sec('S0', 'cell'), sec('RAINSEEN', 'cell'),
+    sec('EMASK', 'edge'), sec('CMASK', 'cell'), sec('BATH', 'cell'), sec('FEDGE', 'edge'),
+    sec('RUNOFFSEEN', 'drain'), sec('DISCHARGESEEN', 'drain'), sec('CALVED', 'cell'), ['DRAINSTART', nC + 1], ['DRAINCELL', count.drain], ['DRAINW', count.drain],
+    sec('EDDYK', 'edge'),
+    ['PR', 2 * L * nC], sec('MIXED', 'cell'), sec('BLD', 'cell'), sec('DRIED', 'cell'), sec('FCELL', 'cell'), sec('SILL', 'edge'), sec('SHELF', 'cell'), sec('DRAFT', 'cell'), sec('LOAD', 'cell'), sec('LOADT', 'cell'), sec('LOADS', 'cell'), sec('LIQUIDUS', 'cell'), sec('MELT', 'cell'), sec('MELTSUM', 'cell'), sec('DRAW', 'cell'), ['POOLS', 12], sec('UPWM', 'cell', L),
+    ...(third ? [['BEY', 2 * nE], ['BED', 2 * nE]] : []),
+    ...(driftOptions ? driftSections(nC, nE).map(([name]) => sec(name, name === 'TAUA' || DRIFT_EDGE_SECTIONS.includes(name) ? 'edge' : 'cell')) : []),
+    ...(restrat ? [sec('MLED', 'cell'), sec('MLEH', 'cell'), sec('MLEB', 'cell'), sec('MLEU', 'cell'), sec('MLESCALE', 'edge')] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
   // than starting a second, colliding index space at 0.
-  const B = seq([['BCUR', C + E], ['BK1', C + E], ['BK2', C + E], ['BK3', C + E], ['BTRIALA', C + E], ['BTRIALB', C + E], ['BAVG', C + E]]);
+  const B = seq([['BCUR', nC + nE], ['BK1', nC + nE], ['BK2', nC + nE], ['BK3', nC + nE], ['BTRIALA', nC + nE], ['BTRIALB', nC + nE], ['BAVG', nC + nE]]);
   const bTotal = B.total;
   for (const k of Object.keys(B)) if (k !== 'total') B[k] += OD.total;
   B.total = bTotal;
@@ -1409,9 +1439,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const implicitStress = !!core.physics && core.physics.surfaceExchange === 'roughness' && !!core.physics.implicitDrag;
   const iceThermo = { skinHeatCapacity: core.physics?.skinHeatCapacity ?? 2e5, iceDensity: core.physics?.iceDensity ?? 917, latentHeatFusion: core.physics?.latentHeatFusion ?? 3.34e5, freshSnowAlbedo: core.physics?.freshSnowAlbedo ?? SNOW_AGEING.freshSnowAlbedo };
   const driftPlan = driftOptions ? { options: driftOptions, waterDensity: o.density, thermo: iceThermo, minimumConcentration: MINIMUM_CONCENTRATION, removal: seaIceRemoval(!!core.physics?.keepSmallIce), remnant: ICE_REMNANT, freezing: FREEZING_POINT, implicitStress, given } : null;
-  const kernels = oceanKernels({ ...o, restrat, table, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined });
+  const kernels = oceanKernels({ ...o, restrat, table, L, C: nC, E: nE, V: nV, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined });
   const reduced = HYBRID_REDUCED;
-  const OF = seq([['SST', C], ['SSS', C], ['H1', C], ['THD', C], ['ETA', C], ['CUR', 3 * C], ['CSPD', C], ['UPW', C], ['PART', reduced.length * reductionGroups(C)]]);
+  const OF = seq([['SST', nC], ['SSS', nC], ['H1', nC], ['THD', nC], ['ETA', nC], ['CUR', 3 * nC], ['CSPD', nC], ['UPW', nC], ['PART', reduced.length * reductionGroups(nC)]]);
   kernels.oFrame = `${HYBRID_THERMOCLINE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let h0 = max(EPSO, IN[hOff(0) + i]);
@@ -1473,14 +1503,97 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     OD[n] = select(OD[n] + alpha * (velocity - OD[n]), velocity, folds < 0.5);
   }
 }`;
-  kernels.oReduce = HYBRID_THERMOCLINE + reductionKernel(HYBRID_REDUCED, { count: C, base: OF.PART, setup: hybridReducedSetup });
+  kernels.oReduce = HYBRID_THERMOCLINE + reductionKernel(HYBRID_REDUCED, { count: nC, base: OF.PART, setup: hybridReducedSetup });
   const ob = {}, own = (name, size) => { const b = emptyBuffer(device, size); b.label = 'layeredOcean' + name; return b; };
   ob.S = own('S', 4 * OS.total);
   for (const name of ['T', 'K1', 'K2', 'K3', 'K4']) ob[name] = registers && registers[name] && registers[name].size >= 4 * OS.total ? registers[name] : own(name, 4 * OS.total);
   ob.OD = own('OD', 4 * ODTOTAL); ob.OF = own('OF', 4 * OF.total);
+  /*
+   * The ocean's own tables: the packed set as a mesh, built by the core's
+   * table builder, and for each packed cell and edge the mesh index the
+   * atmosphere's fields are read and written at (GCE and GEE). The shelf
+   * budget's thread t sums the cells of mesh index t, t + 64, ...: POS lists
+   * the packed cells by thread in the mesh's order and PST the thread starts
+   * in it, so its sum adds in the order the whole mesh does.
+   */
+  const read = { MI: ['COE', 'VOE', 'EOC', 'ESC', 'COC', 'NEC', 'EOV', 'ESV', 'EOE'], MF: ['AREA', 'ATRI', 'DC', 'DV', 'FV', 'PVW', 'NEDGE'] };
+  const tables = meshSections(nC, nE, nV);
+  const TMI = seq([...tables.MI.filter(([name]) => read.MI.includes(name)), ['GCE', nC], ['GEE', nE], ['POS', cellCount], ['PST', WORKGROUP + 1]]), TMF = seq(tables.MF.filter(([name]) => read.MF.includes(name)));
+  {
+    const mi = new Int32Array(TMI.total), mf = new Float32Array(TMF.total);
+    fillMeshTables(pk.mesh, TMI, TMF, mi, mf);
+    mi.set(pk.cellMap, TMI.GCE); mi.set(pk.edgeMap, TMI.GEE);
+    const first = new Int32Array(WORKGROUP + 1);
+    for (let s = 0; s < cellCount; s++) first[pk.cells[s] % WORKGROUP + 1]++;
+    for (let t = 0; t < WORKGROUP; t++) first[t + 1] += first[t];
+    const next = first.slice(0, WORKGROUP);
+    for (let s = 0; s < cellCount; s++) mi[TMI.POS + next[pk.cells[s] % WORKGROUP]++] = s;
+    mi.set(first, TMI.PST);
+    ob.MI = storageBuffer(device, mi); ob.MI.label = 'layeredOceanMI';
+    ob.MF = storageBuffer(device, mf); ob.MF.label = 'layeredOceanMF';
+  }
+  const constants = (prefix, layout) => Object.entries(layout).filter(([name]) => name !== 'total').map(([name, offset]) => `const ${prefix}${name}: i32 = ${offset};`).join('\n');
+  const prelude = `const C: i32 = ${nC}; const E: i32 = ${nE}; const V: i32 = ${nV}; const GC: i32 = ${C}; const GE: i32 = ${E};
+const MAXE: i32 = ${MAX_EDGES}; const MAXEE: i32 = ${MAX_EDGES_ON_EDGE};
+${constants('', TMI)}
+${constants('F_', TMF)}
+${core.fieldConstants}
+`;
+  /*
+   * The arrays of callers and saved states hold all C cells and E edges, in
+   * layers one after another. toCells and toEdges pick the packed set out
+   * of them for the device; fromCells and fromEdges put a device section
+   * back, with `fill` where the set holds no element, or the values last
+   * uploaded where `base` has them. The rows the kernels never touch outside
+   * the set keep what was uploaded, so a section returns exactly what an
+   * ocean that keeps every row would hold.
+   */
+  const RETAINED = ['PREVT0', 'PREVVOL', 'FRESH', 'CALVED', 'BUOY', 'MIXED', 'BLD', 'UICE'], outside = {};
+  const toCells = (values, layers = 1) => {
+    const out = new Float32Array(layers * nC);
+    for (let k = 0; k < layers; k++) for (let s = 0; s < cellCount; s++) out[k * nC + s] = values[k * C + pk.cells[s]];
+    return out;
+  };
+  const toEdges = (values, layers = 1) => {
+    const out = new Float32Array(layers * nE);
+    for (let k = 0; k < layers; k++) for (let s = 0; s < edgeCount; s++) out[k * nE + s] = values[k * E + pk.edges[s]];
+    return out;
+  };
+  const fromCells = (view, layers = 1, fill = 0, base = null) => {
+    const out = base ? Float32Array.from(base) : new Float32Array(layers * C).fill(fill);
+    for (let k = 0; k < layers; k++) for (let s = 0; s < cellCount; s++) out[k * C + pk.cells[s]] = view[k * nC + s];
+    return out;
+  };
+  const fromEdges = (view, layers = 1, fill = 0, base = null) => {
+    const out = base ? Float32Array.from(base) : new Float32Array(layers * E).fill(fill);
+    for (let k = 0; k < layers; k++) for (let s = 0; s < edgeCount; s++) out[k * E + pk.edges[s]] = view[k * nE + s];
+    return out;
+  };
+  const toDrains = (values) => Float32Array.from({ length: count.drain }, (_, p) => (p < drainCells.length ? values[drainCells[p]] : 0));
+  const fromDrains = (view) => { const out = new Float32Array(C); drainCells.forEach((j, p) => { out[j] = view[p]; }); return out; };
+  const toSection = (name, values) => {
+    const { kind, layers } = kinds[name];
+    return kind === 'cell' ? toCells(values, layers) : kind === 'edge' ? toEdges(values, layers) : toDrains(values);
+  };
+  const fromSection = (name, view, fill = 0) => {
+    const { kind, layers } = kinds[name];
+    return kind === 'cell' ? fromCells(view, layers, fill, outside[name]) : kind === 'edge' ? fromEdges(view, layers, fill, outside[name]) : fromDrains(view);
+  };
+  const putSection = (name, values) => {
+    if (RETAINED.includes(name)) outside[name] = Float32Array.from(values);
+    device.queue.writeBuffer(ob.OD, 4 * OD[name], toSection(name, values));
+  };
+  async function readSections(names, fill = 0) {
+    const views = await readRanges(device, ob.OD, names.map((name) => ({ offset: OD[name], length: kinds[name].length })));
+    return views.map((view, n) => fromSection(names[n], view, fill));
+  }
+  async function readStores() {
+    const [s] = await readRanges(device, ob.S, [{ offset: 0, length: OS.total }]);
+    return { h: fromCells(s.subarray(OS.OH, OS.OH + L * nC), L), u: fromEdges(s.subarray(OS.OU, OS.OU + L * nE), L), q: fromCells(s.subarray(OS.OQ, OS.OQ + L * nC), L), w: fromCells(s.subarray(OS.OW, OS.OW + L * nC), L) };
+  }
   const bindLayout = device.createBindGroupLayout({ entries: Array.from({ length: 10 }, (_, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } })) });
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindLayout] });
-  const head = core.preludeConstants + kernels.head;
+  const head = prelude + kernels.head;
   const pipelines = {};
   for (const [name, body] of Object.entries(kernels)) {
     if (name === 'head') continue;
@@ -1492,7 +1605,7 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     const key = [IN.label, OUT.label, ODbuf.label, PH.label, Sbuf.label].join('|');
     let g = groups.get(key);
     if (!g) {
-      g = device.createBindGroup({ layout: bindLayout, entries: [buffers.MI, buffers.MF, buffers.LV, IN, OUT, ODbuf, buffers.P, PH, Sbuf, buffers.D].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+      g = device.createBindGroup({ layout: bindLayout, entries: [ob.MI, ob.MF, buffers.LV, IN, OUT, ODbuf, buffers.P, PH, Sbuf, buffers.D].map((buffer, binding) => ({ binding, resource: { buffer } })) });
       groups.set(key, g);
     }
     return g;
@@ -1511,18 +1624,18 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     const g = group(IN, OUT);
     setParams([0, 0]);
     compute((pass) => {
-      dispatch(pass, 'oVertexVort', g, V);
-      dispatch(pass, 'oEdgeFluxPV', g, E);
-      dispatch(pass, 'oCellTendency', g, C);
-      dispatch(pass, 'oDivCurl', g, C + V);
-      dispatch(pass, 'oLapVelocity', g, E);
+      dispatch(pass, 'oVertexVort', g, nV);
+      dispatch(pass, 'oEdgeFluxPV', g, nE);
+      dispatch(pass, 'oCellTendency', g, nC);
+      dispatch(pass, 'oDivCurl', g, nC + nV);
+      dispatch(pass, 'oLapVelocity', g, nE);
     });
     setParams([0, 1, relaxRate, stepDt]);
     compute((pass) => {
-      dispatch(pass, 'oDivCurl', g, C + V);
-      dispatch(pass, 'oLapVelocity', g, E);
-      dispatch(pass, 'oKineticPhi', g, C);
-      dispatch(pass, 'oMomentum', g, E);
+      dispatch(pass, 'oDivCurl', g, nC + nV);
+      dispatch(pass, 'oLapVelocity', g, nE);
+      dispatch(pass, 'oKineticPhi', g, nC);
+      dispatch(pass, 'oMomentum', g, nE);
     });
   }
   function advanceState(next, stage, factor) {
@@ -1534,23 +1647,23 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
   function barotropicStep(dt, k1) {
     const g1 = group(ob.S, k1);
     compute((pass) => {
-      dispatch(pass, 'oBarotropicSetup', g1, Math.max(C, E));
-      dispatch(pass, 'oBarotropicCoriolis', g1, E);
+      dispatch(pass, 'oBarotropicSetup', g1, Math.max(nC, nE));
+      dispatch(pass, 'oBarotropicCoriolis', g1, nE);
     });
-    core.clearBuffer(ob.OD, 4 * B.BAVG, 4 * (C + E));
+    core.clearBuffer(ob.OD, 4 * B.BAVG, 4 * (nC + nE));
     const M = Math.max(1, Math.ceil(dt / substepLimit)), dtb = dt / M;
     const gAny = group(ob.S, ob.K1);
     // P0=dtb/2 (stage1,2 trial factor), P1=dtb (stage3 trial factor), P2=dtb/6 (final combine), P3=1/M (average accumulation).
     setParams([dtb / 2, dtb, dtb / 6, 1 / M]);
     compute((pass) => {
-      for (let m = 0; m < M; m++) for (let stage = 1; stage <= 4; stage++) dispatch(pass, `oBarotropicStage${stage}`, gAny, Math.max(C, E));
+      for (let m = 0; m < M; m++) for (let stage = 1; stage <= 4; stage++) dispatch(pass, `oBarotropicStage${stage}`, gAny, Math.max(nC, nE));
     });
   }
 
   function dynamics(dt) {
     relaxRate = Math.min(1 / 3600, 1 / dt); stepDt = dt;
     upwellingSteps++;
-    compute((pass) => dispatch(pass, 'oGradEta', group(ob.S, ob.T), E));
+    compute((pass) => dispatch(pass, 'oGradEta', group(ob.S, ob.T), nE));
     tendency(ob.S, ob.K1);
     barotropicStep(dt, ob.K1);
     advanceState(ob.T, ob.K1, dt / 2);
@@ -1560,8 +1673,8 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     setParams([dt / 6]);
     compute((pass) => dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), Math.ceil(OS.total / 2)));
   }
-  const rescalePass = (pass, g) => dispatch(pass, 'oRescale', g, C);
-  const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, E); dispatch(pass, 'oVelocityShiftClamp', g, E); };
+  const rescalePass = (pass, g) => dispatch(pass, 'oRescale', g, nC);
+  const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, nE); dispatch(pass, 'oVelocityShiftClamp', g, nE); };
   let edgesCurrent = false;
   function step(dt) {
     const parts = Math.max(1, Math.ceil(dt / inertialLimit)), part = dt / parts;
@@ -1599,9 +1712,9 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     setParams([o.regridTime > 0 && Number.isFinite(dt) ? Math.min(1, dt / o.regridTime) : 1]);
     const g = group(ob.S, ob.T);
     compute((pass) => {
-      dispatch(pass, 'oRegridTargets', g, C);
-      dispatch(pass, 'oRegridEdges', g, E);
-      dispatch(pass, 'oRegridCells', g, C);
+      dispatch(pass, 'oRegridTargets', g, nC);
+      dispatch(pass, 'oRegridEdges', g, nE);
+      dispatch(pass, 'oRegridCells', g, nC);
     });
     edgesCurrent = false;
   }
@@ -1609,16 +1722,16 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     setParams([dt]);
     const g = group(ob.S, ob.T);
     compute((pass) => {
-      dispatch(pass, 'oColumnCells', g, C);
-      dispatch(pass, 'oColumnEdges', g, E);
+      dispatch(pass, 'oColumnCells', g, nC);
+      dispatch(pass, 'oColumnEdges', g, nE);
     });
   }
 
   function eddyPasses(pass, g) {
-    if (restrat) dispatch(pass, 'oRestratCells', g, C);
-    dispatch(pass, 'oEddyFlux', g, E);
-    dispatch(pass, 'oEddyApply', g, L * C);
-    dispatch(pass, 'oEddyLeftover', g, C);
+    if (restrat) dispatch(pass, 'oRestratCells', g, nC);
+    dispatch(pass, 'oEddyFlux', g, nE);
+    dispatch(pass, 'oEddyApply', g, L * nC);
+    dispatch(pass, 'oEddyLeftover', g, nC);
   }
   function eddyTransport(dt) {
     if (!(eddyLimit > 0)) return;
@@ -1627,43 +1740,38 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     edgesCurrent = false;
   }
   function readSurface(surfaceT, ice, concentration = seaCover) {
-    device.queue.writeBuffer(ob.OD, 4 * OD.SURFT, Float32Array.from(surfaceT));
-    device.queue.writeBuffer(ob.OD, 4 * OD.SURFICE, Float32Array.from(ice));
-    device.queue.writeBuffer(ob.OD, 4 * OD.SURFCONC, concentration ? Float32Array.from(concentration) : new Float32Array(C));
-    compute((pass) => dispatch(pass, 'oReadSurface', group(ob.S, ob.T), C));
+    putSection('SURFT', surfaceT); putSection('SURFICE', ice); putSection('SURFCONC', concentration ?? new Float32Array(C));
+    compute((pass) => dispatch(pass, 'oReadSurface', group(ob.S, ob.T), nC));
   }
   function readSurfaceFromAtmosphere() {
-    core.encode((encoder) => {
-      encoder.copyBufferToBuffer(buffers.S, 4 * core.layout.S.TS, ob.OD, 4 * OD.SURFT, 4 * C);
-      encoder.copyBufferToBuffer(buffers.S, 4 * core.layout.S.ICE, ob.OD, 4 * OD.SURFICE, 4 * C);
-      encoder.copyBufferToBuffer(buffers.PH, 4 * core.layout.PH.CONC, ob.OD, 4 * OD.SURFCONC, 4 * C);
-    });
-    compute((pass) => dispatch(pass, 'oReadSurface', group(ob.S, ob.T), C));
+    const g = group(ob.S, ob.T);
+    compute((pass) => { dispatch(pass, 'oGatherSurface', g, nC); dispatch(pass, 'oReadSurface', g, nC); });
   }
   function stressFromAtmosphere() {
-    compute((pass) => dispatch(pass, 'oStressFromAtmosphere', group(ob.S, ob.T), E));
+    compute((pass) => dispatch(pass, 'oStressFromAtmosphere', group(ob.S, ob.T), nE));
   }
   const coverOf = (ice, concentration, i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
   function setStress(total, ice, concentration = null) {
     const masked = new Float32Array(E), cover = (i) => (shelf[i] ? 0 : coverOf(ice, concentration, i));
     for (let e = 0; e < E; e++) masked[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(mesh.cellsOnEdge[2 * e]) + cover(mesh.cellsOnEdge[2 * e + 1])) * (1 - o.iceStressTransmission)) * (1 - 0.5 * (shelf[mesh.cellsOnEdge[2 * e]] + shelf[mesh.cellsOnEdge[2 * e + 1]])) : 0;
-    device.queue.writeBuffer(ob.OD, 4 * OD.STRESS, masked);
+    putSection('STRESS', masked);
   }
   function salt(dt) {
     setParams([0, 0, 0, 0, 0, 0, dt]);
-    compute((pass) => { if (meltOn) dispatch(pass, 'oShelfBudget', group(ob.S, ob.T), WORKGROUP); dispatch(pass, 'oSalt', group(ob.S, ob.T), C); });
+    compute((pass) => { if (meltOn) dispatch(pass, 'oShelfBudget', group(ob.S, ob.T), WORKGROUP); dispatch(pass, 'oSalt', group(ob.S, ob.T), nC); });
   }
   function writeSurface(dt) {
     setParams([0, 0, 0, 0, 0, 0, dt]);
-    compute((pass) => dispatch(pass, 'oWriteSurface', group(ob.S, ob.T), C));
+    compute((pass) => dispatch(pass, 'oWriteSurface', group(ob.S, ob.T), nC));
   }
   function accumulateFreshwater(dt) {
     setParams([0, 0, 0, 0, 0, 0, dt]);
-    compute((pass) => dispatch(pass, 'oAccumulateFresh', group(ob.S, ob.T), C));
+    compute((pass) => dispatch(pass, 'oAccumulateFresh', group(ob.S, ob.T), nC));
   }
   function forgetAccumulated(which) {
-    device.queue.writeBuffer(ob.OD, 4 * (which === 'rain' ? OD.RAINSEEN : OD.RUNOFFSEEN), new Float32Array(C));
-    if (which !== 'rain') device.queue.writeBuffer(ob.OD, 4 * OD.DISCHARGESEEN, new Float32Array(C));
+    const clear = (name) => device.queue.writeBuffer(ob.OD, 4 * OD[name], new Float32Array(kinds[name].length));
+    clear(which === 'rain' ? 'RAINSEEN' : 'RUNOFFSEEN');
+    if (which !== 'rain') clear('DISCHARGESEEN');
   }
 
   /*
@@ -1694,28 +1802,28 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
   }) : null;
   function driftStep(dt) {
     const d = driftOptions, g = group(ob.S, ob.T);
-    if (++driftCalls % d.dynamicsEvery !== 0) { compute((pass) => dispatch(pass, 'iClearArrived', g, C)); return; }
+    if (++driftCalls % d.dynamicsEvery !== 0) { compute((pass) => dispatch(pass, 'iClearArrived', g, nC)); return; }
     const interval = dt * d.dynamicsEvery, { alpha, beta, passes } = iceDriftPasses(d, interval, o.iceDensity, driftSpacing);
     const sub = Math.max(1, Math.ceil(d.speedLimit * interval / (minSpacing * d.courantLimit)));
     const moving = d.rheology !== 'frozen', cavitating = d.rheology === 'cavitating';
     setParams([interval, alpha, beta, interval / sub]);
     compute((pass) => {
-      dispatch(pass, 'iPrepareCells', g, C);
-      dispatch(pass, 'iPrepareEdges', g, E);
+      dispatch(pass, 'iPrepareCells', g, nC);
+      dispatch(pass, 'iPrepareEdges', g, nE);
       if (moving) {
         for (let p = 0; p < passes; p++) {
-          if (cavitating) dispatch(pass, p % 2 ? 'iStressB' : 'iStressA', g, C);
-          dispatch(pass, p % 2 ? 'iMomentumBA' : 'iMomentumAB', g, E);
+          if (cavitating) dispatch(pass, p % 2 ? 'iStressB' : 'iStressA', g, nC);
+          dispatch(pass, p % 2 ? 'iMomentumBA' : 'iMomentumAB', g, nE);
         }
-        if (passes % 2) dispatch(pass, 'iCopy', g, E);
-        dispatch(pass, 'iStressOut', g, E);
+        if (passes % 2) dispatch(pass, 'iCopy', g, nE);
+        dispatch(pass, 'iStressOut', g, nE);
       }
-      for (let s = 0; s < sub; s++) { dispatch(pass, 'iFlux', g, E); dispatch(pass, s === sub - 1 ? 'iUpdateLast' : 'iUpdateMid', g, C); }
+      for (let s = 0; s < sub; s++) { dispatch(pass, 'iFlux', g, nE); dispatch(pass, s === sub - 1 ? 'iUpdateLast' : 'iUpdateMid', g, nC); }
     });
   }
   function setAirStress(values) {
     if (!given) throw new Error('setAirStress needs iceDrift: { airStress: \'given\' }');
-    device.queue.writeBuffer(ob.OD, 4 * OD.TAUA, Float32Array.from(values));
+    putSection('TAUA', values);
   }
   async function advanceCoupled(dt) {
     if (driftOptions) driftStep(dt);
@@ -1901,59 +2009,65 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
   function uploadArrays({ h, u, Q, Qref, W, Wref, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart) {
     edgesCurrent = false;
     upwellingFolds = 0; upwellingTime = NaN; upwellingSeen = upwellingSteps;
+    for (const name of RETAINED) delete outside[name];
+    const velocity = Float32Array.from(u);
+    for (let e = 0; e < E; e++) if (!edgeOcean[e]) velocity[e] = 0;
+    const heat = Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), salt = Wref ?? Float64Array.from(W, (w, n) => w - SALT_REFERENCE * h[n]);
     const packed = new Float32Array(OS.total);
-    packed.set(h, OS.OH); packed.set(u, OS.OU);
-    packed.set(Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), OS.OQ);
-    packed.set(Wref ?? Float64Array.from(W, (w, n) => w - SALT_REFERENCE * h[n]), OS.OW);
-    for (let e = 0; e < E; e++) if (!edgeOcean[e]) packed[OS.OU + e] = 0;
+    packed.set(toCells(h, L), OS.OH); packed.set(toEdges(velocity, L), OS.OU); packed.set(toCells(heat, L), OS.OQ); packed.set(toCells(salt, L), OS.OW);
     writeInPieces(device, ob.S, 0, packed);
     const encoder = device.createCommandEncoder();
     encoder.copyBufferToBuffer(ob.S, 0, ob.T, 0, 4 * OS.total);
     for (const b of [ob.K1, ob.K2, ob.K3, ob.K4]) encoder.clearBuffer(b, 0, 4 * OS.total);
     encoder.clearBuffer(ob.OD, 0, 4 * ODTOTAL);
     device.queue.submit([encoder.finish()]);
-    device.queue.writeBuffer(ob.OD, 4 * OD.ETA, Float32Array.from(eta));
-    device.queue.writeBuffer(ob.OD, 4 * OD.EMASK, Float32Array.from(edgeOcean));
-    device.queue.writeBuffer(ob.OD, 4 * OD.CMASK, Float32Array.from(cellOcean));
-    device.queue.writeBuffer(ob.OD, 4 * OD.SHELF, Float32Array.from(shelf));
-    device.queue.writeBuffer(ob.OD, 4 * OD.DRAFT, Float32Array.from(draft));
+    putSection('ETA', eta); putSection('EMASK', edgeOcean); putSection('CMASK', cellOcean); putSection('SHELF', shelf); putSection('DRAFT', draft);
     const restoredLoad = restart && [restart.shelfLoadRest, restart.shelfLoadT, restart.shelfLoadS].every((values) => values && values.length === C);
     const load = new Float32Array(C), loadT = new Float32Array(C), loadS = new Float32Array(C);
     if (restoredLoad) { load.set(restart.shelfLoadRest); loadT.set(restart.shelfLoadT); loadS.set(restart.shelfLoadS); }
     else for (let i = 0; i < C; i++) {
       if (!shelf[i]) continue;
-      loadT[i] = Math.fround(packed[OS.OQ + i] / packed[OS.OH + i]); loadS[i] = Math.fround(packed[OS.OW + i] / packed[OS.OH + i]);
+      const n = pk.cellAt[i];
+      loadT[i] = Math.fround(packed[OS.OQ + n] / packed[OS.OH + n]); loadS[i] = Math.fround(packed[OS.OW + n] / packed[OS.OH + n]);
       load[i] = shelfLoad[i] - seawaterDensity(loadT[i] + HEAT_REFERENCE, loadS[i] + SALT_REFERENCE) * draft[i];
     }
-    device.queue.writeBuffer(ob.OD, 4 * OD.LOAD, load); device.queue.writeBuffer(ob.OD, 4 * OD.LOADT, loadT); device.queue.writeBuffer(ob.OD, 4 * OD.LOADS, loadS);
-    device.queue.writeBuffer(ob.OD, 4 * OD.LIQUIDUS, Float32Array.from(shelfLoad, (weight, i) => (shelf[i] ? baseFreezing(o.gravity * weight, 273.15 - HEAT_REFERENCE) : 0)));
-    device.queue.writeBuffer(ob.OD, 4 * OD.MELTSUM, Float32Array.from(shelfMelted)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAW, Float32Array.from(shelfDraw));
+    putSection('LOAD', load); putSection('LOADT', loadT); putSection('LOADS', loadS);
+    putSection('LIQUIDUS', Float32Array.from(shelfLoad, (weight, i) => (shelf[i] ? baseFreezing(o.gravity * weight, 273.15 - HEAT_REFERENCE) : 0)));
+    putSection('MELTSUM', shelfMelted); putSection('DRAW', shelfDraw);
     device.queue.writeBuffer(ob.OD, 4 * OD.POOLS, Float32Array.from([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0]));
-    device.queue.writeBuffer(ob.OD, 4 * OD.BATH, Float32Array.from(D));
-    device.queue.writeBuffer(ob.OD, 4 * OD.FEDGE, Float32Array.from(mesh.fEdge));
-    if (third) { const beyond = beyondCells(mesh); device.queue.writeBuffer(ob.OD, 4 * OD.BEY, Float32Array.from(beyond.cell)); device.queue.writeBuffer(ob.OD, 4 * OD.BED, Float32Array.from(beyond.edge)); }
-    device.queue.writeBuffer(ob.OD, 4 * OD.EDDYK, Float32Array.from(eddyKappa));
+    putSection('BATH', D);
+    putSection('FEDGE', mesh.fEdge);
+    if (third) {
+      const beyond = beyondCells(mesh), cellsBeyond = new Float32Array(2 * nE), edgesBeyond = new Float32Array(2 * nE);
+      for (let s = 0; s < nE; s++) for (let side = 0; side < 2; side++) {
+        const g = s < edgeCount ? 2 * pk.edges[s] + side : -1;
+        cellsBeyond[2 * s + side] = g < 0 || beyond.cell[g] < 0 ? cellCount : pk.cellAt[beyond.cell[g]];
+        edgesBeyond[2 * s + side] = g < 0 || beyond.edge[g] < 0 ? edgeCount : pk.edgeAt[beyond.edge[g]];
+      }
+      device.queue.writeBuffer(ob.OD, 4 * OD.BEY, cellsBeyond); device.queue.writeBuffer(ob.OD, 4 * OD.BED, edgesBeyond);
+    }
+    putSection('EDDYK', eddyKappa);
     if (restrat) {
       const filtered = restart && restart.mleDepths && restart.mleDepths.length === C ? restart.mleDepths : restart && restart.boundaryDepths && restart.boundaryDepths.length === C ? restart.boundaryDepths : null;
-      device.queue.writeBuffer(ob.OD, 4 * OD.MLESCALE, Float32Array.from(restratScale));
-      device.queue.writeBuffer(ob.OD, 4 * OD.MLED, filtered ? Float32Array.from(filtered) : new Float32Array(C));
+      putSection('MLESCALE', restratScale);
+      putSection('MLED', filtered ?? new Float32Array(C));
     }
-    device.queue.writeBuffer(ob.OD, 4 * OD.FCELL, Float32Array.from(mesh.fCell));
-    device.queue.writeBuffer(ob.OD, 4 * OD.SILL, Float32Array.from(sillEdge));
+    putSection('FCELL', mesh.fCell);
+    putSection('SILL', sillEdge);
     if (driftOptions) {
-      device.queue.writeBuffer(ob.OD, 4 * OD.IDYN, driftMask);
-      if (restart && restart.iceVelocity && restart.iceVelocity.length === E) device.queue.writeBuffer(ob.OD, 4 * OD.UICE, Float32Array.from(restart.iceVelocity));
-      if (restart && restart.iceSigma && restart.iceSigma.length === C) device.queue.writeBuffer(ob.OD, 4 * OD.SIGMA, Float32Array.from(restart.iceSigma));
+      putSection('IDYN', driftMask);
+      if (restart && restart.iceVelocity && restart.iceVelocity.length === E) putSection('UICE', restart.iceVelocity);
+      if (restart && restart.iceSigma && restart.iceSigma.length === C) putSection('SIGMA', restart.iceSigma);
       driftCalls = 0;
     }
-    device.queue.writeBuffer(ob.OD, 4 * OD.MIXED, restart && restart.mixedDepths && restart.mixedDepths.length === C ? Float32Array.from(restart.mixedDepths) : mixedDepthsOf(h, Q, W));
-    if (restart && restart.boundaryDepths && restart.boundaryDepths.length === C) device.queue.writeBuffer(ob.OD, 4 * OD.BLD, Float32Array.from(restart.boundaryDepths));
+    putSection('MIXED', restart && restart.mixedDepths && restart.mixedDepths.length === C ? restart.mixedDepths : mixedDepthsOf(h, Q, W));
+    if (restart && restart.boundaryDepths && restart.boundaryDepths.length === C) putSection('BLD', restart.boundaryDepths);
     device.queue.writeBuffer(ob.OD, 4 * OD.DRAINSTART, drainStart);
     if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
-    device.queue.writeBuffer(ob.OD, 4 * OD.PREVVOL, restart ? Float32Array.from(restart.previousIceVolume) : Float32Array.from(ice, (_, i) => coverOf(ice, concentration, i) * ice[i]));
-    if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.FRESH, Float32Array.from(restart.fresh));
-    if (restart && restart.calved && restart.calved.length === C) device.queue.writeBuffer(ob.OD, 4 * OD.CALVED, Float32Array.from(restart.calved));
-    if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.BUOY, Float32Array.from(restart.buoyancy));
+    putSection('PREVVOL', restart ? restart.previousIceVolume : Float32Array.from(ice, (_, i) => coverOf(ice, concentration, i) * ice[i]));
+    if (restart) putSection('FRESH', restart.fresh);
+    if (restart && restart.calved && restart.calved.length === C) putSection('CALVED', restart.calved);
+    if (restart) putSection('BUOY', restart.buoyancy);
     const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
     const kept = (name) => (restart && restart[name] && restart[name].length === C ? restart[name] : null);
     core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h) : null, penetrated: kept('penetrated') });
@@ -1976,7 +2090,7 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
   function initialize(surfaceT, ice, { climatology: atlas = o.climatology ?? null, concentration = seaCover } = {}) {
     const arrays = initializeArrays(surfaceT, ice, atlas);
     uploadArrays(arrays, surfaceT, ice, null, concentration);
-    device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
+    putSection('PREVT0', arrays.previousT0);
     const { filled, T0 } = arrays;
     if (!filled) return null;
     let covered = 0, other = 0;
@@ -2010,14 +2124,14 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
   function upload(saved, surfaceT, ice, concentration = seaCover) {
     const surfaceAt = (i) => (ice[i] > 0 ? FREEZING_POINT : surfaceT[i]);
     const at = (k, i) => k * C + i;
-    const start = () => { const arrays = initializeArrays(surfaceT, ice, o.climatology ?? null); uploadArrays(arrays, surfaceT, ice, null, concentration); device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0)); };
+    const start = () => { const arrays = initializeArrays(surfaceT, ice, o.climatology ?? null); uploadArrays(arrays, surfaceT, ice, null, concentration); putSection('PREVT0', arrays.previousT0); };
     if (!saved || !saved.h) { start(); return; }
     if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * seawaterDensity(saved.T[i], saved.S[i]);
     for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     const classes = savedDensities(saved, C), own = classes && sameDensities(classes, labels) && saved.h.length === L * C;
     if (own && restartable(saved)) {
       uploadArrays(saved, surfaceT, ice, saved, concentration, false);
-      device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(saved.previousT0));
+      putSection('PREVT0', saved.previousT0);
       return;
     }
     const h = new Float64Array(L * C), u = new Float64Array(L * E), Q = new Float64Array(L * C), W = new Float64Array(L * C), eta = Float64Array.from(saved.eta);
@@ -2068,24 +2182,22 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     uploadArrays({ h, u, Q, W, eta }, surfaceT, ice, restart, concentration, !own);
     const previousT0 = new Float64Array(C);
     for (let i = 0; i < C; i++) previousT0[i] = cellOcean[i] ? Q[i] / h[i] : surfaceAt(i);
-    device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(restart ? restart.previousT0 : previousT0));
+    putSection('PREVT0', restart ? restart.previousT0 : previousT0);
   }
   async function readShelfMelt() {
-    const [melted, shelfMelted, shelfDraw, pools] = await readRanges(device, ob.OD, [{ offset: OD.MELT, length: C }, { offset: OD.MELTSUM, length: C }, { offset: OD.DRAW, length: C }, { offset: OD.POOLS, length: 12 }]);
+    const [[melted, shelfMelted, shelfDraw], [pools]] = await Promise.all([readSections(['MELT', 'MELTSUM', 'DRAW']), readRanges(device, ob.OD, [{ offset: OD.POOLS, length: 12 }])]);
     return { melted, shelfMelted, shelfDraw, pools };
   }
   async function download() {
-    const stateRead = readRanges(device, ob.S, [{ offset: 0, length: OS.total }]), etaRead = readRanges(device, ob.OD, [{ offset: OD.ETA, length: C }]);
-    const [s] = await stateRead;
-    const [etaRange] = await etaRead;
-    const h = Float64Array.from(s.subarray(OS.OH, OS.OH + L * C));
-    const u = Float64Array.from(s.subarray(OS.OU, OS.OU + L * E));
-    const Qraw = s.subarray(OS.OQ, OS.OQ + L * C), Wraw = s.subarray(OS.OW, OS.OW + L * C);
+    const [stores, [etaRange]] = await Promise.all([readStores(), readSections(['ETA'])]);
+    const h = Float64Array.from(stores.h);
+    const u = Float64Array.from(stores.u);
+    const Qraw = stores.q, Wraw = stores.w;
     const T = new Float64Array(L * C), S = new Float64Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); T[n] = (Qraw[n] + HEAT_REFERENCE * h[n]) / hh; S[n] = (Wraw[n] + SALT_REFERENCE * h[n]) / hh; }
     const eta = Float64Array.from(etaRange);
-    const shelfFields = hasShelves ? await readRanges(device, ob.OD, [{ offset: OD.MELTSUM, length: C }, { offset: OD.DRAW, length: C }]) : null;
-    const h1 = Float64Array.from((await readRanges(device, ob.OD, [{ offset: OD.MIXED, length: C }]))[0]), T1 = T.subarray(0, C), S1 = S.subarray(0, C), u1 = u.subarray(0, E);
+    const shelfFields = hasShelves ? await readSections(['MELTSUM', 'DRAW']) : null;
+    const h1 = Float64Array.from((await readSections(['MIXED']))[0]), T1 = T.subarray(0, C), S1 = S.subarray(0, C), u1 = u.subarray(0, E);
     const thermoclineDepth = new Float64Array(C);
     for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermoclineOf(h, T, S, i) : NaN;
     return { h, u, T, S, eta, h1, T1, S1, u1, thermoclineDepth, layers: L, ...(shelfFields ? { shelfMelted: Float64Array.from(shelfFields[0]), shelfDraw: Float64Array.from(shelfFields[1]) } : {}) };
@@ -2121,15 +2233,16 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
    */
   async function restartArrays() {
     const PHL = core.layout.PH;
+    const local = ['PREVT0', 'PREVVOL', 'FRESH', 'BUOY', 'MIXED', 'BLD', 'CALVED'];
     const [[Qref, Wref], [previousT0, previousIceVolume, fresh, buoyancy, mixedDepths, boundaryDepths, calved], [flux, capacity, penetrated]] = await Promise.all([
-      readRanges(device, ob.S, [{ offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]),
-      readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVVOL, length: C }, { offset: OD.FRESH, length: C }, { offset: OD.BUOY, length: C }, { offset: OD.MIXED, length: C }, { offset: OD.BLD, length: C }, { offset: OD.CALVED, length: C }]),
+      readRanges(device, ob.S, [{ offset: OS.OQ, length: L * nC }, { offset: OS.OW, length: L * nC }]).then((views) => views.map((view) => fromCells(view, L))),
+      readSections(local),
       readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }, { offset: PHL.PEN, length: C }]),
     ]);
     const transmission = o.penetration ? (await readRanges(device, buffers.PH, [{ offset: PHL.TRANS, length: C }]))[0] : null;
-    const [iceVelocity, iceSigma] = driftOptions ? await readRanges(device, ob.OD, [{ offset: OD.UICE, length: E }, { offset: OD.SIGMA, length: C }]) : [null, null];
-    const mleDepths = restrat ? (await readRanges(device, ob.OD, [{ offset: OD.MLED, length: C }]))[0] : null;
-    const [shelfLoadRest, shelfLoadT, shelfLoadS] = hasShelves ? await readRanges(device, ob.OD, [{ offset: OD.LOAD, length: C }, { offset: OD.LOADT, length: C }, { offset: OD.LOADS, length: C }]) : [null, null, null];
+    const [iceVelocity, iceSigma] = driftOptions ? await readSections(['UICE', 'SIGMA']) : [null, null];
+    const mleDepths = restrat ? (await readSections(['MLED']))[0] : null;
+    const [shelfLoadRest, shelfLoadT, shelfLoadS] = hasShelves ? await readSections(['LOAD', 'LOADT', 'LOADS']) : [null, null, null];
     return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, calved, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}), ...(iceVelocity ? { iceVelocity, iceSigma } : {}), ...(mleDepths ? { mleDepths } : {}), ...(shelfLoadRest ? { shelfLoadRest, shelfLoadT, shelfLoadS } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
@@ -2161,23 +2274,27 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     const interval = upwellingFolds > 0 && time !== null && Number.isFinite(upwellingTime) ? time - upwellingTime : 0;
     setParams([0, 0, 0, 0, depth, upwellingDepth, interval, upwellingFolds]);
     const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    if (folding) dispatch(pass, 'oFoldUpwelling', g, C);
-    if (wanted.length) dispatch(pass, 'oFrame', g, C);
-    if (summarize) dispatch(pass, 'oReduce', g, C);
+    if (folding) dispatch(pass, 'oFoldUpwelling', g, nC);
+    if (wanted.length) dispatch(pass, 'oFrame', g, nC);
+    if (summarize) dispatch(pass, 'oReduce', g, nC);
     pass.end();
     device.queue.submit([encoder.finish()]);
     if (folding) { upwellingFolds++; upwellingSeen = upwellingSteps; if (time !== null) upwellingTime = time; }
     if (!wanted.length && !summarize) return Promise.resolve({ fields: {}, diagnostics: null });
-    const ranges = wanted.map((name) => ({ name, offset: OF[FIELDS[name][0]], length: FIELDS[name][1] * C }));
-    if (summarize) ranges.push({ name: null, offset: OF.PART, length: reduced.length * reductionGroups(C) });
+    const ranges = wanted.map((name) => ({ name, offset: OF[FIELDS[name][0]], length: FIELDS[name][1] * nC }));
+    if (summarize) ranges.push({ name: null, offset: OF.PART, length: reduced.length * reductionGroups(nC) });
     return readRanges(device, ob.OF, ranges).then((views) => {
       const out = { fields: {}, diagnostics: null };
       views.forEach((view, n) => {
         const name = ranges[n].name;
-        if (!name) { out.diagnostics = diagnosticsFrom(finishReduction(reduced, view, C)); return; }
-        const width = FIELDS[name][1];
-        for (let i = 0; i < C; i++) if (!cellOcean[i] || (width === 1 && view[i] <= -1e30)) for (let c = 0; c < width; c++) view[width * i + c] = width === 1 ? NaN : 0;
-        out.fields[name] = view;
+        if (!name) { out.diagnostics = diagnosticsFrom(finishReduction(reduced, view, nC)); return; }
+        const width = FIELDS[name][1], field = new Float32Array(width * C).fill(width === 1 ? NaN : 0);
+        for (let s = 0; s < cellCount; s++) {
+          const i = pk.cells[s];
+          if (!cellOcean[i] || (width === 1 && view[s] <= -1e30)) continue;
+          for (let c = 0; c < width; c++) field[width * i + c] = view[width * s + c];
+        }
+        out.fields[name] = field;
       });
       return out;
     });
@@ -2190,6 +2307,7 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated, readShelfMelt, driftStep, setAirStress, iceDrift: driftOptions,
     setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, salt, writeSurface, step, phases, eddyTransport,
-    buffers: ob, layout: { OS, OD, B },
+    buffers: ob, layout: { OS, OD, B, MI: TMI, MF: TMF }, packing: pk,
+    readSection: async (name) => (await readSections([name]))[0], putSection, readStores,
   };
 }

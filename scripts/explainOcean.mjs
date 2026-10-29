@@ -103,7 +103,7 @@ const t0 = performance.now(), seconds = () => (performance.now() - t0) / 1000;
 const model = await createGpuModel(resumed ? stateGrid(resumed, null).mesh : new Grid(N), options);
 const { mesh, core, state, seaIce, gpu } = model, ocean = model.oceanEngine, { device } = gpu;
 const [pi, theta, u, surfaceT, q, qc, ice] = state;
-const C = mesh.nCells, E = mesh.nEdges, K = core.K, L = ocean.layers, PH = gpu.layout.PH, SL = gpu.layout.S, OD = ocean.layout.OD;
+const C = mesh.nCells, E = mesh.nEdges, K = core.K, L = ocean.layers, PH = gpu.layout.PH, SL = gpu.layout.S;
 const { cellsOnEdge, dvEdge, dcEdge, areaCell: weight } = mesh;
 const rhoCp = ocean.options.density * ocean.options.specificHeat, LATENT = model.moist.latentHeat, FUSION = seaIce.latentHeatFusion;
 const airCp = core.diagnostics.cp, gravity = core.diagnostics.g, { dSigma } = core.diagnostics;
@@ -128,7 +128,7 @@ if (resumed) {
   model.time = resumed.time;
   model.load({ ocean: false });
   model.ocean.load(resumed.ocean, surfaceT, ice);
-  if (resumed.eddyV && resumed.eddyV.length === L * E) device.queue.writeBuffer(ocean.buffers.OD, 4 * OD.EDDYV, Float32Array.from(resumed.eddyV));
+  if (resumed.eddyV && resumed.eddyV.length === L * E) ocean.putSection('EDDYV', resumed.eddyV);
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOW, Float32Array.from(resumed.seaSnow));
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOWALB, Float32Array.from(resumed.seaSnowAlbedo));
   const loaded = await model.ocean.serialize({ restart: true }), differing = [];
@@ -185,9 +185,9 @@ const edgeFluxes = edgeLayerFluxes(mesh, { layers: L, fixed: FIXED, options: oce
 const edgeOut = { volume: new Float64Array(L), net: new Float64Array(L), heat: new Float64Array(L), diffusion: new Float64Array(L), donor: new Int32Array(L) };
 
 async function oceanSnapshot() {
-  const [o, [eddy], [iceNow, skin], [concentration]] = await Promise.all([
+  const [o, eddy, [iceNow, skin], [concentration]] = await Promise.all([
     ocean.download(),
-    readRanges(device, ocean.buffers.OD, [{ offset: OD.EDDYV, length: L * E }]),
+    ocean.readSection('EDDYV'),
     readRanges(device, gpu.buffers.S, [{ offset: SL.ICE, length: C }, { offset: SL.TS, length: C }]),
     readRanges(device, gpu.buffers.PH, [{ offset: PH.CONC, length: C }]),
   ]);

@@ -16,10 +16,11 @@ import { SKIN_DEFAULTS } from '../physics/skin.module.js';
 import { lakeKernels, LAKE_SLOTS } from './lake.gpu.js';
 import { JERLOV } from '../ocean/layered.module.js';
 import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveColumns, gravityWaveBreaking, gravityWaveLid } from '../physics/gravityWaves.module.js';
+import { MAX_EDGES, MAX_EDGES_ON_EDGE, meshSections, fillMeshTables } from './meshTables.gpu.js';
 
 export { PHYSICS_PASSES };
 
-const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
+const WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
 const ELEMENTS_PER_THREAD = { advance: 2, combine: 2, dissipationClear: 8 };
 
 /*
@@ -47,8 +48,9 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const SPK = sponge ? sponge.layers : 0, SPB = sponge ? sponge.bands : 0, spongeCells = SPK ? C : 0, spongeEdges = SPK ? E : 0;
   const KC = K * C, KE = K * E, KV = K * V;
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
-  const MI = seq([['COE', 2 * E], ['VOE', 2 * E], ['EOC', MAX_EDGES * C], ['ESC', MAX_EDGES * C], ['COC', MAX_EDGES * C], ['NEC', C], ['COV', 3 * V], ['EOV', 3 * V], ['ESV', 3 * V], ['EOE', MAX_EDGES_ON_EDGE * E], ['NEE', E], ['SBC', spongeCells], ['SBS', SPK ? SPB + 1 : 0], ['SEB', spongeEdges], ['GWS', waveCells]]);
-  const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C], ['SEW', MAX_EDGES * spongeCells], ['SNW', MAX_EDGES * spongeCells], ['SES', spongeEdges], ['SEE', spongeEdges], ['SEN', spongeEdges], ['GWX', 6 * waveCells], ['GWP', 4 * waveEdges], ['GWF', waveCells]]);
+  const base = meshSections(C, E, V);
+  const MI = seq([...base.MI, ['SBC', spongeCells], ['SBS', SPK ? SPB + 1 : 0], ['SEB', spongeEdges], ['GWS', waveCells]]);
+  const MF = seq([...base.MF, ['GPHIS', E], ['PHIS', C], ['SEW', MAX_EDGES * spongeCells], ['SNW', MAX_EDGES * spongeCells], ['SES', spongeEdges], ['SEE', spongeEdges], ['SEN', spongeEdges], ['GWX', 6 * waveCells], ['GWP', 4 * waveEdges], ['GWF', waveCells]]);
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K], ['SPMR', K], ...(hybrid ? [['HW', K], ['DLS', K]] : [])]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   // The RK stages' scratch fields and the closures' share memory: neither set is read outside its own passes.
@@ -72,16 +74,32 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
  */
 const HELD_RADIATION = ['RADP', 'RADMU', 'RADSW', 'RADDF', 'RADABS', 'RADBACK', 'RADEMIT', 'RADOLR', 'RADT', 'RADSWDN', 'RADDIR', 'RADATM', 'RADTOA', 'RADREFL', 'RADCLRSW', 'RADCLROLR', 'RADTC'];
 
-function prelude(L, constants) {
-  const { C, E, V, K } = L;
-  const consts = Object.entries({ ...L.MI, ...Object.fromEntries(Object.entries(L.MF).map(([k, v]) => ['F_' + k, v])), ...Object.fromEntries(Object.entries(L.LV).map(([k, v]) => ['L_' + k, v])), ...Object.fromEntries(Object.entries(L.S).map(([k, v]) => ['S_' + k, v])), ...Object.fromEntries(Object.entries(L.D).map(([k, v]) => ['D_' + k, v])), ...Object.fromEntries(Object.entries(L.PH).map(([k, v]) => ['PH_' + k, v])), ...Object.fromEntries(Object.entries(L.FR).map(([k, v]) => ['FR_' + k, v])), GROUPS: groupsOf(C) })
-    .filter(([k]) => k !== 'total').map(([k, v]) => `const ${k}: i32 = ${v};`).join('\n');
-  return `
-const C: i32 = ${C}; const E: i32 = ${E}; const V: i32 = ${V}; const K: i32 = ${K}; const SPK: i32 = ${L.SPK}; const SPB: i32 = ${L.SPB};
-const MAXE: i32 = ${MAX_EDGES}; const MAXEE: i32 = ${MAX_EDGES_ON_EDGE};
+const named = (prefix, section) => Object.entries(section).filter(([k]) => k !== 'total').map(([k, v]) => `const ${prefix}${k}: i32 = ${v};`).join('\n');
+
+/*
+ * The physical constants and the offsets into LV, S, D, PH and FR, which
+ * the ocean's kernels share with the atmosphere's.
+ */
+export function fieldConstants(L, constants) {
+  return `const K: i32 = ${L.K}; const SPK: i32 = ${L.SPK}; const SPB: i32 = ${L.SPB};
 const KAPPA: f32 = ${constants.kappa}; const CP: f32 = ${constants.cp}; const P0: f32 = ${constants.p0}; const GRAV: f32 = ${constants.g}; const RGAS: f32 = ${constants.R};
 const VIRT: f32 = ${VIRTUAL_FACTOR}; const CDRAG: f32 = ${constants.dragCoefficient}; const GUST: f32 = ${constants.gustiness};
-${consts}
+${named('L_', L.LV)}
+${named('S_', L.S)}
+${named('D_', L.D)}
+${named('PH_', L.PH)}
+${named('FR_', L.FR)}`;
+}
+
+function prelude(L, constants) {
+  const { C, E, V } = L;
+  return `
+const C: i32 = ${C}; const E: i32 = ${E}; const V: i32 = ${V};
+const MAXE: i32 = ${MAX_EDGES}; const MAXEE: i32 = ${MAX_EDGES_ON_EDGE};
+${named('', L.MI)}
+${named('F_', L.MF)}
+const GROUPS: i32 = ${groupsOf(C)};
+${fieldConstants(L, constants)}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
 @group(0) @binding(1) var<storage, read_write> MF: array<f32>;
 @group(0) @binding(2) var<storage, read_write> LV: array<f32>;
@@ -884,27 +902,9 @@ export async function createGpuCore(mesh, {
 
   const mi = new Int32Array(L.MI.total);
   const put = (arr, off, src) => arr.set(src, off);
-  const padded = (source, fill) => Int32Array.from({ length: MAX_EDGES * C }, (_, slot) => {
-    const i = Math.floor(slot / MAX_EDGES), m = slot % MAX_EDGES;
-    return m < mesh.nEdgesOnCell[i] ? source[mesh.maxEdges * i + m] : fill(i);
-  });
-  put(mi, L.MI.COE, mesh.cellsOnEdge); put(mi, L.MI.VOE, mesh.verticesOnEdge);
-  put(mi, L.MI.EOC, padded(mesh.edgesOnCell, (i) => mesh.edgesOnCell[mesh.maxEdges * i])); put(mi, L.MI.ESC, padded(mesh.edgeSignOnCell, () => 0));
-  put(mi, L.MI.COC, padded(mesh.cellsOnCell, (i) => i)); put(mi, L.MI.NEC, mesh.nEdgesOnCell); put(mi, L.MI.COV, mesh.cellsOnVertex); put(mi, L.MI.EOV, mesh.edgesOnVertex);
-  put(mi, L.MI.ESV, mesh.edgeSignOnVertex); put(mi, L.MI.NEE, mesh.nEdgesOnEdge);
-  if (sponge) { put(mi, L.MI.SBC, sponge.order); put(mi, L.MI.SBS, sponge.bandStart); put(mi, L.MI.SEB, sponge.edgeBand); }
-  const edgesOnEdge = Int32Array.from({ length: MAX_EDGES_ON_EDGE * E }, (_, slot) => (slot % MAX_EDGES_ON_EDGE < mesh.nEdgesOnEdge[Math.floor(slot / MAX_EDGES_ON_EDGE)] ? mesh.edgesOnEdge[mesh.maxEdgesOnEdge * Math.floor(slot / MAX_EDGES_ON_EDGE) + slot % MAX_EDGES_ON_EDGE] : Math.floor(slot / MAX_EDGES_ON_EDGE)));
-  put(mi, L.MI.EOE, edgesOnEdge);
   const mf = new Float32Array(L.MF.total);
-  put(mf, L.MF.AREA, mesh.areaCell); put(mf, L.MF.ATRI, mesh.areaTriangle); put(mf, L.MF.DC, mesh.dcEdge); put(mf, L.MF.DV, mesh.dvEdge); put(mf, L.MF.FV, mesh.fVertex);
-  put(mf, L.MF.KAV, mesh.kiteAreasOnVertex);
-  put(mf, L.MF.PVW, Float64Array.from({ length: MAX_EDGES_ON_EDGE * E }, (_, slot) => {
-    const e = Math.floor(slot / MAX_EDGES_ON_EDGE), s = slot % MAX_EDGES_ON_EDGE;
-    if (s >= mesh.nEdgesOnEdge[e]) return 0;
-    const source = mesh.maxEdgesOnEdge * e + s;
-    return mesh.weightsOnEdge[source] * mesh.dvEdge[mesh.edgesOnEdge[source]];
-  }));
-  put(mf, L.MF.NEDGE, mesh.nEdge); put(mf, L.MF.LAT, mesh.latCell); put(mf, L.MF.XC, mesh.xCell);
+  fillMeshTables(mesh, L.MI, L.MF, mi, mf);
+  if (sponge) { put(mi, L.MI.SBC, sponge.order); put(mi, L.MI.SBS, sponge.bandStart); put(mi, L.MI.SEB, sponge.edgeBand); }
   if (surfaceGeopotential) put(mf, L.MF.PHIS, surfaceGeopotential);
   if (sponge) {
     const paddedWeight = (weights) => Float64Array.from({ length: MAX_EDGES * C }, (_, slot) => { const i = Math.floor(slot / MAX_EDGES), m = slot % MAX_EDGES; return m < mesh.nEdgesOnCell[i] ? weights[mesh.maxEdges * i + m] : 0; });
@@ -957,6 +957,7 @@ export async function createGpuCore(mesh, {
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
   const head = prelude(L, { kappa, cp, p0, g, R, dragCoefficient, gustiness, physics: physicsConstants({ ...phys, kTop, stratusLayer: nearestLayer(sigmaMid, phys.stratusSigma), stabilityLayer: nearestLayer(sigmaMid, STABILITY_SIGMA) }) + orographyConstants(phys), functions: physicsFunctions(phys) });
   const preludeConstants = head.slice(0, head.indexOf('@group(0) @binding(0)'));
+  const sharedConstants = fieldConstants(L, { kappa, cp, p0, g, R, dragCoefficient, gustiness });
   let meshSpacing = 0;
   for (let e = 0; e < E; e++) meshSpacing += mesh.dcEdge[e];
   meshSpacing /= E;
@@ -1367,5 +1368,5 @@ export async function createGpuCore(mesh, {
   function uploadLake(values) { retained.lake = values; device.queue.writeBuffer(buffers.PH, 4 * L.PH.LAKE, values); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, uploadLake, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys, aerosol, refreshAerosol };
+  return { device, mesh, meshSpacing, preludeConstants, fieldConstants: sharedConstants, layout: L, buffers, kernels, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, uploadLake, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys, aerosol, refreshAerosol };
 }

@@ -47,12 +47,14 @@ function compile(model, name, body, prefix, offsets, out) {
   const { device, buffers } = gpu;
   const phys = gpu.physics;
   const constants = physicsConstants({ ...phys, kTop: gpu.kTop, stratusLayer: nearestLayer(gpu.sigmaMid, phys.stratusSigma), stabilityLayer: nearestLayer(gpu.sigmaMid, STABILITY_SIGMA) });
-  const names = ['MI', 'MF', 'LV', 'IN', 'OUT', 'D', 'P', 'PH', 'OD'];
+  const names = ['MI', 'MF', 'LV', 'IN', 'OUT', 'D', 'P', 'PH', 'OD', 'OMI'];
   const code = `${gpu.preludeConstants}
-${names.map((n, b) => `@group(0) @binding(${b}) var<storage, read_write> ${n}: array<${n === 'MI' ? 'i32' : 'f32'}>;`).join('\n')}
+${names.map((n, b) => `@group(0) @binding(${b}) var<storage, read_write> ${n}: array<${n === 'MI' || n === 'OMI' ? 'i32' : 'f32'}>;`).join('\n')}
 ${constants}
 ${physicsFunctions(phys)}
 const O_STRESS: i32 = ${ocean.layout.OD.STRESS};
+const O_GEE: i32 = ${ocean.layout.MI.GEE};
+const O_EDGES: i32 = ${ocean.packing.edges.length};
 ${ocean.layout.OD.TAUA === undefined ? '' : `const O_TAUA: i32 = ${ocean.layout.OD.TAUA};`}
 ${Object.entries(offsets).filter(([k]) => k !== 'total').map(([k, v]) => `const ${prefix}${k}: i32 = ${v};`).join('\n')}
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -62,7 +64,7 @@ ${body}
   const layout = device.createBindGroupLayout({ entries: names.map((_, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } })) });
   const pipeline = device.createComputePipeline({ label: name, layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }), compute: { module: device.createShaderModule({ code, label: name }), entryPoint: 'main' } });
   const params = storageBuffer(device, new Float32Array(8));
-  const group = device.createBindGroup({ layout, entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, out, buffers.D, params, buffers.PH, ocean.buffers.OD].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+  const group = device.createBindGroup({ layout, entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, out, buffers.D, params, buffers.PH, ocean.buffers.OD, ocean.buffers.MI].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   return function run(values, count) {
     gpu.writeParams(Float32Array.from({ length: 8 }, (_, k) => values[k] ?? 0), params);
     gpu.compute((pass) => {
@@ -84,7 +86,7 @@ export async function createForcingRecorder(model, from = null) {
   const A = seq([...SUMMED.map((name) => [name, C]), ['stress', E], ...(drifting ? [['airStress', E]] : [])]);
   const acc = emptyBuffer(device, 4 * A.total);
   const run = compile(model, 'recordForcing', `
-  if (n < E && P[0] > 0.5) { OUT[A_stress + n] += OD[O_STRESS + n];${drifting ? ' OUT[A_airStress + n] += OD[O_TAUA + n];' : ''} }
+  if (n < O_EDGES && P[0] > 0.5) { let e = OMI[O_GEE + n]; OUT[A_stress + e] += OD[O_STRESS + n];${drifting ? ' OUT[A_airStress + e] += OD[O_TAUA + n];' : ''} }
   if (n >= C) { return; }
   let i = n; let ice = IN[S_ICE + i]; let conc = PH[PH_CONC + i];
   OUT[A_netFlux + i] += PH[PH_SFLUX + i];
@@ -167,6 +169,9 @@ export function createForcedOcean(model) {
   if (snowfall > 0.0) {
     ${snowOnSea('snowfall')}
   }`, 'FC_', F, forcing);
+  const loadStress = compile(model, 'forcedStress', `
+  if (n >= O_EDGES) { return; }
+  OD[O_STRESS + n] = OUT[FC_stress + OMI[O_GEE + n]];`, 'FC_', F, forcing);
   let counted = 0, perInterval = 0;
 
   return {
@@ -195,9 +200,7 @@ export function createForcedOcean(model) {
       ocean.accumulateFreshwater(oceanDt);
       if (ocean.iceDrift) ocean.driftStep(oceanDt);
       ocean.readSurfaceFromAtmosphere();
-      const encoder = device.createCommandEncoder();
-      encoder.copyBufferToBuffer(forcing, 4 * F.stress, ocean.buffers.OD, 4 * ocean.layout.OD.STRESS, 4 * E);
-      device.queue.submit([encoder.finish()]);
+      loadStress([], ocean.packing.edges.length);
       ocean.step(oceanDt);
       ocean.phases.regrid(oceanDt); ocean.phases.column(oceanDt);
       ocean.salt(oceanDt);

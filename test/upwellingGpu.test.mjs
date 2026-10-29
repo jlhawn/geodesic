@@ -20,7 +20,6 @@ import { layerVelocities, velocityAt, worstDifference, unevenTopLayers } from '.
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
-const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
 const N = 16, DT = 1350, HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
@@ -98,7 +97,7 @@ test('the GPU memory is the layer-weighted fold of the velocities computed from 
   const { cellOcean, sillEdge, edgeOcean } = cpu, L = gpu.layers;
   const sea = (values) => values.filter((_, n) => cellOcean[n % C]);
   const own = async () => {
-    const state = await gpu.download(), [memory] = await readRanges(device, gpu.buffers.OD, [{ offset: gpu.layout.OD.UPWM, length: L * C }]);
+    const state = await gpu.download(), memory = await gpu.readSection('UPWM');
     return { h: state.h, W: layerVelocities(mesh, L, { h: state.h, u: state.u, eta: state.eta, sillEdge, edgeOcean }, cellOcean), memory: Float64Array.from(memory) };
   };
   const compare = (expected, got, label) => {
