@@ -51,7 +51,7 @@ test('the ocean takes each cell\'s own drag coefficient: with the sea\'s at zero
     const model = await freshModel({ surface: { dragCoefficient }, ocean: { iceDrift: false } }), { mesh } = model, E = mesh.nEdges, ocean = model.oceanEngine;
     for (let n = 0; n < ocean.everySteps; n++) await model.step(DT);
     await model.settle();
-    const [[stress], physics] = await Promise.all([readRanges(model.gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.STRESS, length: E }]), model.gpu.downloadPhysics()]);
+    const [stress, physics] = await Promise.all([ocean.readSection('STRESS'), model.gpu.downloadPhysics()]);
     const cpu = createModel(new Grid(N), { topography, ocean: false, surface: { dragCoefficient } });
     initializeState(cpu, { geostrophic: !cpu.surfaceGeopotential }).forEach((values, a) => cpu.state[a].set(values));
     cpu.step(DT);
@@ -86,7 +86,7 @@ test('the recorded stress and fluxes are the means of what each step handed the 
   for (let n = 1; n <= PER_DAY; n++) {
     await model.step(DT);
     recorder.step();
-    const [[s], [f, e]] = await Promise.all([readRanges(gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.STRESS, length: E }]), readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.SFLUX, length: C }, { offset: gpu.layout.PH.EVAP, length: C }])]);
+    const [s, [f, e]] = await Promise.all([ocean.readSection('STRESS'), readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.SFLUX, length: C }, { offset: gpu.layout.PH.EVAP, length: C }])]);
     if (n % ocean.everySteps === 0) { oceanSteps++; for (let x = 0; x < E; x++) stress[x] += s[x]; }
     for (let i = 0; i < C; i++) { net[i] += f[i]; evaporation[i] += e[i]; }
   }

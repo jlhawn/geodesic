@@ -12,22 +12,23 @@ import { SST_REFERENCE, sstMeanOf } from '../sstMeans.module.js';
  * the sum before it returns, so the next day's steps may follow at once.
  */
 export function createGpuSstRecorder(model, from = null) {
-  const { gpu, oceanEngine: ocean } = model, { device } = gpu, C = model.mesh.nCells, { OD } = ocean.layout;
+  const { gpu, oceanEngine: ocean } = model, { device } = gpu, C = model.mesh.nCells, { OD, MI } = ocean.layout, cells = ocean.packing.cells.length;
   const sum = emptyBuffer(device, 4 * C);
   if (from) device.queue.writeBuffer(sum, 0, Float32Array.from(from.sum));
   const kernel = createKernel(device, `
 @group(0) @binding(0) var<storage, read_write> OD: array<f32>;
 @group(0) @binding(1) var<storage, read_write> SUM: array<f32>;
+@group(0) @binding(2) var<storage, read_write> MI: array<i32>;
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let i = i32(id.x);
-  if (i >= ${C} || OD[${OD.CMASK} + i] < 0.5) { return; }
-  SUM[i] += OD[${OD.T0} + i] - ${SST_REFERENCE};
+  let s = i32(id.x);
+  if (s >= ${cells} || OD[${OD.CMASK} + s] < 0.5) { return; }
+  SUM[MI[${MI.GCE} + s]] += OD[${OD.T0} + s] - ${SST_REFERENCE};
 }`, 'sstSum');
   let counted = 0, samples = from ? from.samples : 0;
   return {
     step() {
       if (++counted % ocean.everySteps !== 0) return;
-      gpu.compute((pass) => kernel.run(pass, [ocean.buffers.OD, sum], C));
+      gpu.compute((pass) => kernel.run(pass, [ocean.buffers.OD, sum, ocean.buffers.MI], cells));
       samples++;
     },
     day() {

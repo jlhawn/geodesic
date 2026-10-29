@@ -214,7 +214,7 @@ ${skin ? '    PH[PH_WARM + i] = 0.0; PH[PH_COOL + i] = 0.0;\n' : ''}  } else ${S
   };
 }
 
-export const LAKE_DRAIN_WGSL = `      if (PH[PH_LAND + j] < -0.5) { let lakeIndex = PH_LAKE + ${slot('pending')} * C + j; fresh -= PH[lakeIndex] * OD[O_DRAINW + p]; PH[lakeIndex] = 0.0; }
+export const LAKE_DRAIN_WGSL = `      if (PH[PH_LAND + j] < -0.5) { let lakeIndex = PH_LAKE + ${slot('pending')} * GC + j; fresh -= PH[lakeIndex] * OD[O_DRAINW + p]; PH[lakeIndex] = 0.0; }
 `;
 
 export function lakeUpload(lake, C) {

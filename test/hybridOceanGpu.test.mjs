@@ -19,7 +19,6 @@ import { SEAWATER, seawaterDensity, salinityForDensity } from '../js/ocean/seawa
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
-const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
@@ -160,14 +159,14 @@ const FLOORS = {
 async function conservation(options) {
   const { mesh, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges;
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options });
-  const gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu, { OS } = gpu.layout, L = gpu.layers, rhoCp = gpu.options.density * gpu.options.specificHeat;
+  const gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu, L = gpu.layers, rhoCp = gpu.options.density * gpu.options.specificHeat;
   gpu.initialize(Float64Array.from(surfaceT), ice);
   for (let n = 0; n < 4; n++) await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
   let area = 0;
   for (let i = 0; i < C; i++) if (gpu.cellOcean[i]) area += mesh.areaCell[i];
   const snapshot = async () => {
     await device.queue.onSubmittedWorkDone();
-    const [h, q, w] = await readRanges(device, gpu.buffers.S, [{ offset: OS.OH, length: L * C }, { offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]);
+    const { h, q, w } = await gpu.readStores();
     return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w) };
   };
   const books = (before, after) => {
@@ -383,7 +382,7 @@ test('with langmuirIce tanh the GPU hybrid ocean weights the Langmuir factor by 
 test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes across a strong front at N=16 and keeps the water, heat and salt it stores', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { mesh, cpu, surfaceT, ice, stress } = scenario(N, RESTRAT), C = mesh.nCells;
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: RESTRAT });
-  const gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu, { OS } = gpu.layout, L = gpu.layers, rhoCp = gpu.options.density * gpu.options.specificHeat;
+  const gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu, L = gpu.layers, rhoCp = gpu.options.density * gpu.options.specificHeat;
   cpu.initialize(Float64Array.from(surfaceT), ice);
   const front = (i) => 288 + 4 * Math.tanh((mesh.latCell[i] - 0.8) / 0.12);
   for (let i = 0; i < C; i++) {
@@ -404,7 +403,7 @@ test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes
   assert.ok(begin.h < 1e-3 && begin.T < 1e-4 && begin.S < 1e-5, `the upload parts from the CPU state: ${JSON.stringify(begin)}`);
   const area = mesh.areaCell, snapshot = async () => {
     await device.queue.onSubmittedWorkDone();
-    const [h, q, w] = await readRanges(device, gpu.buffers.S, [{ offset: OS.OH, length: L * C }, { offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]);
+    const { h, q, w } = await gpu.readStores();
     return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w) };
   };
   let before = await snapshot(), worst = { volume: 0, heat: 0, salt: 0, column: 0 };

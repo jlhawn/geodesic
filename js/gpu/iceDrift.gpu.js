@@ -43,19 +43,20 @@ ${constant('ID_MINCONC', minimumConcentration)} ${constant('ID_GONECONC', remova
 ${constant('ID_MAXH', remnant.thickness)} ${constant('ID_MAXSNOW', remnant.snow)} ${constant('ID_EMIN', thermo.skinHeatCapacity * (remnant.skinLow - freezing))} ${constant('ID_EMAX', thermo.skinHeatCapacity * (remnant.skinHigh - freezing))}
 fn openCell(i: i32) -> bool { return OD[O_CMASK + i] > 0.5 && OD[O_SHELF + i] < 0.5; }
 fn iceCover(i: i32) -> f32 {
-  let c = PH[PH_CONC + i];
-  return select(0.0, select(1.0, c, c > 0.0), S[S_ICE + i] > 0.0 && openCell(i));
+  let g = gcell(i); let c = PH[PH_CONC + g];
+  return select(0.0, select(1.0, c, c > 0.0), S[S_ICE + g] > 0.0 && openCell(i));
 }
 fn hiOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IV + x] / a, a > 0.0); }
 fn siOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_ISN + x] / a, a > 0.0); }
 fn diOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IEN + x] / a, a > 0.0); }
 fn aiOf(x: i32) -> f32 { let sn = OD[O_ISN + x]; return select(ID_FRESH, OD[O_ISA + x] / sn, sn > 0.0); }
 fn rawStress(e: i32, a: i32, b: i32) -> f32 {
-${given ? '  return OD[O_TAUA + e];' : `${implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { return PH[PH_STRESS + e]; }\n' : ''}  let bottom = (K - 1) * C;
-  let rhoA = S[S_PI + a] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + a] * D[D_EXM + bottom + a]);
-  let rhoB = S[S_PI + b] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + b] * D[D_EXM + bottom + b]);
-  let fa = PH[PH_DRAG + a] * rhoA * max(D[D_WIND + a], GUSTO); let fb = PH[PH_DRAG + b] * rhoB * max(D[D_WIND + b], GUSTO);
-  return 0.5 * (fa + fb) * S[S_U + (K - 1) * E + e];`}
+${given ? '  return OD[O_TAUA + e];' : `  let ga = gcell(a); let gb = gcell(b); let ge = gedge(e);
+${implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { return PH[PH_STRESS + ge]; }\n' : ''}  let bottom = (K - 1) * GC;
+  let rhoA = S[S_PI + ga] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + ga] * D[D_EXM + bottom + ga]);
+  let rhoB = S[S_PI + gb] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + gb] * D[D_EXM + bottom + gb]);
+  let fa = PH[PH_DRAG + ga] * rhoA * max(D[D_WIND + ga], GUSTO); let fb = PH[PH_DRAG + gb] * rhoB * max(D[D_WIND + gb], GUSTO);
+  return 0.5 * (fa + fb) * S[S_U + (K - 1) * GE + ge];`}
 }
 `;
 }
@@ -68,8 +69,9 @@ ${given ? '  return OD[O_TAUA + e];' : `${implicitStress ? '  if (PH[PH_STRESSOK
 export const driftStressKernel = (K, idx) => `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   if (OD[O_EMASK + e] < 0.5) { OD[O_STRESS + e] = 0.0; OD[O_TAUA + e] = 0.0; return; }
-  let coverA = select(0.0, select(1.0, PH[PH_CONC + a], PH[PH_CONC + a] > 0.0), OD[O_ICED + a] > 0.5);
-  let coverB = select(0.0, select(1.0, PH[PH_CONC + b], PH[PH_CONC + b] > 0.0), OD[O_ICED + b] > 0.5);
+  let ga = gcell(a); let gb = gcell(b);
+  let coverA = select(0.0, select(1.0, PH[PH_CONC + ga], PH[PH_CONC + ga] > 0.0), OD[O_ICED + a] > 0.5);
+  let coverB = select(0.0, select(1.0, PH[PH_CONC + gb], PH[PH_CONC + gb] > 0.0), OD[O_ICED + b] > 0.5);
   let area = 0.5 * (coverA + coverB);
   let raw = rawStress(e, a, b);
   OD[O_TAUA + e] = raw;
@@ -91,9 +93,10 @@ export function iceDriftKernels({ K, idx, options: d, third }) {
   OD[O_ARRIVED + i] = 0.0; OD[O_ITOUCH + i] = 0.0;
   let a = iceCover(i);
   if (a > 0.0) {
-    let v = a * S[S_ICE + i]; let sn = a * PH[PH_SNOW + i];
+    let gi = gcell(i);
+    let v = a * S[S_ICE + gi]; let sn = a * PH[PH_SNOW + gi];
     OD[O_IA + i] = a; OD[O_IV + i] = v; OD[O_ISN + i] = sn; OD[O_IA0 + i] = a; OD[O_IV0 + i] = v;
-    OD[O_IEN + i] = a * ID_SKINC * (S[S_TS + i] - ID_FREEZE); OD[O_ISA + i] = sn * PH[PH_SNOWALB + i];
+    OD[O_IEN + i] = a * ID_SKINC * (S[S_TS + gi] - ID_FREEZE); OD[O_ISA + i] = sn * PH[PH_SNOWALB + gi];
     OD[O_IMASS + i] = ICEDENS * v + sn;
 ${cavitating ? '    OD[O_IPRESS + i] = ID_STRENGTH * v * exp(-ID_DECAY * (1.0 - a));\n' : ''}  } else {
     OD[O_IA + i] = 0.0; OD[O_IV + i] = 0.0; OD[O_ISN + i] = 0.0; OD[O_IEN + i] = 0.0; OD[O_ISA + i] = 0.0; OD[O_IMASS + i] = 0.0; OD[O_IA0 + i] = 0.0; OD[O_IV0 + i] = 0.0;
@@ -206,20 +209,21 @@ ${third ? `  let beyond = i32(OD[O_BEY + 2 * e + select(1, 0, forward)]);
   let omega = MF[F_AREA + i];
   let A1 = max(0.0, OD[O_IA + i] + dA / omega); let V1 = max(0.0, OD[O_IV + i] + dV / omega); let S1 = max(0.0, OD[O_ISN + i] + dS / omega);
   let E1 = OD[O_IEN + i] + dE / omega; let Sa1 = max(0.0, OD[O_ISA + i] + dSa / omega);
-${last ? `  OD[O_PREVVOL + i] += V1 - OD[O_IV0 + i];
+${last ? `  let gi = gcell(i);
+  OD[O_PREVVOL + i] += V1 - OD[O_IV0 + i];
   let started = OD[O_IA0 + i];
   let full = min(A1, ID_MAXCONC);
   let tidy = full >= ID_MINCONC || (V1 <= ID_MAXH * full && S1 <= ID_MAXSNOW * full && E1 >= ID_EMIN * full && E1 <= ID_EMAX * full);
   if (full < ID_GONECONC || V1 < ID_GONEVOL || !tidy) {
-    let base = select(S[S_TS + i], ID_FREEZE, started > 0.0);
-    S[S_TS + i] = base + (E1 - ID_LATENT * V1 - ID_LFUS * S1) / PH[PH_CAP + i];
-    S[S_ICE + i] = 0.0; PH[PH_SNOW + i] = 0.0; PH[PH_SNOWALB + i] = ID_FRESH; PH[PH_CONC + i] = 0.0;
+    let base = select(S[S_TS + gi], ID_FREEZE, started > 0.0);
+    S[S_TS + gi] = base + (E1 - ID_LATENT * V1 - ID_LFUS * S1) / PH[PH_CAP + gi];
+    S[S_ICE + gi] = 0.0; PH[PH_SNOW + gi] = 0.0; PH[PH_SNOWALB + gi] = ID_FRESH; PH[PH_CONC + gi] = 0.0;
     return;
   }
-  if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + i]; OD[O_ARRIVED + i] = 1.0; }
-  S[S_ICE + i] = V1 / full; PH[PH_CONC + i] = full; PH[PH_SNOW + i] = S1 / full;
-  S[S_TS + i] = ID_FREEZE + E1 / (full * ID_SKINC);
-  PH[PH_SNOWALB + i] = select(ID_FRESH, min(1.0, Sa1 / S1), S1 > 0.0);
+  if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + gi]; OD[O_ARRIVED + i] = 1.0; }
+  S[S_ICE + gi] = V1 / full; PH[PH_CONC + gi] = full; PH[PH_SNOW + gi] = S1 / full;
+  S[S_TS + gi] = ID_FREEZE + E1 / (full * ID_SKINC);
+  PH[PH_SNOWALB + gi] = select(ID_FRESH, min(1.0, Sa1 / S1), S1 > 0.0);
 }` : `  OD[O_IA + i] = A1; OD[O_IV + i] = V1; OD[O_ISN + i] = S1; OD[O_IEN + i] = E1; OD[O_ISA + i] = Sa1; OD[O_ITOUCH + i] = 1.0;
 }`}`;
   kernels.iUpdateMid = update(false);

@@ -367,10 +367,9 @@ if (startStep && saved.rainTotal) {
   queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.RUNOFF, Float32Array.from(saved.runoffTotal));
   if (saved.dischargeTotal) queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.DISCHARGE, Float32Array.from(saved.dischargeTotal));
   if (model.oceanEngine && saved.rainSeen) {
-    const { OD } = model.oceanEngine.layout;
-    queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.RAINSEEN, Float32Array.from(saved.rainSeen));
-    queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.RUNOFFSEEN, Float32Array.from(saved.runoffSeen));
-    if (saved.dischargeSeen) queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.DISCHARGESEEN, Float32Array.from(saved.dischargeSeen));
+    model.oceanEngine.putSection('RAINSEEN', saved.rainSeen);
+    model.oceanEngine.putSection('RUNOFFSEEN', saved.runoffSeen);
+    if (saved.dischargeSeen) model.oceanEngine.putSection('DISCHARGESEEN', saved.dischargeSeen);
   }
 }
 const RECORD = process.env.RECORD;
@@ -525,7 +524,7 @@ if (step) {
   const [rainTotal, runoffTotal, dischargeTotal] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.RAIN, length: C }, { offset: PH.RUNOFF, length: C }, { offset: PH.DISCHARGE, length: C }]);
   Object.assign(partial, { rainTotal, runoffTotal, dischargeTotal });
   if (model.oceanEngine) {
-    const { OD } = model.oceanEngine.layout, [rainSeen, runoffSeen, dischargeSeen] = await readRanges(model.gpu.device, model.oceanEngine.buffers.OD, [{ offset: OD.RAINSEEN, length: C }, { offset: OD.RUNOFFSEEN, length: C }, { offset: OD.DISCHARGESEEN, length: C }]);
+    const [rainSeen, runoffSeen, dischargeSeen] = await Promise.all(['RAINSEEN', 'RUNOFFSEEN', 'DISCHARGESEEN'].map((name) => model.oceanEngine.readSection(name)));
     Object.assign(partial, { rainSeen, runoffSeen, dischargeSeen });
   }
 }
@@ -555,7 +554,7 @@ if (days > 0 && !step) {
   log(`ocean after ${days} days: warm pool ${sst(warmPool).toFixed(1)} °C, cold tongue ${sst(coldTongue).toFixed(1)} °C (W−E ${(sst(westPacific) - sst(eastPacific)).toFixed(1)} K), ${THERMOCLINE_DENSITY} class top W Pac ${classTop(westPacific).toFixed(0)} m, E Pac ${classTop(eastPacific).toFixed(0)} m`);
   const daily = (sums) => Float64Array.from(sums, (x) => x / splitDays);
   log(convectionLine(mesh, { land, ice: state[6] }, { convective: daily(split.convective), largeScale: daily(split.largeScale), wet: daily(split.wet) }, days));
-  const [stress] = await readRanges(model.gpu.device, model.oceanEngine.buffers.OD, [{ offset: model.oceanEngine.layout.OD.STRESS, length: mesh.nEdges }]);
+  const stress = await model.oceanEngine.readSection('STRESS');
   log(equatorLine(mesh, land, ocean, stress, days));
 }
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;

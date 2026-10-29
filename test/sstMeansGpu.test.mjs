@@ -21,7 +21,6 @@ let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 const { createGpuSstRecorder } = gpuAvailable ? await import('../js/gpu/sstMeans.gpu.js') : {};
-const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 const skip = !gpuAvailable && 'webgpu not installed';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -51,7 +50,7 @@ test('the CPU and GPU recorders agree at N=16: each day\'s mean is its engine\'s
     for (let n = 1; n <= days * PER_DAY; n++) {
       await model.step(DT);
       recorder.step();
-      if (n % ocean.everySteps === 0) samples.push(gpu ? Float64Array.from((await readRanges(model.gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.T0, length: C }]))[0]) : Float64Array.from(ocean.T0));
+      if (n % ocean.everySteps === 0) samples.push(gpu ? Float64Array.from(await ocean.readSection('T0')) : Float64Array.from(ocean.T0));
       if (n % PER_DAY === 0) means.push(await recorder.day());
     }
     const out = { C, samples, means, cells: Uint8Array.from(ocean.cellOcean), perDay: PER_DAY / ocean.everySteps };
