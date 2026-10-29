@@ -48,27 +48,36 @@ export function broadHigh({ cols, rows, spacing, xy }, radius, amplitude = 1) {
   return p.map((v) => v - mean);
 }
 
-export function linearWater(mesh, { c, f, rho }) {
+export function linearWater(mesh, { c, f, rho, cd = false }) {
   const { nCells, nEdges } = mesh;
-  const push = new Float64Array(nEdges), along = new Float64Array(nEdges), spread = new Float64Array(nCells);
-  const stages = Array.from({ length: 4 }, () => ({ p: new Float64Array(nCells), u: new Float64Array(nEdges) })), trial = { p: new Float64Array(nCells), u: new Float64Array(nEdges) };
-  function rate(p, u, out) {
+  const push = new Float64Array(nEdges), along = new Float64Array(nEdges), pushAlong = new Float64Array(nEdges), spread = new Float64Array(nCells);
+  const blank = () => ({ p: new Float64Array(nCells), u: new Float64Array(nEdges), v: new Float64Array(nEdges) });
+  const stages = Array.from({ length: 4 }, blank), trial = blank();
+  function rate(p, u, v, out) {
     gradient(mesh, p, push);
-    tangential(mesh, u, along);
     divergence(mesh, u, spread);
-    for (let e = 0; e < nEdges; e++) out.u[e] = -push[e] / rho + f * along[e];
+    if (cd) tangential(mesh, push, pushAlong);
+    else tangential(mesh, u, along);
+    for (let e = 0; e < nEdges; e++) {
+      out.u[e] = -push[e] / rho + f * (cd ? v[e] : along[e]);
+      if (cd) out.v[e] = -f * u[e] - pushAlong[e] / rho;
+    }
     for (let i = 0; i < nCells; i++) out.p[i] = -rho * c * c * spread[i];
   }
   return function step(state, dt) {
-    rate(state.p, state.u, stages[0]);
+    const v = state.v ??= new Float64Array(nEdges);
+    rate(state.p, state.u, v, stages[0]);
     for (let n = 1; n < 4; n++) {
       const h = n < 3 ? dt / 2 : dt, last = stages[n - 1];
       for (let i = 0; i < nCells; i++) trial.p[i] = state.p[i] + h * last.p[i];
-      for (let e = 0; e < nEdges; e++) trial.u[e] = state.u[e] + h * last.u[e];
-      rate(trial.p, trial.u, stages[n]);
+      for (let e = 0; e < nEdges; e++) { trial.u[e] = state.u[e] + h * last.u[e]; trial.v[e] = v[e] + h * last.v[e]; }
+      rate(trial.p, trial.u, trial.v, stages[n]);
     }
     const [a, b, d, g] = stages;
     for (let i = 0; i < nCells; i++) state.p[i] += dt / 6 * (a.p[i] + 2 * b.p[i] + 2 * d.p[i] + g.p[i]);
-    for (let e = 0; e < nEdges; e++) state.u[e] += dt / 6 * (a.u[e] + 2 * b.u[e] + 2 * d.u[e] + g.u[e]);
+    for (let e = 0; e < nEdges; e++) {
+      state.u[e] += dt / 6 * (a.u[e] + 2 * b.u[e] + 2 * d.u[e] + g.u[e]);
+      v[e] += dt / 6 * (a.v[e] + 2 * b.v[e] + 2 * d.v[e] + g.v[e]);
+    }
   };
 }

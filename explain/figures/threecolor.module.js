@@ -11,7 +11,7 @@ const fixed = (v, n = 2) => (Math.abs(v) < 0.5 * 10 ** -n ? (0).toFixed(n) : v.t
 
 export function mountThreeColor(root) {
   const controls = root.querySelector('.controls');
-  let patternName = 'three', fluidName = 'sea', torus = null, start = null, runs = [], t = 0, carry = 0, samples = [], fastest = 0, frame = null, steps = 0, mode = null;
+  let patternName = 'three', fluidName = 'sea', grid = 'c', torus = null, start = null, runs = [], t = 0, carry = 0, samples = [], fastest = 0, frame = null, steps = 0, mode = null;
   const pushes = { across: null, along: null };
 
   const fig = new Figure(root, { height: (w) => layout(w).h, draw, step });
@@ -19,6 +19,7 @@ export function mountThreeColor(root) {
   const key = legend(root, []);
   choice(controls, { label: 'Start from', options: [['three colors', 'three'], ['one high', 'one'], ['a broad high', 'high'], ['level', 'level']], value: patternName, onChange: (v) => { patternName = v; fill(); }, span: true });
   choice(controls, { label: 'The patch holds', options: [['the sea', 'sea'], ['the air', 'air']], value: fluidName, onChange: (v) => { fluidName = v; reset(); }, span: true });
+  choice(controls, { label: 'Each edge stores', options: [['the wind across it (C-grid)', 'c'], ['the wind along it too (C-D)', 'cd']], value: grid, onChange: (v) => { grid = v; reset(); }, span: true });
   const [go] = buttons(controls, [['Let go', () => { fig.play(!fig.running); label(); }], ['Reset', () => reset()]]);
   const out = readout(controls);
   const label = () => { go.textContent = fig.running ? 'Pause' : t > 0 ? 'Go on' : 'Let go'; };
@@ -45,7 +46,7 @@ export function mountThreeColor(root) {
     if (!torus) return;
     const { mesh } = torus, fluid = FLUIDS[fluidName];
     fig.play(false);
-    runs = [F, 0].map((f) => ({ step: linearWater(mesh, { c: fluid.c, f, rho: fluid.rho }), state: { p: Float64Array.from(start), u: new Float64Array(mesh.nEdges) } }));
+    runs = [F, 0].map((f) => ({ step: linearWater(mesh, { c: fluid.c, f, rho: fluid.rho, cd: grid === 'cd' }), state: { p: Float64Array.from(start), u: new Float64Array(mesh.nEdges), v: new Float64Array(mesh.nEdges) } }));
     t = 0; carry = 0; steps = 0; samples = [[0, remaining(start), remaining(start)]]; fastest = 0;
     pushes.across = gradient(mesh, start).map((g) => -g / fluid.rho);
     pushes.along = tangential(mesh, pushes.across);
@@ -70,9 +71,12 @@ export function mountThreeColor(root) {
       if (++steps % fluid.every === 0) samples.push([t, remaining(runs[0].state.p), remaining(runs[1].state.p)]);
     }
     while (samples.length > 2 && samples[1][0] < t - fluid.window) samples.shift();
-    fastest = Math.max(Math.max(...Array.from(runs[0].state.u, Math.abs)), fastest * Math.exp(-dt * fluid.speed / (fluid.window / 8)));
+    const biggest = (a) => Math.max(...Array.from(a, Math.abs));
+    fastest = Math.max(biggest(runs[0].state.u), biggest(windAlong()), fastest * Math.exp(-dt * fluid.speed / (fluid.window / 8)));
     show();
   }
+
+  const windAlong = () => (grid === 'cd' ? runs[0].state.v : tangential(torus.mesh, runs[0].state.u));
 
   const level = () => { const m = mean(start); return start.every((v) => Math.abs(v - m) < 1e-9); };
 
@@ -80,9 +84,9 @@ export function mountThreeColor(root) {
     if (!torus) return;
     const fluid = FLUIDS[fluidName], radius = fluid.c / F, ratio = radius / SPACING;
     const deformation = ['deformation radius', `${Math.round(radius / 1000)} km, ${ratio < 1 ? `${fixed(ratio)} of` : `${ratio.toFixed(1)} times`} the spacing`];
-    const now = t === 0 ? 'rest' : 'run';
+    const now = t === 0 ? 'rest' : grid;
     if (now !== mode && now === 'rest') key.set([['gradient', 'pressure, lower to higher', 'cool', 'warm'], ['force', 'the push across each edge, from the pressures on either side', INK], ['force', 'the push along each edge, from the sum of the ten around it', ACCENT]]);
-    else if (now !== mode) key.set([['gradient', 'pressure, lower to higher', 'cool', 'warm'], ['arrow', 'the wind across each edge', INK], ['arrow', 'the wind along each edge, from the sum', ACCENT], ['line', 'how much of the pattern is left, the planet turning', ACCENT], ['dash', 'and the planet stopped', INK]]);
+    else if (now !== mode) key.set([['gradient', 'pressure, lower to higher', 'cool', 'warm'], ['arrow', 'the wind across each edge', INK], ['arrow', grid === 'cd' ? 'the wind along each edge, stored' : 'the wind along each edge, from the sum', ACCENT], ['line', 'how much of the pattern is left, the planet turning', ACCENT], ['dash', 'and the planet stopped', INK]]);
     mode = now;
     if (t === 0) {
       const across = Math.max(...Array.from(pushes.across, Math.abs)), along = Math.max(...Array.from(pushes.along, Math.abs));
@@ -106,7 +110,7 @@ export function mountThreeColor(root) {
     ctx.fillStyle = '#fff';
     for (const [x, y] of xy) { ctx.beginPath(); ctx.arc(sx(x), sy(y), 2, 0, Math.PI * 2); ctx.fill(); }
 
-    const resting = t === 0, across = resting ? pushes.across : runs[0].state.u, along = resting ? pushes.along : tangential(mesh, across);
+    const resting = t === 0, across = resting ? pushes.across : runs[0].state.u, along = resting ? pushes.along : windAlong();
     const biggest = resting ? Math.max(...Array.from(across, Math.abs)) : fastest, per = biggest > 0 ? 0.9 * R / biggest : 0;
     const acrossStyle = resting ? { color: INK, width: 1.5, head: 6, dash: [3, 2.5], open: true } : { color: INK, width: 1.5, head: 6 };
     const alongStyle = resting ? { color: ACCENT, width: 2, head: 6, dash: [3, 2.5], open: true } : { color: ACCENT, width: 2, head: 6 };

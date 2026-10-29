@@ -43,3 +43,15 @@ test('let go in the sea, the three-color pattern sloshes every 2πd/(√6 c) wit
   assert.ok(Math.min(...held) > 0.6, `turning: ${Math.min(...held)}`);
   assert.ok(Math.min(...loose) < 0, `stopped: ${Math.min(...loose)}`);
 });
+
+test('with the wind along each edge stored too (C-D), the three-color pattern in the sea keeps 1/(1 + K) of itself, K = 6Ld²/d², and wobbles at f√(1 + K), while in the air it sloshes as it does with the sum', () => {
+  const torus = hexTorus(9, 6, SPACING), { mesh } = torus, three = threeColors(torus), norm = three.reduce((a, v) => a + v * v, 0);
+  const run = (fluid, f, cd, hours) => {
+    const step = linearWater(mesh, { c: fluid.c, f, rho: fluid.rho, cd }), state = { p: Float64Array.from(three), u: new Float64Array(mesh.nEdges) };
+    return Array.from({ length: hours * 3600 / fluid.dt }, () => { step(state, fluid.dt); return state.p.reduce((a, v, i) => a + v * three[i], 0) / norm; });
+  };
+  const sea = { c: 2, rho: 1025, dt: 600 }, K = 6 * (sea.c / (F * SPACING)) ** 2, w = F * Math.sqrt(1 + K);
+  run(sea, F, true, 48).forEach((a, k) => assert.ok(Math.abs(a - (1 + K * Math.cos(w * (k + 1) * sea.dt)) / (1 + K)) < 1e-4, `step ${k}: ${a}`));
+  const air = { c: 50, rho: 1.2, dt: 30 }, stored = run(air, F, true, 8), stopped = run(air, 0, false, 8);
+  assert.ok(Math.max(...stored.map((a, k) => Math.abs(a - stopped[k]))) < 0.1);
+});
