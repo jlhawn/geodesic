@@ -723,6 +723,7 @@ async function start(message) {
   if (climatologyOn(options.radiation)) options.radiation = { ...options.radiation, aerosolData: await loadAerosolFile() };
   options.terrain = message.terrain !== false;
   if (saved?.ocean?.generator) options.ocean = { ...(options.ocean ?? {}), generator: saved.ocean.generator };
+  if (saved?.ocean?.coriolis === 'cd') options.ocean = { ...(options.ocean ?? {}), coriolis: 'cd', ...(saved.ocean.cdTau > 0 ? { cdTau: saved.ocean.cdTau } : {}) };
   if (saved) options.levels = savedLevels(saved);
   else if (message.levels) options.levels = sigmaInterfaces(message.levels);
   const workers = message.workers ?? 1;

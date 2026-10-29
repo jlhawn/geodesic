@@ -57,7 +57,9 @@
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}';
-// everySteps by default from js/cadence.module.js),
+// everySteps by default from js/cadence.module.js), OCEAN_CD (1 runs the ocean's
+// C-D Coriolis scheme, which a run's saved states record and its later segments
+// keep) with OCEAN_CD_TAU (its relaxation time in seconds),
 // RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}';
 // radiationEvery by default from js/cadence.module.js),
 // DRAG_EVERY (the steps the gravity-wave and orographic drags' profiles
@@ -206,6 +208,8 @@ const t0 = performance.now();
 const existing = snapshots(), file = existing[existing.length - 1];
 let saved = file ? await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`))) : null;
 if (saved && saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
+const cdTau = process.env.OCEAN_CD_TAU !== undefined ? Number(process.env.OCEAN_CD_TAU) : saved?.ocean?.cdTau;
+const CORIOLIS = process.env.OCEAN_CD === '1' || saved?.ocean?.coriolis === 'cd' ? { coriolis: 'cd', ...(cdTau !== undefined ? { cdTau } : {}) } : {};
 const PERTURB = Number(process.env.PERTURB ?? 0);
 if (saved && PERTURB) {
   let seed = 12345;
@@ -229,7 +233,7 @@ if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (G
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}`;
 const found = base ? stateGrid(base, topography) : null;
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, ...LAND }, lake: LAKE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, ...CORIOLIS, climatology } : { ...OCEAN, ...CORIOLIS }, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, ...LAND }, lake: LAKE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
@@ -465,6 +469,7 @@ async function dayEnd(day, stepsToday, jump) {
     const minutes = (performance.now() - start) / 60000;
     log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
     log(await lowest);
+    if (CORIOLIS.coriolis === 'cd') { const w = await model.oceanEngine.cdMisfit(); log(`C-D Coriolis: rms(v - R(u)) ${w.misfit.toExponential(2)} m/s against rms(u) ${w.speed.toExponential(2)} m/s over the sea's edges and layers`); }
     if (sstDay) {
       const { mean, samples } = await sstDay;
       if (samples === oceanSteps) sstRing.push(day, mean); else log(`SST mean of day ${day} over ${samples} of its ${oceanSteps} ocean steps left out; the window starts again`);

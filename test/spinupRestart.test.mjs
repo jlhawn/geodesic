@@ -41,3 +41,26 @@ for (const [arm, env] of Object.entries(arms)) {
     }
   });
 }
+
+test(`at N=${N} spinup.mjs resumed from a state saved under OCEAN_CD keeps the C-D Coriolis scheme without the switch and its relaxation time, and v stays nearer R(u) than u is large`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const out = mkdtempSync(join(tmpdir(), 'restart-cd-'));
+  try {
+    const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), MINUTES: '100', OUT: out, TAG: 'cd', ICE_SHELVES: 'land', OCEAN: JSON.stringify({ iceDrift: false }), ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    run({ DAYS: '1', OCEAN_CD: '1', OCEAN_CD_TAU: '200000' });
+    const first = decodeState(new Uint8Array(readFileSync(join(out, 'cd_day0001.bin'))));
+    const resumed = run({ DAYS: '2' });
+    const [day1, day2] = await Promise.all([first, decodeState(new Uint8Array(readFileSync(join(out, 'cd_day0002.bin'))))]);
+    for (const state of [day1, day2]) {
+      assert.equal(state.ocean.coriolis, 'cd');
+      assert.equal(state.ocean.cdTau, 200000);
+    }
+    const lines = resumed.split('\n').filter((line) => line.startsWith('C-D Coriolis'));
+    assert.ok(lines.length >= 1, 'the resumed segment reports the scheme');
+    for (const line of lines) {
+      const [misfit, speed] = [...line.matchAll(/(\d\.\d+e[-+]\d+) m\/s/g)].map((m) => Number(m[1]));
+      assert.ok(misfit < speed, `${line}`);
+    }
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});

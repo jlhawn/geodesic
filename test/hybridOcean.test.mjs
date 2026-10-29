@@ -50,6 +50,54 @@ test('through dynamics, regrid and column physics the hybrid ocean conserves wat
   }
 });
 
+const tangentialMisfit = (ocean) => {
+  const reconstructed = new Float64Array(E);
+  let misfit = 0, speed = 0;
+  for (let k = 0; k < ocean.layers; k++) {
+    ocean.reconstruct(ocean.u, k * E, reconstructed);
+    for (let e = 0; e < E; e++) { if (!ocean.edgeOcean[e]) continue; misfit += (ocean.v[k * E + e] - reconstructed[e]) ** 2; speed += ocean.u[k * E + e] ** 2; }
+  }
+  return Math.sqrt(misfit / speed);
+};
+
+test('with coriolis cd the hybrid ocean conserves water, heat and salt to rounding as with TRiSK, v carries none of them and stays near the reconstruction of u', () => {
+  const { mesh, ocean, surfaceT, ice, flux } = hybridOcean({ coriolis: 'cd' });
+  assert.equal(ocean.state.length, 5);
+  assert.equal(hybridOcean().ocean.state.length, 4);
+  const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
+  ocean.advance(surfaceT, ice, flux, wind, DT);
+  const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean);
+  for (let n = 0; n < 24; n++) ocean.advance(surfaceT, ice, flux, wind, DT);
+  const after = totalHeatSalt(ocean, mesh);
+  assert.ok(Math.abs(after.heat - before.heat) < 1e-10 * before.heat, `heat ${before.heat} → ${after.heat}`);
+  assert.ok(Math.abs(after.salt - before.salt) < 1e-10 * before.salt, `salt ${before.salt} → ${after.salt}`);
+  assert.ok(Math.abs(volumeOf(ocean) - volume) < 1e-10 * volume, 'volume');
+  const d = ocean.diagnostics();
+  assert.equal(d.oceanDried, 0);
+  assert.ok(d.oceanSpeed > 0.01 && d.oceanSpeed < 1, `speed ${d.oceanSpeed}`);
+  for (const x of ocean.v) assert.ok(Number.isFinite(x) && Math.abs(x) <= 5, 'v is finite and within the speed limit');
+  const misfit = tangentialMisfit(ocean);
+  console.log(`coriolis cd after 25 steps: rms(v − R(u)) / rms(u) = ${misfit.toExponential(2)}`);
+  assert.ok(misfit < 0.1, `v is ${misfit} of u away from R(u)`);
+});
+
+test('coriolis cd is recorded in the saved ocean, an unknown scheme or a relaxation time that is not positive is refused, and a load starts v as the reconstruction of u', () => {
+  const { mesh, ocean, surfaceT, ice, flux } = hybridOcean({ coriolis: 'cd', cdTau: 1e5 });
+  const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
+  for (let n = 0; n < 6; n++) ocean.advance(surfaceT, ice, flux, wind, DT);
+  const saved = ocean.serialize();
+  assert.equal(saved.coriolis, 'cd');
+  assert.equal(saved.cdTau, 1e5);
+  assert.equal(hybridOcean().ocean.serialize().coriolis, undefined);
+  assert.equal(hybridOcean().ocean.v, null);
+  const twin = hybridOcean({ coriolis: 'cd', cdTau: 1e5 });
+  twin.ocean.load(saved, twin.surfaceT, twin.ice);
+  assert.equal(tangentialMisfit(twin.ocean), 0);
+  assert.ok(Math.abs(tangentialMisfit(ocean) - tangentialMisfit(twin.ocean)) > 0, 'a running v is not exactly R(u)');
+  assert.throws(() => hybridOcean({ coriolis: 'd' }), /coriolis is one of/);
+  assert.throws(() => hybridOcean({ coriolis: 'cd', cdTau: 0 }), /cdTau/);
+});
+
 test('a step longer than a radian of the fastest inertial rotation takes its dynamics in equal parts that keep water, heat and salt to rounding', () => {
   const { mesh, ocean, surfaceT, ice, flux } = hybridOcean();
   const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat)), step = 4 * 3600;

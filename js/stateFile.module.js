@@ -15,7 +15,8 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * padding, as float32 unless its type is 'f64'. Array names are the JSON
  * state's keys, with 'ocean.' and 'land.' prefixes for the nested ones;
  * the header's `ocean` and `land` hold those groups' scalar entries, the
- * ocean's `vertical` ('hybrid'; older states carry 'slab' and are converted on load) and `generator`.
+ * ocean's `vertical` ('hybrid'; older states carry 'slab' and are converted on load) and `generator`,
+ * and `coriolis` ('cd') with `cdTau` for a run on the C-D Coriolis scheme.
  * Gzip and the binary format are recognised by their magic bytes rather
  * than the file name, since a server may already have inflated a .gz
  * file on the way. The array 'levels' holds the interface σ values of the

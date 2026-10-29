@@ -23,6 +23,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
 const RESTRAT = { ...HYBRID, mixedLayerRestratification: { coefficient: 50 } };
+const CD = { ...HYBRID, coriolis: 'cd' };
 const FIXED_ENERGY = { ...HYBRID, mstarScheme: 'fixed', langmuirScheme: 'factor' };
 const RH18_ENERGY = { ...HYBRID, mstarScheme: 'rh18' };
 const RH18_ENERGY_ALL = { ...RH18_ENERGY, langmuirScheme: 'rescale', mixedLayerRestratification: { coefficient: 50 } };
@@ -57,13 +58,14 @@ function scenario(n, options = HYBRID) {
 }
 const cpuFields = (ocean, C) => {
   const T = Float64Array.from(ocean.Q, (q, n) => q / Math.max(1e-9, ocean.h[n])), S = Float64Array.from(ocean.W, (w, n) => w / Math.max(1e-9, ocean.h[n]));
-  return { h: ocean.h, u: ocean.u, T, S, eta: ocean.eta, C };
+  return { h: ocean.h, u: ocean.u, T, S, eta: ocean.eta, C, ...(ocean.v ? { v: ocean.v } : {}) };
 };
 const compare = (label, a, b, wet, limit) => {
   const results = {};
-  for (const f of ['h', 'u', 'T', 'S', 'eta']) results[f] = stats(a[f], b[f], f === 'T' || f === 'S' ? wet : null);
+  const fields = a.v && b.v ? ['h', 'u', 'v', 'T', 'S', 'eta'] : ['h', 'u', 'T', 'S', 'eta'];
+  for (const f of fields) results[f] = stats(a[f], b[f], f === 'T' || f === 'S' ? wet : null);
   console.log(`${label}: ${Object.entries(results).map(([f, r]) => `${f} rms ${r.rmsRel.toExponential(2)} max ${r.maxDiff.toExponential(2)}`).join(', ')}`);
-  for (const f of ['h', 'u', 'T', 'S', 'eta']) assert.ok(results[f].rmsRel < limit[f] ?? limit.any, `${label}: ${f} rms relative diff ${results[f].rmsRel} (largest ${results[f].maxDiff} at ${results[f].at})`);
+  for (const f of fields) assert.ok(results[f].rmsRel < (limit[f] ?? limit.u), `${label}: ${f} rms relative diff ${results[f].rmsRel} (largest ${results[f].maxDiff} at ${results[f].at})`);
   return results;
 };
 
@@ -80,7 +82,8 @@ async function tracking(options) {
   compare('the start', cpuFields(cpu, C), await gpu.download(), wet, { h: 2e-2, u: 1, T: 1e-4, S: 1e-5, eta: 1e-3 });
   const flux = new Float64Array(C);
   // From the CPU's state on both engines, one step, then a step phase by phase, both reading the same surface and stress.
-  const sync = async () => { await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice); };
+  const R = new Float64Array(E);
+  const sync = async () => { if (cpu.v) for (let k = 0; k < cpu.layers; k++) { cpu.reconstruct(cpu.u, k * E, R); cpu.v.set(R, k * E); } await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice); };
   await sync();
   cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT);
   await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
@@ -135,6 +138,7 @@ async function tracking(options) {
 }
 const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
 test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
+test(`${TRACKING}, with coriolis cd`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(CD));
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
 test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
 test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));
