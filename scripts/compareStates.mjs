@@ -13,7 +13,8 @@ import { createModel } from '../js/model.module.js';
 import { stateGeography } from '../js/geography.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { THERMOCLINE_DENSITY, LAYER_DENSITIES, savedDensities } from '../js/ocean/layered.module.js';
+import { THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
+import { layerDensities, mixedLayerDepth } from '../js/ocean/column.module.js';
 import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 
 const args = process.argv.slice(2);
@@ -52,6 +53,16 @@ function logWindow(file, day) {
   return { days: rows.length, ts: mean('ts'), imbalance: mean('imbalance'), precip: mean('precip'), ice: mean('ice'), speed: max('speed'), transport: max('transport'), clamped: max('clamped') };
 }
 
+function isopycnalDepth(h, rho, K, density) {
+  let z = 0, previous = -Infinity, center = 0;
+  for (let k = 0; k < K; k++) {
+    const rk = Math.max(previous, rho[k]), c = z + 0.5 * h[k];
+    if (rk >= density) return k === 0 ? 0 : center + (density - previous) / Math.max(rk - previous, 1e-12) * (c - center);
+    previous = rk; center = c; z += h[k];
+  }
+  return z;
+}
+
 async function measure(file) {
   const saved = await decodeState(new Uint8Array(readFileSync(file)));
   const model = modelFor(saved);
@@ -59,7 +70,15 @@ async function measure(file) {
   const deg = 180 / Math.PI, lat = Float64Array.from(mesh.latCell, (x) => x * deg), lon = Float64Array.from(mesh.lonCell, (x) => x * deg);
   const inLon = (i, west, east) => (west <= east ? lon[i] >= west && lon[i] <= east : lon[i] >= west || lon[i] <= east);
   const box = (south, north, west, east, sea = true) => (i) => (!sea || !land[i]) && lat[i] >= south && lat[i] <= north && inLon(i, west, east);
-  const mean = (values, where) => { let s = 0, w = 0; for (let i = 0; i < C; i++) if (where(i)) { s += mesh.areaCell[i] * values(i); w += mesh.areaCell[i]; } return w ? s / w : NaN; };
+  const mean = (values, where) => {
+    let s = 0, w = 0;
+    for (let i = 0; i < C; i++) {
+      if (!where(i)) continue;
+      const v = values(i);
+      if (!Number.isNaN(v)) { s += mesh.areaCell[i] * v; w += mesh.areaCell[i]; }
+    }
+    return w ? s / w : NaN;
+  };
 
   const wind = cellVector(mesh, Float64Array.from(saved.u.subarray((K - 1) * E, K * E)), new Float64Array(3 * C));
   const east = (i) => -Math.sin(mesh.lonCell[i]) * wind[3 * i] + Math.cos(mesh.lonCell[i]) * wind[3 * i + 1];
@@ -70,13 +89,22 @@ async function measure(file) {
     return `${best.toFixed(1)} at ${Math.abs(where)}°${where < 0 ? 'S' : 'N'}`;
   };
 
-  const h = saved.ocean.h, T = saved.ocean.T;
-  const layers = (savedDensities(saved.ocean, C) ?? LAYER_DENSITIES).filter((rho) => rho < THERMOCLINE_DENSITY).length;
-  const thermocline = (i) => { let d = 0; for (let k = 0; k <= layers; k++) d += h[k * C + i]; return d; };
+  const h = saved.ocean.h, T = saved.ocean.T, S = saved.ocean.S, L = h.length / C;
+  const hc = new Float64Array(L), Tc = new Float64Array(L), Sc = new Float64Array(L), rho = new Float64Array(L);
+  const mixedDepths = new Float64Array(C).fill(NaN), thermoclineDepths = new Float64Array(C).fill(NaN);
+  for (let i = 0; i < C; i++) {
+    let K = 0;
+    for (let k = 0; k < L; k++) if (h[k * C + i] > 0.01) { hc[K] = h[k * C + i]; Tc[K] = T[k * C + i]; Sc[K] = S[k * C + i]; K++; }
+    if (!K) continue;
+    layerDensities(Tc, Sc, K, rho);
+    mixedDepths[i] = mixedLayerDepth(hc, rho, K);
+    thermoclineDepths[i] = isopycnalDepth(hc, rho, K, THERMOCLINE_DENSITY);
+  }
+  const thermocline = (i) => thermoclineDepths[i];
   const sst = (i) => T[i] - 273.15;
   const roughness = (where) => mean((i) => {
     let s = 0, n = 0;
-    for (let k = 0; k < mesh.nEdgesOnCell[i]; k++) { const j = mesh.cellsOnCell[6 * i + k]; if (j >= 0 && !land[j]) { s += thermocline(j); n++; } }
+    for (let k = 0; k < mesh.nEdgesOnCell[i]; k++) { const j = mesh.cellsOnCell[6 * i + k]; if (j >= 0 && !land[j] && !Number.isNaN(thermocline(j))) { s += thermocline(j); n++; } }
     return n ? Math.abs(thermocline(i) - s / n) : 0;
   }, where);
 
@@ -85,7 +113,7 @@ async function measure(file) {
     day: saved.day, N: saved.N, log: logWindow(file, saved.day),
     ts: mean((i) => saved.surfaceT[i] - 273.15, () => true),
     tropicalSst: mean(sst, box(-20, 20, -180, 180)), warmPoolSst: mean(sst, warmPool), coldTongueSst: mean(sst, box(-5, 5, -130, -90)),
-    mixedLayer: mean((i) => h[i], box(-90, 90, -180, 180)),
+    mixedLayer: mean((i) => mixedDepths[i], box(-90, 90, -180, 180)),
     warmPoolD: mean(thermocline, warmPool), westD: mean(thermocline, box(-5, 5, 130, 150)), centralD: mean(thermocline, box(-5, 5, 170, -170)), eastD: mean(thermocline, box(-5, 5, -110, -90)),
     ridgeD: mean(thermocline, box(-10, -5, 50, 80)),
     nhTrades: band(10, 20), shTrades: band(-20, -10), nhWesterlies: strongest(30, 65), shWesterlies: strongest(-65, -30),
