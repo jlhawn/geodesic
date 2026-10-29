@@ -5,7 +5,7 @@ import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContr
 import { profileAt } from './climatology.module.js';
 import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, MSTAR_SCHEMES, LANGMUIR_SCHEMES, surfaceBuoyancy, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
 import { basalMelt, baseFreezing, SHELF_MELT } from './iceShelfMelt.module.js';
-import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
+import { upwellingTimescale, upwellingWeight, upwellingAtDepth } from '../frames.module.js';
 
 /*
  * The ocean on the C-grid: the ALE hybrid vertical coordinate of
@@ -1337,6 +1337,7 @@ export function createOcean(mesh, {
     regrid(dtOcean); columnPhysics(dtOcean);
     salt(); meltCalved();
     writeSurface(surfaceT, oceanFlux, dtOcean);
+    if (time !== null) foldUpwelling(time);
     return true;
   }
 
@@ -1633,8 +1634,17 @@ export function createOcean(mesh, {
       mleDepths.set(boundaryDepths);
       if (saved.mleDepths && saved.mleDepths.length === C && restartable(saved)) mleDepths.set(saved.mleDepths);
     }
+    if (own) restoreUpwelling(saved);
     counter = 0;
     initialised = true;
+  }
+  function restoreUpwelling(saved) {
+    if (!(saved.upwellingFolds > 0) || !saved.upwellingMemory || saved.upwellingMemory.length !== L * C) return;
+    upwellingMemory ??= new Float64Array(L * C);
+    upwellingMemory.set(saved.upwellingMemory);
+    upwellingFolds = saved.upwellingFolds;
+    upwellingTime = Number.isFinite(saved.upwellingTime) ? saved.upwellingTime : NaN;
+    upwellingStale = false;
   }
   let seaFlux = null;
   function restartArrays() {
@@ -1651,7 +1661,7 @@ export function createOcean(mesh, {
   function serialize() {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
-    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
+    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}), ...(upwellingFolds > 0 ? { upwellingMemory: Float64Array.from(upwellingMemory), upwellingFolds, upwellingTime } : {}) };
   }
 
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;
@@ -1699,18 +1709,8 @@ export function createOcean(mesh, {
   }
   function upwellingAt(depth, upwellingDepth) {
     if (upwellingFolds === 0) foldUpwelling();
-    const out = new Float32Array(C);
-    for (let i = 0; i < C; i++) {
-      if (!cellOcean[i]) { out[i] = NaN; continue; }
-      let top = 0, previous = 0, held = false, found = false, value = 0;
-      for (let k = 0; k < L; k++) {
-        const n = at(k, i), hk = h[n];
-        held ||= depth < top + hk;
-        if (!found && upwellingDepth < top + hk) { value = previous + (upwellingDepth - top) / hk * (upwellingMemory[n] - previous); found = true; }
-        top += hk; previous = upwellingMemory[n];
-      }
-      out[i] = !held ? NaN : found ? value : previous;
-    }
+    const out = upwellingAtDepth(L, C, h, upwellingMemory, depth, upwellingDepth);
+    for (let i = 0; i < C; i++) if (!cellOcean[i]) out[i] = NaN;
     return out;
   }
   function fields(depth = 0, upwellingDepth = depth) {

@@ -1825,7 +1825,7 @@ ${core.fieldConstants}
     if (!given) throw new Error('setAirStress needs iceDrift: { airStress: \'given\' }');
     putSection('TAUA', values);
   }
-  async function advanceCoupled(dt) {
+  async function advanceCoupled(dt, time = null) {
     if (driftOptions) driftStep(dt);
     readSurfaceFromAtmosphere();
     stressFromAtmosphere();
@@ -1833,6 +1833,18 @@ ${core.fieldConstants}
     regrid(dt); columnPhysics(dt);
     salt(dt);
     writeSurface(dt);
+    if (time !== null) foldMemory(time);
+  }
+  /*
+   * Folds the state as it stands into the upwelling memory at `time`, as
+   * a frame does (oFoldUpwelling), in the order of the queued steps.
+   */
+  function foldMemory(time) {
+    if (time < upwellingTime) upwellingFolds = 0;
+    const interval = upwellingFolds > 0 && Number.isFinite(upwellingTime) ? time - upwellingTime : 0;
+    setParams([0, 0, 0, 0, 0, 0, interval, upwellingFolds]);
+    compute((pass) => dispatch(pass, 'oFoldUpwelling', group(ob.S, ob.OF), nC));
+    upwellingFolds++; upwellingSeen = upwellingSteps; upwellingTime = time;
   }
 
   /*
@@ -2132,6 +2144,7 @@ ${core.fieldConstants}
     if (own && restartable(saved)) {
       uploadArrays(saved, surfaceT, ice, saved, concentration, false);
       putSection('PREVT0', saved.previousT0);
+      restoreUpwelling(saved);
       return;
     }
     const h = new Float64Array(L * C), u = new Float64Array(L * E), Q = new Float64Array(L * C), W = new Float64Array(L * C), eta = Float64Array.from(saved.eta);
@@ -2183,6 +2196,7 @@ ${core.fieldConstants}
     const previousT0 = new Float64Array(C);
     for (let i = 0; i < C; i++) previousT0[i] = cellOcean[i] ? Q[i] / h[i] : surfaceAt(i);
     putSection('PREVT0', restart ? restart.previousT0 : previousT0);
+    if (own) restoreUpwelling(saved);
   }
   async function readShelfMelt() {
     const [[melted, shelfMelted, shelfDraw], [pools]] = await Promise.all([readSections(['MELT', 'MELTSUM', 'DRAW']), readRanges(device, ob.OD, [{ offset: OD.POOLS, length: 12 }])]);
@@ -2214,7 +2228,17 @@ ${core.fieldConstants}
   function serializeFrom(d) {
     return { h: Array.from(d.h), u: Array.from(d.u), T: Array.from(d.T), S: Array.from(d.S), eta: Array.from(d.eta), densities: Array.from(labels), vertical: 'hybrid', generator: o.generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), ...(d.shelfMelted ? { shelfMelted: Array.from(d.shelfMelted), shelfDraw: Array.from(d.shelfDraw) } : {}) } : {}) };
   }
-  async function serialize() { return serializeFrom(await download()); }
+  async function serialize() {
+    const saved = serializeFrom(await download());
+    if (upwellingFolds > 0) Object.assign(saved, { upwellingMemory: (await readSections(['UPWM']))[0], upwellingFolds, upwellingTime });
+    return saved;
+  }
+  function restoreUpwelling(saved) {
+    if (!(saved.upwellingFolds > 0) || !saved.upwellingMemory || saved.upwellingMemory.length !== L * C) return;
+    putSection('UPWM', saved.upwellingMemory);
+    upwellingFolds = saved.upwellingFolds;
+    upwellingTime = Number.isFinite(saved.upwellingTime) ? saved.upwellingTime : NaN;
+  }
   /*
    * What upload needs beside serialize()'s fields to put the device back
    * exactly as it stands between two ocean steps: the heat and salt
@@ -2261,8 +2285,10 @@ ${core.fieldConstants}
    * the state into the memory (oFoldUpwelling) whenever the ocean has
    * stepped since the last fold, whatever fields are asked for, and the
    * memory restarts, the next fold replacing it, when time goes back and
-   * when the state is uploaded; the first frame that asks for the vertical
-   * velocity folds once without a time.
+   * when a state without a memory is uploaded; the first frame that asks
+   * for the vertical velocity folds once without a time. A coupled model
+   * folds at each ocean step (advanceCoupled), and serialize and upload
+   * carry the memory with its folds and the time of the last.
    */
   const FIELDS = { sst: ['SST', 1], sss: ['SSS', 1], layerDepth: ['H1', 1], thermocline: ['THD', 1], ssh: ['ETA', 1], currents: ['CUR', 3], current: ['CSPD', 1], upwelling: ['UPW', 1] };
   function frame({ fields = [], diagnostics: summarize = false, depth = 0, upwellingDepth = depth, time = null } = {}) {

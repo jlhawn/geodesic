@@ -38,13 +38,14 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
  * (OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND as JSON in the
  * environment; the radiation's clear-sky pass on unless RADIATION turns
  * it off, and the cadences of js/cadence.module.js at the state's dt,
- * the drags' unless DRAG_EVERY gives it in steps),
+ * the drags' unless DRAG_EVERY gives it in steps, and the fold of the
+ * vertical-velocity memory unless VERTICAL_EVERY does),
  * loaded with everything a whole-day snapshot carries.
  */
 export async function gpuModelFrom(saved) {
   const env = (name) => JSON.parse(process.env[name] ?? '{}'), { topography, geography, land } = stateGeography(saved);
   const model = await createGpuModel(stateGrid(saved, topography).mesh, {
-    topography, geography, levels: savedLevels(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
+    topography, geography, levels: savedLevels(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY), verticalEvery: process.env.VERTICAL_EVERY === undefined ? undefined : Number(process.env.VERTICAL_EVERY) }, dt(saved.N), saved.N),
     moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: { ...land, ...env('LAND') },
   });
   const { state } = model;
@@ -64,6 +65,7 @@ export async function gpuModelFrom(saved) {
   placeCumulus(model, saved);
   if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual); else model.moist.subcloudVirtual.fill(0);
   model.time = saved.time;
+  model.verticalMemory.load(saved);
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
   loadSavedLand(model, saved);

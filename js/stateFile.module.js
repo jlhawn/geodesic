@@ -24,6 +24,12 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * (stateGrid.module.js finds them for a state saved without it).
  * `options`, when present, holds the model options the run was made with
  * by group ({ radiation, moist }), which the page's model starts with.
+ * The running means of the vertical velocity travel with the state, so
+ * that the overlays and the figures read them at once (js/means.module.js):
+ * the arrays 'verticalMemory' (layers × cells) and 'verticalClock' (the
+ * folds in the mean and the time of the last, float64), and in the ocean
+ * 'upwellingMemory' (layers × cells) with the scalars 'upwellingFolds'
+ * and 'upwellingTime'.
  */
 export function stateName(file) {
   return file.replace(/(?:\.json(?:\.gz)?|\.parts\.json|\.bin(?:\.gz)?)$/, '');
@@ -81,7 +87,7 @@ export function savedLevels(saved) {
  * `ocean` and `land`, as float32 or, listed in `f64` or in F64, float64,
  * with the header padded with spaces so the arrays start 8-byte aligned.
  */
-const GROUPS = ['ocean', 'land'], F64 = ['levels', 'ocean.densities', 'ocean.shelfLoad', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum'];
+const GROUPS = ['ocean', 'land'], F64 = ['levels', 'ocean.densities', 'ocean.shelfLoad', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum', 'verticalClock'];
 const isArray = (value) => ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer;
 const isScalar = (value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 

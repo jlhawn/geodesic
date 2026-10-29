@@ -99,6 +99,72 @@ export function verticalVelocity(mesh, core, pi, u, level, theta, out = new Floa
 }
 
 /*
+ * The vertical velocity at the middle of each layer (m/s, upward
+ * positive) as verticalVelocity derives it at that layer's pressure, from
+ * the state alone: ω = ½(πσ̇ above + πσ̇ below) + σ (∂π/∂t + v·∇π) with the
+ * layer's own mass-flux divergence, w = −ω R T / (p g) with T = θ times
+ * the layer's Exner function at the state's π. verticalColumn fills
+ * out[0..K) for cell i; `work` holds the scratch that
+ * verticalWork(core) makes. layerVerticalVelocity fills a K × C array,
+ * layer k of cell i at k * C + i.
+ */
+export function verticalWork(core) {
+  const { K, dSigma, sigmaLower, sigmaUpper, kappa } = core.diagnostics;
+  return { massDivergence: new Float64Array(K), divergence: new Float64Array(K), exner: Float64Array.from(dSigma, (d, k) => (sigmaLower[k] ** (1 + kappa) - sigmaUpper[k] ** (1 + kappa)) / ((1 + kappa) * d)) };
+}
+export function verticalColumn(mesh, core, pi, u, theta, i, work, out) {
+  const { K, C, E, sigmaMid, sigmaLower, dSigma, R, g, p0, kappa } = core.diagnostics;
+  const { maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dvEdge, areaCell } = mesh;
+  const { massDivergence, divergence, exner } = work;
+  massDivergence.fill(0); divergence.fill(0);
+  for (let m = 0; m < nEdgesOnCell[i]; m++) {
+    const e = edgesOnCell[maxEdges * i + m], f = edgeSignOnCell[maxEdges * i + m] * dvEdge[e];
+    const piEdge = 0.5 * (pi[cellsOnEdge[2 * e]] + pi[cellsOnEdge[2 * e + 1]]);
+    for (let k = 0; k < K; k++) { const flow = f * u[k * E + e]; massDivergence[k] += piEdge * flow; divergence[k] += flow; }
+  }
+  let dPi = 0;
+  for (let k = 0; k < K; k++) { massDivergence[k] /= areaCell[i]; divergence[k] /= areaCell[i]; dPi -= massDivergence[k] * dSigma[k]; }
+  const exner0 = (pi[i] / p0) ** kappa;
+  let cumulative = 0, upper = 0;
+  for (let k = 0; k < K; k++) {
+    cumulative += massDivergence[k] * dSigma[k];
+    const lower = k === K - 1 ? 0 : -cumulative - sigmaLower[k] * dPi;
+    const omega = 0.5 * (upper + lower) + sigmaMid[k] * (dPi + massDivergence[k] - pi[i] * divergence[k]);
+    out[k] = -omega * R * theta[k * C + i] * exner0 * exner[k] / (pi[i] * sigmaMid[k] * g);
+    upper = lower;
+  }
+  return out;
+}
+export function layerVerticalVelocity(mesh, core, pi, u, theta, out = new Float32Array(core.diagnostics.K * mesh.nCells)) {
+  const { K, C } = core.diagnostics, work = verticalWork(core), column = new Float64Array(K);
+  for (let i = 0; i < C; i++) {
+    verticalColumn(mesh, core, pi, u, theta, i, work, column);
+    for (let k = 0; k < K; k++) out[k * C + i] = column[k];
+  }
+  return out;
+}
+
+/*
+ * A field held at the layers' middles (K × C, layer k of cell i at
+ * k * C + i) at a level, as levelFields takes temperature: interpolated in
+ * ln p between the layers that bound the level, held at the lowest and
+ * highest layer beyond them; 'surface' is σ = SURFACE_VERTICAL_SIGMA, the
+ * top of the boundary layer. `sigmaMid` lists the layers' middle σ and pi
+ * the surface pressure of each cell, Pa.
+ */
+export function layerFieldAtLevel(sigmaMid, K, C, pi, field, level, out = new Float32Array(C)) {
+  for (let i = 0; i < C; i++) {
+    const pressure = level === 'surface' ? SURFACE_VERTICAL_SIGMA * pi[i] : 100 * level;
+    let k = 0;
+    while (k < K - 2 && pi[i] * sigmaMid[k + 1] < pressure) k++;
+    const pk = pi[i] * sigmaMid[k], pk1 = pi[i] * sigmaMid[k + 1];
+    const tw = Math.min(1, Math.max(0, (Math.log(pressure) - Math.log(pk)) / (Math.log(pk1) - Math.log(pk))));
+    out[i] = field[k * C + i] + tw * (field[(k + 1) * C + i] - field[k * C + i]);
+  }
+  return out;
+}
+
+/*
  * Each cell's value averaged, with equal weights, with its neighbours'.
  */
 export function smoothCells(mesh, values, out = new Float32Array(mesh.nCells)) {

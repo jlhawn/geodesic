@@ -13,7 +13,7 @@ import { createLayeredOcean, oceanStateLength, OCEAN_DEFAULTS } from './layeredO
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { createGeography, surfaceGeopotential, geographyRecordOf } from '../geography.module.js';
 import { readRanges } from './device.module.js';
-import { RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH } from '../frames.module.js';
+import { RAIN_MEMORY, SURFACE_UPWELLING_DEPTH } from '../frames.module.js';
 import { createLandSurface, soilColumn, SOIL_CARBON } from '../physics/land.module.js';
 import { loadClimatology } from '../ocean/climatology.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from '../physics/exchange.module.js';
@@ -64,7 +64,7 @@ const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
  */
 export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, dynamics = {}, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
-  topography = null, geography: geographyOptions = {}, land: landOptions = {}, lake: lakeOptions = {}, terrain = true, orography: orographyOptions = {}, subgrid: givenSubgrid = undefined, levels = sigmaInterfaces(), gravityWaves = {}, dragEvery = 1,
+  topography = null, geography: geographyOptions = {}, land: landOptions = {}, lake: lakeOptions = {}, terrain = true, orography: orographyOptions = {}, subgrid: givenSubgrid = undefined, levels = sigmaInterfaces(), gravityWaves = {}, dragEvery = 1, verticalEvery = 1,
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
@@ -90,7 +90,7 @@ export async function createGpuModel(gridOrMesh, {
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
-    orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
+    orography: subgrid ? orography : false, formDrag, dragEvery, verticalEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
     keepSmallIce: ice.keepSmallIce ?? (oceanOptions !== false && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift)),
     ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],
@@ -136,12 +136,35 @@ export async function createGpuModel(gridOrMesh, {
   model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
   model.oceanEngine = gpuOcean;
 
+  /*
+   * The vertical-velocity memory (js/means.module.js) lives on the device;
+   * `values` mirrors it as of the last sync, with the folds and time that
+   * sync saw. load(saved) sends a saved mean up now and again after a load
+   * of the state, which clears it, and a load with no saved mean restarts it.
+   */
+  const memory = { values: new Float32Array(K * C), every: gpu.vertical.every, folds: 0, time: NaN, kept: null };
+  Object.assign(memory, {
+    load(saved) {
+      const mean = saved && saved.verticalMemory, clock = saved && saved.verticalClock;
+      memory.kept = mean && mean.length === K * C && clock && clock[0] > 0 ? { folds: clock[0], time: Number.isFinite(clock[1]) ? clock[1] : NaN } : null;
+      if (memory.kept) { memory.values.set(mean); gpu.vertical.restore(memory.values, memory.kept.folds, memory.kept.time); } else gpu.vertical.restart();
+      return !!memory.kept;
+    },
+    afterLoad() {
+      if (memory.kept) gpu.vertical.restore(memory.values, memory.kept.folds, memory.kept.time); else gpu.vertical.restart();
+      memory.kept = null;
+    },
+    serialize() { return memory.folds > 0 ? { verticalMemory: Float64Array.from(memory.values), verticalClock: Float64Array.of(memory.folds, memory.time) } : {}; },
+  });
+  model.verticalMemory = memory;
+
   function pushState(ocean) {
     gpu.upload(state);
     gpu.uploadPhysics({ orography: subgrid, wind: exchange ? exchange.wind : null, land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : lakeCpu && lakeCpu.isLake[i] ? -1 : 0)) : null, drag: exchange ? exchange.drag : null, heat: exchange && !exchange.fixed ? exchange.heat : null, reference: exchange && !exchange.fixed ? exchange.reference : null, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, snowAlbedo: landCpu ? landCpu.snowAlbedo : null, canopy: landCpu ? landCpu.canopy : null, seasonLength: landCpu ? landCpu.seasonLength : null, seasonWarmth: landCpu ? landCpu.seasonWarmth : null, rainMean: landCpu ? landCpu.rainMean : null, demandMean: landCpu ? landCpu.demandMean : null, soilCarbon: landCpu ? landCpu.soilCarbon : null, litterMean: landCpu ? landCpu.litterMean : null, decayMean: landCpu ? landCpu.decayMean : null, snowFreeCover: landCpu ? landCpu.snowFreeCover : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux, evaporation: radiationCpu.evaporation, cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, ...(skin ? { warmLayer: skin.warm, coolSkin: skin.cool } : {}), ...(landCpu && landCpu.layered ? { soilDeep: landCpu.deep } : {}) });
     gpu.setWindSpeed(surfaceCpu.windSpeed);
     if (lakeCpu) pushLake();
     gpu.clearFrame();
+    memory.afterLoad();
     if (gpuOcean && ocean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
     lastFrameStep = gpu.stepCount;
@@ -160,12 +183,13 @@ export async function createGpuModel(gridOrMesh, {
    */
   function sync() {
     if (mirrored === changes) return Promise.resolve();
-    if (!reading || reading.at !== changes) reading = { at: changes, done: mirror(changes, [gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [...['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY', 'EVAP', 'FOGMEAN'].map((name) => ({ offset: gpu.layout.PH[name], length: C })), ...['CUCOVER', 'CUWATER'].map((name) => ({ offset: gpu.layout.PH[name], length: cumulusLength })), { offset: gpu.layout.PH.SUBTV, length: model.moist.subcloudVirtual.length }]), readRanges(gpu.device, gpu.buffers.D, [{ offset: gpu.layout.D.WIND, length: C }]), exchange ? readRanges(gpu.device, gpu.buffers.PH, ['HEATX', 'XWIND'].map((name) => ({ offset: gpu.layout.PH[name], length: C }))) : null, skin ? readRanges(gpu.device, gpu.buffers.PH, ['WARM', 'COOL'].map((name) => ({ offset: gpu.layout.PH[name], length: C }))) : null]) };
+    if (!reading || reading.at !== changes) reading = { at: changes, done: mirror(changes, { folds: gpu.vertical.folds, time: gpu.vertical.time }, [gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [...['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY', 'EVAP', 'FOGMEAN'].map((name) => ({ offset: gpu.layout.PH[name], length: C })), ...['CUCOVER', 'CUWATER'].map((name) => ({ offset: gpu.layout.PH[name], length: cumulusLength })), { offset: gpu.layout.PH.SUBTV, length: model.moist.subcloudVirtual.length }]), readRanges(gpu.device, gpu.buffers.D, [{ offset: gpu.layout.D.WIND, length: C }]), exchange ? readRanges(gpu.device, gpu.buffers.PH, ['HEATX', 'XWIND'].map((name) => ({ offset: gpu.layout.PH[name], length: C }))) : null, skin ? readRanges(gpu.device, gpu.buffers.PH, ['WARM', 'COOL'].map((name) => ({ offset: gpu.layout.PH[name], length: C }))) : null, gpu.vertical.read()]) };
     return reading.done;
   }
-  async function mirror(at, reads) {
-    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy, evaporation, fog, cumulusCover, cumulusWater, subcloudVirtual], [windSpeed], exchanged, skinned] = await Promise.all(reads);
+  async function mirror(at, clock, reads) {
+    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy, evaporation, fog, cumulusCover, cumulusWater, subcloudVirtual], [windSpeed], exchanged, skinned, layerMean] = await Promise.all(reads);
     if (at <= mirrored) return;
+    memory.values.set(layerMean); memory.folds = clock.folds; memory.time = clock.time;
     if (skinned) { skin.warm.set(skinned[0]); skin.cool.set(skinned[1]); }
     if (exchanged) {
       if (!exchange.fixed) exchange.heat.set(exchanged[0]);
@@ -254,18 +278,16 @@ export async function createGpuModel(gridOrMesh, {
    * and a step between, the clear-sky absorbed sunlight and outgoing
    * longwave and the two cloud effects are means over the same steps.
    */
-  let verticalLevel = null;
   model.beginFrame = function beginFrame({ level = 'surface', depth = 'surface', fields = [], diagnostics: summarize = false } = {}) {
     if (gpuOcean) gpuOcean.accumulateFreshwater(0);
     const time = model.time, interval = time - lastFrameTime, steps = gpu.stepCount - lastFrameStep;
     lastFrameTime = time;
     lastFrameStep = gpu.stepCount;
-    const vertical = fields.includes('vertical');
-    const keepVertical = vertical && verticalLevel === level ? Math.exp(-Math.max(0, interval) / VERTICAL_MEMORY) : 0;
-    verticalLevel = vertical ? level : null;
     const rainScale = summarize && interval > 0 ? 86400 / interval : 0, meanScale = summarize && steps > 0 ? 1 / steps : 0;
     if (rainScale || meanScale) changes++;
-    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize, rainScale, meanScale });
+    const folded = gpu.vertical.folds;
+    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), time, fields, diagnostics: summarize, rainScale, meanScale });
+    if (gpu.vertical.folds !== folded) changes++;
     if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
     const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth), upwellingDepth: depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth), time }) : null;
     return Promise.all([atmosphere, ocean]).then(([a, o]) => {

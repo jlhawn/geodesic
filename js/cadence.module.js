@@ -21,7 +21,10 @@ import { DEFAULT_SHORTWAVE } from './physics/radiation.module.js';
  * clamps 1.3 million edges on the first day where 2.8 (every 2) holds.
  * Options given in steps win; coarser grids
  * and the tests keep the engines' own defaults, the radiation and the
- * drags every step and the ocean every 4 steps. See "M24 —
+ * drags every step and the ocean every 4 steps. The atmosphere's memory
+ * of the vertical velocity of its layers is folded in every
+ * VERTICAL_MINUTES (the models' verticalEvery), the ocean's at each of its
+ * steps. See "M24 —
  * Performance" in docs/c-grid-dynamical-core.md for what each interval
  * costs in realism and saves in time, and docs/cloud-gas-overlap.md for
  * the layered shortwave's cost and the error of holding it.
@@ -29,14 +32,16 @@ import { DEFAULT_SHORTWAVE } from './physics/radiation.module.js';
 export const RADIATION_MINUTES = { layered: 45, sequential: 11.25 };
 export const DRAG_MINUTES = 11.25;
 export const OCEAN_MINUTES = 45;
+export const VERTICAL_MINUTES = 11.25;
 
 export const stepsFor = (minutes, dt) => Math.max(1, Math.round(minutes * 60 / dt));
 export const oceanMinutes = (N) => (N <= 128 ? OCEAN_MINUTES * 64 / N : OCEAN_MINUTES * 0.5 * (128 / N) ** 3);
 
-export function withCadence({ radiation = {}, ocean = {}, dragEvery } = {}, dt, N) {
+export function withCadence({ radiation = {}, ocean = {}, dragEvery, verticalEvery } = {}, dt, N) {
   return {
     radiation: { radiationEvery: N < 64 ? 1 : stepsFor(RADIATION_MINUTES[radiation.shortwave ?? DEFAULT_SHORTWAVE] ?? RADIATION_MINUTES[DEFAULT_SHORTWAVE], dt), ...radiation },
     ocean: ocean === false || N < 64 ? ocean : { everySteps: stepsFor(oceanMinutes(N), dt), ...ocean },
     dragEvery: dragEvery ?? stepsFor(DRAG_MINUTES, dt),
+    verticalEvery: verticalEvery ?? stepsFor(VERTICAL_MINUTES, dt),
   };
 }

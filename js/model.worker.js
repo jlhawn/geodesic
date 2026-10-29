@@ -10,13 +10,13 @@ import { CUMULUS_FIELDS, placeCumulus } from './physics/moist.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, missingMask, decodeMask, decodeLandIce, landIceUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
-import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
+import { levelFields, dewPoint, wetBulb, miseryIndex, layerFieldAtLevel, smoothCells } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels, groupHeader, groupArrays } from './stateFile.module.js';
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
-import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH, frameIsFinite } from './frames.module.js';
+import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, SURFACE_UPWELLING_DEPTH, frameIsFinite } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
@@ -27,7 +27,6 @@ const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
 let subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false }, layerWinds = [];
 const rain = { total: null, time: 0 };
-const vertical = { values: null, level: null, time: 0 };
 
 function restartRain() { rain.total = null; rain.time = model.time; if (model.restartPrecipitation) model.restartPrecipitation(); }
 
@@ -69,13 +68,9 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
     if (want.has('wetBulb')) out.wetBulb = comfort(wetBulb);
     if (want.has('misery')) out.misery = comfort(miseryIndex);
     if (want.has('vertical')) {
-      const smoothed = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, theta));
-      const keep = vertical.values && vertical.level === level ? Math.exp(-Math.max(0, time - vertical.time) / VERTICAL_MEMORY) : 0;
-      if (!vertical.values || vertical.values.length !== C) vertical.values = new Float32Array(C);
-      for (let i = 0; i < C; i++) vertical.values[i] = keep * vertical.values[i] + (1 - keep) * smoothed[i];
-      vertical.level = level; vertical.time = time;
-      out.vertical = Float32Array.from(vertical.values);
-    } else vertical.level = null;
+      if (model.verticalMemory.folds === 0) model.foldVertical(time);
+      out.vertical = smoothCells(mesh, layerFieldAtLevel(core.diagnostics.sigmaMid, core.diagnostics.K, C, pi, model.verticalMemory.values, level));
+    }
   }
   if (want.has('ps')) out.ps = Float32Array.from(pi);
   if (want.has('mslp')) {
@@ -355,6 +350,15 @@ function placeDeck(model, saved, N) {
 function placeLake(model, saved, N) {
   if (!model.lake || !saved || saved.N !== N || !savedLake(saved)) return;
   model.lake.load(savedLake(saved));
+}
+
+/*
+ * The atmosphere's memory of its layers' vertical velocity, which comes
+ * with a saved run at the same resolution and layers and otherwise starts
+ * afresh.
+ */
+function placeMeans(model, saved, N) {
+  if (model.verticalMemory) model.verticalMemory.load(saved && saved.N === N ? saved : null);
 }
 
 function savedCumulus(model) {
@@ -645,6 +649,7 @@ async function snapshot() {
   for (const name of Object.keys(RADIATION_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   arrays.levels = Float64Array.from(model.core.levels).buffer;
   if (model.skin) for (const [name, values] of Object.entries(model.skin.serialize())) arrays[name] = values.buffer;
+  if (model.verticalMemory) for (const [name, values] of Object.entries(model.verticalMemory.serialize())) arrays[name] = values.buffer;
   if (model.lake) for (const [name, values] of Object.entries(lakeArrays(await model.lake.serialize()))) arrays[name] = values.buffer;
   let ocean = null, land = null;
   if (model.ocean) {
@@ -682,6 +687,7 @@ async function restore(snapshot) {
   placeIce(model, saved, currentN);
   placeDeck(model, saved, currentN);
   placeLake(model, saved, currentN);
+  placeMeans(model, saved, currentN);
   if (model.load) model.load({ ocean: false });
   await model.settle?.();
   if (model.dragsDue) model.dragsDue();
@@ -750,6 +756,7 @@ async function start(message) {
   placeIce(model, saved, N);
   placeDeck(model, saved, N);
   placeLake(model, saved, N);
+  placeMeans(model, saved, N);
   status('uploading the state…', 0.92);
   if (model.load) model.load({ ocean: false });
   await model.settle?.();

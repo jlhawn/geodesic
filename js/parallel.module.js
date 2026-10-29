@@ -163,6 +163,7 @@ export async function createParallelModel(grid, options = {}, workers = null, pr
     if (model.land) model.land.advance(dt);
     model.time += dt;
     model.radiationSteps++;
+    model.verticalMemory.step(model.state[0], model.state[1], model.state[2], model.time);
   };
 
   const serialDiagnostics = model.diagnostics;

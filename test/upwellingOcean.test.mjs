@@ -92,7 +92,7 @@ test('land and cells whose floor lies above the depth are NaN, and the surface v
   assert.ok(dry > 0 && wet > 0, `${dry} sea cells with a floor above 2500 m and ${wet} below`);
 });
 
-test('the memory folds when the ocean has stepped, weights each layer by the timescale at its base, and restarts when time goes back or a state loads', () => {
+test('the memory folds when the ocean has stepped, weights each layer by the timescale at its base, and restarts when time goes back or a state without a memory loads', () => {
   const { mesh, C, L, ocean, advance, surfaceT, ice, state } = scenario();
   const velocities = () => layerVelocities(mesh, L, state(), ocean.cellOcean);
   const check = (expected, label, depth = 500) => {
@@ -127,16 +127,17 @@ test('the memory folds when the ocean has stepped, weights each layer by the tim
   advance(1);
   ocean.foldUpwelling(DT);
   const loaded = ocean.serialize();
+  delete loaded.upwellingMemory;
   ocean.load(loaded, Float64Array.from(surfaceT), ice);
   ocean.foldUpwelling(2 * DT);
-  check(velocities(), 'the memory restarts when a state loads');
+  check(velocities(), 'the memory restarts when a state without one loads');
   advance(1);
   ocean.foldUpwelling(3 * DT);
   ocean.initialize(Float64Array.from(surfaceT), ice);
   for (const value of ocean.fields(500).upwelling) assert.ok(Number.isNaN(value) || value === 0, 'the memory restarts when the ocean initializes, from rest');
 });
 
-test('the model folds its ocean at the frame time, and not again until the ocean has stepped', () => {
+test('the model folds its ocean at each ocean step, and a frame folds it no more until the ocean has stepped again', () => {
   const { model } = scenario();
   assert.equal(typeof model.foldUpwelling, 'function');
   const { ocean } = model;

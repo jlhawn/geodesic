@@ -19,6 +19,7 @@ import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, visibleCloudHeights } from './
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from './physics/exchange.module.js';
 import { createGravityWaveDrag } from './physics/gravityWaves.module.js';
 import { createOrographicDrag, LOTT_MILLER } from './physics/orography.module.js';
+import { createVerticalMemory } from './means.module.js';
 
 export const SIDEREAL_DAY = 86164.0905;
 export const STATE_NAMES = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
@@ -93,9 +94,10 @@ export const dragConstants = (fields, options) => (fields.raster ? { ...LOTT_MIL
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
   topography = null, geography: geographyOptions = {}, land: landOptions = {}, lake: lakeOptions = {}, terrain = true, gravityWaves: gravityWaveOptions = {}, orography: orographyOptions = {}, subgrid = undefined,
-  physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, dynamics = {}, buffers = null, levels = sigmaInterfaces(), dragEvery = 1,
+  physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, dynamics = {}, buffers = null, levels = sigmaInterfaces(), dragEvery = 1, verticalEvery = 1,
 } = {}) {
   if (!(Number.isInteger(dragEvery) && dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${dragEvery}`);
+  if (!(Number.isInteger(verticalEvery) && verticalEvery >= 1)) throw new Error(`verticalEvery must be a whole number of steps, 1 or more, not ${verticalEvery}`);
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
@@ -311,6 +313,8 @@ export function createModel(gridOrMesh, {
     shared: { skin: seaSkin ? seaSkin.shared : null, core: core.shared, surface: surface.shared, exchange: exchange ? exchange.shared : null, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, gravityWaves: gravityWaves ? gravityWaves.shared : null, orography: orography ? orography.shared : null, drags: dragBuffer, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
+  model.verticalMemory = createVerticalMemory(mesh, core, { every: verticalEvery });
+  model.foldVertical = (time = model.time) => model.verticalMemory.fold(state[0], state[1], state[2], time);
   model.oceanFields = (depth = 0, upwellingDepth = depth) => (ocean ? ocean.fields(depth, upwellingDepth) : null);
   model.foldUpwelling = (time = model.time) => { if (ocean) ocean.foldUpwelling(time); };
   model.dragsDue = () => dragStep.fill(-1);
@@ -359,6 +363,7 @@ export function createModel(gridOrMesh, {
     if (land) land.advance(dt);
     model.time += dt;
     model.radiationSteps++;
+    model.verticalMemory.step(state[0], state[1], state[2], model.time);
   };
 
   /*

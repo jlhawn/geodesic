@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { levelFields, verticalVelocity, smoothCells, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
-import { VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH } from '../js/frames.module.js';
+import { levelFields, layerVerticalVelocity, layerFieldAtLevel, smoothCells, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
+import { VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH, memoryWeight } from '../js/frames.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { layerVelocities, velocityAt } from './helpers/upwelling.mjs';
 import { cellVector } from '../js/dynamics/operators.module.js';
@@ -59,10 +59,10 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     const layerWind = (k) => cellVector(mesh, u.subarray(k * E, (k + 1) * E));
     const reference = levelFields(core, pi, theta, layerWind, level, q);
     const comfort = (fn) => Float64Array.from(reference.temperature, (t, i) => fn(t - 273.15, reference.humidity[i], reference.speed[i]) + 273.15);
-    const vertical = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, theta));
+    const vertical = smoothCells(mesh, layerFieldAtLevel(core.diagnostics.sigmaMid, core.K, C, pi, Float64Array.from(model.verticalMemory.values), level, new Float64Array(C)), new Float64Array(C));
     const checks = {
       temperature: [reference.temperature, 2e-3], height: [reference.height, 0.1], humidity: [reference.humidity, 5e-5], speed: [reference.speed, 5e-4], wind: [reference.vector, 5e-4],
-      dewPoint: [comfort(dewPoint), 5e-3], wetBulb: [comfort(wetBulb), 5e-3], misery: [comfort(miseryIndex), 5e-3], vertical: [vertical, 2e-3],
+      dewPoint: [comfort(dewPoint), 5e-3], wetBulb: [comfort(wetBulb), 5e-3], misery: [comfort(miseryIndex), 5e-3], vertical: [vertical, 1e-5],
     };
     for (const [name, [values, tolerance]] of Object.entries(checks)) {
       const { max, at } = worst(values, frame.fields[name]);
@@ -158,6 +158,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   close('oceanUpperDepth', depth / oceanArea, d.oceanUpperDepth); close('oceanSSH', ssh, d.oceanSSH);
   console.log(`GPU frame at N=${N}: Ts ${d.meanSurfaceT.toFixed(3)} K, OLR ${d.outgoingLongwave.toFixed(2)} W/m², precipitation ${(86400 * d.precipitation).toFixed(3)} mm/day, ocean h1 ${d.oceanUpperDepth.toFixed(2)} m`);
 
+  await model.oceanEngine.frame({ time: -1 });
   const column = await model.oceanEngine.serialize();
   const L = model.oceanEngine.layers, cellOcean = model.oceanEngine.cellOcean;
   const upwellingOf = (state) => layerVelocities(mesh, L, { h: state.h, u: state.u, eta: state.eta, sillEdge: model.oceanEngine.sillEdge, edgeOcean: model.oceanEngine.edgeOcean }, cellOcean);
@@ -193,17 +194,16 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   const held = await model.beginFrame({ level: 250, fields: ['vertical'] });
   const again = await model.beginFrame({ level: 250, fields: ['vertical'] });
   assert.deepEqual(again.fields.vertical, held.fields.vertical, 'no time elapsed, the memory holds');
-  const dt = 900;
+  const dt = 900, before = Float64Array.from(model.verticalMemory.values), folds = model.verticalMemory.folds;
   await model.step(dt);
   const later = await model.beginFrame({ level: 250, fields: ['vertical'] });
   await model.sync();
-  core.diagnose(pi, theta, q, qc);
-  const fresh = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, 250, theta));
-  const keep = Math.exp(-dt / VERTICAL_MEMORY);
-  const blend = Float64Array.from(fresh, (w, i) => keep * held.fields.vertical[i] + (1 - keep) * w);
-  { const { max, at } = worst(blend, later.fields.vertical); assert.ok(max < 2e-3, `the two-hour memory blends the new frame in: ${max} at ${at}`); }
+  const fresh = layerVerticalVelocity(mesh, core, pi, u, theta, new Float64Array(core.K * C)), alpha = memoryWeight(dt, folds, VERTICAL_MEMORY);
+  const blended = Float64Array.from(fresh, (w, n) => before[n] + alpha * (w - before[n]));
+  const expected = smoothCells(mesh, layerFieldAtLevel(core.diagnostics.sigmaMid, core.K, C, pi, blended, 250, new Float64Array(C)), new Float64Array(C));
+  { const { max, at } = worst(expected, later.fields.vertical); assert.ok(max < 2e-5, `the two-hour memory blends the new step in: ${max} at ${at}`); }
 
-  await model.oceanEngine.frame({ time: -1 });
+  await model.oceanEngine.frame({ time: -2 });
   const beforeSteps = upwellingOf(await model.oceanEngine.serialize());
   for (let n = 0; n < 4; n++) await model.step(900);
   await model.beginFrame({ level: 'surface', fields: ['ps'] });

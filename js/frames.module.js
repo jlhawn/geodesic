@@ -22,7 +22,7 @@ export const FIELDS = {
   dewPoint: 'dew point at the level, K',
   wetBulb: 'wet-bulb temperature at the level, K',
   misery: 'heat index above 26.7 °C, wind chill below 10 °C, air temperature between, at the level, K',
-  vertical: 'vertical velocity at the level, m/s, positive upward, averaged with the neighbouring cells and over a two-hour memory',
+  vertical: 'vertical velocity at the level, m/s, positive upward, averaged with the neighbouring cells and over the two-hour memory the model keeps for each layer',
   ps: 'surface pressure, Pa',
   mslp: 'sea-level pressure, Pa',
   water: 'precipitable water, kg/m²',
@@ -133,19 +133,47 @@ export const SURFACE_VERTICAL_SIGMA = 0.9;
 
 /*
  * The upwelling memory of a layer's base is the running mean of the
- * vertical velocity there, folded in at each frame as memory ← memory +
- * α·(value − memory). Its timescale runs from UPWELLING_FAST at
+ * vertical velocity there, folded in as memory ← memory + α·(value −
+ * memory) at every ocean step the model takes and at every frame that
+ * finds the ocean stepped since. Its timescale runs from UPWELLING_FAST at
  * UPWELLING_FAST_DEPTH and above to UPWELLING_SLOW at UPWELLING_SLOW_DEPTH
  * and below, linear in depth between. α is the larger of the
  * exponential's 1 − exp(−Δt / timescale) and the plain mean's
- * 1 / (folds + 1), `folds` being how many frames the memory already
- * holds, so a memory that has just restarted is the mean of its frames
- * until they span the timescale.
+ * 1 / (folds + 1), `folds` being how many folds the memory already
+ * holds, so a memory that has just restarted is the mean of its folds
+ * until they span the timescale. The atmosphere keeps the same kind of
+ * memory of each layer's vertical velocity over VERTICAL_MEMORY, folded
+ * in at the model's steps (js/means.module.js); a saved state carries both
+ * with the number of folds and the time of the last.
  */
 export function upwellingTimescale(depth) {
   const share = Math.min(1, Math.max(0, (depth - UPWELLING_FAST_DEPTH) / (UPWELLING_SLOW_DEPTH - UPWELLING_FAST_DEPTH)));
   return UPWELLING_FAST + share * (UPWELLING_SLOW - UPWELLING_FAST);
 }
-export function upwellingWeight(dt, folds, timescale) {
+export function memoryWeight(dt, folds, timescale) {
   return Math.max(1 - Math.exp(-dt / timescale), 1 / (folds + 1));
+}
+export const upwellingWeight = memoryWeight;
+
+/*
+ * The vertical velocity at `upwellingDepth` from an upwelling memory
+ * (L layers of C cells, layer k of cell i at k * C + i, the velocity at the
+ * layer's base) over layers of thickness h: linear in depth between the
+ * memory at the top of the layer that holds the depth (zero at the surface)
+ * and at its base, the value at the floor where the column ends above
+ * `upwellingDepth`, and NaN where no layer holds `depth` (land, or a floor
+ * above it).
+ */
+export function upwellingAtDepth(L, C, h, memory, depth, upwellingDepth = depth, out = new Float32Array(C)) {
+  for (let i = 0; i < C; i++) {
+    let top = 0, previous = 0, held = false, found = false, value = 0;
+    for (let k = 0; k < L; k++) {
+      const n = k * C + i, hk = h[n];
+      held ||= depth < top + hk;
+      if (!found && upwellingDepth < top + hk) { value = previous + (upwellingDepth - top) / hk * (memory[n] - previous); found = true; }
+      top += hk; previous = memory[n];
+    }
+    out[i] = !held ? NaN : found ? value : previous;
+  }
+  return out;
 }
