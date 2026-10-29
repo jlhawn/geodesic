@@ -3,7 +3,7 @@
  * resolution. A chosen or given resolution starts from defaultRunFor(N),
  * regridded when no run is saved at that resolution.
  */
-export const DEFAULT_RUNS = { 192: 'runs/twelve192_day0020.parts.json', 128: 'runs/seventeen128_day1095.parts.json', 64: 'runs/fourteen64_day1825.parts.json' };
+export const DEFAULT_RUNS = { 192: 'runs/twelve192_day0020.parts.json', 128: 'runs/seventeen128_day1095.parts.json', 64: 'runs/seventeen64_day0365.parts.json' };
 export const DEFAULT_RUN = DEFAULT_RUNS[128];
 
 /*

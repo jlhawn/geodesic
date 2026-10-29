@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { createGeography, stateGeography } from '../js/geography.module.js';
+import { lakeWater, lakeModelOf } from '../js/physics/lake.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 import { stateGrid, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
 import { DEFAULT_RUNS } from '../js/defaultRun.module.js';
@@ -23,7 +24,7 @@ for (const N of [64, 128]) {
       assert.deepEqual({ relax: bare.relax, source: bare.source, mismatches: bare.mismatches }, { relax: found.relax, source: 'mask', mismatches: 0 });
     }
     if (saved.N > 64) return;
-    const ocean = createOcean(found.mesh, { geography: made });
+    const ocean = createOcean(found.mesh, { geography: lakeModelOf(made) !== 'off' ? lakeWater(found.mesh, made) : made });
     const surfaceT = Float64Array.from(saved.surfaceT), ice = Float64Array.from(saved.ice);
     ocean.load(saved.ocean, surfaceT, ice, Float64Array.from(saved.concentration));
     const C = found.mesh.nCells, L = ocean.layers, Ls = saved.ocean.h.length / C;
