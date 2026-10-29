@@ -12,6 +12,7 @@ export function mountStagger(root) {
   const patterns = {
     stripes: (c, r) => (r & 1 ? -1 : 1),
     checkerboard: (c, r) => (r & 1 ? 1 : ((c + (r >> 1)) & 1 ? -1 : 1)),
+    three: (c, r) => [1, 0, -1][(((c - (r >> 1) - r) % 3) + 3) % 3],
     bump: (c, r) => { const [x, y] = place(c, r, 1), [cx, cy] = place(4, 3, 1); return Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / 4); },
     clear: () => 0,
   };
@@ -21,7 +22,7 @@ export function mountStagger(root) {
   const fig = new Figure(root, { height: 400, draw });
   legend(root, [['gradient', 'lower to higher pressure', 'cool', 'warm'], ['arrow', 'the push the grid feels', ACCENT]]);
   choice(controls, { label: 'The numbers live', options: [['all at the center (A-grid)', 'A'], ['wind on the edges (C-grid)', 'C']], value: grid, onChange: (v) => { grid = v; show(); fig.render(); }, span: true });
-  choice(controls, { label: 'Pressure pattern', options: [['bump', 'bump'], ['alternating rows', 'stripes'], ['checkerboard', 'checkerboard'], ['clear', 'clear']], value: 'stripes', onChange: (v) => { fill(v); show(); fig.render(); }, span: true });
+  choice(controls, { label: 'Pressure pattern', options: [['bump', 'bump'], ['alternating rows', 'stripes'], ['checkerboard', 'checkerboard'], ['three colors', 'three'], ['clear', 'clear']], value: 'stripes', onChange: (v) => { fill(v); show(); fig.render(); }, span: true });
   const swatches = document.createElement('div');
   swatches.className = 'choice';
   swatches.setAttribute('role', 'group');
