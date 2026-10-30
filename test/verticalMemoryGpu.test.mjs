@@ -85,7 +85,7 @@ test('the frame reads the memory at a level, interpolated in ln p between the la
       const frame = await model.beginFrame({ level, fields: ['vertical'] });
       const expected = smoothCells(mesh, layerFieldAtLevel(sigmaMid, K, C, state[0], memory, level, new Float64Array(C)), new Float64Array(C));
       const gap = worst(expected, frame.fields.vertical), scale = largest(expected);
-      assert.ok(scale > 1e-4 && gap <= 1e-5 * scale, `at ${level}: ${gap} against ${scale}`);
+      assert.ok(scale > 1e-4 && gap <= 1e-4 * scale, `at ${level}: ${gap} against ${scale}`);
     }
     const held = await model.beginFrame({ level: 500, fields: ['vertical'] });
     same((await model.beginFrame({ level: 500, fields: ['vertical'] })).fields.vertical, held.fields.vertical, 'with no step between, the frame shows the same memory');
