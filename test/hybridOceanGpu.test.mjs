@@ -174,7 +174,7 @@ test('the GPU regrid adds the shift that keeps each edge\'s transport to v as we
   assert.ok(results[1].misfit < 0.05 * results[1].moved, `v is ${results[1].misfit} m/s from R(u) after a shift of ${results[1].moved} m/s`);
   gpuModel.destroy();
 });
-test('on the GPU u feels the internal part of v alone, so a depth-uniform offset of v changes neither u nor the barotropic transport of a dynamics step, with coriolis cd', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('on the GPU a depth-uniform offset of v leaves the barotropic transport of a step alone, so u after the shift moves only by the nonlinear terms, with coriolis cd', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { mesh, cpu, surfaceT, ice, stress } = scenario(N, CD), C = mesh.nCells, E = mesh.nEdges, flux = new Float64Array(C);
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: CD });
   const gpu = gpuModel.oceanEngine;
@@ -187,13 +187,15 @@ test('on the GPU u feels the internal part of v alone, so a depth-uniform offset
     if (shifted) for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) if (cpu.edgeOcean[e]) v[k * E + e] += offset[e];
     await gpu.upload({ ...cpu.serialize(), v, Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
     gpu.readSurface(Float64Array.from(surfaceT), ice); gpu.setStress(stress, ice);
-    gpu.phases.dynamics(DT);
+    gpu.phases.dynamics(DT); gpu.phases.rescale(); gpu.phases.shift();
     return gpu.download();
   };
   const plain = await stepped(false), moved = await stepped(true);
-  const change = stats(plain.u, moved.u), size = stats(new Float64Array(plain.u.length), plain.u);
-  console.log(`GPU dynamics with coriolis cd: a depth-uniform offset of v moves u by up to ${change.maxDiff.toExponential(2)} m/s, u is up to ${size.maxDiff.toExponential(2)} m/s`);
-  assert.ok(change.maxDiff < 1e-5, `an offset of v moved u by ${change.maxDiff} m/s`);
+  let turned = 0;
+  for (let e = 0; e < E; e++) if (cpu.edgeOcean[e]) turned = Math.max(turned, Math.abs(2 * 7.292e-5 * Math.sin(mesh.latEdge[e]) * offset[e] * DT));
+  const change = stats(plain.u, moved.u);
+  console.log(`GPU step with coriolis cd: a depth-uniform offset of v moves u after the shift by up to ${change.maxDiff.toExponential(2)} m/s, where its Coriolis term would turn u by up to ${turned.toExponential(2)} m/s`);
+  assert.ok(change.maxDiff < 0.05 * turned, `an offset of v moved u by ${change.maxDiff} m/s`);
   gpuModel.destroy();
 });
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));

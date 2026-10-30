@@ -356,17 +356,7 @@ ${keep ? keepFlow(stateThickness, 'keptBefore') : ''}  }
   var floor = 0.0;
   for (var k = 0; k < L; k++) { floor += OD[O_HEDGE + k * E + e]; }
   let da = OD[O_DRAFT + a]; let db = OD[O_DRAFT + b]; var layerTop = 0.0; var uAbove = 0.0;${o.cd ? ' var vAbove = 0.0;' : ''} var Ha = da; var Hb = db;
-${o.cd ? `  var vSum = 0.0; var vThick = 0.0;
-  { var Hma = da; var Hmb = db;
-    for (var k = 0; k < L; k++) {
-      let hm = OD[O_HEDGE + k * E + e]; let hma = IN[hOff(k) + a]; let hmb = IN[hOff(k) + b];
-      let rma = Hma - da; let rmb = Hmb - db;
-      let pinnedHere = k > 0 && (hm <= THINEDGE || (hm <= TOKENEDGE[k] && !(min(rma + hma, rmb + hmb) > max(rma, rmb))));
-      if (!pinnedHere) { vSum += hm * IN[vOff(k) + e]; vThick += hm; }
-      Hma += hma; Hmb += hmb;
-    } }
-  let vMean = select(0.0, vSum / vThick, vThick > 0.0);
-` : ''}  for (var k = 0; k < L; k++) {
+  for (var k = 0; k < L; k++) {
     let n = k * E + e;
     let u = IN[uOff(k) + e];${o.cd ? '\n    let v = IN[vOff(k) + e];' : ''}
     let qHere = 0.5 * OD[O_QE + n];
@@ -388,7 +378,7 @@ ${o.cd ? `    let pinned = k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(
     if (pinned) { du = (uAbove - u) * P[2]; }
     OD[O_LAPB + n] = du;
     OUT[vOff(k) + e] = select(DRY, (vAbove - v) * P[2], pinned);
-    if (!pinned) { du += OD[O_FEDGE + e] * (v - vMean); }
+    if (!pinned) { du += OD[O_FEDGE + e] * v; }
     OUT[uOff(k) + e] = du;
     uAbove = u; vAbove = v; layerTop += he; Ha += ha; Hb += hb;` : `    if (k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(min(ra + ha, rb + hb) > max(ra, rb))))) { du = (uAbove - u) * P[2]; }
     OUT[uOff(k) + e] = du;
@@ -1117,7 +1107,7 @@ ${K}  let i = ${idx}; if (i >= C) { return; }
   if (n < E) {
     let e = n;
     var sumH = 0.0; var transport = 0.0; var forcing = 0.0;
-    for (var k = 0; k < L; k++) { let he = OD[O_HEDGE + k * E + e]; sumH += he; transport += he * IN[uOff(k) + e]; forcing += he * (OUT[uOff(k) + e] + OGRAV * OD[O_GRADETA + e]); }
+    for (var k = 0; k < L; k++) { let he = OD[O_HEDGE + k * E + e]; sumH += he; transport += he * IN[uOff(k) + e]; forcing += he * (${o.cd ? 'OD[O_LAPB + k * E + e]' : 'OUT[uOff(k) + e]'} + OGRAV * OD[O_GRADETA + e]); }
     let onOcean = OD[O_EMASK + e] > 0.5;
     OD[B_BCUR + C + e] = select(0.0, transport, onOcean);
     OD[O_SLOW + e] = select(0.0, forcing, onOcean);

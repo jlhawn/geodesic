@@ -104,33 +104,36 @@ test('under coriolis cd the regrid adds the shift that keeps each edge\'s transp
   assert.ok(misfit < 1e-10 * Math.max(moved, 1), `v is ${misfit} m/s from R(u)`);
 });
 
-test('under coriolis cd u feels the internal part of v alone: the 3-D Coriolis term has no depth integral, and a depth-uniform offset of v changes neither a step\'s u nor its barotropic transport', () => {
+test('under coriolis cd the barotropic slow forcing carries none of the Coriolis term: whatever v, a depth-uniform offset included, it is the same, as is the barotropic transport of a step', () => {
   const make = () => {
     const made = hybridOcean({ coriolis: 'cd' }), wind = zonalWindOnEdges(made.mesh, (lat) => 0.1 * Math.cos(2 * lat));
     for (let n = 0; n < 6; n++) made.ocean.advance(made.surfaceT, made.ice, made.flux, wind, DT);
     return made;
   };
   const { ocean } = make(), twin = make().ocean, offset = zonalWindOnEdges(mesh, (lat) => 0.2 * Math.cos(lat));
-  const [k1, k2] = ocean.stages, v = Float64Array.from(ocean.v);
-  ocean.tendency(ocean.state, k1);
+  const k1 = ocean.stages[0], v = Float64Array.from(ocean.v);
+  const forcing = () => {
+    ocean.tendency(ocean.state, k1);
+    ocean.baroPrep(0, E);
+    return { slow: Float64Array.from(new Float64Array(ocean.shared.baroSlow)), du: Float64Array.from(k1[1]) };
+  };
+  const plain = forcing();
+  for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < E; e++) if (ocean.edgeOcean[e]) ocean.v[k * E + e] += offset[e];
+  const shifted = forcing();
   ocean.v.fill(0);
-  ocean.tendency(ocean.state, k2);
+  const none = forcing();
   ocean.v.set(v);
-  let integral = 0, size = 0;
-  for (let e = 0; e < E; e++) {
-    if (!ocean.edgeOcean[e]) continue;
-    let sum = 0, scale = 0;
-    for (let k = 0; k < ocean.layers; k++) { const coriolis = k1[1][k * E + e] - k2[1][k * E + e], he = ocean.hEdge[k * E + e]; sum += he * coriolis; scale += he * Math.abs(coriolis); }
-    integral = Math.max(integral, Math.abs(sum)); size = Math.max(size, scale);
-  }
-  console.log(`coriolis cd: the depth integral of the 3-D Coriolis term is ${integral.toExponential(2)} against ${size.toExponential(2)} m²/s² of its absolute value`);
-  assert.ok(size > 1e-6 && integral < 1e-12 * size, `the 3-D Coriolis term integrates to ${integral} m²/s² of ${size}`);
+  let size = 0, byOffset = 0, byNothing = 0, coriolis = 0;
+  for (let e = 0; e < E; e++) { size = Math.max(size, Math.abs(plain.slow[e])); byOffset = Math.max(byOffset, Math.abs(shifted.slow[e] - plain.slow[e])); byNothing = Math.max(byNothing, Math.abs(none.slow[e] - plain.slow[e])); }
+  for (let n = 0; n < plain.du.length; n++) coriolis = Math.max(coriolis, Math.abs(shifted.du[n] - plain.du[n]));
+  console.log(`coriolis cd: the slow forcing is up to ${size.toExponential(2)} m²/s², moved by ${byOffset.toExponential(2)} with v offset and ${byNothing.toExponential(2)} with v zero, where the offset moves u's tendency by ${coriolis.toExponential(2)} m/s²`);
+  assert.ok(size > 1e-6 && coriolis > 1e-7, 'the forcing and the Coriolis term it leaves out are not nil');
+  assert.ok(byOffset < 1e-9 * size && byNothing < 1e-9 * size, `the slow forcing depends on v by ${Math.max(byOffset, byNothing)} m²/s²`);
   for (let k = 0; k < twin.layers; k++) for (let e = 0; e < E; e++) if (twin.edgeOcean[e]) twin.v[k * E + e] += offset[e];
   ocean.phases.dynamics(DT); twin.phases.dynamics(DT);
-  let moved = 0, flow = 0;
-  for (let n = 0; n < ocean.u.length; n++) moved = Math.max(moved, Math.abs(ocean.u[n] - twin.u[n]));
+  let flow = 0;
   for (let e = 0; e < E; e++) flow = Math.max(flow, Math.abs(ocean.avgU[e] - twin.avgU[e]));
-  assert.ok(moved < 1e-12 && flow < 1e-9, `an offset of v moved u by ${moved} m/s and the barotropic transport by ${flow} m²/s`);
+  assert.ok(flow < 1e-9, `an offset of v moved the barotropic transport by ${flow} m²/s`);
 });
 
 test('coriolis cd is recorded in the saved ocean, an unknown scheme or a relaxation time that is not positive is refused, and a load starts v as the reconstruction of u', () => {

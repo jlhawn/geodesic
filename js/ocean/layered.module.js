@@ -292,18 +292,17 @@ export const TRACER_ADVECTIONS = ['upwind', 'third'], EDGE_TRANSPORTS = ['remapp
  * The Coriolis term of the edge velocities. 'trisk' is the energy-conserving
  * TRiSK term, the absolute vorticity's flux. 'cd' is the C-D scheme of
  * Adcroft, Hill and Marshall (1999): every layer's edges carry the
- * cross-edge velocity u and an along-edge velocity v. u feels f·(v − v̄), v̄
- * the thickness-weighted mean of v over the edge's unpinned layers, so the
- * depth mean of the flow keeps the barotropic mode's TRiSK Coriolis term and
- * the scheme acts on the internal flow alone, and the vorticity flux holds the
- * relative vorticity alone; v follows
+ * cross-edge velocity u and an along-edge velocity v. u feels f·v where it is
+ * and the vorticity flux holds the relative vorticity alone; the barotropic
+ * mode keeps the TRiSK Coriolis term, and its slow forcing holds none of u's,
+ * so that v cannot drive the depth-mean flow; v follows
  * dv/dt = −f·u + R(G) − (v − R(u))/τ, with R the TRiSK tangential
  * reconstruction (1/dc)·Σ w·dv·x over an edge's neighbors and G the whole of
  * u's tendency but the Coriolis term. Where u is pinned to the layer above, v
  * relaxes to the layer above's. v rides the RK4 beside u, takes R(δ) where
  * a depth-uniform shift δ is added to u, is remapped and mixed as u is, is limited
- * to SPEED_LIMIT, has its mean v̄ reset to the mean of R(u) once a step, starts
- * as R(u) on a load and is not saved. cdTau is τ in
+ * to SPEED_LIMIT, has its thickness-weighted depth mean reset to that of R(u)
+ * once a step, starts as R(u) on a load and is not saved. cdTau is τ in
  * seconds; the default is the 3.72 days of MITgcm's global_ocean.90x40x15.
  */
 export const CORIOLIS_SCHEMES = ['trisk', 'cd'], CD_TAU = 321428;
@@ -548,7 +547,7 @@ export function createOcean(mesh, {
   const shared = (name, n) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * n));
   const h = shared('h', L * C), u = shared('u', L * E), Q = shared('Q', L * C), W = shared('W', L * C);
   const state = [h, u, Q, W];
-  const cd = coriolis === 'cd', cdKeep = cd && edgeTransport === 'kept', cdRate = 1 / cdTau, cdV = cd ? shared('v', L * E) : null, cdShift = cd ? shared('cdShift', E) : null, cdMean = cd ? shared('cdMean', E) : null;
+  const cd = coriolis === 'cd', cdKeep = cd && edgeTransport === 'kept', cdRate = 1 / cdTau, cdV = cd ? shared('v', L * E) : null, cdShift = cd ? shared('cdShift', E) : null;
   if (cd) state.push(cdV);
   const eta = shared('eta', C);
   const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = shared('rhoMl', C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), iceVolume = new Float64Array(C), previousVolume = new Float64Array(C);
@@ -687,16 +686,6 @@ export function createOcean(mesh, {
       let sum = 0;
       for (let k = 0; k < L; k++) { edgeAbove[ae(k, e)] = sum; sum += hEdge[ae(k, e)]; }
       edgeBottom[e] = sum;
-      if (cd) {
-        const vIn = input[4];
-        let sumV = 0, sumH = 0;
-        for (let k = 0; k < L; k++) {
-          if (k > 0 && isPinned(k, e, hIn)) continue;
-          const he = hEdge[ae(k, e)];
-          sumV += he * vIn[ae(k, e)]; sumH += he;
-        }
-        cdMean[e] = sumH > 0 ? sumV / sumH : 0;
-      }
     }
   }
   function prepare(input) {
@@ -846,7 +835,7 @@ export function createOcean(mesh, {
           if (k > 0 && pinned[e]) { dv[oe + e] = (vIn[ae(k - 1, e)] - vIn[oe + e]) * relax; continue; }
           const f = fEdge[e];
           dv[oe + e] = -f * uIn[oe + e] + cdRG[e] - (vIn[oe + e] - cdRu[e]) * cdRate;
-          du[oe + e] += f * (vIn[oe + e] - cdMean[e]);
+          du[oe + e] += f * vIn[oe + e];
         }
       }
     }
@@ -863,7 +852,10 @@ export function createOcean(mesh, {
     const [, du] = stages[0];
     for (let e = from; e < to; e++) {
       let sumH = 0, transport = 0, forcing = 0;
-      for (let k = 0; k < L; k++) { const he = hEdge[ae(k, e)]; sumH += he; transport += he * u[ae(k, e)]; forcing += he * (du[ae(k, e)] + g * gradEta[e]); }
+      for (let k = 0; k < L; k++) {
+        const n = ae(k, e), he = hEdge[n], coriolis = cd && edgeOcean[e] && !(k > 0 && isPinned(k, e, h)) ? fEdge[e] * cdV[n] : 0;
+        sumH += he; transport += he * u[n]; forcing += he * (du[n] - coriolis + g * gradEta[e]);
+      }
       U[e] = edgeOcean[e] ? transport : 0;
       slow[e] = edgeOcean[e] ? forcing : 0;
       depthEdge[e] = sumH;
@@ -1853,6 +1845,6 @@ export function createOcean(mesh, {
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
   Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, heatIn: heatIn.buffer, saltIn: saltIn.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer , ...(restrat ? { mleDepths: mleDepths.buffer, mleThickness: mleThickness.buffer, mleBuoyancy: mleBuoyancy.buffer, mleUstar: mleUstar.buffer } : {}) });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  if (cd) { sharedBuffers.v = cdV.buffer; sharedBuffers.cdShift = cdShift.buffer; sharedBuffers.cdMean = cdMean.buffer; sharedBuffers.trialv = trial[4].buffer; stages.forEach((stage, s) => { sharedBuffers[`stage${s}v`] = stage[4].buffer; }); }
+  if (cd) { sharedBuffers.v = cdV.buffer; sharedBuffers.cdShift = cdShift.buffer; sharedBuffers.trialv = trial[4].buffer; stages.forEach((stage, s) => { sharedBuffers[`stage${s}v`] = stage[4].buffer; }); }
   return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; seaFlux = seaIce ? seaIce.oceanFlux : null; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, foldUpwelling, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells, coriolis, cdTau: cd ? cdTau : null, v: cdV, reconstruct };
 }
