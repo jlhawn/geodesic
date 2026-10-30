@@ -356,7 +356,17 @@ ${keep ? keepFlow(stateThickness, 'keptBefore') : ''}  }
   var floor = 0.0;
   for (var k = 0; k < L; k++) { floor += OD[O_HEDGE + k * E + e]; }
   let da = OD[O_DRAFT + a]; let db = OD[O_DRAFT + b]; var layerTop = 0.0; var uAbove = 0.0;${o.cd ? ' var vAbove = 0.0;' : ''} var Ha = da; var Hb = db;
-  for (var k = 0; k < L; k++) {
+${o.cd ? `  var vSum = 0.0; var vThick = 0.0;
+  { var Hma = da; var Hmb = db;
+    for (var k = 0; k < L; k++) {
+      let hm = OD[O_HEDGE + k * E + e]; let hma = IN[hOff(k) + a]; let hmb = IN[hOff(k) + b];
+      let rma = Hma - da; let rmb = Hmb - db;
+      let pinnedHere = k > 0 && (hm <= THINEDGE || (hm <= TOKENEDGE[k] && !(min(rma + hma, rmb + hmb) > max(rma, rmb))));
+      if (!pinnedHere) { vSum += hm * IN[vOff(k) + e]; vThick += hm; }
+      Hma += hma; Hmb += hmb;
+    } }
+  let vMean = select(0.0, vSum / vThick, vThick > 0.0);
+` : ''}  for (var k = 0; k < L; k++) {
     let n = k * E + e;
     let u = IN[uOff(k) + e];${o.cd ? '\n    let v = IN[vOff(k) + e];' : ''}
     let qHere = 0.5 * OD[O_QE + n];
@@ -378,7 +388,7 @@ ${o.cd ? `    let pinned = k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(
     if (pinned) { du = (uAbove - u) * P[2]; }
     OD[O_LAPB + n] = du;
     OUT[vOff(k) + e] = select(DRY, (vAbove - v) * P[2], pinned);
-    if (!pinned) { du += OD[O_FEDGE + e] * v; }
+    if (!pinned) { du += OD[O_FEDGE + e] * (v - vMean); }
     OUT[uOff(k) + e] = du;
     uAbove = u; vAbove = v; layerTop += he; Ha += ha; Hb += hb;` : `    if (k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(min(ra + ha, rb + hb) > max(ra, rb))))) { du = (uAbove - u) * P[2]; }
     OUT[uOff(k) + e] = du;
@@ -1178,6 +1188,23 @@ ${K}  let i = ${idx}; if (i >= C) { return; }
     ...(o.cd ? {
       oCdShift: cdFollowShift(true),
       oCdKeep: cdFollowShift(false),
+      oCdSlave: `${K}  let e = ${idx}; if (e >= E) { return; }
+  if (OD[O_EMASK + e] < 0.5) { return; }
+  let dc = MF[F_DC + e];
+  var others: array<i32, MAXEE>; var weights: array<f32, MAXEE>; var live: array<bool, MAXEE>;
+  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; others[s] = MI[EOE + slot]; weights[s] = MF[F_PVW + slot]; live[s] = OD[O_EMASK + others[s]] > 0.5; }
+  var sumR = 0.0; var sumV = 0.0; var depth = 0.0;
+  for (var k = 0; k < L; k++) {
+    var velocityR = 0.0;
+    for (var s = 0; s < MAXEE; s++) { velocityR += weights[s] * select(0.0, IN[uOff(k) + others[s]], live[s]); }
+    let he = OD[O_HEDGE + k * E + e];
+    sumR += he * velocityR / dc; sumV += he * IN[vOff(k) + e]; depth += he;
+  }
+  if (depth > 0.0) {
+    let change = (sumR - sumV) / depth;
+    for (var k = 0; k < L; k++) { let n = vOff(k) + e; IN[n] = clamp(IN[n] + change, -SPEEDLIM, SPEEDLIM); }
+  }
+}`,
     } : {}),
     oGatherSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   let gi = gcell(i);
@@ -1696,7 +1723,7 @@ ${core.fieldConstants}
     const g1 = group(ob.S, k1);
     compute((pass) => {
       dispatch(pass, 'oBarotropicSetup', g1, Math.max(nC, nE));
-      dispatch(pass, 'oBarotropicCoriolis', g1, nE);
+      if (!cd) dispatch(pass, 'oBarotropicCoriolis', g1, nE);
     });
     core.clearBuffer(ob.OD, 4 * B.BAVG, 4 * (nC + nE));
     const M = Math.max(1, Math.ceil(dt / substepLimit)), dtb = dt / M;
@@ -1722,7 +1749,7 @@ ${core.fieldConstants}
     compute((pass) => dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), Math.ceil(OS.total / 2)));
   }
   const rescalePass = (pass, g) => dispatch(pass, 'oRescale', g, nC);
-  const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, nE); dispatch(pass, 'oVelocityShiftClamp', g, nE); if (cd) dispatch(pass, 'oCdShift', g, nE); };
+  const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, nE); dispatch(pass, 'oVelocityShiftClamp', g, nE); if (cd) { dispatch(pass, 'oCdShift', g, nE); dispatch(pass, 'oCdSlave', g, nE); } };
   let edgesCurrent = false;
   function step(dt) {
     const parts = Math.max(1, Math.ceil(dt / inertialLimit)), part = dt / parts;

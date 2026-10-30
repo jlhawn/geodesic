@@ -174,6 +174,28 @@ test('the GPU regrid adds the shift that keeps each edge\'s transport to v as we
   assert.ok(results[1].misfit < 0.05 * results[1].moved, `v is ${results[1].misfit} m/s from R(u) after a shift of ${results[1].moved} m/s`);
   gpuModel.destroy();
 });
+test('on the GPU u feels the internal part of v alone, so a depth-uniform offset of v changes neither u nor the barotropic transport of a dynamics step, with coriolis cd', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice, stress } = scenario(N, CD), C = mesh.nCells, E = mesh.nEdges, flux = new Float64Array(C);
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: CD });
+  const gpu = gpuModel.oceanEngine;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  gpu.initialize(Float64Array.from(surfaceT), ice);
+  for (let n = 0; n < 6; n++) cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT);
+  const offset = zonalWindOnEdges(mesh, (lat) => 0.2 * Math.cos(lat));
+  const stepped = async (shifted) => {
+    const v = Float64Array.from(cpu.v);
+    if (shifted) for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) if (cpu.edgeOcean[e]) v[k * E + e] += offset[e];
+    await gpu.upload({ ...cpu.serialize(), v, Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
+    gpu.readSurface(Float64Array.from(surfaceT), ice); gpu.setStress(stress, ice);
+    gpu.phases.dynamics(DT);
+    return gpu.download();
+  };
+  const plain = await stepped(false), moved = await stepped(true);
+  const change = stats(plain.u, moved.u), size = stats(new Float64Array(plain.u.length), plain.u);
+  console.log(`GPU dynamics with coriolis cd: a depth-uniform offset of v moves u by up to ${change.maxDiff.toExponential(2)} m/s, u is up to ${size.maxDiff.toExponential(2)} m/s`);
+  assert.ok(change.maxDiff < 1e-5, `an offset of v moved u by ${change.maxDiff} m/s`);
+  gpuModel.destroy();
+});
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
 test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
 test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));
