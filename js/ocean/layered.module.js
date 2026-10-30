@@ -301,8 +301,7 @@ export const TRACER_ADVECTIONS = ['upwind', 'third'], EDGE_TRANSPORTS = ['remapp
  * u's tendency but the Coriolis term. Where u is pinned to the layer above, v
  * relaxes to the layer above's. v rides the RK4 beside u, takes R(δ) where
  * a depth-uniform shift δ is added to u, is remapped and mixed as u is, is limited
- * to SPEED_LIMIT, has its thickness-weighted depth mean reset to that of R(u)
- * once a step, starts as R(u) on a load and is not saved. cdTau is τ in
+ * to SPEED_LIMIT, starts as R(u) on a load and is not saved. cdTau is τ in
  * seconds; the default is the 3.72 days of MITgcm's global_ocean.90x40x15.
  */
 export const CORIOLIS_SCHEMES = ['trisk', 'cd'], CD_TAU = 321428;
@@ -984,27 +983,10 @@ export function createOcean(mesh, {
       cdV[n] = clamp && Math.abs(v) > SPEED_LIMIT ? Math.sign(v) * SPEED_LIMIT : v;
     }
   }
-  const cdSumR = cd ? new Float64Array(E) : null, cdSumV = cd ? new Float64Array(E) : null, cdDepth = cd ? new Float64Array(E) : null;
-  function slaveMean() {
-    cdSumR.fill(0); cdSumV.fill(0); cdDepth.fill(0);
-    for (let k = 0; k < L; k++) {
-      reconstruct(u, k * E, cdRu);
-      for (let e = 0; e < E; e++) {
-        if (!edgeOcean[e]) continue;
-        const he = hEdge[ae(k, e)];
-        cdSumR[e] += he * cdRu[e]; cdSumV[e] += he * cdV[ae(k, e)]; cdDepth[e] += he;
-      }
-    }
-    for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) {
-      if (!(cdDepth[e] > 0)) continue;
-      const n = ae(k, e), v = cdV[n] + (cdSumR[e] - cdSumV[e]) / cdDepth[e];
-      cdV[n] = Math.abs(v) > SPEED_LIMIT ? Math.sign(v) * SPEED_LIMIT : v;
-    }
-  }
   function shiftVelocities() {
     Atomics.store(counts, 1, 0);
     if (columnRunner) columnRunner('shift'); else shiftEdges(0, E);
-    if (cd) { followShift(true); slaveMean(); }
+    if (cd) followShift(true);
     limited = Atomics.load(counts, 1);
   }
   function step(dt) {

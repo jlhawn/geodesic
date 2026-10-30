@@ -1178,23 +1178,6 @@ ${o.cd ? '    forcing += OD[O_CDPVF + e];\n' : ''}    let onOcean = OD[O_EMASK +
     ...(o.cd ? {
       oCdShift: cdFollowShift(true),
       oCdKeep: cdFollowShift(false),
-      oCdSlave: `${K}  let e = ${idx}; if (e >= E) { return; }
-  if (OD[O_EMASK + e] < 0.5) { return; }
-  let dc = MF[F_DC + e];
-  var others: array<i32, MAXEE>; var weights: array<f32, MAXEE>; var live: array<bool, MAXEE>;
-  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; others[s] = MI[EOE + slot]; weights[s] = MF[F_PVW + slot]; live[s] = OD[O_EMASK + others[s]] > 0.5; }
-  var sumR = 0.0; var sumV = 0.0; var depth = 0.0;
-  for (var k = 0; k < L; k++) {
-    var velocityR = 0.0;
-    for (var s = 0; s < MAXEE; s++) { velocityR += weights[s] * select(0.0, IN[uOff(k) + others[s]], live[s]); }
-    let he = OD[O_HEDGE + k * E + e];
-    sumR += he * velocityR / dc; sumV += he * IN[vOff(k) + e]; depth += he;
-  }
-  if (depth > 0.0) {
-    let change = (sumR - sumV) / depth;
-    for (var k = 0; k < L; k++) { let n = vOff(k) + e; IN[n] = clamp(IN[n] + change, -SPEEDLIM, SPEEDLIM); }
-  }
-}`,
     } : {}),
     oGatherSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   let gi = gcell(i);
@@ -1739,7 +1722,7 @@ ${core.fieldConstants}
     compute((pass) => dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), Math.ceil(OS.total / 2)));
   }
   const rescalePass = (pass, g) => dispatch(pass, 'oRescale', g, nC);
-  const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, nE); dispatch(pass, 'oVelocityShiftClamp', g, nE); if (cd) { dispatch(pass, 'oCdShift', g, nE); dispatch(pass, 'oCdSlave', g, nE); } };
+  const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, nE); dispatch(pass, 'oVelocityShiftClamp', g, nE); if (cd) dispatch(pass, 'oCdShift', g, nE); };
   let edgesCurrent = false;
   function step(dt) {
     const parts = Math.max(1, Math.ceil(dt / inertialLimit)), part = dt / parts;
