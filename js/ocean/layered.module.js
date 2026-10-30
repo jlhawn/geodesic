@@ -294,8 +294,8 @@ export const TRACER_ADVECTIONS = ['upwind', 'third'], EDGE_TRANSPORTS = ['remapp
  * Adcroft, Hill and Marshall (1999): every layer's edges carry the
  * cross-edge velocity u and an along-edge velocity v. u feels f·v where it is
  * and the vorticity flux holds the relative vorticity alone; the barotropic
- * mode keeps the TRiSK Coriolis term, and its slow forcing holds none of u's,
- * so that v cannot drive the depth-mean flow; v follows
+ * mode is TRiSK's: its slow forcing is built with the f part of the TRiSK PV
+ * flux in place of f·v, so that v cannot drive the depth-mean flow; v follows
  * dv/dt = −f·u + R(G) − (v − R(u))/τ, with R the TRiSK tangential
  * reconstruction (1/dc)·Σ w·dv·x over an edge's neighbors and G the whole of
  * u's tendency but the Coriolis term. Where u is pinned to the layer above, v
@@ -848,13 +848,25 @@ export function createOcean(mesh, {
     }
   }
 
+  const planetaryPV = (k, e) => 0.5 * (fVertex[verticesOnEdge[2 * e]] + fVertex[verticesOnEdge[2 * e + 1]]) / Math.max(hEdge[ae(k, e)], vorticityCentring * 0.5 * (h[at(k, cellsOnEdge[2 * e])] + h[at(k, cellsOnEdge[2 * e + 1])]), pvFloor[k]);
+  function planetaryFlux(k, e) {
+    const q = planetaryPV(k, e);
+    let sum = 0;
+    for (let s = 0; s < nEdgesOnEdge[e]; s++) {
+      const other = edgesOnEdge[maxEdgesOnEdge * e + s];
+      if (!edgeOcean[other]) continue;
+      const n = ae(k, other);
+      sum += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[other] * hEdge[n] * u[n] * 0.5 * (q + planetaryPV(k, other));
+    }
+    return sum / dcEdge[e];
+  }
   function baroPrep(from, to) {
     const [, du] = stages[0];
     for (let e = from; e < to; e++) {
       let sumH = 0, transport = 0, forcing = 0;
       for (let k = 0; k < L; k++) {
-        const n = ae(k, e), he = hEdge[n], coriolis = cd && edgeOcean[e] && !(k > 0 && isPinned(k, e, h)) ? fEdge[e] * cdV[n] : 0;
-        sumH += he; transport += he * u[n]; forcing += he * (du[n] - coriolis + g * gradEta[e]);
+        const n = ae(k, e), he = hEdge[n], tendencyHasF = cd && edgeOcean[e] && !(k > 0 && isPinned(k, e, h));
+        sumH += he; transport += he * u[n]; forcing += he * (du[n] + g * gradEta[e] + (tendencyHasF ? planetaryFlux(k, e) - fEdge[e] * cdV[n] : 0));
       }
       U[e] = edgeOcean[e] ? transport : 0;
       slow[e] = edgeOcean[e] ? forcing : 0;
@@ -900,7 +912,7 @@ export function createOcean(mesh, {
     params[5] = dtb; params[6] = 1 / M;
     const pass = (name, n, fn) => (columnRunner ? columnRunner(name) : fn(0, n));
     pass('baroPrep', E, baroPrep);
-    if (!cd) pass('baroCoriolis', E, baroCoriolis);
+    pass('baroCoriolis', E, baroCoriolis);
     etaB.set(eta); avgU.fill(0); avgEta.fill(0);
     for (let m = 0; m < M; m++) for (let stage = 0; stage < 4; stage++) {
       params[4] = stage;

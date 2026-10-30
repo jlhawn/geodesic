@@ -354,14 +354,14 @@ ${keep ? keepFlow(stateThickness, 'keptBefore') : ''}  }
   var others: array<i32, MAXEE>; var weights: array<f32, MAXEE>; var live: array<bool, MAXEE>;
   for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; others[s] = MI[EOE + slot]; weights[s] = MF[F_PVW + slot]; live[s] = OD[O_EMASK + others[s]] > 0.5; }
   var floor = 0.0;
-  for (var k = 0; k < L; k++) { floor += OD[O_HEDGE + k * E + e]; }
+${o.cd ? '  var cdPvf = 0.0;\n' : ''}  for (var k = 0; k < L; k++) { floor += OD[O_HEDGE + k * E + e]; }
   let da = OD[O_DRAFT + a]; let db = OD[O_DRAFT + b]; var layerTop = 0.0; var uAbove = 0.0;${o.cd ? ' var vAbove = 0.0;' : ''} var Ha = da; var Hb = db;
   for (var k = 0; k < L; k++) {
     let n = k * E + e;
     let u = IN[uOff(k) + e];${o.cd ? '\n    let v = IN[vOff(k) + e];' : ''}
     let qHere = 0.5 * OD[O_QE + n];
-    var pv = 0.0;
-    for (var s = 0; s < MAXEE; s++) { let other = others[s]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], live[s]); pv += weights[s] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]); }
+    var pv = 0.0;${o.cd ? ' var pvf = 0.0; let qfHere = 0.5 * OD[O_QEF + n];' : ''}
+    for (var s = 0; s < MAXEE; s++) { let other = others[s]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], live[s]); pv += weights[s] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]);${o.cd ? ' pvf += weights[s] * fo * (qfHere + 0.5 * OD[O_QEF + k * E + other]);' : ''} }
     let gradK = (OD[O_PHI + k * C + b] - OD[O_PHI + k * C + a]) / dc;
     let pa = O_PR + 2 * (k * C + a); let pb = O_PR + 2 * (k * C + b); let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
     let top = max(Ha, Hb); let bottom = min(Ha + ha, Hb + hb);
@@ -375,7 +375,7 @@ ${keep ? keepFlow(stateThickness, 'keptBefore') : ''}  }
     if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
     let ra = Ha - da; let rb = Hb - db;
 ${o.cd ? `    let pinned = k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(min(ra + ha, rb + hb) > max(ra, rb))));
-    if (pinned) { du = (uAbove - u) * P[2]; }
+    if (pinned) { du = (uAbove - u) * P[2]; } else { cdPvf += he * pvf / dc; }
     OD[O_LAPB + n] = du;
     OUT[vOff(k) + e] = select(DRY, (vAbove - v) * P[2], pinned);
     if (!pinned) { du += OD[O_FEDGE + e] * v; }
@@ -383,7 +383,7 @@ ${o.cd ? `    let pinned = k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(
     uAbove = u; vAbove = v; layerTop += he; Ha += ha; Hb += hb;` : `    if (k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(min(ra + ha, rb + hb) > max(ra, rb))))) { du = (uAbove - u) * P[2]; }
     OUT[uOff(k) + e] = du;
     uAbove = u; layerTop += he; Ha += ha; Hb += hb;`}
-  }
+  }${o.cd ? '\n  OD[O_CDPVF + e] = cdPvf;' : ''}
 }`,
     ...(o.cd ? {
       /*
@@ -427,7 +427,7 @@ ${o.cd ? `    let pinned = k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(
     OD[O_FLUX + n] = select(0.0, min(he, max(0.0, select(hb, ha, ue > 0.0))) * ue, wet);
     let hq = max(he, CENTRING * 0.5 * (ha + hb));
     OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, PVFLOORK[k]);
-  }
+${o.cd ? '    OD[O_QEF + n] = 0.5 * (MF[F_FV + v1] + MF[F_FV + v2]) / max(hq, PVFLOORK[k]);\n' : ''}  }
 }`,
     oRescale: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
@@ -1108,7 +1108,7 @@ ${K}  let i = ${idx}; if (i >= C) { return; }
     let e = n;
     var sumH = 0.0; var transport = 0.0; var forcing = 0.0;
     for (var k = 0; k < L; k++) { let he = OD[O_HEDGE + k * E + e]; sumH += he; transport += he * IN[uOff(k) + e]; forcing += he * (${o.cd ? 'OD[O_LAPB + k * E + e]' : 'OUT[uOff(k) + e]'} + OGRAV * OD[O_GRADETA + e]); }
-    let onOcean = OD[O_EMASK + e] > 0.5;
+${o.cd ? '    forcing += OD[O_CDPVF + e];\n' : ''}    let onOcean = OD[O_EMASK + e] > 0.5;
     OD[B_BCUR + C + e] = select(0.0, transport, onOcean);
     OD[O_SLOW + e] = select(0.0, forcing, onOcean);
     OD[O_DEPTHEDGE + e] = sumH;
@@ -1485,7 +1485,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
     sec('EMASK', 'edge'), sec('CMASK', 'cell'), sec('BATH', 'cell'), sec('FEDGE', 'edge'),
     sec('RUNOFFSEEN', 'drain'), sec('DISCHARGESEEN', 'drain'), sec('CALVED', 'cell'), ['DRAINSTART', nC + 1], ['DRAINCELL', count.drain], ['DRAINW', count.drain],
     sec('EDDYK', 'edge'),
-    ...(cd ? [sec('CDSHIFT', 'edge')] : []),
+    ...(cd ? [sec('CDSHIFT', 'edge'), sec('QEF', 'edge', L), sec('CDPVF', 'edge')] : []),
     ['PR', 2 * L * nC], sec('MIXED', 'cell'), sec('BLD', 'cell'), sec('DRIED', 'cell'), sec('FCELL', 'cell'), sec('SILL', 'edge'), sec('SHELF', 'cell'), sec('DRAFT', 'cell'), sec('LOAD', 'cell'), sec('LOADT', 'cell'), sec('LOADS', 'cell'), sec('LIQUIDUS', 'cell'), sec('MELT', 'cell'), sec('MELTSUM', 'cell'), sec('DRAW', 'cell'), ['POOLS', 12], sec('UPWM', 'cell', L),
     ...(third ? [['BEY', 2 * nE], ['BED', 2 * nE]] : []),
     ...(driftOptions ? driftSections(nC, nE).map(([name]) => sec(name, name === 'TAUA' || DRIFT_EDGE_SECTIONS.includes(name) ? 'edge' : 'cell')) : []),
@@ -1713,7 +1713,7 @@ ${core.fieldConstants}
     const g1 = group(ob.S, k1);
     compute((pass) => {
       dispatch(pass, 'oBarotropicSetup', g1, Math.max(nC, nE));
-      if (!cd) dispatch(pass, 'oBarotropicCoriolis', g1, nE);
+      dispatch(pass, 'oBarotropicCoriolis', g1, nE);
     });
     core.clearBuffer(ob.OD, 4 * B.BAVG, 4 * (nC + nE));
     const M = Math.max(1, Math.ceil(dt / substepLimit)), dtb = dt / M;
@@ -2399,7 +2399,7 @@ ${core.fieldConstants}
   return {
     layers: L, everySteps: o.everySteps, options: o, coriolis: o.coriolis, D, sillEdge, cellOcean, edgeOcean, vertical: 'hybrid', generator: o.generator, table,
     useSeaIce(concentration) { seaCover = concentration; },
-    initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame, cdMisfit: cd ? cdMisfit : null,
+    initialize, upload, download, serialize, serializeFrom, restartArrays, readSections, diagnostics, frame, cdMisfit: cd ? cdMisfit : null,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated, readShelfMelt, driftStep, setAirStress, iceDrift: driftOptions,
     setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, salt, writeSurface, step, phases, eddyTransport,
     buffers: ob, layout: { OS, OD, B, MI: TMI, MF: TMF }, packing: pk,

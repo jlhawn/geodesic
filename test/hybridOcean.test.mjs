@@ -104,36 +104,44 @@ test('under coriolis cd the regrid adds the shift that keeps each edge\'s transp
   assert.ok(misfit < 1e-10 * Math.max(moved, 1), `v is ${misfit} m/s from R(u)`);
 });
 
-test('under coriolis cd the barotropic slow forcing carries none of the Coriolis term: whatever v, a depth-uniform offset included, it is the same, as is the barotropic transport of a step', () => {
-  const make = () => {
-    const made = hybridOcean({ coriolis: 'cd' }), wind = zonalWindOnEdges(made.mesh, (lat) => 0.1 * Math.cos(2 * lat));
-    for (let n = 0; n < 6; n++) made.ocean.advance(made.surfaceT, made.ice, made.flux, wind, DT);
-    return made;
-  };
-  const { ocean } = make(), twin = make().ocean, offset = zonalWindOnEdges(mesh, (lat) => 0.2 * Math.cos(lat));
-  const k1 = ocean.stages[0], v = Float64Array.from(ocean.v);
-  const forcing = () => {
+test('under coriolis cd the barotropic slow forcing is the control\'s whatever v is: for the same h, u and forcing it equals the TRiSK one, and so does the barotropic transport of a step', () => {
+  const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
+  const A = hybridOcean({}), B = hybridOcean({ coriolis: 'cd' });
+  for (let n = 0; n < 6; n++) A.ocean.advance(A.surfaceT, A.ice, A.flux, wind, DT);
+  for (const name of ['h', 'u', 'Q', 'W', 'eta', 'stress']) B.ocean[name].set(A.ocean[name]);
+  const slowOf = (ocean) => {
+    const k1 = ocean.stages[0];
     ocean.tendency(ocean.state, k1);
     ocean.baroPrep(0, E);
+    ocean.baroCoriolis(0, E);
     return { slow: Float64Array.from(new Float64Array(ocean.shared.baroSlow)), du: Float64Array.from(k1[1]) };
   };
-  const plain = forcing();
-  for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < E; e++) if (ocean.edgeOcean[e]) ocean.v[k * E + e] += offset[e];
-  const shifted = forcing();
-  ocean.v.fill(0);
-  const none = forcing();
-  ocean.v.set(v);
-  let size = 0, byOffset = 0, byNothing = 0, coriolis = 0;
-  for (let e = 0; e < E; e++) { size = Math.max(size, Math.abs(plain.slow[e])); byOffset = Math.max(byOffset, Math.abs(shifted.slow[e] - plain.slow[e])); byNothing = Math.max(byNothing, Math.abs(none.slow[e] - plain.slow[e])); }
-  for (let n = 0; n < plain.du.length; n++) coriolis = Math.max(coriolis, Math.abs(shifted.du[n] - plain.du[n]));
-  console.log(`coriolis cd: the slow forcing is up to ${size.toExponential(2)} m²/s², moved by ${byOffset.toExponential(2)} with v offset and ${byNothing.toExponential(2)} with v zero, where the offset moves u's tendency by ${coriolis.toExponential(2)} m/s²`);
-  assert.ok(size > 1e-6 && coriolis > 1e-7, 'the forcing and the Coriolis term it leaves out are not nil');
-  assert.ok(byOffset < 1e-9 * size && byNothing < 1e-9 * size, `the slow forcing depends on v by ${Math.max(byOffset, byNothing)} m²/s²`);
-  for (let k = 0; k < twin.layers; k++) for (let e = 0; e < E; e++) if (twin.edgeOcean[e]) twin.v[k * E + e] += offset[e];
-  ocean.phases.dynamics(DT); twin.phases.dynamics(DT);
-  let flow = 0;
-  for (let e = 0; e < E; e++) flow = Math.max(flow, Math.abs(ocean.avgU[e] - twin.avgU[e]));
-  assert.ok(flow < 1e-9, `an offset of v moved the barotropic transport by ${flow} m²/s`);
+  const control = slowOf(A.ocean), reconstructed = new Float64Array(E), offset = zonalWindOnEdges(mesh, (lat) => 0.3 * Math.cos(lat));
+  const fills = {
+    'v as R(u)': (k, e, r) => r[e],
+    'v zero': () => 0,
+    'v a rough field': (k, e, r) => r[e] + offset[e] + 0.2 * Math.sin(7 * (k * E + e)),
+  };
+  let size = 0, worst = 0, coriolis = 0;
+  for (let e = 0; e < E; e++) size = Math.max(size, Math.abs(control.slow[e]));
+  for (const [label, fill] of Object.entries(fills)) {
+    for (let k = 0; k < B.ocean.layers; k++) {
+      B.ocean.reconstruct(B.ocean.u, k * E, reconstructed);
+      for (let e = 0; e < E; e++) B.ocean.v[k * E + e] = B.ocean.edgeOcean[e] ? fill(k, e, reconstructed) : 0;
+    }
+    const cd = slowOf(B.ocean);
+    let gap = 0;
+    for (let e = 0; e < E; e++) gap = Math.max(gap, Math.abs(cd.slow[e] - control.slow[e]));
+    worst = Math.max(worst, gap);
+    if (label === 'v a rough field') for (let n = 0; n < cd.du.length; n++) coriolis = Math.max(coriolis, Math.abs(cd.du[n] - control.du[n]));
+    console.log(`coriolis cd, ${label}: the slow forcing differs from the control's by up to ${gap.toExponential(2)} m²/s² of ${size.toExponential(2)}`);
+  }
+  assert.ok(size > 1e-6 && coriolis > 1e-7, 'the forcing and the difference between the tendencies are not nil');
+  assert.ok(worst < 1e-12 * size, `the slow forcing parts from the control's by ${worst} m²/s²`);
+  A.ocean.phases.dynamics(DT); B.ocean.phases.dynamics(DT);
+  let flow = 0, speed = 0;
+  for (let e = 0; e < E; e++) { flow = Math.max(flow, Math.abs(A.ocean.avgU[e] - B.ocean.avgU[e])); speed = Math.max(speed, Math.abs(A.ocean.avgU[e])); }
+  assert.ok(speed > 1e-3 && flow < 1e-9 * speed, `the barotropic transport parts from the control's by ${flow} m²/s of ${speed}`);
 });
 
 test('coriolis cd is recorded in the saved ocean, an unknown scheme or a relaxation time that is not positive is refused, and a load starts v as the reconstruction of u', () => {
