@@ -3003,7 +3003,7 @@ and 773 and 82, 245 and 460 with c = 2 m/s and power 2; poleward of 15°
 it is within 5% of `eddyDiffusivity`. Under the deep basins the
 structure is 0.6–0.8 at 300 m, 0.3–0.4 at 750 m, 0.1–0.2 at 1500 m and
 the floor below 2000 m, the peak lying at 200–450 m. The column pass
-adds 0.12 ms to the 1.1 ms eddy phase at N=64 and 0.8 ms to its 5.4 ms
+adds 0.08 ms to the 0.93 ms eddy phase at N=64 and 0.6 ms to its 4.9 ms
 at N=128 on the M5 Max. The taper τ is linear over the top
 200 m (`eddyTaperDepth`, on the shallower cell), over 100 m above the sill
 and of the water below the interface that both columns hold, and over
