@@ -3,6 +3,8 @@ import { NEAR_INFRARED_TABLE } from '../physics/nearInfraredTable.module.js';
 import { NEAR_INFRARED_MOLAR, OXYGEN, OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR } from '../physics/shortwaveGases.module.js';
 import { SLINGO_LIQUID, EBERT_CURRY_ICE, NEAR_INFRARED_SHARE, ULTRAVIOLET_BANDS, VISIBLE_RAYLEIGH_SCALE, VISIBLE_OZONE_ABSORPTION } from '../physics/layeredShortwave.module.js';
 import { REFERENCE_PRESSURE, NEAR_INFRARED_RAYLEIGH } from '../physics/radiation.module.js';
+import { AEROSOL_SPECTRA } from '../physics/aerosolSpectra.module.js';
+import { macProfiles, macCell, macSliceBand, macSliceVisible } from './aerosol.gpu.js';
 
 /*
  * The layered shortwave (js/physics/layeredShortwave.module.js) as a pass between the
@@ -23,6 +25,7 @@ export const LAYERED_SLOTS = 9;
 const x = (v) => { if (!Number.isFinite(v)) throw new Error(`the layered table holds ${v}`); return v.toPrecision(9); };
 
 function slices(o) {
+  const mac = o.aerosol === 'mac';
   const mixing = { co2: o.carbonDioxide * NEAR_INFRARED_MOLAR.co2, ch4: o.methane * NEAR_INFRARED_MOLAR.ch4, o2: OXYGEN.mixingRatio * NEAR_INFRARED_MOLAR.o2 };
   const rayleigh = o.rayleighDepth != null ? [[1, o.rayleighDepth]] : o.rayleighBands;
   const out = [];
@@ -39,12 +42,12 @@ function slices(o) {
       const logs = band.gases.map((name, i) => `let lv${i} = log(sqrt(airP2[k] + ${x(parameters[i].pD * parameters[i].pD)}) / ${x(NEAR_INFRARED_TABLE.pRef)});`).join(' ');
       const self = h2o.self > 0 ? `var d = ${x(h2o.self)} * airE[k] * exp(${x(h2o.selfT)} * airLn[k]);` : 'var d = 0.0;';
       out.push({
-        text: `w = ${x(band.share * point.weight)}; sb = ${band.slingo}; ray = ${x(band.rayleigh * o.nearInfraredRayleigh / NEAR_INFRARED_RAYLEIGH)}; visible = false;
+        text: `w = ${x(band.share * point.weight)}; sb = ${band.slingo}; ray = ${x(band.rayleigh * o.nearInfraredRayleigh / NEAR_INFRARED_RAYLEIGH)}; visible = false;${mac ? macSliceBand(AEROSOL_SPECTRA.bands.indexOf(band.band)) : ''}
         for (var k = 0; k < K; k++) { ${logs} ${self} ${terms.join(' ')} gas[k] = ${x(point.scale)} * d; }`,
       });
     });
   }
-  rayleigh.forEach(([weight, depth]) => out.push({ text: `w = visShare * ${x(weight)}; sb = 0; ray = ${x(depth * VISIBLE_RAYLEIGH_SCALE)}; visible = true;
+  rayleigh.forEach(([weight, depth]) => out.push({ text: `w = visShare * ${x(weight)}; sb = 0; ray = ${x(depth * VISIBLE_RAYLEIGH_SCALE)}; visible = true;${mac ? macSliceVisible() : ''}
         for (var k = 0; k < K; k++) { gas[k] = vis[k]; }` }));
   return out;
 }
@@ -54,7 +57,7 @@ const chain = (list) => list.map((s, n) => `${n ? ' else ' : ''}if (s == ${n}) {
 const COEFFICIENTS = (name, table, field, pick) => `if (sb == 0) { ${name} = ${x(table[field][0][pick])}; } else if (sb == 1) { ${name} = ${x(table[field][1][pick])}; } else if (sb == 2) { ${name} = ${x(table[field][2][pick])}; } else { ${name} = ${x(table[field][3][pick])}; }`;
 
 export const layeredKernel = (o, held, stashText) => {
-  const list = slices(o);
+  const list = slices(o), mac = o.aerosol === 'mac';
   const ultraviolet = OZONE_SHARES.slice(0, ULTRAVIOLET_BANDS).map((share, b) => `${x(share)} * (1.0 - exp(-${x(OZONE_COEFFICIENTS[b])} * ozonePath))`).join(' + ');
   const aerosolAlbedo = o.aerosolAlbedo, aerosolAsymmetry = o.aerosolAsymmetry;
   const outputs = held ? `    PH[PH_RADSW + k * C + i] += weightL * dh[k];` : `    OUT[LWS_FLUX + k * C + i] += weightL * dh[k];`;
@@ -115,7 +118,7 @@ fn twoStream(tau: f32, co: f32, g: f32, mu0: f32) -> Layer {
   let ozonePath = ozoneSum / muEff; let ultraviolet = ${ultraviolet};
   let visShare = 1.0 - ${x(NEAR_INFRARED_SHARE)} - ultraviolet; let ozoneStrength = ${x(VISIBLE_OZONE_ABSORPTION)} / visShare; let vaporStrength = ${x(VISIBLE_VAPOR.share)} * VIS_H2O_K * VIS_STRENGTH / visShare;
   for (var k = 0; k < K; k++) { vis[k] = ozoneStrength * OUT[LWS_OZONE + k * C + i] + vaporStrength * vis[k]; }
-  let nodes = select(1, 4, variance > 0.0);
+${mac ? `  ${macProfiles()}  ${macCell()}` : ''}  let nodes = select(1, 4, variance > 0.0);
   let sigma = sqrt(log(1.0 + max(variance, 0.0))); let shift = 0.5 * sigma * sigma;
   var surf = 0.0; var down = 0.0; var dir = 0.0;
   for (var s = 0; s < ${list.length}; s++) {
@@ -146,8 +149,9 @@ fn twoStream(tau: f32, co: f32, g: f32, mu0: f32) -> Layer {
         let cw = select(0.0, wat[k] / cover * node, region > 0);
         if (region > 0 && !(cw > 0.0)) { continue; }
         let rayleigh = ray * pressureScale * LV[L_DS + k];
-        let aer = select(0.0, aerosol * LV[L_AER + k], visible);
-        var cloudTau = 0.0; var cloudAbsorbed = 0.0; var cloudScattered = 0.0; var cloudAsymmetry = 0.0;
+${mac ? `        let aerTau = mq0 * macF[k] + mq1 * macG[k]; let aerAbs = ma0 * macF[k] + ma1 * macG[k]; let aerSca = ms0 * macF[k] + ms1 * macG[k]; let aerGs = mp0 * macF[k] + mp1 * macG[k];
+` : `        let aer = select(0.0, aerosol * LV[L_AER + k], visible);
+`}        var cloudTau = 0.0; var cloudAbsorbed = 0.0; var cloudScattered = 0.0; var cloudAsymmetry = 0.0;
         if (cw > 0.0) {
           let T = airDT[k] + 250.0;
           let liquid = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
@@ -158,10 +162,13 @@ fn twoStream(tau: f32, co: f32, g: f32, mu0: f32) -> Layer {
           cloudTau = liquidTau + iceTau; cloudAbsorbed = liquidTau * liquidCo + iceTau * iceCo; cloudScattered = cloudTau - cloudAbsorbed;
           cloudAsymmetry = liquidTau * (1.0 - liquidCo) * (le + lf * liquidRadius) + iceTau * (1.0 - iceCo) * (ie + if2 * crystal);
         }
-        let tau = gas[k] + rayleigh + aer + cloudTau;
+${mac ? `        let tau = gas[k] + rayleigh + aerTau + cloudTau;
+        let absorbed = gas[k] + aerAbs + cloudAbsorbed; let scattered = rayleigh + aerSca + cloudScattered;
+        let asymmetry = select(0.0, (aerGs + cloudAsymmetry) / scattered, scattered > 0.0);
+` : `        let tau = gas[k] + rayleigh + aer + cloudTau;
         let absorbed = gas[k] + ${x(1 - aerosolAlbedo)} * aer + cloudAbsorbed; let scattered = rayleigh + ${x(aerosolAlbedo)} * aer + cloudScattered;
         let asymmetry = select(0.0, (${x(aerosolAsymmetry * aerosolAlbedo)} * aer + cloudAsymmetry) / scattered, scattered > 0.0);
-        let layer = twoStream(tau, absorbed / tau, asymmetry, muEff);
+`}        let layer = twoStream(tau, absorbed / tau, asymmetry, muEff);
         rd[k] = layer.rd; td[k] = layer.td; rb[k] = layer.rb; tb[k] = layer.tb; tt[k] = layer.tt;
       }
       var up = adif; var source = adir;

@@ -36,6 +36,7 @@ import { decodeMonthlySst, monthWeights, climatologyAt } from '../js/ocean/clima
 import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 import { pressureColumns, residualCirculation, temSums, tropicalTable, temJson, TEM_PRESSURES } from './residualCirculation.mjs';
 import { upperWindLine } from './upperAtmosphere.mjs';
+import { loadSavedLand } from './savedLand.mjs';
 
 const [FILE, OUT, TAG] = process.argv.slice(2);
 const DAYS = Number(process.env.DAYS ?? 12), SAVE_DAYS = Number(process.env.SAVE_DAYS ?? 3), SAVE_FROM = Number(process.env.SAVE_FROM ?? 0), SST = process.env.SST ?? 'own', CAP = Number(process.env.CAP ?? 1e12), BATCH = 8;
@@ -45,7 +46,7 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const mesh = stateGrid(saved, topography).mesh, dt = 1350 * 16 / saved.N, perDay = Math.round(86400 / dt);
 const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedLevels(saved);
-const model = await createGpuModel(mesh, { topography, geography, land: landOptions, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES'), dynamics: env('DYNAMICS') });
+const model = await createGpuModel(mesh, { topography, geography, land: { ...landOptions, ...env('LAND') }, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES'), dynamics: env('DYNAMICS') });
 const { state, core } = model, C = mesh.nCells;
 const carried = { ...saved, ...(process.env.LEVELS ? remapLevels(savedLevels(saved), levels, saved, mesh) : {}) };
 const PERTURB = Number(process.env.PERTURB ?? 0);
@@ -83,7 +84,7 @@ function setSst(day) {
 const [changed, shift] = sst ? setSst(saved.day) : [0, 0];
 console.log(`${TAG}: day ${saved.day}, SST ${SST}${changed ? ` set on ${changed} open-sea cells, mean shift ${(shift / changed).toFixed(2)} K` : ''}, slab ${CAP.toExponential(0)} J/m²/K, ${DAYS} days`);
 model.load({ ocean: false });
-model.land.load(saved.land);
+loadSavedLand(model, saved);
 mkdirSync(OUT, { recursive: true });
 const every = TEM_HOURS ? Math.round(TEM_HOURS * 3600 / dt) : Infinity, pressures = TEM_PRESSURES.map((p) => 100 * p), tem = temSums();
 const temCore = TEM_HOURS ? createSigmaCore(mesh, { levels }) : null, K = levels.length - 1, BANDS = 72;

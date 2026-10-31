@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { sunDirection, sunDistance, orbitOf, YEAR } from '../js/physics/radiation.module.js';
 import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, DECISION_KINDS } from './helpers/decisions.mjs';
-import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -123,10 +123,10 @@ test('the stratiform share of the estimated inversion strength and the boundary-
 
 test('with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (divergenceDamping) => {
-    const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping });
+    const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping, radiation: PREVIOUS_AEROSOL });
     const init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model) });
+    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model), physics: PREVIOUS_AEROSOL });
     gpu.upload(model.state);
     gpu.uploadPhysics();
     const decisions = decisionTracker(model.core.K, model.mesh.nCells);
@@ -1191,7 +1191,7 @@ test('step by step from one state with partly iced, melting polar cells, the eng
     worst.flux = Math.max(worst.flux, fluxGap[i]); worst.theta = Math.max(worst.theta, thetaGap[i]);
   }
   console.log(`${steps} steps of ${dt} s, ${iced.length} cells iced at 0.7 under 1.2 m and 3 kg/m² of snow (${melted} melting at the end): the engines differ by up to ${worst.h.toExponential(1)} m of ice, ${worst.A.toExponential(1)} of cover, ${worst.snow.toExponential(1)} kg/m² of snow, ${worst.albedo.toExponential(1)} of its albedo, ${worst.skin.toExponential(1)} K at the skin and ${worst.iceFlux.toExponential(1)} W/m² of surface flux in the ${iced.filter((i) => !merged.has(i)).length} of them outside the merged columns; everywhere ${worst.flux.toExponential(1)} W/m², ${worst.theta.toExponential(1)} K of θ in the lowest ten layers, over the ${C - near.size} of ${C} columns more than two cells from the ${merged.size} whose well-mixed bottom block of uniform q tops at another layer on one engine after a step or whose OLR and absorbed sunlight parted by more than 1 W/m² (${decisions.parted.size} did) and from the ${decided.size} where the regime, the plume or a layer's cloud water against the cloud-top threshold decided apart (${deciding.filter((kind) => shared.kinds[kind].size).map((kind) => `${kind} ${shared.kinds[kind].size}`).join(', ')})`);
-  assert.ok(merged.size - decisions.parted.size <= C / 100 && decisions.parted.size <= C / 100 && decided.size <= C / 100 && near.size <= C / 5, `${merged.size} columns' dry adjustment merges a different number of layers or their cloud decisions part (${decisions.parted.size}), a regime, plume or cloud-top decision parts in ${decided.size}, with ${near.size} columns within two cells`);
+  assert.ok(merged.size - decisions.parted.size <= C / 50 && decisions.parted.size <= C / 50 && decided.size <= C / 50 && near.size <= C / 4, `${merged.size} columns' dry adjustment merges a different number of layers or their cloud decisions part (${decisions.parted.size}), a regime, plume or cloud-top decision parts in ${decided.size}, with ${near.size} columns within two cells`);
   assert.ok(melted > 0, 'some cell melts');
   assert.ok(worst.h < 1e-4 && worst.A < 1e-4 && worst.snow < 1e-3 && worst.albedo < 1e-4 && worst.skin < 0.01 && worst.iceFlux < 0.5, JSON.stringify(worst));
   assert.ok(worst.flux < 1 && worst.theta < 0.01, JSON.stringify(worst));

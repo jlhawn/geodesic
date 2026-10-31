@@ -8,7 +8,7 @@ import { SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 import { R_VAPOR, saturationHumidity, cloudSaturation, iceVaporPressure, saturationVaporPressure, criticalHumidityAt, uniformCondensate, uniformCover, LATENT_HEAT, MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 
 const levels = sigmaInterfaces('bl34');
-const build = (moist = {}) => createModel(new Grid(16), { ocean: false, levels, moist });
+const build = (moist = {}) => createModel(new Grid(16), { ocean: false, levels, moist: { bergeronAutoconversion: false, ...moist } });
 
 /*
  * Column 0 of the model at 1000 hPa under a 6.5 K/km atmosphere from
@@ -175,7 +175,7 @@ test('bergeronAutoconversion multiplies the liquid share\'s two conversion rates
     return water - Math.min(water, excess * (1 - Math.exp(-rate * factor * dt)) + water * (1 - Math.exp(-factor * dt / lifetime)));
   };
   for (const [pressure, water] of [[3e4, 1e-4], [4.5e4, 3e-4], [4.5e4, 5e-5], [7e4, 3e-4], [9e4, 3e-4]]) {
-    const plain = run({}, pressure, water), fast = run({ bergeronAutoconversion: true }, pressure, water);
+    const plain = run({ bergeronAutoconversion: false }, pressure, water), fast = run({ bergeronAutoconversion: true }, pressure, water);
     assert.ok(Math.abs(plain.left - expected(water, plain.T, false)) < 1e-18, `plain ${plain.left} against ${expected(water, plain.T, false)} at ${plain.T} K`);
     assert.ok(Math.abs(fast.left - expected(water, fast.T, true)) < 1e-18, `with the factor ${fast.left} against ${expected(water, fast.T, true)} at ${fast.T} K`);
     if (fast.T < 268.16) assert.ok(fast.left < plain.left, `${fast.T} K converts faster`);
@@ -252,9 +252,9 @@ async function gpuAdjustParity(previous, reference = null) {
   assert.ok(moved > 0 && drier > wetter, `the factor moved ${moved} layers, ${drier} drier and ${wetter} wetter`);
 }
 
-test('on the GPU the falling ice and the uniform condensation keep column water with the precipitation and moist enthalpy to single precision, and match the CPU column by column', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory' }));
+test('on the GPU the falling ice and the uniform condensation keep column water with the precipitation and moist enthalpy to single precision, and match the CPU column by column', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: false }));
 
-test('on the GPU bergeronAutoconversion converts the cold liquid faster and matches the CPU column by column to the same tolerances', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: true }, { plumeEntrainmentLaw: 'gregory' }));
+test('on the GPU bergeronAutoconversion converts the cold liquid faster and matches the CPU column by column to the same tolerances', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: true }, { plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: false }));
 
 function coverColumn(radiation = {}) {
   const model = createModel(new Grid(16), { ocean: false, levels, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999], ...radiation } });

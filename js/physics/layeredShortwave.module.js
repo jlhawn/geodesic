@@ -124,7 +124,11 @@ export function addLayers(layers, K, surfaceAlbedo, diffuseAlbedo, weight, out, 
  *   mu, airmass: the sun's cosine and the beam's magnification
  *   air, mixing: the near infrared's layers and gases (nearInfraredBands')
  *   dSigma, pressureScale: the layers' share of the mass and the surface pressure over 1013.25 hPa
- *   ozone[k] (cm-atm), vaporPath[k] (g/cm2 scaled, 0.1 vaporScaling q mass), aerosol, aerosolFraction[k]
+ *   ozone[k] (cm-atm), vaporPath[k] (g/cm2 scaled, 0.1 vaporScaling q mass), aerosol, aerosolFraction[k], or
+ *   aerosolLayers: null, or { visible(out), band(number, out) } filling out.tau, abs, sca and gs [k] (a slice's
+ *   aerosol depth, absorption depth, scattering depth and asymmetry-weighted scattering depth in each layer) for
+ *   the visible slices and for RRTMG_SW's band `number`; without it the aerosol is aerosol times aerosolFraction in
+ *   the visible slices, of albedo aerosolAlbedo and asymmetry aerosolAsymmetry, and none in the near infrared
  *   surfaceAlbedo, diffuseAlbedo
  *   cloud: null or { cover, count, layers[], water[k] (kg/m2 of the cell), liquid[k], reIce[k], reLiquid, nodes }
  */
@@ -133,7 +137,9 @@ export function createLayered(K, { rayleighBands, nearInfraredScale = 1, visible
   const makeLayers = () => ({ reflect: field(), scatter: field(), direct: field(), reflectDiffuse: field(), transmitDiffuse: field() });
   const clearLayers = makeLayers(), cloudLayers = makeLayers();
   const albedo = new Float64Array(K + 1), source = new Float64Array(K + 1);
-  const depth = field(), aerosolDepth = field(), one = {};
+  const depth = field(), one = {};
+  const aerosolSlice = () => ({ tau: field(), abs: field(), sca: field(), gs: field() });
+  const visibleAerosol = aerosolSlice(), bandAerosol = aerosolSlice(), noAerosol = aerosolSlice();
   const clear = { heat: field(), surface: 0, reflected: 0, down: 0, direct: 0 }, cloudy = { heat: field(), surface: 0, reflected: 0, down: 0, direct: 0 };
   const base = [Array.from({ length: 4 }, field), Array.from({ length: 4 }, field)], self = field();
   const sourceBands = new Map(NEAR_INFRARED_TABLE.bands.map((b) => [b.band, b]));
@@ -144,33 +150,33 @@ export function createLayered(K, { rayleighBands, nearInfraredScale = 1, visible
     layers.reflect[k] = one.reflect; layers.scatter[k] = one.scatter; layers.direct[k] = one.direct; layers.reflectDiffuse[k] = one.reflectDiffuse; layers.transmitDiffuse[k] = one.transmitDiffuse;
   }
 
-  function clearLayer(k, gas, rayleigh, aerosol, mu) {
-    const tau = gas + rayleigh + aerosol, scattered = rayleigh + aerosolAlbedo * aerosol;
-    setLayer(clearLayers, k, tau, (gas + (1 - aerosolAlbedo) * aerosol) / tau, scattered > 0 ? aerosolAsymmetry * aerosolAlbedo * aerosol / scattered : 0, mu);
+  function clearLayer(k, gas, rayleigh, aer, mu) {
+    const tau = gas + rayleigh + aer.tau[k], scattered = rayleigh + aer.sca[k];
+    setLayer(clearLayers, k, tau, (gas + aer.abs[k]) / tau, scattered > 0 ? aer.gs[k] / scattered : 0, mu);
   }
 
-  function cloudLayer(k, band, water, cloud, gas, rayleigh, aerosol, mu) {
+  function cloudLayer(k, band, water, cloud, gas, rayleigh, aer, mu) {
     const liquidShare = cloud.liquid[k], reLiquid = cloud.reLiquid, reIce = cloud.reIce[k];
     const [a0, b0] = SLINGO_LIQUID.extinction[0], [a, b] = SLINGO_LIQUID.extinction[band];
     const liquidTau = liquidShare * water * 1500 / reLiquid * (a + b / reLiquid) / (a0 + b0 / reLiquid), iceTau = (1 - liquidShare) * water * 1000 * (3.448e-3 + 2.431 / reIce);
     const liquidCo = Math.max(0, SLINGO_LIQUID.absorption[band][0] + SLINGO_LIQUID.absorption[band][1] * reLiquid), iceCo = EBERT_CURRY_ICE.absorption[band][0] + EBERT_CURRY_ICE.absorption[band][1] * reIce;
     const liquidG = SLINGO_LIQUID.asymmetry[band][0] + SLINGO_LIQUID.asymmetry[band][1] * reLiquid, iceG = EBERT_CURRY_ICE.asymmetry[band][0] + EBERT_CURRY_ICE.asymmetry[band][1] * reIce;
     const cloudTau = liquidTau + iceTau, cloudScattered = liquidTau * (1 - liquidCo) + iceTau * (1 - iceCo);
-    const tau = gas + rayleigh + aerosol + cloudTau, absorbed = gas + (1 - aerosolAlbedo) * aerosol + liquidTau * liquidCo + iceTau * iceCo;
-    const scattered = rayleigh + aerosolAlbedo * aerosol + cloudScattered;
-    setLayer(cloudLayers, k, tau, absorbed / tau, scattered > 0 ? (aerosolAsymmetry * aerosolAlbedo * aerosol + liquidTau * (1 - liquidCo) * liquidG + iceTau * (1 - iceCo) * iceG) / scattered : 0, mu);
+    const tau = gas + rayleigh + aer.tau[k] + cloudTau, absorbed = gas + aer.abs[k] + liquidTau * liquidCo + iceTau * iceCo;
+    const scattered = rayleigh + aer.sca[k] + cloudScattered;
+    setLayer(cloudLayers, k, tau, absorbed / tau, scattered > 0 ? (aer.gs[k] + liquidTau * (1 - liquidCo) * liquidG + iceTau * (1 - iceCo) * iceG) / scattered : 0, mu);
   }
 
-  function slice(inputs, gas, rayleigh, visible, band, weight) {
+  function slice(inputs, gas, rayleigh, aer, band, weight) {
     const { surfaceAlbedo, diffuseAlbedo, dSigma, pressureScale, cloud } = inputs, mu = 1 / inputs.airmass;
-    for (let k = 0; k < K; k++) clearLayer(k, gas[k], rayleigh * pressureScale * dSigma[k], visible ? aerosolDepth[k] : 0, mu);
+    for (let k = 0; k < K; k++) clearLayer(k, gas[k], rayleigh * pressureScale * dSigma[k], aer, mu);
     addLayers(clearLayers, K, surfaceAlbedo, diffuseAlbedo, weight, clear, albedo, source);
     if (!cloud || cloud.count === 0) return;
     for (const key in clearLayers) cloudLayers[key].set(clearLayers[key]);
     for (const [x, nodeWeight] of cloud.nodes) {
       for (let n = 0; n < cloud.count; n++) {
         const k = cloud.layers[n];
-        cloudLayer(k, band, x * cloud.water[k] / cloud.cover, cloud, gas[k], rayleigh * pressureScale * dSigma[k], visible ? aerosolDepth[k] : 0, mu);
+        cloudLayer(k, band, x * cloud.water[k] / cloud.cover, cloud, gas[k], rayleigh * pressureScale * dSigma[k], aer, mu);
       }
       addLayers(cloudLayers, K, surfaceAlbedo, diffuseAlbedo, weight * nodeWeight, cloudy, albedo, source);
     }
@@ -179,9 +185,15 @@ export function createLayered(K, { rayleighBands, nearInfraredScale = 1, visible
   function solve(inputs) {
     reset(clear); reset(cloudy);
     const { air, mixing } = inputs;
-    for (let k = 0; k < K; k++) aerosolDepth[k] = inputs.aerosol * inputs.aerosolFraction[k];
+    const layers = inputs.aerosolLayers;
+    if (layers) layers.visible(visibleAerosol);
+    else for (let k = 0; k < K; k++) {
+      const d = inputs.aerosol * inputs.aerosolFraction[k];
+      visibleAerosol.tau[k] = d; visibleAerosol.abs[k] = (1 - aerosolAlbedo) * d; visibleAerosol.sca[k] = aerosolAlbedo * d; visibleAerosol.gs[k] = aerosolAsymmetry * aerosolAlbedo * d;
+    }
     for (const band of LAYERED_TABLE.bands) {
       const data = sourceBands.get(band.band);
+      const nearAerosol = layers ? layers.band(band.band, bandAerosol) : noAerosol;
       self.fill(0);
       band.gases.forEach((name, i) => {
         const par = data.gases[name], isVapor = name === 'h2o';
@@ -197,7 +209,7 @@ export function createLayered(K, { rayleighBands, nearInfraredScale = 1, visible
           for (let i = 0; i < band.gases.length; i++) for (let j = 0; j < point.mix[i].length; j++) d += point.mix[i][j] * base[i][j][k];
           depth[k] = point.scale * d;
         }
-        slice(inputs, depth, band.rayleigh * nearInfraredScale, false, band.slingo, band.share * point.weight);
+        slice(inputs, depth, band.rayleigh * nearInfraredScale, nearAerosol, band.slingo, band.share * point.weight);
       }
     }
     let ozonePath = 0;
@@ -208,7 +220,7 @@ export function createLayered(K, { rayleighBands, nearInfraredScale = 1, visible
     const visibleShare = 1 - NEAR_INFRARED_SHARE - ultraviolet, ozoneStrength = VISIBLE_OZONE_ABSORPTION / visibleShare, vaporStrength = VISIBLE_VAPOR.share * visibleVaporCoefficient * visibleVaporStrength / visibleShare;
     for (const [bandWeight, rayleigh] of rayleighBands) {
       for (let k = 0; k < K; k++) depth[k] = ozoneStrength * inputs.ozone[k] + vaporStrength * inputs.vaporPath[k];
-      slice(inputs, depth, VISIBLE_RAYLEIGH_SCALE * rayleigh, true, 0, visibleShare * bandWeight);
+      slice(inputs, depth, VISIBLE_RAYLEIGH_SCALE * rayleigh, visibleAerosol, 0, visibleShare * bandWeight);
     }
   }
   return { solve, clear, cloudy };

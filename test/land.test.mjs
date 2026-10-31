@@ -58,7 +58,7 @@ test('the bucket conserves water: rain, evaporation, melt and runoff balance the
 
 test('snow accumulates below freezing, raises the albedo, holds the surface at the melting point while it melts, and drains into the bucket', () => {
   const geography = createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
-  const land = createLandSurface(mesh, geography, { heatCapacity: 1e6, albedo: 0.25, snowAlbedo: 0.7, fullSnow: 20, vegetation: false, snowAgeing: false });
+  const land = createLandSurface(mesh, geography, { soil: 'slab', heatCapacity: 1e6, albedo: 0.25, snowAlbedo: 0.7, fullSnow: 20, vegetation: false, snowAgeing: false });
   land.initialize();
   const i = 3;
   land.deposit(i, 10, MELTING_POINT - 5);
@@ -97,7 +97,7 @@ const DAY = 86400;
 const flat = () => createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
 
 test('vegetation grows over a wet bucket and dies back over a dry one on its time scales, taking the albedo and the bucket with it', () => {
-  const land = createLandSurface(mesh, flat(), { growthTime: 100 * DAY, declineTime: 50 * DAY, grassland: false, soilCarbon: false });
+  const land = createLandSurface(mesh, flat(), { soil: 'slab', growthTime: 100 * DAY, declineTime: 50 * DAY, grassland: false, soilCarbon: false });
   land.initialize();
   const i = 0, surfaceT = new Float64Array(mesh.nCells).fill(295), flux = new Float64Array(mesh.nCells);
   assert.equal(land.vegetation[i], 0.5);
@@ -157,7 +157,7 @@ test('a saved land state without vegetation loads green with full buckets where 
   }
   land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow, vegetation: new Float64Array(mesh.nCells).fill(1.5) });
   for (let i = 0; i < mesh.nCells; i++) assert.equal(land.vegetation[i], geography.land[i] && !geography.iceSheet[i] ? 1 : 0);
-  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'snowAlbedo', 'vegetation', 'surface', 'canopy', 'seasonLength', 'seasonWarmth', 'rainMean', 'demandMean', 'snowFreeCover', 'record', 'soilCarbon', 'litterMean', 'decayMean']);
+  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'snowAlbedo', 'vegetation', 'surface', 'canopy', 'seasonLength', 'seasonWarmth', 'rainMean', 'demandMean', 'snowFreeCover', 'record', 'soilCarbon', 'litterMean', 'decayMean', 'soilT2', 'soilT3', 'soilT4']);
 });
 
 test('an ice sheet keeps its albedo under anything and grows nothing', () => {

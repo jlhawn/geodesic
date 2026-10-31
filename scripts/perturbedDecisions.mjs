@@ -27,7 +27,7 @@ const SETUP = process.env.SETUP ?? 'cloudEffect', AMP = Number(process.env.AMP ?
 let seed = Number(process.env.SEED ?? 99);
 const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 - 0.5; };
 
-const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false, longwaveScheme: 'gray', solarGases: 'lacisHansen' };
+const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, aerosol: 'flat', landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false, longwaveScheme: 'gray', solarGases: 'lacisHansen' };
 const SETUPS = {
   cloudEffect: {
     steps: 16,

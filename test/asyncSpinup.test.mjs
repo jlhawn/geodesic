@@ -201,6 +201,8 @@ test('a coupled run split at each day\'s end ends byte for byte where the uninte
   assert.ok(day.ocean.Qref && day.ocean.Wref && day.ocean.flux && day.ocean.capacity, 'the day\'s file carries the ocean\'s restart arrays');
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '2' }), 0);
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '3' }), 0);
+  const [x, y] = await Promise.all([whole, parts].map((out) => load(join(out, 's_day0003.bin'))));
+  assert.deepEqual(apart(x, y), [], 'the arrays the split run ends with differ from the uninterrupted one\'s');
   assert.ok(readFileSync(join(whole, 's_day0003.bin')).equals(readFileSync(join(parts, 's_day0003.bin'))), 'the split run ends where the uninterrupted one does');
 });
 

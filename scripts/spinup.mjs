@@ -50,6 +50,10 @@
 // saved a whole day.
 // Whole-day names alone count towards KEEP, and only whole-day names match
 // the day patterns of the shell drivers.
+// The header records the radiation's shortwave scheme and aerosol, the moist
+// physics' bergeronAutoconversion and the land's soil, with the RADIATION,
+// MOIST and LAND given, as the options the page starts the state with
+// (scripts/stateOptions.mjs).
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}';
@@ -163,12 +167,14 @@ import { START_CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { SEA_ICE_START_FILE, loadSeaIceStart } from '../js/physics/seaIceStart.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { withCadence } from '../js/cadence.module.js';
+import { recordedOptions, soilOptions } from './stateOptions.mjs';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
 import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
 import { watchSkin } from './skinWatch.mjs';
 import { lakeArrays, savedLake } from '../js/physics/lake.module.js';
+import { loadSavedLand } from './savedLand.mjs';
 
 const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
@@ -180,7 +186,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, LAKE = JSON.parse(process.env.LAKE ?? '{}');
-const RADIATION = withCadence({ radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
+const GIVEN_RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), RADIATION = withCadence({ radiation: { clearSkyPass: true, ...GIVEN_RADIATION } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
 const DRAG_EVERY = withCadence({ dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, 1350 * 16 / N, N).dragEvery;
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
@@ -247,7 +253,7 @@ function loadSaved(saved) {
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
-  model.land.load(saved.land);
+  loadSavedLand(model, saved);
   if (model.lake && savedLake(saved)) model.lake.load(savedLake(saved));
   if (saved.energyRecord) model.energyRecord.load(saved.energyRecord);
 }
@@ -298,12 +304,12 @@ if (saved) {
   if (from) {
     const started = oceanFromAtlas ? model.ocean.initialize(state[3], state[6]) : null;
     if (!oceanFromAtlas) model.ocean.load(from.ocean, state[3], state[6]);
-    model.land.load(from.land, iceFrom ? state[6] : null);
+    model.land.load(from.land, iceFrom ? state[6] : null, model.time, state[3]);
     log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${fromGrid}): ${oceanFromAtlas ? '' : 'the ocean, '}the land (soil, snow, ${from.land.snowAlbedo ? 'snow albedo, ' : ''}${from.land.vegetation ? 'vegetation, ' : ''}${from.land.canopy ? 'standing cover, ' : ''}${from.land.seasonLength ? 'season means, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature)${oceanFromAtlas ? '' : ' and the sea-surface temperature of its mixed layer'}, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; ${atmosphere}; the clock at day 0`);
     if (started) log(`ocean and the open sea's surface from ${climatology}: ${started.atlas} sea cells, ${started.analytic} from the analytic climatology where it has no water`);
   } else {
     const started = model.ocean.initialize(state[3], state[6]);
-    model.land.initialize();
+    model.land.initialize(model.time);
     log(started ? `ocean and sea surface from ${climatology}: ${started.atlas} sea cells, ${started.analytic} from the analytic climatology where it has no water` : 'ocean from the analytic climatology');
   }
   if (process.env.LAND_FROM) {
@@ -311,7 +317,7 @@ if (saved) {
     const seedGeography = stateGeography(seed), sameGround = JSON.stringify(seedGeography.record) === JSON.stringify(GEOGRAPHY);
     const sourceMesh = seed.N === N ? mesh : stateGrid(seed, seedGeography.topography).mesh;
     const source = { mesh: sourceMesh, geography: seed.N === N && sameGround ? model.geography : createGeography(sourceMesh, seedGeography.topography, seedGeography.geography) };
-    model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6]);
+    model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6], model.time, state[3]);
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
   }
   const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at'][record[1]];
@@ -361,10 +367,9 @@ if (startStep && saved.rainTotal) {
   queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.RUNOFF, Float32Array.from(saved.runoffTotal));
   if (saved.dischargeTotal) queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.DISCHARGE, Float32Array.from(saved.dischargeTotal));
   if (model.oceanEngine && saved.rainSeen) {
-    const { OD } = model.oceanEngine.layout;
-    queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.RAINSEEN, Float32Array.from(saved.rainSeen));
-    queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.RUNOFFSEEN, Float32Array.from(saved.runoffSeen));
-    if (saved.dischargeSeen) queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.DISCHARGESEEN, Float32Array.from(saved.dischargeSeen));
+    model.oceanEngine.putSection('RAINSEEN', saved.rainSeen);
+    model.oceanEngine.putSection('RUNOFFSEEN', saved.runoffSeen);
+    if (saved.dischargeSeen) model.oceanEngine.putSection('DISCHARGESEEN', saved.dischargeSeen);
   }
 }
 const RECORD = process.env.RECORD;
@@ -519,7 +524,7 @@ if (step) {
   const [rainTotal, runoffTotal, dischargeTotal] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.RAIN, length: C }, { offset: PH.RUNOFF, length: C }, { offset: PH.DISCHARGE, length: C }]);
   Object.assign(partial, { rainTotal, runoffTotal, dischargeTotal });
   if (model.oceanEngine) {
-    const { OD } = model.oceanEngine.layout, [rainSeen, runoffSeen, dischargeSeen] = await readRanges(model.gpu.device, model.oceanEngine.buffers.OD, [{ offset: OD.RAINSEEN, length: C }, { offset: OD.RUNOFFSEEN, length: C }, { offset: OD.DISCHARGESEEN, length: C }]);
+    const [rainSeen, runoffSeen, dischargeSeen] = await Promise.all(['RAINSEEN', 'RUNOFFSEEN', 'DISCHARGESEEN'].map((name) => model.oceanEngine.readSection(name)));
     Object.assign(partial, { rainSeen, runoffSeen, dischargeSeen });
   }
 }
@@ -549,13 +554,13 @@ if (days > 0 && !step) {
   log(`ocean after ${days} days: warm pool ${sst(warmPool).toFixed(1)} °C, cold tongue ${sst(coldTongue).toFixed(1)} °C (W−E ${(sst(westPacific) - sst(eastPacific)).toFixed(1)} K), ${THERMOCLINE_DENSITY} class top W Pac ${classTop(westPacific).toFixed(0)} m, E Pac ${classTop(eastPacific).toFixed(0)} m`);
   const daily = (sums) => Float64Array.from(sums, (x) => x / splitDays);
   log(convectionLine(mesh, { land, ice: state[6] }, { convective: daily(split.convective), largeScale: daily(split.largeScale), wet: daily(split.wet) }, days));
-  const [stress] = await readRanges(model.gpu.device, model.oceanEngine.buffers.OD, [{ offset: model.oceanEngine.layout.OD.STRESS, length: mesh.nEdges }]);
+  const stress = await model.oceanEngine.readSection('STRESS');
   log(equatorLine(mesh, land, ocean, stress, days));
 }
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
 const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
-const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(GEOGRAPHY), levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
+const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(GEOGRAPHY), levels: core.levels, options: recordedOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: soilOptions(LAND) }), ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
 writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));

@@ -38,7 +38,7 @@ import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { placeCumulus } from '../js/physics/moist.module.js';
-import { PUBLISHED_RADIATION } from '../explain/published.module.js';
+import { PUBLISHED_RADIATION, PUBLISHED_MOIST } from '../explain/published.module.js';
 
 const FLOAT32_TOLERANCE = 2 ** -21, SECTION_MIN_THICKNESS = 0.1, NET_FRACTION = 0.1;
 const N = 16, DAY = 86400, STEP = 450, GRID = 'bl36', FRAME_DAYS = 5, SPINUP_FRAMES = 60, BINS = 36, CAP_STEP = 5, UPWELLING_DEPTH = 50, CELSIUS = 273.15;
@@ -88,7 +88,7 @@ const base = resumed ? JSON.parse(resumed.optionsJson) : { ocean: { everySteps: 
 const ICE = process.env.WET_ICE ? JSON.parse(process.env.WET_ICE) : base.ice;
 const OCEAN = { ...base.ocean, ...JSON.parse(process.env.OCEAN_OPTS ?? '{}') };
 const cadence = withCadence({ ocean: OCEAN }, STEP, N);
-const options = { ocean: cadence.ocean, levels: sigmaInterfaces(GRID), radiation: { ...cadence.radiation, clearSkyPass: true, orbit: PUBLISHED_RADIATION.orbit }, dragEvery: cadence.dragEvery, ice: ICE, surface: JSON.parse(process.env.SURFACE_OPTS ?? '{}') };
+const options = { ocean: cadence.ocean, levels: sigmaInterfaces(GRID), radiation: { ...cadence.radiation, clearSkyPass: true, orbit: PUBLISHED_RADIATION.orbit, shortwave: PUBLISHED_RADIATION.shortwave, aerosol: PUBLISHED_RADIATION.aerosol }, moist: { bergeronAutoconversion: PUBLISHED_MOIST.bergeronAutoconversion }, dragEvery: cadence.dragEvery, ice: ICE, surface: JSON.parse(process.env.SURFACE_OPTS ?? '{}') };
 const runStartTime = resumed ? resumed.runStartTime : (Math.ceil(SPINUP_DAYS / 365) * 365 - SPINUP_DAYS) * DAY;
 const invocationStart = resumed ? resumed.time : runStartTime, recordStart = invocationStart + SPINUP_DAYS * DAY, end = RECORD_DAYS * DAY;
 if (Math.round(recordStart / DAY) % 365 !== 0) { console.error(`the checkpoint is at model day ${Math.round(invocationStart / DAY)}; a record must start on a March equinox, ${365 - (Math.round(invocationStart / DAY) % 365)} days on (or that plus whole years)`); process.exit(1); }
@@ -103,7 +103,7 @@ const t0 = performance.now(), seconds = () => (performance.now() - t0) / 1000;
 const model = await createGpuModel(resumed ? stateGrid(resumed, null).mesh : new Grid(N), options);
 const { mesh, core, state, seaIce, gpu } = model, ocean = model.oceanEngine, { device } = gpu;
 const [pi, theta, u, surfaceT, q, qc, ice] = state;
-const C = mesh.nCells, E = mesh.nEdges, K = core.K, L = ocean.layers, PH = gpu.layout.PH, SL = gpu.layout.S, OD = ocean.layout.OD;
+const C = mesh.nCells, E = mesh.nEdges, K = core.K, L = ocean.layers, PH = gpu.layout.PH, SL = gpu.layout.S;
 const { cellsOnEdge, dvEdge, dcEdge, areaCell: weight } = mesh;
 const rhoCp = ocean.options.density * ocean.options.specificHeat, LATENT = model.moist.latentHeat, FUSION = seaIce.latentHeatFusion;
 const airCp = core.diagnostics.cp, gravity = core.diagnostics.g, { dSigma } = core.diagnostics;
@@ -128,7 +128,7 @@ if (resumed) {
   model.time = resumed.time;
   model.load({ ocean: false });
   model.ocean.load(resumed.ocean, surfaceT, ice);
-  if (resumed.eddyV && resumed.eddyV.length === L * E) device.queue.writeBuffer(ocean.buffers.OD, 4 * OD.EDDYV, Float32Array.from(resumed.eddyV));
+  if (resumed.eddyV && resumed.eddyV.length === L * E) ocean.putSection('EDDYV', resumed.eddyV);
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOW, Float32Array.from(resumed.seaSnow));
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOWALB, Float32Array.from(resumed.seaSnowAlbedo));
   const loaded = await model.ocean.serialize({ restart: true }), differing = [];
@@ -185,9 +185,9 @@ const edgeFluxes = edgeLayerFluxes(mesh, { layers: L, fixed: FIXED, options: oce
 const edgeOut = { volume: new Float64Array(L), net: new Float64Array(L), heat: new Float64Array(L), diffusion: new Float64Array(L), donor: new Int32Array(L) };
 
 async function oceanSnapshot() {
-  const [o, [eddy], [iceNow, skin], [concentration]] = await Promise.all([
+  const [o, eddy, [iceNow, skin], [concentration]] = await Promise.all([
     ocean.download(),
-    readRanges(device, ocean.buffers.OD, [{ offset: OD.EDDYV, length: L * E }]),
+    ocean.readSection('EDDYV'),
     readRanges(device, gpu.buffers.S, [{ offset: SL.ICE, length: C }, { offset: SL.TS, length: C }]),
     readRanges(device, gpu.buffers.PH, [{ offset: PH.CONC, length: C }]),
   ]);

@@ -57,6 +57,7 @@ import { decodeForcing, forcingDay } from '../js/forcing.module.js';
 import { COUPLED_ICE_DRIFT } from '../js/ocean/iceDrift.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
+import { loadSavedLand } from './savedLand.mjs';
 
 const N = Number(process.env.N ?? 64), TAG = process.env.TAG ?? `ocean${N}`, YEARS = Number(process.env.YEARS ?? 1), KEEP = Number(process.env.KEEP ?? 2);
 const DAYS_PER_YEAR = Number(process.env.DAYS_PER_YEAR ?? 365), LOOP_DAYS = Number(process.env.LOOP_DAYS ?? DAYS_PER_YEAR), RESTORE = Number(process.env.RESTORE ?? 30);
@@ -104,7 +105,7 @@ for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDe
 model.time = saved.time;
 model.load();
 model.ocean.load(saved.ocean, state[3], state[6]);
-model.land.load(saved.land);
+loadSavedLand(model, saved);
 const forced = createForcedOcean(model);
 
 const deg = 180 / Math.PI, land = model.geography.land;

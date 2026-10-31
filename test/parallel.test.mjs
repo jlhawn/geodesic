@@ -5,6 +5,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createParallelModel } from '../js/parallel.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { syntheticAerosol } from './helpers/aerosol.mjs';
 
 test('the worker-thread step reproduces the single-thread step bit for bit', async () => {
   const serial = createModel(new Grid(16));
@@ -41,6 +42,25 @@ test('with penetrating sunlight the worker-thread step reproduces the single-thr
     for (let a = 0; a < serial.state.length; a++) assert.deepEqual(parallel.state[a], serial.state[a], `array ${a}`);
     for (let a = 0; a < serial.ocean.state.length; a++) assert.deepEqual(parallel.ocean.state[a], serial.ocean.state[a], `ocean array ${a}`);
     for (const name of ['penetrated', 'transmission', 'eta']) assert.deepEqual(parallel.ocean[name], serial.ocean[name], name);
+  } finally {
+    await parallel.close();
+  }
+});
+
+test("with aerosol 'mac' the worker-thread step reproduces the single-thread step bit for bit across a change of the model day", async () => {
+  const { bytes } = syntheticAerosol();
+  const options = { radiation: { aerosol: 'mac', aerosolData: bytes } };
+  const serial = createModel(new Grid(16), options);
+  const parallel = await createParallelModel(new Grid(16), options, 3);
+  const init = initializeState(serial, {});
+  for (let a = 0; a < 4; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
+  serial.time = parallel.time = 150 * 86400 - 1500;
+  try {
+    for (let n = 0; n < 5; n++) { serial.step(600); parallel.step(600); }
+    assert.equal(serial.aerosol.day, 150);
+    for (let a = 0; a < serial.state.length; a++) assert.deepEqual(parallel.state[a], serial.state[a], `array ${a}`);
+    const ds = serial.diagnostics(), dp = parallel.diagnostics();
+    assert.ok(Math.abs(ds.absorbedSolar - dp.absorbedSolar) < 1e-9 * ds.absorbedSolar);
   } finally {
     await parallel.close();
   }

@@ -162,12 +162,18 @@ test('every option of the land surface reaches the GPU or is refused there', { s
   const source = createLandSurface.toString();
   const block = source.slice(source.indexOf('{', source.indexOf('geography,')) + 1, source.indexOf('} = {})'));
   const names = [...block.matchAll(/(?:^|,)\s*([A-Za-z]+)\s*(?::|=)/g)].map((m) => m[1]);
-  const handled = new Set([...VEGETATION_OPTIONS, 'snowAgeing', ...Object.keys(SNOW_AGEING), 'heatCapacity', 'bucketCapacity', 'wetnessThreshold', 'albedo', 'snowAlbedo', 'fullSnow', 'latentHeatFusion', 'start', 'buffers']);
+  const handled = new Set([...VEGETATION_OPTIONS, 'snowAgeing', ...Object.keys(SNOW_AGEING), 'heatCapacity', 'bucketCapacity', 'wetnessThreshold', 'albedo', 'snowAlbedo', 'fullSnow', 'latentHeatFusion', 'start', 'buffers', 'soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity']);
   assert.ok(names.length > 60, names.join(' '));
   assert.deepEqual(names.filter((n) => !handled.has(n)), []);
   for (const key of Object.keys(SOIL_CARBON)) assert.ok(VEGETATION_OPTIONS.includes(key), key);
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 300 : -4000));
   await assert.rejects(createGpuModel(new Grid(16), { topography, land: { latentHeatFusion: 3e5 } }), /latentHeatFusion/);
+  await assert.rejects(createGpuModel(new Grid(16), { topography, land: { heatCapacity: 1.5e5 } }), /give soil: 'slab'/);
+  for (const soilDepths of [[0.2], [0.1, 0.3], [0.05, 0.1, 0.2, 0.4, 0.8]]) {
+    const model = await createGpuModel(new Grid(16), { topography, land: { soilDepths } });
+    assert.deepEqual([model.gpu.physics.soilColumn.depths.length, model.land.deepNames.length], [soilDepths.length, soilDepths.length - 1]);
+  }
+  assert.equal((await createGpuModel(new Grid(16), { topography, land: { soil: 'slab', heatCapacity: 1.5e5 } })).gpu.physics.soilColumn, null);
 });
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));

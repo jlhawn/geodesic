@@ -16,18 +16,18 @@ import { fetchState, stateName, savedLevels, groupHeader, groupArrays } from './
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
-import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, UPWELLING_MEMORY, SURFACE_UPWELLING_DEPTH, foldMemory, frameIsFinite } from './frames.module.js';
+import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH, frameIsFinite } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
 import { lakeArrays, savedLake } from './physics/lake.module.js';
+import { AEROSOL_FILE, climatologyOn } from './aerosol.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
 let subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false }, layerWinds = [];
 const rain = { total: null, time: 0 };
 const vertical = { values: null, level: null, time: 0 };
-const upwelling = { values: null, key: null, time: 0, start: 0 };
 
 function restartRain() { rain.total = null; rain.time = model.time; if (model.restartPrecipitation) model.restartPrecipitation(); }
 
@@ -105,6 +105,7 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil);
   if (model.land && want.has('snow')) out.snow = Float32Array.from(model.land.snow);
   if (model.land && want.has('vegetation')) out.vegetation = Float32Array.from(model.land.vegetation);
+  if (model.foldUpwelling) model.foldUpwelling(time);
   const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields(depth === 'surface' ? 0 : Number(depth), depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth)) : null;
   if (ocean) {
     for (const [name, values] of Object.entries({ sst: ocean.temperature, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta, current: ocean.speed, upwelling: ocean.upwelling })) if (want.has(name)) out[name] = sea(values);
@@ -149,8 +150,6 @@ function placeEnergy(model, saved) {
 // A frame that is no longer finite stops the loop and tells the page so, in place of the frame.
 function postFrame({ time, level, depth, fields, diagnostics }) {
   if (!frameIsFinite(fields, diagnostics)) { running = false; self.postMessage({ type: 'halted', day: time / 86400 }); return; }
-  if (fields.upwelling) fields.upwelling = foldMemory(upwelling, fields.upwelling, time, depth, UPWELLING_MEMORY);
-  else upwelling.values = null;
   if (diagnostics && model.energyRecord) { feedEnergy(diagnostics, time); diagnostics.energy = model.energyRecord.windows(); diagnostics.energyDay = model.energyRecord.newest; }
   const transfer = [...new Set(Object.values(fields).map((values) => values.buffer))];
   self.postMessage({ type: 'frame', frame: frame++, time, day: time / 86400, level, depth, engine: model.engine ?? 'cpu', pause: model.beginFrame ? pace.pause : 0, fields, diagnostics }, transfer);
@@ -391,8 +390,8 @@ function sourceFor(saved) {
  */
 function placeLand(model, saved, N) {
   if (!model.land) return;
-  if (saved && saved.land) model.land.load(saved.N === N ? saved.land : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }), model.state[6]);
-  else model.land.initialize();
+  if (saved && saved.land) model.land.load(saved.N === N ? saved.land : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }), model.state[6], saved.time, model.state[3]);
+  else model.land.initialize(model.time);
 }
 
 let currentTopography = null;
@@ -430,6 +429,15 @@ async function loadLandIce() {
   const response = await fetch(landIceUrl);
   if (!response.ok) throw new Error(`land ice ${landIceUrl}: ${response.status}`);
   return (landIce = decodeLandIce(await response.arrayBuffer()));
+}
+
+let aerosolBytes = null;
+async function loadAerosolFile() {
+  if (aerosolBytes) return aerosolBytes;
+  const url = new URL(`../${AEROSOL_FILE}`, import.meta.url);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`aerosol climatology ${AEROSOL_FILE}: ${response.status}`);
+  return (aerosolBytes = new Uint8Array(await response.arrayBuffer()));
 }
 
 /*
@@ -538,7 +546,7 @@ const PROBE = { gpuN: 64, cpuN: 16, warmup: 4, steps: 12, cpuSteps: 3 };
 async function probe(message) {
   const result = { gpu: null, cpu: null }, gpuN = message.N ?? PROBE.gpuN;
   const topography = message.land === false ? null : await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href);
-  const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false };
+  const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false, radiation: { aerosolData: await loadAerosolFile() } };
   const prepare = async (test, N) => {
     for (const [a, values] of initialState(test, null, N).entries()) test.state[a].set(values);
     placeIce(test, null, N);
@@ -554,7 +562,7 @@ async function probe(message) {
     let test = null;
     try {
       status('testing the GPU…', 0.1);
-      test = await createGpuModel(new Grid(gpuN), { ...options, ...withCadence({}, 1350 * 16 / gpuN, gpuN), ...(topography ? { subgrid: await loadSubgrid(gpuN) } : {}) });
+      test = await createGpuModel(new Grid(gpuN), { ...options, ...withCadence(options, 1350 * 16 / gpuN, gpuN), ...(topography ? { subgrid: await loadSubgrid(gpuN) } : {}) });
       await prepare(test, gpuN);
       const step = 1350 * 16 / gpuN, queued = [];
       for (let n = 0; n < PROBE.warmup; n++) await test.step(step);
@@ -575,7 +583,7 @@ async function probe(message) {
   }
   if (!result.gpu || result.gpu.error) {
     status('testing the CPU…', 0.3);
-    const test = createModel(new Grid(PROBE.cpuN), { ...options, ...withCadence({}, 1350 * 16 / PROBE.cpuN, PROBE.cpuN), ...(topography ? { subgrid: await loadSubgrid(PROBE.cpuN) } : {}) });
+    const test = createModel(new Grid(PROBE.cpuN), { ...options, ...withCadence(options, 1350 * 16 / PROBE.cpuN, PROBE.cpuN), ...(topography ? { subgrid: await loadSubgrid(PROBE.cpuN) } : {}) });
     await prepare(test, PROBE.cpuN);
     const step = 1350 * 16 / PROBE.cpuN;
     await test.step(step);
@@ -684,7 +692,6 @@ async function restore(snapshot) {
   placeEnergy(model, saved);
   model.time = saved.time;
   restartRain();
-  upwelling.values = null;
   serving = true;
   self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   await sendFrame();
@@ -713,6 +720,7 @@ async function start(message) {
     const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);
     if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };
   }
+  if (climatologyOn(options.radiation)) options.radiation = { ...options.radiation, aerosolData: await loadAerosolFile() };
   options.terrain = message.terrain !== false;
   if (saved?.ocean?.generator) options.ocean = { ...(options.ocean ?? {}), generator: saved.ocean.generator };
   if (saved) options.levels = savedLevels(saved);
@@ -756,7 +764,6 @@ async function start(message) {
   layerWinds = new Array(model.core.K).fill(null);
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
-  upwelling.values = null;
   serving = true;
   self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   refresh();
