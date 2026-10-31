@@ -2989,7 +2989,16 @@ interface where N² peaks under `eddyTaperDepth`, by N²/N²_peak and never
 by less than `eddyStructureFloor` (0.1) (Danabasoglu and Marshall 2007),
 N² being that of the jump across each interface and the classes held at
 their minimum taking the N² of the water around them; an edge again
-takes its two cells' mean. The taper τ is linear over the top
+takes its two cells' mean. On the seventeen states (N=64 day 365, N=128
+day 1095) the deep-water c₁ is 2.4 m/s within 10° of the equator, 1.9 at
+40° and 0.9 at 60°, and with power 4 κ is 82, 456 and 845 m²/s at the
+equator, 5° and 10° at N=64 and 5, 49 and 262 at N=128, against 262, 565
+and 773 and 82, 245 and 460 with c = 2 m/s and power 2; poleward of 15°
+it is within 5% of `eddyDiffusivity`. Under the deep basins the
+structure is 0.6–0.8 at 300 m, 0.3–0.4 at 750 m, 0.1–0.2 at 1500 m and
+the floor below 2000 m, the peak lying at 200–450 m. The column pass
+adds 0.12 ms to the 1.1 ms eddy phase at N=64 and 0.8 ms to its 5.4 ms
+at N=128 on the M5 Max. The taper τ is linear over the top
 200 m (`eddyTaperDepth`, on the shallower cell), over 100 m above the sill
 and of the water below the interface that both columns hold, and over
 5 m of interior water above it in the fuller column, so an outcropped
