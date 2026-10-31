@@ -27,6 +27,7 @@ const RESTRAT = { ...HYBRID, mixedLayerRestratification: { coefficient: 50 } };
 const FIXED_ENERGY = { ...HYBRID, mstarScheme: 'fixed', langmuirScheme: 'factor' };
 const RH18_ENERGY = { ...HYBRID, mstarScheme: 'rh18' };
 const RH18_ENERGY_ALL = { ...RH18_ENERGY, langmuirScheme: 'rescale', mixedLayerRestratification: { coefficient: 50 } };
+const EDDY_STRUCTURE = { ...HYBRID, eddyWaveSpeed: 'local', eddyResolutionPower: 4, eddyStructure: 'stratification' };
 const N = 16, DT = 1350;
 
 function stats(cpu, gpu, mask = null) {
@@ -137,6 +138,7 @@ async function tracking(options) {
 const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
 test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
+test(`${TRACKING}, with the local eddy speed and the stratification structure`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(EDDY_STRUCTURE));
 test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
 test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));
 
@@ -223,6 +225,7 @@ async function conservation(options) {
 const CONSERVATION = 'in single precision the GPU hybrid ocean keeps the heat, salt and water it stores through the regrid and the column physics to the stores\' rounding, and through the other phases of its step';
 test(CONSERVATION, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(HYBRID));
 test(`${CONSERVATION}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(RESTRAT));
+test(`${CONSERVATION}, with the local eddy speed and the stratification structure`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(EDDY_STRUCTURE));
 
 test('the GPU hybrid ocean keeps a brackish band\'s fixed-depth surface layers as the CPU does and tracks it over five steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const brackish = (lat) => (Math.abs(lat) < 0.35 ? 12 : 34.5);

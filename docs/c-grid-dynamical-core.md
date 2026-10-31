@@ -2979,7 +2979,17 @@ donor cell's water, and the velocities are untouched. κ is
 `eddyDiffusivity` (1000 m²/s) times 1/(1 + (L_d/dc)²), L_d = c/√(f² + 2βc)
 with c = 2 m/s (Hallberg 2013's resolution function): 983 m²/s at 60°S,
 902 at 20°S and 253 at the equator at N=64, and 935, 699 and 78 at N=128,
-where κΔt/dc² is 9×10⁻⁵ and 2×10⁻⁴. The taper τ is linear over the top
+where κΔt/dc² is 9×10⁻⁵ and 2×10⁻⁴. With `eddyWaveSpeed: 'local'` c is
+each column's own first baroclinic speed, the WKB c₁ = (1/π)∫N dz
+(Chelton et al. 1998) over the density jumps between the centers of the
+classes thicker than 5 m, so vanished classes add nothing, and an edge
+takes its two cells' mean; `eddyResolutionPower` (2) is the exponent.
+With `eddyStructure: 'stratification'` κ is also multiplied, below the
+interface where N² peaks under `eddyTaperDepth`, by N²/N²_peak and never
+by less than `eddyStructureFloor` (0.1) (Danabasoglu and Marshall 2007),
+N² being that of the jump across each interface and the classes held at
+their minimum taking the N² of the water around them; an edge again
+takes its two cells' mean. The taper τ is linear over the top
 200 m (`eddyTaperDepth`, on the shallower cell), over 100 m above the sill
 and of the water below the interface that both columns hold, and over
 5 m of interior water above it in the fuller column, so an outcropped

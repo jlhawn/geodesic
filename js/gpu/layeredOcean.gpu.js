@@ -1,6 +1,6 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, EDDY_WAVE_SPEED, EDDY_STRUCTURE_FLOOR, eddyOptions, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -45,7 +45,7 @@ export const OCEAN_DEFAULTS = {
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   vorticityCentring: 0.5, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917, latentHeatFusion: 3.34e5, langmuir: 2, langmuirIce: 'tanh',
   momentumDepth: 50, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, topDrag: 2.5e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, everySteps: 4,
-  eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: true,
+  eddyDiffusivity: 1000, eddyTaperDepth: 200, eddyWaveSpeed: EDDY_WAVE_SPEED, eddyResolutionPower: 2, eddyStructure: 'uniform', eddyStructureFloor: EDDY_STRUCTURE_FLOOR, penetration: 'IB', mixedLayerRestratification: true,
   gustiness: 3,
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
@@ -781,7 +781,15 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
   let q = max(ga, gb); let area = select(sb, sa, ga > gb || (ga == gb && moved > 0.0));
   return round(moved / area / q) * q * area;
 }
-`;
+${o.eddyMode.local ? `${constLine('EDDYKAPPA', o.eddyDiffusivity)} ${constLine('EDDYFOUROMEGA2', 4 * o.omega * o.omega)} ${constLine('EDDYRADIUS', o.radius)}
+fn eddyLocalKappa(e: i32) -> f32 {
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  let c = 0.5 * (OD[O_EDDYC1 + a] + OD[O_EDDYC1 + b]); let f = OD[O_FEDGE + e];
+  let beta = sqrt(max(0.0, EDDYFOUROMEGA2 - f * f)) / EDDYRADIUS;
+  let x = select(0.0, c / sqrt(f * f + 2.0 * beta * c), c > 0.0) / MF[F_DC + e];
+  return EDDYKAPPA / (1.0 + ${o.eddyMode.power === 2 ? 'x * x' : o.eddyMode.power === 4 ? '(x * x) * (x * x)' : `pow(x, ${Number(o.eddyMode.power).toExponential(10)})`});
+}
+` : ''}`;
   const restratShared = o.restrat ? `${constLine('MLEVONK', RESTRATIFICATION_VON_KARMAN * RESTRATIFICATION_PI_SQUARED)} ${constLine('MLEUMIN', RESTRATIFICATION_USTAR_MIN)} ${constLine('MLENEG', RESTRATIFICATION_NEGLECT)}
 fn restratShape(s: f32) -> f32 { let x = 2.0 * s + 1.0; let x2 = x * x; return max(0.0, (1.0 - x2) * (1.0 + ${(5 / 21).toFixed(9)} * x2)); }
 ` : '';
@@ -932,7 +940,7 @@ fn restratShape(s: f32) -> f32 { let x = 2.0 * s + 1.0; let x2 = x * x; return m
      */
     oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${eddyShared}${restratShared}${K}  let e = ${idx}; if (e >= E) { return; }
   for (var k = 0; k < L; k++) { OD[O_EDDYV + k * E + e] = 0.0; OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; }
-  let kappa = min(OD[O_EDDYK + e], P[1]);
+  let kappa = min(${o.eddyMode.local ? 'eddyLocalKappa(e)' : 'OD[O_EDDYK + e]'}, P[1]);
   if (OD[O_EMASK + e] < 0.5${o.restrat ? '' : ' || !(kappa > 0.0)'}) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   var overlap = 0.0;
@@ -966,7 +974,8 @@ ${o.restrat ? `  var front = 0.0; var inverseDepth = 0.0;
       let ceiling = clamp(max(aboveA, aboveB) / THINO, 0.0, 1.0);
       lower = -coefficient * top * bottom * ceiling * (zb - za);
       lower *= min(modeWeight(k + 1, a), modeWeight(k + 1, b));
-    }
+${o.eddyMode.shape ? `      lower *= 0.5 * (OD[O_EDDYS + k * C + a] + OD[O_EDDYS + k * C + b]);
+` : ''}    }
     let weight = clamp((max(ha, hb) - EPSO) / THINO, 0.0, 1.0);
 ${o.restrat ? `    depth += 0.5 * (ha + hb); shapeBelow = restratShape(-depth * inverseDepth);
     flux[k] = weight * (lower - upper) + front * (shapeAbove - shapeBelow); shapeAbove = shapeBelow;
@@ -1015,6 +1024,43 @@ ${o.restrat ? `    depth += 0.5 * (ha + hb); shapeBelow = restratShape(-depth * 
 }`,
     oEddyApply: eddyApply(o.restrat ? 0 : 1),
     oEddyLeftover: eddyLeftover(o.restrat ? 0 : 1),
+    ...(o.eddyMode.columns ? { oEddyColumns: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYFLOOR', o.eddyMode.floor)}
+${K}  let i = ${idx}; if (i >= C) { return; }
+  if (OD[O_CMASK + i] < 0.5) {
+    OD[O_EDDYC1 + i] = 0.0;
+    for (var k = 0; k < L; k++) { OD[O_EDDYS + k * C + i] = 1.0; }
+    return;
+  }
+  for (var k = 0; k < L; k++) { OD[O_EDDYS + k * C + i] = 0.0; }
+  var top = 0.0; var speed = 0.0; var above = -1; var centerAbove = 0.0; var densityAbove = 0.0;
+  for (var j = 0; j < L; j++) {
+    let hj = IN[hOff(j) + i]; let center = top + 0.5 * hj;
+    top += hj;
+    if (!(hj > THINO)) { continue; }
+    let r = eosA(IN[qOff(j) + i] / hj, IN[wOff(j) + i] / hj);
+    if (above >= 0) {
+      let jump = max(0.0, r - densityAbove); let dz = max(THINO, center - centerAbove);
+      speed += sqrt(OGRAV * jump * dz / RHO0);
+      let n2 = OGRAV * jump / (RHO0 * dz);
+      for (var k = above; k < j; k++) { OD[O_EDDYS + k * C + i] = n2; }
+    }
+    above = j; centerAbove = center; densityAbove = r;
+  }
+  OD[O_EDDYC1 + i] = speed / ${Math.PI.toFixed(9)};
+  var peak = 0.0; var peakDepth = 3.0e38; var z = IN[hOff(0) + i];
+  for (var k = 1; k < L - 1; k++) {
+    z += IN[hOff(k) + i];
+    let n2 = OD[O_EDDYS + k * C + i];
+    if (z >= EDDYTOP && n2 > peak) { peak = n2; peakDepth = z; }
+  }
+  z = IN[hOff(0) + i];
+  OD[O_EDDYS + i] = 1.0; OD[O_EDDYS + (L - 1) * C + i] = 1.0;
+  for (var k = 1; k < L - 1; k++) {
+    z += IN[hOff(k) + i];
+    let n2 = OD[O_EDDYS + k * C + i];
+    OD[O_EDDYS + k * C + i] = select(1.0, clamp(n2 / max(peak, 1e-30), EDDYFLOOR, 1.0), peak > 0.0 && z > peakDepth);
+  }
+}` } : {}),
     ...(o.restrat ? { oRestratCells: `${constLine('MLEDECAY', o.restrat.decayDays * 86400)} ${constLine('MLENEG', RESTRATIFICATION_NEGLECT)}
 ${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5 || OD[O_SHELF + i] > 0.5) { OD[O_MLED + i] = 0.0; OD[O_MLEH + i] = 0.0; OD[O_MLEB + i] = 0.0; OD[O_MLEU + i] = 0.0; return; }
@@ -1336,7 +1382,8 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const labelT = rho.map((r, k) => Math.max(FREEZING_POINT, labelTemperature(r, labelS[k])));
   const nu4 = closureCoefficient(meshSpacing, o.closureHours, o.closureSpacing);
   const restrat = restratificationOptions(o.mixedLayerRestratification);
-  const eddyKappa = eddyDiffusivities(mesh, o.eddyDiffusivity), eddyLimit = o.eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0;
+  const eddyMode = eddyOptions(o);
+  const eddyKappa = eddyDiffusivities(mesh, o.eddyDiffusivity, eddyMode.waveSpeed, eddyMode.power), eddyLimit = o.eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0;
   const restratScale = restrat ? Float64Array.from(deformationRadii(mesh), (radiusE, e) => restrat.coefficient * Math.min(mesh.dcEdge[e], radiusE) / restrat.frontLength) : null;
   let minSpacing = Infinity;
   for (let e = 0; e < E; e++) minSpacing = Math.min(minSpacing, mesh.dcEdge[e]);
@@ -1391,6 +1438,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ...(third ? [['BEY', 2 * E], ['BED', 2 * E]] : []),
     ...(driftOptions ? driftSections(C, E) : []),
     ...(restrat ? [['MLED', C], ['MLEH', C], ['MLEB', C], ['MLEU', C], ['MLESCALE', E]] : []),
+    ...(eddyMode.columns ? [['EDDYC1', C], ['EDDYS', L * C]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1404,7 +1452,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const implicitStress = !!core.physics && core.physics.surfaceExchange === 'roughness' && !!core.physics.implicitDrag;
   const iceThermo = { skinHeatCapacity: core.physics?.skinHeatCapacity ?? 2e5, iceDensity: core.physics?.iceDensity ?? 917, latentHeatFusion: core.physics?.latentHeatFusion ?? 3.34e5, freshSnowAlbedo: core.physics?.freshSnowAlbedo ?? SNOW_AGEING.freshSnowAlbedo };
   const driftPlan = driftOptions ? { options: driftOptions, waterDensity: o.density, thermo: iceThermo, minimumConcentration: MINIMUM_CONCENTRATION, removal: seaIceRemoval(!!core.physics?.keepSmallIce), remnant: ICE_REMNANT, freezing: FREEZING_POINT, implicitStress, given } : null;
-  const kernels = oceanKernels({ ...o, restrat, table, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined });
+  const kernels = oceanKernels({ ...o, restrat, eddyMode, table, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, radius: mesh.radius, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined });
   const reduced = HYBRID_REDUCED;
   const OF = seq([['SST', C], ['SSS', C], ['H1', C], ['THD', C], ['ETA', C], ['CUR', 3 * C], ['CSPD', C], ['UPW', C], ['PART', reduced.length * reductionGroups(C)]]);
   kernels.oFrame = `${HYBRID_THERMOCLINE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -1584,6 +1632,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
 
   function eddyPasses(pass, g) {
     if (restrat) dispatch(pass, 'oRestratCells', g, C);
+    if (eddyMode.columns) dispatch(pass, 'oEddyColumns', g, C);
     dispatch(pass, 'oEddyFlux', g, E);
     dispatch(pass, 'oEddyApply', g, L * C);
     dispatch(pass, 'oEddyLeftover', g, C);

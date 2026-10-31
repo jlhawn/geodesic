@@ -8,6 +8,7 @@ const CASES = {
   'the basin with no walls': () => basinCase({ walls: false }),
   'the walled basin under one f': () => basinCase({ beta: false, ocean: { closureHours: 48 } }),
   'the walled basin with mixed-layer restratification': () => basinCase({ ocean: { mixedLayerRestratification: true } }),
+  'the walled basin with the local eddy speed and the stratification structure': () => basinCase({ ocean: { eddyWaveSpeed: 'local', eddyResolutionPower: 4, eddyStructure: 'stratification' } }),
   'the Ekman column': () => ekmanCase({ N: 16 }),
   'the planet under the trades': () => ekmanCase({ N: 16, view: 'planet' }),
   'the lens': () => lensCase(),

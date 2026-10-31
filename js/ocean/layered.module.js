@@ -138,7 +138,50 @@ export function inertialStepLimit(mesh) {
   return 1 / f;
 }
 
-export const EDDY_WAVE_SPEED = 2, EDDY_BOTTOM_TAPER = 100, EDDY_SLACK = 1e-6;
+export const EDDY_WAVE_SPEED = 2, EDDY_BOTTOM_TAPER = 100, EDDY_SLACK = 1e-6, EDDY_STRUCTURE_FLOOR = 0.1;
+/*
+ * The eddy diffusivity at an edge is κ₀/(1 + (Ld/Δ)ⁿ), Hallberg's (2013,
+ * Ocean Modelling 72, 92) resolution function, with Ld = c/√(f² + 2βc) and
+ * Δ the cell spacing. eddyWaveSpeed is c in m/s, or 'local': each column's
+ * first-mode speed c₁ = (1/π)∫N dz (Chelton et al. 1998, J. Phys. Oceanogr.
+ * 28, 433), taken every eddy step between the centers of successive layers
+ * thicker than THIN, so that classes held at their minimum add nothing and
+ * take the buoyancy frequency of the water around them; an edge takes the
+ * mean of its cells' speeds. eddyStructure 'stratification' multiplies the
+ * flux at each interface below the one where N² peaks under eddyTaperDepth
+ * by N²/N²_peak, no less than eddyStructureFloor (Danabasoglu & Marshall
+ * 2007, Ocean Modelling 18, 122), an edge taking the mean of its cells'.
+ */
+export function eddyOptions({ eddyWaveSpeed = EDDY_WAVE_SPEED, eddyResolutionPower = 2, eddyStructure = 'uniform', eddyStructureFloor = EDDY_STRUCTURE_FLOOR } = {}) {
+  if (!(eddyWaveSpeed === 'local' || eddyWaveSpeed > 0)) throw new Error(`eddyWaveSpeed is 'local' or a speed in m/s, not ${eddyWaveSpeed}`);
+  if (!(eddyResolutionPower > 0)) throw new Error(`eddyResolutionPower is a positive power, not ${eddyResolutionPower}`);
+  if (eddyStructure !== 'uniform' && eddyStructure !== 'stratification') throw new Error(`eddyStructure is 'uniform' or 'stratification', not ${eddyStructure}`);
+  if (!(eddyStructureFloor >= 0 && eddyStructureFloor <= 1)) throw new Error(`eddyStructureFloor is between 0 and 1, not ${eddyStructureFloor}`);
+  const local = eddyWaveSpeed === 'local', shape = eddyStructure === 'stratification';
+  return { local, shape, columns: local || shape, waveSpeed: local ? EDDY_WAVE_SPEED : eddyWaveSpeed, power: eddyResolutionPower, floor: eddyStructureFloor };
+}
+export function eddyStratification(h, density, n, g, rho0, nsq) {
+  for (let k = 0; k < n; k++) nsq[k] = 0;
+  let speed = 0, top = 0, above = -1, centerAbove = 0, densityAbove = 0;
+  for (let j = 0; j < n; j++) {
+    const center = top + 0.5 * h[j];
+    top += h[j];
+    if (!(h[j] > THIN)) continue;
+    if (above >= 0) {
+      const jump = Math.max(0, density[j] - densityAbove), dz = Math.max(THIN, center - centerAbove);
+      speed += Math.sqrt(g * jump * dz / rho0);
+      for (let k = above; k < j; k++) nsq[k] = g * jump / (rho0 * dz);
+    }
+    above = j; centerAbove = center; densityAbove = density[j];
+  }
+  return speed / Math.PI;
+}
+export function eddyStructureFactors(h, nsq, n, taperDepth, floor, out) {
+  let peak = 0, peakDepth = Infinity, z = h[0];
+  for (let k = 1; k < n - 1; k++) { z += h[k]; if (z >= taperDepth && nsq[k] > peak) { peak = nsq[k]; peakDepth = z; } }
+  out[0] = 1; out[n - 1] = 1; z = h[0];
+  for (let k = 1; k < n - 1; k++) { z += h[k]; out[k] = peak > 0 && z > peakDepth ? Math.min(1, Math.max(floor, nsq[k] / peak)) : 1; }
+}
 export function deformationRadii(mesh, waveSpeed = EDDY_WAVE_SPEED) {
   const { nEdges: E, latEdge, radius, omega } = mesh;
   const out = new Float64Array(E);
@@ -148,12 +191,12 @@ export function deformationRadii(mesh, waveSpeed = EDDY_WAVE_SPEED) {
   }
   return out;
 }
-export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
+export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED, power = 2) {
   const { nEdges: E, dcEdge } = mesh;
   const out = new Float64Array(E);
   if (!(kappa > 0)) return out;
   const deformation = deformationRadii(mesh, waveSpeed);
-  for (let e = 0; e < E; e++) out[e] = kappa / (1 + (deformation[e] / dcEdge[e]) ** 2);
+  for (let e = 0; e < E; e++) out[e] = kappa / (1 + (deformation[e] / dcEdge[e]) ** power);
   return out;
 }
 
@@ -428,7 +471,7 @@ export function createOcean(mesh, {
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2, langmuirIce = 'tanh',
   momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
-  eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
+  eddyDiffusivity = 1000, eddyTaperDepth = 200, eddyWaveSpeed = EDDY_WAVE_SPEED, eddyResolutionPower = 2, eddyStructure = 'uniform', eddyStructureFloor = EDDY_STRUCTURE_FLOOR, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'rh18', langmuirScheme = 'rescale', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
@@ -469,7 +512,10 @@ export function createOcean(mesh, {
   spacing /= E;
   const nu4 = closureCoefficient(spacing, closureHours, closureSpacing);
   const restrat = restratificationOptions(mixedLayerRestratification);
-  const eddyKappa = eddyDiffusivities(mesh, eddyDiffusivity), eddyLimit = eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0, eddyFirst = restrat ? 0 : 1;
+  const eddyMode = eddyOptions({ eddyWaveSpeed, eddyResolutionPower, eddyStructure, eddyStructureFloor });
+  const eddyKappa = eddyDiffusivities(mesh, eddyDiffusivity, eddyMode.waveSpeed, eddyMode.power), eddyLimit = eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0, eddyFirst = restrat ? 0 : 1;
+  const eddyBeta = eddyMode.local ? Float64Array.from(mesh.latEdge, (lat) => 2 * mesh.omega * Math.cos(lat) / radius) : null;
+  const eddyColumn = eddyMode.columns ? { h: new Float64Array(L), rho: new Float64Array(L), nsq: new Float64Array(L), factor: new Float64Array(L) } : null;
   const restratScale = restrat ? Float64Array.from(deformationRadii(mesh), (radiusE, e) => restrat.coefficient * Math.min(dcEdge[e], radiusE) / restrat.frontLength) : null;
   let eddy = null;
 
@@ -522,6 +568,7 @@ export function createOcean(mesh, {
   const mixedDepths = shared('mixedDepths', C), boundaryDepths = shared('boundaryDepths', C);
   const mleDepths = restrat ? shared('mleDepths', C) : null, mleThickness = restrat ? shared('mleThickness', C) : null, mleBuoyancy = restrat ? shared('mleBuoyancy', C) : null, mleUstar = restrat ? shared('mleUstar', C) : null;
   const edgeAbove = shared('edgeAbove', L * E), eddyFlux = shared('eddyFlux', L * E), eddyVolume = shared('eddyVolume', L * C), eddyHeat = shared('eddyHeat', L * C), eddySalt = shared('eddySalt', L * C);
+  const eddyC1 = eddyMode.columns ? shared('eddyC1', C) : null, eddyS = eddyMode.columns ? shared('eddyS', L * C) : null;
   const pvFloor = Float64Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m)), tokenEdge = Float64Array.from(table.minimum, (m) => 2 * Math.min(m, table.spacing ?? m)), pinned = new Uint8Array(E);
   const boundaries = labelBoundaries(rho), cs = columnScratch(L);
   const cols = Object.fromEntries(['h', 'T', 'S', 'rho', 'shear', 'kappa', 'nu', 'hNew', 'amount', 'hOld', 'hEdgeNew', 'uCol', 'nuEdge'].map((name) => [name, new Float64Array(L)]));
@@ -887,9 +934,9 @@ export function createOcean(mesh, {
     const allowance = (k, i) => (Math.max(0, h[at(k, i)] - EPS) + EDDY_SLACK) * areaCell[i] / (nEdgesOnCell[i] * dt);
     for (let e = from; e < to; e++) {
       for (let k = 0; k < L; k++) eddyFlux[k * E + e] = 0;
-      const kappa = Math.min(eddyKappa[e], kappaLimit);
-      if (!edgeOcean[e] || !(kappa > 0 || restrat)) continue;
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+      const kappa = Math.min(eddyMode.local ? localEddyKappa(e, a, b) : eddyKappa[e], kappaLimit);
+      if (!edgeOcean[e] || !(kappa > 0 || restrat)) continue;
       let shared = 0;
       for (let k = 1; k < L; k++) shared += Math.max(0, Math.min(h[at(k, a)], h[at(k, b)]) - EPS);
       const sill = sillEdge[e] + 0.5 * (eta[a] + eta[b]), coefficient = kappa * dvEdge[e] / dcEdge[e];
@@ -918,6 +965,7 @@ export function createOcean(mesh, {
           const ceiling = ramp(Math.max(aboveA, aboveB), THIN);
           lower = -coefficient * top * bottom * ceiling * (zb - za);
           lower *= Math.min(interfaceWeight(k + 1, a), interfaceWeight(k + 1, b));
+          if (eddyMode.shape) lower *= 0.5 * (eddyS[at(k, a)] + eddyS[at(k, b)]);
         }
         const weight = ramp(Math.max(ha, hb) - EPS, THIN);
         classFlux[k] = weight * (lower - upper);
@@ -990,10 +1038,30 @@ export function createOcean(mesh, {
       mleUstar[i] = Math.sqrt(stressAt(i) / rho0);
     }
   }
+  function localEddyKappa(e, a, b) {
+    const c = 0.5 * (eddyC1[a] + eddyC1[b]), f = fEdge[e], radiusE = c > 0 ? c / Math.sqrt(f * f + 2 * eddyBeta[e] * c) : 0;
+    return eddyDiffusivity / (1 + (radiusE / dcEdge[e]) ** eddyMode.power);
+  }
+  function eddyColumns(from, to) {
+    const { h: ch, rho: cr, nsq, factor } = eddyColumn;
+    for (let i = from; i < to; i++) {
+      if (!cellOcean[i]) { eddyC1[i] = 0; for (let k = 0; k < L; k++) eddyS[at(k, i)] = 1; continue; }
+      for (let k = 0; k < L; k++) { const n = at(k, i), hv = h[n]; ch[k] = hv; cr[k] = hv > THIN ? eos(Q[n] / hv, W[n] / hv) : 0; }
+      eddyC1[i] = eddyStratification(ch, cr, L, g, rho0, nsq);
+      eddyStructureFactors(ch, nsq, L, eddyTaperDepth, eddyMode.floor, factor);
+      for (let k = 0; k < L; k++) eddyS[at(k, i)] = factor[k];
+    }
+  }
+  function currentEddyKappa(out = new Float64Array(E)) {
+    if (eddyMode.columns) eddyColumns(0, C);
+    for (let e = 0; e < E; e++) out[e] = eddyMode.local ? localEddyKappa(e, cellsOnEdge[2 * e], cellsOnEdge[2 * e + 1]) : eddyKappa[e];
+    return out;
+  }
   function eddyTransport(dt) {
     params[1] = dt;
-    if (columnRunner) { if (restrat) columnRunner('restratCells'); columnRunner('eddyEdges'); columnRunner('eddyCells'); columnRunner('eddyApply'); return; }
+    if (columnRunner) { if (restrat) columnRunner('restratCells'); if (eddyMode.columns) columnRunner('eddyColumns'); columnRunner('eddyEdges'); columnRunner('eddyCells'); columnRunner('eddyApply'); return; }
     if (restrat) restratCells(0, C);
+    if (eddyMode.columns) eddyColumns(0, C);
     eddyEdges(0, E); eddyCells(0, C); eddyApply(0, C);
   }
 
@@ -1651,7 +1719,7 @@ export function createOcean(mesh, {
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, waves: waves.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   Object.assign(sharedBuffers, { baroSlow: slow.buffer, baroU: U.buffer, baroDepth: depthEdge.buffer, baroEta: etaB.buffer, baroAvgU: avgU.buffer, baroAvgEta: avgEta.buffer, baroTrialEtaA: bTrial[0].buffer, baroTrialUA: bTrial[1].buffer, baroTrialEtaB: bTrialB[0].buffer, baroTrialUB: bTrialB[1].buffer, counts: countBuffer });
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
-  Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, heatIn: heatIn.buffer, saltIn: saltIn.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer , ...(restrat ? { mleDepths: mleDepths.buffer, mleThickness: mleThickness.buffer, mleBuoyancy: mleBuoyancy.buffer, mleUstar: mleUstar.buffer } : {}) });
+  Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, heatIn: heatIn.buffer, saltIn: saltIn.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer, ...(eddyMode.columns ? { eddyC1: eddyC1.buffer, eddyS: eddyS.buffer } : {}), ...(restrat ? { mleDepths: mleDepths.buffer, mleThickness: mleThickness.buffer, mleBuoyancy: mleBuoyancy.buffer, mleUstar: mleUstar.buffer } : {}) });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; seaFlux = seaIce ? seaIce.oceanFlux : null; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells };
+  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; seaFlux = seaIce ? seaIce.oceanFlux : null; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, eddyColumns: eddyMode.columns ? eddyColumns : undefined, eddyDiffusivities: currentEddyKappa, eddyStructure: eddyS, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells };
 }

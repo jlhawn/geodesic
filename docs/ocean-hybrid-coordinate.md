@@ -62,7 +62,7 @@ With no token layers, `vorticityCentring` applies uniformly, q = (ζ + f)/max(h_
 
 ### 3.3 Gent–McWilliams
 
-The interface-height transport stays as it is, multiplied by the smaller of the two cells' mode weights for the interface (w_k = clamp((h_{k−1} − Δz_{k−1})/δ, 0, 1), the excess of the layer above over its minimum, so the weights need no storage), so fixed-depth interfaces carry nothing and isopycnal ones carry the full tapered flux. The surface taper over `eddyTaperDepth` can then shrink, since fixed-depth interfaces are already excluded; stage 2 decides by test.
+The interface-height transport stays as it is, multiplied by the smaller of the two cells' mode weights for the interface (w_k = clamp((h_{k−1} − Δz_{k−1})/δ, 0, 1), the excess of the layer above over its minimum, so the weights need no storage), so fixed-depth interfaces carry nothing and isopycnal ones carry the full tapered flux. The surface taper over `eddyTaperDepth` can then shrink, since fixed-depth interfaces are already excluded; stage 2 decides by test. κ's resolution function can take each column's own first baroclinic speed (`eddyWaveSpeed: 'local'`, with `eddyResolutionPower`), and its vertical structure can follow N² below the stratification's peak (`eddyStructure: 'stratification'`, `eddyStructureFloor`); the dynamical-core document's eddy-transport paragraph defines both.
 
 ### 3.4 Tracer advection and the surface layers' lateral mixing
 
