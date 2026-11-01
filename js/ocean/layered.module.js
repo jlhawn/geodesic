@@ -20,6 +20,21 @@ import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
  * (column.module.js). Every column's thicknesses sum to its depth plus
  * the free surface; land columns are zero.
  *
+ * Under sea ice the top layer hands the ice its heat above freezing in one
+ * of two ways, `iceExchange` (physics/ice.module.js). 'instant' holds the
+ * layer at the freezing point under ice and gives the ice what accumulates
+ * above it each step, as `oceanFlux`. 'turbulent' lets the layer keep that
+ * heat: writeSurface hands the ice `waterHeat` (J/m², what the layer holds
+ * above freezing; the ice's steps draw on it at the bottom and lateral
+ * rates and add the leads' gain to it, and readSurface reads it back into the
+ * layer) and the conductance ρ c_p c_h u* of McPhee's bottom flux, with u*
+ * the friction velocity of the ice–ocean stress, max(u*_min, √C_w |u_ice −
+ * u_ocean|), found from the drift's edge velocity and the top layer's by the
+ * reconstruction the surface stress uses (the drift's C_w, the stirring
+ * u*_min alone where the drift is off). Water below freezing under ice
+ * still freezes onto the base through `oceanFlux`, which is then never
+ * positive; waterHeat and the conductance are saved in restartArrays.
+ *
  * The interior classes of the saved slab oceans, placed where the World Ocean Atlas holds its water
  * in this equation of state: 1019.5–1021.5 for the warm pool, the two
  * lightest at WOA23's tropical surface salinities, 0.25 apart

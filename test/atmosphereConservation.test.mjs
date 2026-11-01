@@ -48,11 +48,12 @@ function spunUpBergeron() {
 /*
  * The spun-up air over a layered ocean started under it.
  */
-function overOcean(surface = {}) {
-  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: {}, surface });
+function overOcean(surface = {}, ocean = {}) {
+  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean, surface });
   slab.state.forEach((values, s) => model.state[s].set(values));
   model.seaIce.load(model.state[6], slab.seaIce.concentration);
   model.ocean.initialize(model.state[3], model.state[6]);
+  if (model.seaIce.turbulent) for (let i = 0; i < model.mesh.nCells; i++) if (model.state[6][i] > 0) { model.seaIce.waterHeat[i] = model.ocean.capacity[i] * (0.2 + 0.1 * (i % 5)); model.seaIce.conductance[i] = 30 + 10 * (i % 4); }
   model.time = slab.time;
   return model;
 }
@@ -70,7 +71,7 @@ function overOceanSkin() {
 /*
  * The air's enthalpy c_p T, latent heat L q and kinetic energy, and the
  * surface's store (seaIce.energy, with an ocean's heat capacity over open
- * water), as global means in J/m², summed in double precision with the
+ * water and, with iceExchange turbulent, the water's heat under the ice), as global means in J/m², summed in double precision with the
  * Exner function of each state's own π.
  */
 function bookkeeper(model) {
@@ -83,7 +84,7 @@ function bookkeeper(model) {
     let H = 0, Lq = 0, KE = 0, S = 0;
     for (let i = 0; i < C; i++) {
       for (let k = 0; k < K; k++) { const n = k * C + i, m = areaCell[i] * pi[i] * dSigma[k] / g; H += m * cp * theta[n] * exner[n]; Lq += m * L * q[n]; }
-      S += areaCell[i] * (ocean && !(ice[i] > 0) ? ocean.capacity[i] * (surfaceT[i] - FREEZING_POINT) : seaIce.energy(surfaceT[i], ice[i], seaIce.snow[i], seaIce.cover(i, ice[i])));
+      S += areaCell[i] * (ocean && !(ice[i] > 0) ? ocean.capacity[i] * (surfaceT[i] - FREEZING_POINT) : seaIce.energy(surfaceT[i], ice[i], seaIce.snow[i], seaIce.cover(i, ice[i])) + (seaIce.turbulent && ice[i] > 0 ? seaIce.waterHeat[i] : 0));
     }
     for (let k = 0; k < K; k++) for (let e = 0; e < E; e++) {
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
@@ -97,7 +98,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
+for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ['over a layered ocean', () => overOcean()], ['over a layered ocean with iceExchange turbulent, the water under the ice holding heat', () => overOcean({}, { iceExchange: 'turbulent' })], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));

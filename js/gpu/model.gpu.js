@@ -1,7 +1,7 @@
 import { buildMesh } from '../mesh.module.js';
 import { createEnergyRecord } from '../physics/energyRecord.module.js';
 import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, GRAVITY, dynamicsOptions } from '../dynamics/sigmaCore.module.js';
-import { createSeaIce, SNOW_AGEING } from '../physics/ice.module.js';
+import { createSeaIce, SNOW_AGEING, iceExchangeOptions } from '../physics/ice.module.js';
 import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { createRadiation } from '../physics/radiation.module.js';
@@ -87,12 +87,15 @@ export async function createGpuModel(gridOrMesh, {
   const ageingOf = (options, key) => options[key] ?? (key === 'snowAgeing' ? true : SNOW_AGEING[key]);
   if (geography) for (const key of AGEING_OPTIONS) if (ageingOf(ice, key) !== ageingOf(landOptions, key)) throw new Error(`the GPU's land and sea ice share ${key}: ${ageingOf(landOptions, key)} on the land, ${ageingOf(ice, key)} on the ice`);
   if (geography && landOptions.latentHeatFusion !== undefined && landOptions.latentHeatFusion !== (ice.latentHeatFusion ?? 3.34e5)) throw new Error(`the GPU's land and sea ice share latentHeatFusion: ${landOptions.latentHeatFusion} on the land, ${ice.latentHeatFusion ?? 3.34e5} on the ice`);
+  const oceanExchange = oceanOptions !== false ? { ...OCEAN_DEFAULTS, ...oceanOptions }.iceExchange : undefined;
+  if (oceanExchange !== undefined && ice.iceExchange !== undefined && iceExchangeOptions(ice.iceExchange).mode !== iceExchangeOptions(oceanExchange).mode) throw new Error(`the ocean's iceExchange is ${iceExchangeOptions(oceanExchange).mode} and the sea ice's is ${iceExchangeOptions(ice.iceExchange).mode}`);
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
     orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
     keepSmallIce: ice.keepSmallIce ?? (oceanOptions !== false && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift)),
+    iceExchange: oceanExchange ?? ice.iceExchange ?? 'instant',
     ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],
     landed: !!geography, soilColumn: geography ? soilColumn(landOptions) : null, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
@@ -103,7 +106,7 @@ export async function createGpuModel(gridOrMesh, {
   const oceanGeography = lakeCpu ? lakeWater(mesh, geography) : geography;
   const packing = oceanOptions === false ? null : oceanPacking(mesh, oceanGeography, { packed: oceanOptions.packed !== false });
   const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), physics, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, spongeMeanRates: lidFriction, gravityWaves, surfaceGeopotential: phis, registerLength: packing ? oceanStateLength(packing.C, packing.E, oceanOptions) : 0, lake: !!lakeCpu });
-  const seaIce = createSeaIce(mesh, { keepSmallIce: physics.keepSmallIce, ...ice });
+  const seaIce = createSeaIce(mesh, { keepSmallIce: physics.keepSmallIce, ...ice, iceExchange: physics.iceExchange });
   const radiationCpu = createRadiation(mesh, core, { surfaceLayer: mode === 'roughness', ...radiation, radiationEvery: 1 });
   const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });
   const moistCpu = createMoistPhysics(mesh, core, { ...moist, stabilityLayer: radiationCpu.stabilityLayer });

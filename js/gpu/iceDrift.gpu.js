@@ -79,7 +79,7 @@ export const driftStressKernel = (K, idx) => `${K}  let e = ${idx}; if (e >= E) 
   OD[O_STRESS + e] = select(raw * (1.0 - area * (1.0 - TRANSMIT)), (1.0 - area) * raw + area * OD[O_ICESTRESS + e], OD[O_VALID + e] > 0.5) * open;
 }`;
 
-export function iceDriftKernels({ K, idx, options: d, third }) {
+export function iceDriftKernels({ K, idx, options: d, third, turbulent = false }) {
   const moving = d.rheology !== 'frozen', cavitating = d.rheology === 'cavitating';
   const sinTurn = 'select(select(0.0, -ID_SIN, fe < 0.0), ID_SIN, fe > 0.0)';
   const tangential = (field) => `  var tang = 0.0;
@@ -215,12 +215,12 @@ ${last ? `  let gi = gcell(i);
   let full = min(A1, ID_MAXCONC);
   let tidy = full >= ID_MINCONC || (V1 <= ID_MAXH * full && S1 <= ID_MAXSNOW * full && E1 >= ID_EMIN * full && E1 <= ID_EMAX * full);
   if (full < ID_GONECONC || V1 < ID_GONEVOL || !tidy) {
-    let base = select(S[S_TS + gi], ID_FREEZE, started > 0.0);
+    let base = ${turbulent ? 'select(S[S_TS + gi], ID_FREEZE + PH[PH_WHEAT + gi] / PH[PH_CAP + gi], started > 0.0)' : 'select(S[S_TS + gi], ID_FREEZE, started > 0.0)'};
     S[S_TS + gi] = base + (E1 - ID_LATENT * V1 - ID_LFUS * S1) / PH[PH_CAP + gi];
     S[S_ICE + gi] = 0.0; PH[PH_SNOW + gi] = 0.0; PH[PH_SNOWALB + gi] = ID_FRESH; PH[PH_CONC + gi] = 0.0;
     return;
   }
-  if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + gi]; OD[O_ARRIVED + i] = 1.0; }
+  if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + gi]; OD[O_ARRIVED + i] = 1.0;${turbulent ? ' PH[PH_WHEAT + gi] = PH[PH_CAP + gi] * (S[S_TS + gi] - ID_FREEZE);' : ''} }
   S[S_ICE + gi] = V1 / full; PH[PH_CONC + gi] = full; PH[PH_SNOW + gi] = S1 / full;
   S[S_TS + gi] = ID_FREEZE + E1 / (full * ID_SKINC);
   PH[PH_SNOWALB + gi] = select(ID_FRESH, min(1.0, Sa1 / S1), S1 > 0.0);

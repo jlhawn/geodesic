@@ -1,5 +1,5 @@
 import { emptyBuffer, storageBuffer, readRanges } from './device.module.js';
-import { physicsConstants, physicsFunctions, SEA_SURFACE_WGSL, snowOnSea } from './physics.gpu.js';
+import { physicsConstants, physicsFunctions, seaSurfaceWgsl, snowOnSea } from './physics.gpu.js';
 import { nearestLayer, STABILITY_SIGMA } from '../physics/radiation.module.js';
 import { encodeForcing } from '../forcing.module.js';
 import { gridHeader } from '../stateGrid.module.js';
@@ -163,7 +163,7 @@ export function createForcedOcean(model) {
   let contrast = OUT[FC_shortwaveDown + i] * (surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]) - ALB_DIF_WATER) + pull;
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = skin; var h = ice;
-  ${SEA_SURFACE_WGSL}
+  ${seaSurfaceWgsl(gpu.physics.iceTransfer.turbulent)}
   IN[S_TS + i] = T; IN[S_ICE + i] = h;
   let snowfall = OUT[FC_snowfall + i] * dt;
   if (snowfall > 0.0) {

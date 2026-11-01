@@ -1,6 +1,6 @@
 /* FLake (http://www.flake.igb-berlin.de/source/src_flake_sfcflx.tar.gz) is distributed under the MIT license; see the notice in js/physics/lake.module.js. */
 import { FLAKE, LAKE_FIELDS, SETTLE_SLACK } from '../physics/lake.module.js';
-import { SEA_SURFACE_WGSL } from './physics.gpu.js';
+import { seaSurfaceWgsl } from './physics.gpu.js';
 
 export const LAKE_SLOTS = ['depth', 'coriolis', ...LAKE_FIELDS, 'passed', 'pending'];
 const slot = (name) => LAKE_SLOTS.indexOf(name);
@@ -189,7 +189,8 @@ const ADIR = 'select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLa
 const DEPOSIT = '  if (PH[PH_LAND + i] < 0.5 && airT < MELTING && rained + convected > 0.0) {';
 const SKIN_STEP = '  if (!onLand) { skinStep(';
 
-export function lakeKernels(bodies, { held = false, skin = false } = {}) {
+export function lakeKernels(bodies, { held = false, skin = false, turbulent = false } = {}) {
+  const SEA_SURFACE_WGSL = seaSurfaceWgsl(turbulent);
   const physics = iceAlbedo(iceAlbedo(bodies.physics, 'adif', ADIF, 'diffuse albedo'), 'adir', ADIR, 'direct albedo');
   const radiation = held ? iceAlbedo(bodies.radiation, 'adir', ADIR, 'held direct albedo') : bodies.radiation;
   let surface = replaceOnce(bodies.physicsSurface, `} else ${SEA_SURFACE_WGSL}`, `} else if (${ON_LAKE}) {

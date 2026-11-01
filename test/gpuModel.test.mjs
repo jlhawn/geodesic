@@ -1154,10 +1154,14 @@ async function meltingPolarCells(ice) {
   const concentration = Float64Array.from({ length: C }, (_, i) => (iced.includes(i) ? Math.fround(0.7) : 0)), snow = Float32Array.from({ length: C }, (_, i) => (iced.includes(i) ? 3 : 0));
   for (const m of [cpu, gpu]) { for (let a = 0; a < init.length; a++) m.state[a].set(init[a]); m.seaIce.load(m.state[6], concentration); m.time = 91 * 86400 + 12 * 3600; }
   cpu.seaIce.snow.set(snow);
+  const turbulent = ice.iceExchange !== undefined;
+  const water = Float32Array.from({ length: C }, (_, i) => (iced.includes(i) ? Math.fround(2.1e7 * (0.2 + 0.4 * (i % 5))) : 0)), conductance = Float32Array.from({ length: C }, (_, i) => (iced.includes(i) ? 40 + 10 * (i % 3) : 0));
+  if (turbulent) { cpu.seaIce.waterHeat.set(water); cpu.seaIce.conductance.set(conductance); }
   gpu.load();
   const { device, buffers, layout } = gpu.gpu;
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SNOW, snow);
-  const worst = { h: 0, A: 0, snow: 0, albedo: 0, skin: 0, flux: 0, iceFlux: 0, theta: 0 };
+  if (turbulent) { device.queue.writeBuffer(buffers.PH, 4 * layout.PH.WHEAT, water); device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CONDUCT, conductance); }
+  const worst = { h: 0, A: 0, snow: 0, albedo: 0, skin: 0, flux: 0, iceFlux: 0, theta: 0, water: 0 };
   const mixedTop = (q, i) => { let k = K - 1; while (k > 0 && Math.abs(q[(k - 1) * C + i] - q[(K - 1) * C + i]) <= 1e-6 * q[(K - 1) * C + i]) k--; return k; };
   const deciding = DECISION_KINDS.filter((kind) => kind !== 'merge');
   const merged = new Set(), decisions = cloudDecisions(C), shared = decisionTracker(K, C), decided = new Set(), fluxGap = new Float64Array(C), thetaGap = new Float64Array(C);
@@ -1166,7 +1170,7 @@ async function meltingPolarCells(ice) {
     cpu.step(dt);
     await gpu.step(dt);
     await gpu.sync();
-    const [conc, snowNow, snowAlbedo, flux, outgoing] = await readRanges(device, buffers.PH, ['CONC', 'SNOW', 'SNOWALB', 'SFLUX', 'OLR'].map((name) => ({ offset: layout.PH[name], length: C })));
+    const [conc, snowNow, snowAlbedo, flux, outgoing, wheat] = await readRanges(device, buffers.PH, ['CONC', 'SNOW', 'SNOWALB', 'SFLUX', 'OLR', ...(turbulent ? ['WHEAT'] : [])].map((name) => ({ offset: layout.PH[name], length: C })));
     const physics = await gpu.gpu.downloadPhysics();
     for (let i = 0; i < C; i++) if (mixedTop(cpu.state[4], i) !== mixedTop(gpu.state[4], i)) merged.add(i);
     decisions.check(cpu, { OLR: outgoing, ABS: physics.ABS });
@@ -1183,6 +1187,7 @@ async function meltingPolarCells(ice) {
       worst.h = Math.max(worst.h, Math.abs(cpu.state[6][i] - gpu.state[6][i])); worst.A = Math.max(worst.A, Math.abs(cpu.seaIce.concentration[i] - conc[i]));
       worst.snow = Math.max(worst.snow, Math.abs(cpu.seaIce.snow[i] - snowNow[i])); worst.albedo = Math.max(worst.albedo, Math.abs(cpu.seaIce.snowAlbedo[i] - snowAlbedo[i]));
       worst.skin = Math.max(worst.skin, Math.abs(cpu.state[3][i] - gpu.state[3][i])); worst.iceFlux = Math.max(worst.iceFlux, Math.abs(cpu.radiation.surfaceFlux[i] - flux[i]));
+      if (turbulent && cpu.state[6][i] > 0) worst.water = Math.max(worst.water, Math.abs(cpu.seaIce.waterHeat[i] - wheat[i]));
     }
   }
   if (ice.areaLossFactor !== undefined) {
@@ -1194,16 +1199,26 @@ async function meltingPolarCells(ice) {
     console.log(`against Hibler's rule the option moved the cover by up to ${moved.toExponential(1)}`);
     assert.ok(moved > 1e-3, `the option moved the cover by only ${moved}, too little for the comparison to see it`);
   }
+  if (turbulent) {
+    const reference = createModel(new Grid(N), { ...options, ice: {} });
+    for (let a = 0; a < init.length; a++) reference.state[a].set(init[a]);
+    reference.seaIce.load(reference.state[6], concentration); reference.time = 91 * 86400 + 12 * 3600; reference.seaIce.snow.set(snow);
+    for (let n = 0; n < steps; n++) reference.step(dt);
+    const thinner = Math.max(...iced.map((i) => reference.state[6][i] - cpu.state[6][i])), drawn = Math.max(...iced.map((i) => water[i] - cpu.seaIce.waterHeat[i]));
+    console.log(`against the instant exchange (no ocean beneath) the turbulent one thinned the ice by up to ${thinner.toExponential(1)} m and drew up to ${drawn.toExponential(1)} J/m² from the water`);
+    assert.ok(thinner > 1e-3 && drawn > 1e5, `the exchange moved the ice by only ${thinner} m and the water by ${drawn} J/m²`);
+  }
   const near = neighbourhood(cpu.mesh, new Set([...merged, ...decided]), 2);
   for (let i = 0; i < C; i++) {
     if (near.has(i)) continue;
     worst.flux = Math.max(worst.flux, fluxGap[i]); worst.theta = Math.max(worst.theta, thetaGap[i]);
   }
-  console.log(`${steps} steps of ${dt} s, ${iced.length} cells iced at 0.7 under 1.2 m and 3 kg/m² of snow (${melted} melting at the end): the engines differ by up to ${worst.h.toExponential(1)} m of ice, ${worst.A.toExponential(1)} of cover, ${worst.snow.toExponential(1)} kg/m² of snow, ${worst.albedo.toExponential(1)} of its albedo, ${worst.skin.toExponential(1)} K at the skin and ${worst.iceFlux.toExponential(1)} W/m² of surface flux in the ${iced.filter((i) => !merged.has(i)).length} of them outside the merged columns; everywhere ${worst.flux.toExponential(1)} W/m², ${worst.theta.toExponential(1)} K of θ in the lowest ten layers, over the ${C - near.size} of ${C} columns more than two cells from the ${merged.size} whose well-mixed bottom block of uniform q tops at another layer on one engine after a step or whose OLR and absorbed sunlight parted by more than 1 W/m² (${decisions.parted.size} did) and from the ${decided.size} where the regime, the plume or a layer's cloud water against the cloud-top threshold decided apart (${deciding.filter((kind) => shared.kinds[kind].size).map((kind) => `${kind} ${shared.kinds[kind].size}`).join(', ')})`);
+  console.log(`${steps} steps of ${dt} s, ${iced.length} cells iced at 0.7 under 1.2 m and 3 kg/m² of snow (${melted} melting at the end): the engines differ by up to ${turbulent ? `${worst.water.toExponential(1)} J/m² in the heat of the water under the ice, ` : ''}${worst.h.toExponential(1)} m of ice, ${worst.A.toExponential(1)} of cover, ${worst.snow.toExponential(1)} kg/m² of snow, ${worst.albedo.toExponential(1)} of its albedo, ${worst.skin.toExponential(1)} K at the skin and ${worst.iceFlux.toExponential(1)} W/m² of surface flux in the ${iced.filter((i) => !merged.has(i)).length} of them outside the merged columns; everywhere ${worst.flux.toExponential(1)} W/m², ${worst.theta.toExponential(1)} K of θ in the lowest ten layers, over the ${C - near.size} of ${C} columns more than two cells from the ${merged.size} whose well-mixed bottom block of uniform q tops at another layer on one engine after a step or whose OLR and absorbed sunlight parted by more than 1 W/m² (${decisions.parted.size} did) and from the ${decided.size} where the regime, the plume or a layer's cloud water against the cloud-top threshold decided apart (${deciding.filter((kind) => shared.kinds[kind].size).map((kind) => `${kind} ${shared.kinds[kind].size}`).join(', ')})`);
   assert.ok(merged.size - decisions.parted.size <= C / 50 && decisions.parted.size <= C / 50 && decided.size <= C / 50 && near.size <= C / 4, `${merged.size} columns' dry adjustment merges a different number of layers or their cloud decisions part (${decisions.parted.size}), a regime, plume or cloud-top decision parts in ${decided.size}, with ${near.size} columns within two cells`);
   assert.ok(melted > 0, 'some cell melts');
-  assert.ok(worst.h < 1e-4 && worst.A < 1e-4 && worst.snow < 1e-3 && worst.albedo < 1e-4 && worst.skin < 0.01 && worst.iceFlux < 0.5, JSON.stringify(worst));
+  assert.ok(worst.h < 1e-4 && worst.A < 1e-4 && worst.snow < 1e-3 && worst.albedo < 1e-4 && worst.skin < 0.01 && worst.iceFlux < 0.5 && worst.water < 5e4, JSON.stringify(worst));
   assert.ok(worst.flux < 1 && worst.theta < 0.01, JSON.stringify(worst));
 }
 test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux and the lowest layers, but for the columns where a discrete decision parted (the dry adjustment merging one layer more on one engine, a layer\'s cloud water switching a cover or the boundary layer\'s regime on one engine only) and, outside the ice, their neighbours within two cells', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({}));
 test('the engines agree the same way on those melting polar cells when areaLossFactor halves the area melting takes', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({ areaLossFactor: 0.5 }));
+test('the engines agree the same way on those melting polar cells, and on the heat of the water under them, when the ice and the water exchange heat as turbulence does (iceExchange turbulent)', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({ iceExchange: 'turbulent' }));
