@@ -6,6 +6,7 @@
 //   MOIST='{...}' node scripts/armMetrics.mjs <label> <state.bin>...
 import { readFileSync } from 'node:fs';
 import { SECTIONS, sectionName as binName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable } from './equatorialSections.mjs';
+import { diagnoseExchange } from './surfaceExchange.mjs';
 const R = new URL('../', import.meta.url).pathname;
 const [{ stateGeography }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
   import(R + 'js/geography.module.js'), import(R + 'js/model.module.js'), import(R + 'js/stateFile.module.js'), import(R + 'js/physics/regrid.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/physics/moist.module.js')]);
@@ -62,7 +63,7 @@ for (const file of FILES) {
   model.time = saved.time;
   const [pi, theta, u, , q] = state;
   core.phaseFlux(state, 0, K); core.phaseColumn(state, [new Float64Array(C)], 0, C);
-  surface.lowestWindSpeed(u); surface.applyLayers(state, [null, null, new Float64Array(K * E)], 0, K);
+  diagnoseExchange(model); surface.applyLayers(state, [null, null, new Float64Array(K * E)], 0, K);
   const stressEdge = surface.stress(state, new Float64Array(E)), speed = surface.windSpeed;
   const geo = Float64Array.from(geopotential), exL = Float64Array.from(exnerLayer), thv = Float64Array.from(thetaV);
   for (let k = 0; k < K; k++) for (const i of cells) zMid[k * C + i] = geo[k * C + i] / g;
