@@ -13038,6 +13038,7 @@ js/
     device.module.js         M15: WebGPU device (Dawn in Node, navigator.gpu in the page) and buffer helpers
     core.gpu.js              M15: layouts, dynamics kernels, RK4 and closures, full-step orchestration
     physics.gpu.js           M15: column physics and adjustment kernels
+    anvil.gpu.js             the anvil of moist.anvilLifetime patched into physics.gpu.js's kernels (docs/anvil-memory.md)
     forcing.gpu.js           M18: the forcing recorder and the ocean and sea ice stepped alone under it
     model.gpu.js             M15: the GPU model behind the CPU model's interface
     profile.module.js        the model dialog's GPU profile: step times and kernel timestamps

@@ -10,7 +10,10 @@
 // 680-440 hPa, high above 440 hPa); covers are overlapped as the radiation
 // overlaps them (cloudOverlap), "total" combines the resolved and cumulus
 // cover at random with the deck's, and is given beside under
-// maximum-random and exponential-random overlap. Per class: cover; grid-mean and in-cloud (over the
+// maximum-random and exponential-random overlap. With moist.anvilLifetime the
+// anvil (the state's, placed with placeAnvil) is the class "anvil", the cumulus
+// arrays above cumulusK0, and "high+anvil" is the resolved high cloud and the
+// anvil above 440 hPa together. Per class: cover; grid-mean and in-cloud (over the
 // class's cover) path; the share of its cover whose in-cloud mid-visible
 // optical depth (cloudOptics) lies below 3.6, 3.6-23 and above 23 (ISCCP's
 // thin, medium and thick bins). The humidity lines: relative humidity over
@@ -38,6 +41,7 @@ import { LOW_CLOUD_PRESSURE, CLOUD_OPTICS, cloudOptics, overlapped, DECORRELATIO
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { placeAnvil } from '../js/physics/moist.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/cloudRegimes.mjs <state.bin>'); process.exit(1); }
@@ -54,6 +58,7 @@ STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) }, state[6]);
+placeAnvil(model, saved);
 model.time = saved.time;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
 if (saved.boundaryDepth) bl.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));
@@ -83,7 +88,7 @@ for (let i = 0; i < C; i++) {
   if (h > 0 && cover < 1) fluxT[i] = cover * surfaceT[i] + (1 - cover) * 271.35;
 }
 
-const CLASSES = ['deck', 'cumulus', 'low', 'middle', 'high'];
+const CLASSES = ['deck', 'cumulus', 'low', 'middle', 'high', 'anvil', 'high+anvil'], K0 = moist.cumulusK0;
 const runClass = new Int8Array(K * C).fill(-1);
 for (let i = 0; i < C; i++) {
   for (let k = 0; k < K;) {
@@ -118,16 +123,18 @@ for (let i = 0; i < C; i++) {
   for (let k = 0; k < K; k++) {
     const idx = k * C + i, m = mass(k, i), T = temperature[idx], p = pressure(k, i);
     cloudOptics(T, landMask[i] && !(geography.iceSheet && geography.iceSheet[i]), optics, layerOptics);
-    const resolved = Math.max(0, qc[idx]) * m, cumulus = cuCover[idx] * cuWater[idx] * m, c = runClass[idx];
+    const resolved = Math.max(0, qc[idx]) * m, plume = cuCover[idx] * cuWater[idx] * m, cumulus = k >= K0 ? plume : 0, anvil = k < K0 ? plume : 0, c = runClass[idx];
     liquidPath[i] += layerOptics.liquid * resolved; icePath[i] += (1 - layerOptics.liquid) * resolved;
-    const seen = resolved + cumulus > 0 ? layerCover[k] * -Math.expm1(-(resolved + cumulus) / VISIBLE) : 0;
+    const seen = resolved + plume > 0 ? layerCover[k] * -Math.expm1(-(resolved + plume) / VISIBLE) : 0;
     alpha = k > 0 ? Math.exp(-(core.diagnostics.geopotential[(k - 1) * C + i] - core.diagnostics.geopotential[idx]) / g / decorrelation) : 0;
     close(together, seen, k === K - 1);
     cumulative = overlapped(cumulative, above, seen, alpha);
     above = seen;
-    updraught[i] = Math.max(updraught[i], cuCover[idx]);
+    if (k >= K0) updraught[i] = Math.max(updraught[i], cuCover[idx]);
+    const high = c === 4 ? resolved : 0, highAnvil = p < HIGH_CLOUD_PRESSURE ? anvil : 0;
     for (let n = 1; n < CLASSES.length; n++) {
-      const w = n === 1 ? cumulus : c === n ? resolved : 0, f = n === 1 ? cuCover[idx] : resolvedCover[k];
+      const w = n === 1 ? cumulus : n === 5 ? anvil : n === 6 ? high + highAnvil : c === n ? resolved : 0;
+      const f = n === 1 || n === 5 ? cuCover[idx] : n === 6 ? Math.max(high > 0 ? resolvedCover[k] : 0, highAnvil > 0 ? cuCover[idx] : 0) : resolvedCover[k];
       close(blocks[n], w > 0 ? f * -Math.expm1(-w / VISIBLE) : 0, k === K - 1);
       if (w > 0) { path[n][i] += w; visible[n][i] += layerOptics.visible * w; if (n === 4 && T < 235.15) coldHigh[i] += w; }
     }
