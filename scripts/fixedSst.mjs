@@ -29,7 +29,7 @@ import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { withCadence } from '../js/cadence.module.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS, remapLevels } from '../js/physics/regrid.module.js';
-import { placeCumulus } from '../js/physics/moist.module.js';
+import { placeCumulus, placeAnvil } from '../js/physics/moist.module.js';
 import { sigmaInterfaces, createSigmaCore } from '../js/dynamics/sigmaCore.module.js';
 import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt } from '../js/ocean/climatology.module.js';
@@ -66,6 +66,7 @@ if (saved.evaporation) model.radiation.evaporation.set(saved.evaporation);
 if (saved.exchangeHeat && model.exchange && !model.exchange.fixed) model.exchange.heat.set(saved.exchangeHeat);
 if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
 placeCumulus(model, saved);
+placeAnvil(model, saved);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual); else model.moist.subcloudVirtual.fill(0);
 model.time = saved.time;
 const land = model.geography.land;
@@ -123,7 +124,7 @@ for (let day = 1; day <= DAYS; day++) {
     const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, r = model.radiation, b = model.boundaryLayer;
     const header = { N: saved.N, ...gridHeader(mesh), K: core.K, day: saved.day + day, time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(record), levels: core.levels };
     const name = `${OUT}/${TAG}_day${String(saved.day + day).padStart(4, '0')}.bin`;
-    writeFileSync(name, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo, meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux, windSpeed: model.surface.windSpeed, evaporation: r.evaporation, ...(model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {}), cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, land: await model.land.serialize() }));
+    writeFileSync(name, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo, meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux, windSpeed: model.surface.windSpeed, evaporation: r.evaporation, ...(model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {}), cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, ...(model.moist.anvilCover.length ? { anvilCover: model.moist.anvilCover, anvilIce: model.moist.anvilIce } : {}), subcloudVirtual: model.moist.subcloudVirtual, land: await model.land.serialize() }));
     console.log(`day +${day}: sea-mean surface ${(seaMean() - 273.15).toFixed(3)} °C, ${((performance.now() - t0) / 1000 / day).toFixed(1)} s/day, saved ${name.replace(/.*\//, '')}`);
   }
 }

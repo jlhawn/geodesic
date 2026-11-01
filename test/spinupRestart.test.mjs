@@ -14,12 +14,13 @@ const root = fileURLToPath(new URL('..', import.meta.url)), N = 16;
 const arms = {
   cavity: { ICE_SHELVES: 'cavity', OCEAN: JSON.stringify({ iceDrift: false }) },
   drift: { ICE_SHELVES: 'land', OCEAN: JSON.stringify({ iceDrift: { rheology: 'cavitating', hemisphere: 'both' } }) },
+  anvil: { OCEAN: JSON.stringify({ iceDrift: false }), MOIST: JSON.stringify({ anvilLifetime: 3 * 3600 }) },
 };
 
 const fields = (state, prefix = '') => Object.entries(state).flatMap(([name, value]) => (ArrayBuffer.isView(value) ? [[prefix + name, value]] : value && typeof value === 'object' && !Array.isArray(value) ? fields(value, `${prefix}${name}.`) : []));
 
 for (const [arm, env] of Object.entries(arms)) {
-  test(`at N=${N} spinup.mjs with ${arm === 'cavity' ? 'the ice-shelf cavities' : 'the cavitating ice drift'} run 2 days whole and run 1 day, saved, then resumed for the second, ends on the same state bit for bit`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  test(`at N=${N} spinup.mjs with ${{ cavity: 'the ice-shelf cavities', drift: 'the cavitating ice drift', anvil: 'moist.anvilLifetime' }[arm]} run 2 days whole and run 1 day, saved, then resumed for the second, ends on the same state bit for bit`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const out = mkdtempSync(join(tmpdir(), `restart-${arm}-`));
     try {
       const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), MINUTES: '100', OUT: out, ...env, ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -36,6 +37,8 @@ for (const [arm, env] of Object.entries(arms)) {
         if (count) apart.push(`${name} ${largest.toExponential(1)} (${count})`);
       }
       assert.deepEqual(apart, [], `day 2, whole against split: ${apart.join(', ')}`);
+      if (arm === 'anvil') for (const name of ['anvilCover', 'anvilIce']) assert.ok(whole[name] && whole[name].some((x) => x > 0), `${name} is saved and holds anvil`);
+      if (arm === 'anvil') assert.equal(whole.options.moist.anvilLifetime, 3 * 3600, 'and the state records the option');
     } finally {
       rmSync(out, { recursive: true, force: true });
     }

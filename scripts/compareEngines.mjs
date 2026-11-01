@@ -49,7 +49,7 @@ export const PH_MAP = {
   OLR: 'radiation.held.outgoing', OLRSUM: 'radiation.summed.outgoingLongwave', ATMSUM: 'radiation.summed.atmosphereSolar',
   INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.summed.clearOutgoingLongwave',
   ASRMEAN: 'radiation.meanAbsorbedSolar', OLRMEAN: 'radiation.meanOutgoingLongwave', ALBMEAN: 'radiation.meanPlanetaryAlbedo', SWCREMEAN: 'radiation.meanShortwaveCloudEffect', LWCREMEAN: 'radiation.meanLongwaveCloudEffect',
-  CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
+  CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', ANVA: 'moist.anvilCover', ANVQ: 'moist.anvilIce', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
   PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo',
   SURF: 'land.surface', SOIL: 'land.soil', RUNOFF: 'land.runoff', DISCHARGE: 'land.discharge', ICELOSS: 'land.iceLoss', MLMK: 'radiation.mlmLayer', MLMM: 'radiation.mlmShare', DECKK: 'radiation.deckLayer', DECKFROM: 'radiation.deckFrom', VEG: 'land.vegetation', CANOPY: 'land.canopy', SEASONL: 'land.seasonLength', SEASONW: 'land.seasonWarmth', DEMAND: 'land.demandMean', RAINMEAN: 'land.rainMean',
   LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4',
@@ -105,6 +105,7 @@ async function build(file) {
   const { savedLevels } = await import(`${REPO}/js/stateFile.module.js`);
   const { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } = await import(`${REPO}/js/physics/regrid.module.js`);
   const { stateGrid } = await import(`${REPO}/js/stateGrid.module.js`);
+  const { placeAnvil } = await import(`${REPO}/js/physics/moist.module.js`);
   const { decodeSubgrid, stateGeography, subgridUrl } = await import(`${REPO}/js/geography.module.js`);
   const saved = await fs.readState(file), sg = stateGeography(saved), topography = sg.topography, dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
@@ -131,6 +132,7 @@ async function build(file) {
       if (!v) continue;
       if (v.length === t.length) t.set(v); else if (t.length === K * C) { t.fill(0); t.set(v, K * C - v.length); }
     }
+    placeAnvil(model, saved);
     const sv = model.moist.subcloudVirtual;
     if (saved.subcloudVirtual && saved.subcloudVirtual.length === sv.length) sv.set(saved.subcloudVirtual); else sv.fill(0);
     if (!model.gpu && model.surfaceGeopotential) for (let i = 0; i < C; i++) { const zs = model.surfaceGeopotential[i] / 9.80665; if (saved.boundaryDepth) model.boundaryLayer.depth[i] += zs; if (saved.mixingTop) model.boundaryLayer.mixingTop[i] += zs; }

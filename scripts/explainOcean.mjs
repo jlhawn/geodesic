@@ -37,7 +37,7 @@ import { decodeForcing } from '../js/forcing.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
-import { placeCumulus } from '../js/physics/moist.module.js';
+import { placeCumulus, placeAnvil } from '../js/physics/moist.module.js';
 import { PUBLISHED_RADIATION, PUBLISHED_MOIST } from '../explain/published.module.js';
 
 const FLOAT32_TOLERANCE = 2 ** -21, SECTION_MIN_THICKNESS = 0.1, NET_FRACTION = 0.1;
@@ -123,6 +123,7 @@ if (resumed) {
   if (model.exchange && resumed.exchangeHeat && !model.exchange.fixed) model.exchange.heat.set(resumed.exchangeHeat);
   if (model.exchange && resumed.exchangeWind) model.exchange.wind.set(resumed.exchangeWind);
   placeCumulus(model, resumed);
+  placeAnvil(model, resumed);
   model.moist.subcloudVirtual.set(resumed.subcloudVirtual);
   if (model.skin) model.skin.load(resumed);
   model.time = resumed.time;
@@ -418,7 +419,7 @@ async function saveCheckpoint(path, cloud) {
     convectiveRain: m.convectiveRain, largeScaleRain: m.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo,
     meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux,
     windSpeed: model.surface.windSpeed, evaporation: r.evaporation, ...(model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {}),
-    cumulusCover: m.cumulusCover, cumulusWater: m.cumulusWater, subcloudVirtual: m.subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean: saved, seaSnow, seaSnowAlbedo,
+    cumulusCover: m.cumulusCover, cumulusWater: m.cumulusWater, ...(m.anvilCover.length ? { anvilCover: m.anvilCover, anvilIce: m.anvilIce } : {}), subcloudVirtual: m.subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean: saved, seaSnow, seaSnowAlbedo,
     spinupFrameTimes: Float64Array.from(spinup.times), spinupFrameData, recentRain, recentNet, ...dailyArrays,
   }, { f64: ['spinupFrameTimes', ...Object.keys(dailyArrays)] });
   mkdirSync(dirname(path), { recursive: true });

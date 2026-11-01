@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { sunDirection, sunDistance, orbitOf, YEAR } from '../js/physics/radiation.module.js';
 import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, DECISION_KINDS } from './helpers/decisions.mjs';
@@ -1085,6 +1086,40 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
   }
   console.log(`  fog reached the ground in ${fogged} cells, at most ${Math.max(...fogPrecipitation).toExponential(1)} kg/m²; over the kept cells the engines' fog differs by at most ${fog.maxDiff.toExponential(1)} kg/m²`);
   assert.ok(fog.maxDiff <= 1e-3 * largestScale, `fog differs by ${fog.maxDiff} at ${fog.at}`);
+});
+
+for (const [label, steps, options] of [['the previous layers', 24, {}], ['bl48 and the current defaults, where the private arrays of a column pass 32 floats', 12, { previous: false, levels: sigmaInterfaces('bl48') }]]) test(`the anvil forms, falls and sublimates alike in both engines on ${label}: cover, ice, the layers\' temperature and vapor and the rain, cell by cell outside the columns where a discrete decision parted at some step and their neighbours within two cells, and the radiation of both reads it`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  let decisions = null;
+  const { model, state, physics } = await pair(steps, 900, 0, false, options, { anvilLifetime: 3 * 3600 }, {}, async (cpu, device, gpu) => {
+    decisions ??= decisionTracker(cpu.core.K, cpu.mesh.nCells);
+    decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.download(), device));
+  });
+  const C = model.mesh.nCells, K0 = model.moist.cumulusK0, length = K0 * C, { anvilCover, anvilIce } = model.moist;
+  const cover = physics.ANVA.subarray(0, length), ice = physics.ANVQ.subarray(0, length);
+  const near = neighbourhood(model.mesh, decisions.parted, 2), apart = new Set([...Array(C).keys()].filter((i) => near.has(i)));
+  let cpuCells = 0, gpuCells = 0, cpuIce = 0, gpuIce = 0, keptIce = 0, keptGpuIce = 0, largest = 0;
+  for (let x = 0; x < length; x++) {
+    const i = x % C, a = model.mesh.areaCell[i];
+    if (anvilCover[x] > 0) cpuCells++;
+    if (cover[x] > 0) gpuCells++;
+    cpuIce += a * anvilIce[x]; gpuIce += a * ice[x];
+    if (!near.has(i)) { keptIce += a * anvilIce[x]; keptGpuIce += a * ice[x]; }
+    largest = Math.max(largest, anvilIce[x]);
+  }
+  const coverStats = stats(anvilCover, cover, apart, C), iceStats = stats(anvilIce, ice, apart, C);
+  const theta = stats(model.state[1], state[1], apart, C), vapor = stats(model.state[4], state[4], apart, C), cloud = stats(model.state[5], state[5], apart, C);
+  const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);
+  const conv = stats(pick(model.moist.convectivePrecipitation), pick(physics.CONV)), ls = stats(pick(model.moist.largeScalePrecipitation), pick(physics.COND));
+  const olr = stats(pick(model.radiation.outgoing), pick(physics.OLR));
+  console.log(`${steps} steps at N=${N} on ${label}: anvil in ${cpuCells} of ${length} layer-cells (GPU ${gpuCells}), area-weighted ice sum ${cpuIce.toExponential(4)} (GPU ${gpuIce.toExponential(4)}), the most ${largest.toExponential(2)} kg/kg in a layer; ${decisions.parted.size} columns parted (${near.size} with their neighbours); over the other ${kept.length}: cover apart by ${coverStats.maxDiff.toExponential(2)} at most (rms ${coverStats.rmsRel.toExponential(2)} of itself), ice by ${iceStats.maxDiff.toExponential(2)} kg/kg (rms ${iceStats.rmsRel.toExponential(2)}), θ by ${theta.maxDiff.toExponential(2)} K, q by ${vapor.maxDiff.toExponential(2)}, q_c by ${cloud.maxDiff.toExponential(2)}, rain ${conv.rmsRel.toExponential(2)} and ${ls.rmsRel.toExponential(2)}, OLR by ${olr.maxDiff.toExponential(2)} W/m²`);
+  assert.ok(cpuCells > length / 20 && Math.abs(cpuCells - gpuCells) < 0.02 * cpuCells, `anvil in ${cpuCells} layer-cells on the CPU, ${gpuCells} on the GPU`);
+  assert.ok(decisions.parted.size <= C / 2 && near.size <= 0.95 * C, `a decision parted in ${decisions.parted.size} cells, ${near.size} with their neighbours`);
+  assert.ok(Math.abs(keptGpuIce - keptIce) < 2e-3 * keptIce, `ice over the kept cells ${keptIce} against ${keptGpuIce}`);
+  assert.ok(coverStats.rmsRel < 3e-3 && coverStats.maxDiff < 2e-3, `cover rms ${coverStats.rmsRel}, at most ${coverStats.maxDiff} at ${coverStats.at}`);
+  assert.ok(iceStats.rmsRel < 3e-3 && iceStats.maxDiff < 3e-3 * largest, `ice rms ${iceStats.rmsRel}, at most ${iceStats.maxDiff} at ${iceStats.at}`);
+  assert.ok(theta.maxDiff < 0.1 && vapor.maxDiff < 5e-5 && cloud.maxDiff < 5e-6, `θ ${theta.maxDiff} K at ${theta.at}, q ${vapor.maxDiff}, q_c ${cloud.maxDiff}`);
+  assert.ok(conv.rmsRel < 1e-3 && ls.rmsRel < (options.previous === false ? 1e-2 : 1e-3), `rain rms ${conv.rmsRel}, ${ls.rmsRel}`);
+  assert.ok(olr.maxDiff < 1, `OLR apart by ${olr.maxDiff} W/m² at ${olr.at}`);
 });
 
 test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, alike outside the columns where a discrete decision parted and their neighbours within two cells, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

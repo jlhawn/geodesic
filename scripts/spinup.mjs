@@ -155,7 +155,7 @@ import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0 } from '../js/dynamics/sigmaCore.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS, regridLand, remapLevels } from '../js/physics/regrid.module.js';
-import { placeCumulus } from '../js/physics/moist.module.js';
+import { placeCumulus, placeAnvil } from '../js/physics/moist.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
@@ -249,6 +249,7 @@ function loadSaved(saved) {
   if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
   if (model.skin) model.skin.load(saved);
   placeCumulus(model, saved);
+  placeAnvil(model, saved);
   if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual); else model.moist.subcloudVirtual.fill(0);
   model.time = saved.time;
   model.load();
@@ -559,9 +560,10 @@ if (days > 0 && !step) {
 }
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
+const anvilFields = model.moist.anvilCover.length ? { anvilCover: model.moist.anvilCover, anvilIce: model.moist.anvilIce } : {};
 const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
 const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(GEOGRAPHY), levels: core.levels, options: recordedOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: soilOptions(LAND) }), ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, ...anvilFields, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));
 for (const old of whole.slice(0, Math.max(0, whole.length - KEEP))) unlinkSync(`${OUT}/${old}`);

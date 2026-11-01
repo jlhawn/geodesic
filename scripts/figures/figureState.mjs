@@ -8,7 +8,7 @@ import { createGpuModel } from '../../js/gpu/model.gpu.js';
 import { withCadence } from '../../js/cadence.module.js';
 import { decodeState, savedLevels, stateName } from '../../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../../js/physics/regrid.module.js';
-import { placeCumulus } from '../../js/physics/moist.module.js';
+import { placeCumulus, placeAnvil } from '../../js/physics/moist.module.js';
 import { stateGrid } from '../../js/stateGrid.module.js';
 import { loadSavedLand } from '../savedLand.mjs';
 
@@ -62,6 +62,7 @@ export async function gpuModelFrom(saved) {
   if (saved.exchangeHeat && model.exchange && !model.exchange.fixed) model.exchange.heat.set(saved.exchangeHeat);
   if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
   placeCumulus(model, saved);
+  placeAnvil(model, saved);
   if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual); else model.moist.subcloudVirtual.fill(0);
   model.time = saved.time;
   model.load();
