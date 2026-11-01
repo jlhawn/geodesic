@@ -234,6 +234,7 @@ export function physicsConstants(o) {
   if (o.plumePhase !== 'mixed' && o.plumePhase !== 'liquid') throw new Error(`plumePhase must be 'mixed' or 'liquid', not ${o.plumePhase}`);
   if (o.convectionType !== 'testParcel' && o.convectionType !== 'cloudDepth' && o.convectionType !== 'top') throw new Error(`convectionType must be 'testParcel', 'cloudDepth' or 'top', not ${o.convectionType}`);
   if (o.stratusIndex !== 'eis' && o.stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${o.stratusIndex}`);
+  if (!((o.countergradient ?? 0) >= 0)) throw new Error(`countergradient must be 0 or more, not ${o.countergradient}`);
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
@@ -385,7 +386,7 @@ const PL_SURFACE50: bool = ${o.plumeSourceDepth === 'surface50'}; const EX_COEF:
 const EX_LAYER: bool = ${o.excessVelocity === 'surfaceLayer'}; const EX_SCALE: f32 = ${SOURCE_EXCESS.scale}; const EX_STAB: f32 = ${SOURCE_EXCESS.layer}; const EX_KARMAN: f32 = ${SOURCE_EXCESS.karman}; const EX_USTAR: f32 = ${SOURCE_EXCESS.friction}; const EX_VIRT: f32 = ${SOURCE_EXCESS.virtual};
 const PL_ELEVATED: bool = ${o.plumeDeparture !== 'surface'}; const PL_STABLE: bool = ${o.plumeDeparture === 'elevatedStable'}; const DEP_DEPTH: f32 = ${DEPARTURE.depth}; const DEP_DT: f32 = ${DEPARTURE.temperature}; const DEP_DQ: f32 = ${DEPARTURE.humidity}; const DEP_OWN: bool = ${DEPARTURE.reference === 'departure'};
 const PL_BECHTOLD: bool = ${o.capeClosure === 'bechtold'}; const BT_POSITIVE: bool = ${o.pcapeBoundary === 'positive'}; const BT_SCALE: f32 = ${BECHTOLD.resolution / BECHTOLD.reference}; const BT_SHORT: f32 = ${BECHTOLD.shortest}; const BT_LONG: f32 = ${BECHTOLD.longest}; const BT_WIND: f32 = ${BECHTOLD.boundaryWind}; const BT_TSTAR: f32 = ${BECHTOLD.temperatureScale}; const SUB_K: i32 = ${o.subcloudLayers ?? 0};
-const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_SUBSIDENCE: bool = ${!!entrainment.subsidence}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
+const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_SUBSIDENCE: bool = ${!!entrainment.subsidence}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop}; const BL_CG: f32 = ${o.countergradient ?? 0};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${darkening !== false}; const DARK_SURFACE: bool = ${darkening === 'surface'}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${wetting[0]}; const DARK_SPAN: f32 = ${wetting[1] - wetting[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
@@ -2600,6 +2601,28 @@ fn mixConserved(i: i32, pi: f32, dt: f32, wet: bool) {
     level[j] = staticEnergy(k, i, reference, wet);
     total[j] = IN[S_Q + idx] + IN[S_QC + idx];
   }
+  if (BL_CG > 0.0) {
+    let heat = PH[PH_CGH + i]; let water = PH[PH_CGW + i];
+    var keeps = true;
+    for (var j = 0; j < n; j++) {
+      let k = KTOP + j;
+      let mass = pi * LV[L_DS + k] / GRAV;
+      var below = 0.0; if (k < K - 1) { below = PH[PH_CG + k * C + i]; }
+      var above = 0.0; if (j > 0) { above = PH[PH_CG + (k - 1) * C + i]; }
+      level[j] += dt * (below * heat - above * heat) / mass;
+      if (select(IN[S_Q + k * C + i], total[j], wet) + dt * (below * water - above * water) / mass < 0.0) { keeps = false; }
+    }
+    if (keeps) {
+      for (var j = 0; j < n; j++) {
+        let k = KTOP + j;
+        let mass = pi * LV[L_DS + k] / GRAV;
+        var below = 0.0; if (k < K - 1) { below = PH[PH_CG + k * C + i]; }
+        var above = 0.0; if (j > 0) { above = PH[PH_CG + (k - 1) * C + i]; }
+        let change = dt * (below * water - above * water) / mass;
+        if (wet) { total[j] += change; } else { IN[S_Q + k * C + i] += change; }
+      }
+    }
+  }
   ${thomasSolve('upper', 'lower', 'level')}
   if (wet) ${thomasSolve('upper', 'lower', 'total')}
   for (var j = 0; j < n; j++) {
@@ -2656,6 +2679,15 @@ export const PHYSICS_KERNELS = {
   pblDiagnose: `fn blHeight(k: i32, i: i32) -> f32 { return (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV; }
 fn blInterface(k: i32, i: i32, zb: f32) -> f32 { return 0.5 * (blHeight(k, i) + blHeight(k + 1, i)) - zb; }
 fn blDensity(k: i32, i: i32, pi: f32) -> f32 { let idx = k * C + i; return pi * LV[L_SM + k] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]); }
+fn blNonlocal(i: i32, pi: f32, zb: f32, h: f32, scale: f32, buoyancy: f32, friction: f32) {
+  if (!(buoyancy > 0.0) || !(h > 0.0)) { return; }
+  let mixed = pow(friction * friction * friction + 0.6 * buoyancy * h, 1.0 / 3.0);
+  let factor = BL_CG * pow(buoyancy * h, 1.0 / 3.0) / (mixed * mixed * h);
+  for (var k = KTOP; k < K - 1; k++) {
+    let z = blInterface(k, i, zb);
+    if (z > 0.1 * h && z < h) { PH[PH_CG + k * C + i] = 0.5 * (blDensity(k, i, pi) + blDensity(k + 1, i, pi)) * (KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h)) * factor; }
+  }
+}
 fn parcelVirtual(level: f32, total: f32, k: i32, i: i32, pi: f32) -> f32 {
   let ex = D[D_EXM + k * C + i]; let liquidT = level * ex; let qs = qsat(liquidT, pi * LV[L_SM + k]);
   if (!(total > qs)) { return level * (1.0 + VIRT * total); }
@@ -2779,6 +2811,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     if (velocity > 0.0 && z > base0 && z < cloudTopZ) { let x = (z - base0) / layerDepth; diffusivity += CT_PROFILE * KARMAN * velocity * layerDepth * x * x * sqrt(1.0 - x); }
     if (diffusivity > 0.0) { PH[PH_MIX + k * C + i] = 0.5 * (blDensity(k, i, pi) + blDensity(k + 1, i, pi)) * diffusivity / (blHeight(k, i) - blHeight(k + 1, i)); }
   }
+  if (BL_CG > 0.0) { blNonlocal(i, pi, zb, h, scale, buoyancy, friction); }
   if (!BL_ENTRAIN) { return; }
   var onset = 1.0;
   if (BL_ONSET > 0.0) { onset = min(1.0, buoyancy / BL_ONSET); }
@@ -2798,6 +2831,7 @@ fn blSeal(i: i32, pi: f32) {
   let a = i32(PH[PH_MLMK + i]);
   if (a <= 0 || PH[PH_DEPTH + i] > PH[PH_MLMTOP + i]) { return; }
   for (var k = KTOP; k < a; k++) { PH[PH_MIX + k * C + i] = 0.0; }
+  if (BL_CG > 0.0) { for (var k = KTOP; k <= a; k++) { PH[PH_CG + k * C + i] = 0.0; } }
   let velocity = max(0.0, PH[PH_MLMENT + i]);
   PH[PH_MIX + a * C + i] = blExchange(a, i, 0.5 * (blDensity(a, i, pi) + blDensity(a + 1, i, pi)), velocity / max(PH[PH_MLMM + i], 1e-3));
   PH[PH_ENTRAIN + i] = velocity;
@@ -2826,6 +2860,7 @@ fn blSeal(i: i32, pi: f32) {
   if (MLM_PROGNOSTIC && PH[PH_MLMTOP + i] > 0.0) { top = max(depth, PH[PH_MLMTOP + i]); }
   let h = top - zb;
   for (var k = KTOP; k < K; k++) { PH[PH_MIX + k * C + i] = 0.0; }
+  if (BL_CG > 0.0) { for (var k = KTOP; k < K; k++) { PH[PH_CG + k * C + i] = 0.0; } }
   PH[PH_ENTRAIN + i] = 0.0;
   let iceConc = PH[PH_CONC + i]; let seaOpen = 1.0 - select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) * (1.0 - X_SEA_REDUCTION * seaOpen) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
@@ -2841,6 +2876,11 @@ fn blSeal(i: i32, pi: f32) {
   }
   let buoyancy = select(GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture), PH[PH_BUOY + i], ROUGH);
   PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
+  if (BL_CG > 0.0) {
+    let rho = blDensity(K - 1, i, pi); let exchange = PH[PH_DRAG + i] * max(speed, GUST);
+    PH[PH_CGH + i] = select(CP * D[D_EXM + base] * exchange * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base]), PH[PH_SH + i] / rho, ROUGH);
+    PH[PH_CGW + i] = select(select(exchange * (qsat(IN[S_TS + i], pi) * (1.0 - X_SEA_REDUCTION * seaOpen) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5), PH[PH_EVAP + i] / rho, ROUGH);
+  }
   if (MOIST_BL) { blMoist(i, pi, depth - zb, zb, buoyancy, friction); if (MLM_SUBGRID) { blSeal(i, pi); } return; }
   if (h <= 0.0) { return; }
   var scale = friction;
@@ -2856,6 +2896,7 @@ fn blSeal(i: i32, pi: f32) {
     let rhoBelow = pi * LV[L_SM + k + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below]);
     PH[PH_MIX + idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
   }
+  if (BL_CG > 0.0) { blNonlocal(i, pi, zb, h, scale, buoyancy, friction); }
   let taper = clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0) * (1.0 - PH[PH_STRAT + i]);
   if (BL_ENTRAIN && entrainK >= KTOP && buoyancy > 0.0 && taper > 0.0) {
     let idx = entrainK * C + i; let below = idx + C;

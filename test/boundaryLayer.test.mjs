@@ -59,6 +59,67 @@ test('an unstable, sheared column gets a kilometer-deep boundary layer that mixe
   console.log(`unstable column: boundary layer ${depth.toFixed(0)} m, ${coefficients} mixing interfaces, θ spread over the lowest three layers ${spreadBefore.toFixed(2)} → ${spreadAfter.toFixed(2)} K after 6 h`);
 });
 
+function heatedColumns(boundaryLayerOptions) {
+  const pair = createModel(new Grid(16), { ocean: false, boundaryLayer: boundaryLayerOptions });
+  const { core: c, mesh: m, radiation, state } = pair, { K: nK, C: nC, E: nE, g: grav, geopotential: phi, exnerLayer, sigmaMid, R, cp } = c.diagnostics;
+  const init = initializeState(pair, { profile: equilibriumProfile(pair) });
+  for (let a = 0; a < init.length; a++) state[a].set(init[a]);
+  const [pi, theta, u, , q, qc] = state;
+  c.diagnose(pi, theta, q, qc);
+  for (let i = 0; i < nC; i++) {
+    const zb = phi[(nK - 1) * nC + i] / grav;
+    for (let k = 0; k < nK; k++) {
+      const x = k * nC + i, z = phi[x] / grav - zb;
+      theta[x] = 300 - 1e-3 * Math.min(z, 750) + 2e-3 * Math.max(0, Math.min(z, 1500) - 750) + 6e-3 * Math.max(0, z - 1500);
+      q[x] = 8e-3 * Math.exp(-z / 2000);
+      qc[x] = 0;
+    }
+  }
+  for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 0 : 8 * m.nEdge[3 * e + 1];
+  c.diagnose(pi, theta, q, qc);
+  for (let i = 0; i < nC; i++) {
+    const b = (nK - 1) * nC + i, rho = pi[i] * sigmaMid[nK - 1] / (R * theta[b] * exnerLayer[b]);
+    radiation.sensibleHeat[i] = 300;
+    radiation.evaporation[i] = 1e-4;
+    radiation.surfaceBuoyancy[i] = grav / theta[b] * (300 / (rho * cp * exnerLayer[b]) + 0.61 * theta[b] * 1e-4 / rho);
+  }
+  return pair;
+}
+
+test('with boundaryLayer.countergradient 7.2 an unstable, heated column carries heat and water from the lower to the upper part of its mixed layer and holds its upper half more stable, as Holtslag and Boville\'s nonlocal flux does, conserving its enthalpy and water; with 0 it is bit for bit the boundary layer built without the option', () => {
+  const same = (a, b) => a.length === b.length && a.every((x, n) => Object.is(x, b[n]));
+  for (const turbulence of ['dry', 'moist']) {
+    const runs = [7.2, 0, undefined].map((a) => {
+      const pair = heatedColumns({ turbulence, ...(a === undefined ? {} : { countergradient: a }) }), { core: c, boundaryLayer: layer, state } = pair;
+      const { K: nK, C: nC, dSigma: ds, g: grav, geopotential: phi, exnerLayer, cp } = c.diagnostics, [pi, theta, , , q, qc] = state;
+      const heat = (i) => { let s = 0; for (let k = 0; k < nK; k++) s += pi[i] * ds[k] / grav * cp * theta[k * nC + i] * exnerLayer[k * nC + i]; return s; };
+      const water = (i) => { let s = 0; for (let k = 0; k < nK; k++) s += pi[i] * ds[k] / grav * (q[k * nC + i] + qc[k * nC + i]); return s; };
+      layer.diagnose(state);
+      const mixing = Float64Array.from(layer.mixing), heatBefore = Float64Array.from({ length: nC }, (_, i) => heat(i)), waterBefore = Float64Array.from({ length: nC }, (_, i) => water(i));
+      const zb = phi[(nK - 1) * nC] / grav, h = layer.depth[0] - zb, z = Float64Array.from({ length: nK }, (_, k) => phi[k * nC] / grav - zb);
+      let carrying = 0;
+      if (layer.nonlocal) for (let k = layer.kTop; k < nK - 1; k++) if (layer.nonlocal[k * nC] > 0) carrying++;
+      for (let n = 0; n < 24; n++) for (let i = 0; i < nC; i++) layer.mixColumn(i, pi, theta, q, qc, 900);
+      let heatMiss = 0, waterMiss = 0;
+      for (let i = 0; i < nC; i++) { heatMiss = Math.max(heatMiss, Math.abs(heat(i) - heatBefore[i]) / heatBefore[i]); waterMiss = Math.max(waterMiss, Math.abs(water(i) - waterBefore[i]) / waterBefore[i]); }
+      const part = (field, from, to) => { let s = 0, w = 0; for (let k = 0; k < nK; k++) if (z[k] > from && z[k] < to) { s += ds[k] * field[k * nC]; w += ds[k]; } return s / w; };
+      const nearest = (height) => { let best = 0; for (let k = 0; k < nK; k++) if (Math.abs(z[k] - height) < Math.abs(z[best] - height)) best = k; return best; };
+      const [middle, upper] = [nearest(0.5 * h), nearest(h)], gradient = (theta[upper * nC] - theta[middle * nC]) / (z[upper] - z[middle]);
+      const result = { pair, mixing, h, carrying, heatMiss, waterMiss, gradient, lowerT: part(theta, 0.1 * h, h / 3), upperT: part(theta, h / 3, h), lowerQ: part(q, 0.1 * h, h / 3), upperQ: part(q, h / 3, h) };
+      pair.step(900);
+      return result;
+    });
+    const [on, off, none] = runs;
+    assert.ok(on.h > 1000 && on.carrying >= 3, `${turbulence}: boundary layer ${on.h} m deep, ${on.carrying} interfaces carry the nonlocal flux`);
+    assert.ok(on.heatMiss < 1e-14 && on.waterMiss < 1e-10, `${turbulence}: enthalpy ${on.heatMiss}, water ${on.waterMiss} relative`);
+    assert.ok(on.lowerT < off.lowerT && on.upperT > off.upperT && on.lowerQ < off.lowerQ && on.upperQ > off.upperQ, `${turbulence}: θ ${off.lowerT} → ${on.lowerT} below h/3, ${off.upperT} → ${on.upperT} above; q ${off.lowerQ} → ${on.lowerQ}, ${off.upperQ} → ${on.upperQ}`);
+    assert.ok(on.gradient > off.gradient, `${turbulence}: upper half ${1000 * off.gradient} → ${1000 * on.gradient} K/km`);
+    assert.ok(same(off.mixing, none.mixing), `${turbulence}: coefficients`);
+    for (let s = 0; s < none.pair.state.length; s++) assert.ok(same(off.pair.state[s], none.pair.state[s]), `${turbulence}: state ${s} after the columns' mixing and a step`);
+    console.log(`${turbulence} heated column: h ${on.h.toFixed(0)} m, ${on.carrying} interfaces carry the nonlocal flux; after 6 h of mixing θ ${off.lowerT.toFixed(3)} → ${on.lowerT.toFixed(3)} K between 0.1 h and h/3 and ${off.upperT.toFixed(3)} → ${on.upperT.toFixed(3)} K above, q ${(1000 * off.lowerQ).toFixed(4)} → ${(1000 * on.lowerQ).toFixed(4)} and ${(1000 * off.upperQ).toFixed(4)} → ${(1000 * on.upperQ).toFixed(4)} g/kg, the upper half ${(1000 * off.gradient).toFixed(3)} → ${(1000 * on.gradient).toFixed(3)} K/km; enthalpy kept to ${on.heatMiss.toExponential(1)}, water to ${on.waterMiss.toExponential(1)}`);
+  }
+});
+
 test('a strongly stable column stays unmixed', () => {
   const state = column(280, 2e-2, 2);
   const [pi, theta, , , q, qc] = state;
@@ -293,10 +354,10 @@ test('the shear term comes in continuously with the surface buoyancy flux: w_e f
   console.log(`shear onset: w_e ${samples.map(([b, w, x]) => `${(1000 * w).toFixed(3)} (switched ${(1000 * x).toFixed(3)}) mm/s at B0 ${b.toExponential(1)}`).join(', ')}`);
 });
 
-async function engines(entrainment) {
+async function engines(entrainment, extra = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry' }, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry', ...extra }, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
   const { core: c, mesh: m, state, radiation, moist, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -327,7 +388,7 @@ async function engines(entrainment) {
   c.diagnose(pi, theta, q, qc);
   const { piSigmaDot, exnerLower } = c.diagnostics;
   for (let k = 1; k < nK; k++) for (let i = 0; i < nC; i++) piSigmaDot[k * nC + i] = Math.fround(0.6 * (random() - 0.4));
-  const gpu = await createGpuCore(m, { levels, physics: { entrainment, turbulence: 'dry', surfaceExchange: 'fixed', exchangeOptions: PREVIOUS_SURFACE } });
+  const gpu = await createGpuCore(m, { levels, physics: { entrainment, turbulence: 'dry', surfaceExchange: 'fixed', exchangeOptions: PREVIOUS_SURFACE, ...extra } });
   const { device, buffers, kernels } = gpu, dt = 900;
   gpu.upload(state);
   device.queue.writeBuffer(buffers.D, 4 * gpu.layout.D.PSD, Float32Array.from(piSigmaDot));
@@ -346,7 +407,7 @@ async function engines(entrainment) {
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
   const before = state.map((a) => Float64Array.from(a));
   layer.diagnose(state);
-  const cpu = { entrainment: Float64Array.from(layer.entrainment), mixing: Float64Array.from(layer.mixing) };
+  const cpu = { entrainment: Float64Array.from(layer.entrainment), mixing: Float64Array.from(layer.mixing), depth: Float64Array.from(layer.depth), ...(layer.nonlocal ? { nonlocal: Float64Array.from(layer.nonlocal), kinematicHeat: Float64Array.from(layer.kinematicHeat), kinematicWater: Float64Array.from(layer.kinematicWater) } : {}) };
   pair.phases.adjust(0, nC, dt);
   pair.phases.mixMomentum(0, nE, dt);
   return { K: nK, C: nC, E: nE, kTop: layer.kTop, gate: radiation.mlmGate, share: radiation.stratiform, before, cpu, state, after, ph, mesh: m };
@@ -575,4 +636,53 @@ test('the cumulus-capped rule matches between the engines: the cumulus columns c
   assert.equal(flips, 0);
   assert.ok(worstDepth < 0.5, `depth ${worstDepth}`);
   assert.ok(worstTop < 0.5, `mixing top ${worstTop}`);
+});
+
+test('the countergradient matches between the engines on the random columns: each interface\'s ρK a w* / (w_m² h), the kinematic surface fluxes, the coefficients, and θ, q, qc and the wind after the step and what the term changes in them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const turbulence of ['dry', 'moist']) {
+    const on = await engines({}, { countergradient: 7.2, turbulence }), base = await engines({}, { turbulence });
+    const { K: nK, C: nC, E: nE, kTop, mesh: m } = on;
+    const scaleOf = (a) => a.reduce((s, x) => Math.max(s, Math.abs(x)), 0);
+    const heatScale = scaleOf(on.cpu.kinematicHeat), waterScale = scaleOf(on.cpu.kinematicWater), gradientScale = scaleOf(on.cpu.nonlocal);
+    let carrying = 0, apart = 0, flips = 0, worstG = 0, worstHeat = 0, worstWater = 0, worstMix = 0;
+    const parted = new Uint8Array(nC);
+    for (let i = 0; i < nC; i++) {
+      for (const run of [on, base]) for (let k = 0; k < nK; k++) if (Math.abs(run.state[4][k * nC + i] - run.after[4][k * nC + i]) > 1e-5) parted[i] = 1;
+      worstHeat = Math.max(worstHeat, Math.abs(on.cpu.kinematicHeat[i] - on.ph.CGH[i]) / heatScale);
+      worstWater = Math.max(worstWater, Math.abs(on.cpu.kinematicWater[i] - on.ph.CGW[i]) / waterScale);
+      let largest = 0, flipped = false;
+      for (let k = kTop; k < nK - 1; k++) { const x = k * nC + i; largest = Math.max(largest, on.cpu.nonlocal[x]); if ((on.cpu.nonlocal[x] > 0) !== (on.ph.CG[x] > 0)) flipped = true; }
+      if (largest > 0) carrying++;
+      if (Math.abs(on.cpu.depth[i] - on.ph.DEPTH[i]) > 1) { apart++; continue; }
+      if (flipped) { flips++; continue; }
+      let mixLargest = 0;
+      for (let k = kTop; k < nK - 1; k++) mixLargest = Math.max(mixLargest, on.cpu.mixing[k * nC + i]);
+      for (let k = kTop; k < nK - 1; k++) {
+        const x = k * nC + i;
+        if (largest > 0) worstG = Math.max(worstG, Math.abs(on.cpu.nonlocal[x] - on.ph.CG[x]) / Math.max(largest, 1e-2 * gradientScale));
+        if (mixLargest > 0) worstMix = Math.max(worstMix, Math.abs(on.cpu.mixing[x] - on.ph.MIX[x]) / mixLargest);
+      }
+    }
+    let theta = 0, q = 0, qc = 0, wind = 0, movedT = 0, movedQ = 0, termT = 0, termQ = 0;
+    for (let i = 0; i < nC; i++) {
+      if (parted[i]) continue;
+      for (let k = 0; k < nK; k++) {
+        const x = k * nC + i;
+        theta = Math.max(theta, Math.abs(on.state[1][x] - on.after[1][x])); q = Math.max(q, Math.abs(on.state[4][x] - on.after[4][x])); qc = Math.max(qc, Math.abs(on.state[5][x] - on.after[5][x]));
+        movedT = Math.max(movedT, Math.abs(on.state[1][x] - base.state[1][x])); movedQ = Math.max(movedQ, Math.abs(on.state[4][x] - base.state[4][x]));
+        termT = Math.max(termT, Math.abs(on.state[1][x] - base.state[1][x] - (on.after[1][x] - base.after[1][x])));
+        termQ = Math.max(termQ, Math.abs(on.state[4][x] - base.state[4][x] - (on.after[4][x] - base.after[4][x])));
+      }
+    }
+    for (let e = 0; e < nE; e++) {
+      if (parted[m.cellsOnEdge[2 * e]] || parted[m.cellsOnEdge[2 * e + 1]]) continue;
+      for (let k = 0; k < nK; k++) wind = Math.max(wind, Math.abs(on.state[2][k * nE + e] - on.after[2][k * nE + e]));
+    }
+    console.log(`${turbulence}: ${nC} random columns, ${carrying} carry the countergradient, ${apart} have depths more than 1 m apart between the engines and ${flips} more flip an interface; its coefficients differ by ${worstG.toExponential(1)} of each column's largest or a hundredth of the largest anywhere, the kinematic heat and water fluxes by ${worstHeat.toExponential(1)} and ${worstWater.toExponential(1)} of their largest, the interface coefficients by ${worstMix.toExponential(1)}; after the step θ ${theta.toExponential(1)} K, q ${q.toExponential(1)}, qc ${qc.toExponential(1)}, wind ${wind.toExponential(1)} m/s apart; the term moves θ by up to ${movedT.toFixed(3)} K and q by ${movedQ.toExponential(1)}, and the engines' moves differ by ${termT.toExponential(1)} K and ${termQ.toExponential(1)}`);
+    assert.ok(carrying > nC / 4, `${turbulence}: ${carrying} columns carry the countergradient`);
+    assert.ok(apart + flips <= nC / 50, `${turbulence}: ${apart} apart, ${flips} flip`);
+    assert.ok(worstG < 1e-3 && worstHeat < 1e-3 && worstWater < 1e-3 && worstMix < 1e-3, `${turbulence}: countergradient ${worstG}, heat ${worstHeat}, water ${worstWater}, coefficients ${worstMix}`);
+    assert.ok(termT < 1e-3 && termQ < 1e-6 && movedT > 10 * termT && movedQ > 10 * termQ, `${turbulence}: the term moves θ ${movedT} and q ${movedQ}, the engines' moves differ by ${termT} and ${termQ}`);
+    if (turbulence === 'dry') assert.ok(theta < 1e-3 && q < 1e-6 && qc < 1e-7 && wind < 1e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
+  }
 });
