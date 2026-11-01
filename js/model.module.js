@@ -399,7 +399,7 @@ export function createModel(gridOrMesh, {
       piMin = Math.min(piMin, pi[i]);
       piMax = Math.max(piMax, pi[i]);
       water += a * moistPhysics.columnWater(pi, q, i);
-      cloud += a * moistPhysics.columnWater(pi, qc, i);
+      cloud += a * (moistPhysics.columnWater(pi, qc, i) + moistPhysics.anvilPath(pi, i));
       rain += a * precipitation[i];
       const cover = seaIce.cover(i, ice[i]);
       if (ice[i] > 0) { iceArea += a * cover; iceVolume += a * cover * ice[i]; }

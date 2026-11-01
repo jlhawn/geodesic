@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { CUMULUS_FIELDS, placeCumulus } from '../js/physics/moist.module.js';
+import { CUMULUS_FIELDS, ANVIL_FIELDS, placeCumulus } from '../js/physics/moist.module.js';
 import { encodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
 
 const N = 16;
@@ -121,6 +121,15 @@ test("the page's worker places a state's cumulus cloud saved in either layout an
     await start();
     const again = await snapshot();
     for (const name of CUMULUS_FIELDS) assert.ok(zero(new Float64Array(again.arrays[name])), `${name}: a start without a state is zero again`);
+    const anvil = { anvilCover: random(K0 * C, 22), anvilIce: random(K0 * C, 23).map((x) => 1e-4 * x), options: { moist: { anvilLifetime: 3 * 3600 } } };
+    const withAnvil = await carried({ ...tail, ...anvil }, 'anvil');
+    for (const name of ANVIL_FIELDS) assert.ok(same(new Float64Array(withAnvil[name]), anvil[name]), `${name}: a state that records anvilLifetime comes back with the anvil it saved`);
+    for (const name of CUMULUS_FIELDS) assert.ok(same(new Float64Array(withAnvil[name]), tail[name]), `${name}: and the plume layers' cloud alone, the anvil being saved apart`);
+    const withoutAnvil = await carried({ ...tail, options: anvil.options }, 'noanvil');
+    for (const name of ANVIL_FIELDS) assert.ok(zero(new Float64Array(withoutAnvil[name])), `${name}: a state that records anvilLifetime but saved no anvil starts it zero`);
+    await start();
+    const plain = await snapshot();
+    for (const name of ANVIL_FIELDS) assert.equal(plain.arrays[name], undefined, `${name}: a start without the option saves none`);
   } finally {
     globalThis.fetch = fetched;
     delete globalThis.self;

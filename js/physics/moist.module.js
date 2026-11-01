@@ -20,6 +20,8 @@ export const TEST_PARCEL = { entrainment: 0.4, removal: 0.5 };
 export const DEPARTURE = { depth: 350e2, temperature: 0.2, humidity: 1e-4, reference: 'lowest' };
 export const IFS_PRECIPITATION = { conversion: 1.4e-3, liquidFactor: 1.3, critical: 5e-4, seaThreshold: 3e-4, landThreshold: 5e-4, bergeron: 268.16, ice: 250.16, speed: 10, velocityScale: 0.75 };
 export const SOURCE_EXCESS = { coefficient: 1.5, temperature: 3, humidity: 2e-3, scale: 1.2, layer: 1.5, karman: 0.4, friction: 0.1, virtual: 0.61 };
+export const ANVIL_TRACE = 1e-8;
+export const ANVIL_FIELDS = ['anvilCover', 'anvilIce'];
 
 /*
  * The convective-scale velocity of the IFS's test parcel at the lowest
@@ -437,6 +439,45 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * mixing factors, and `transportMomentum` moves the edges' normal
  * velocity by them (see there).
  *
+ * The anvil: with `anvilLifetime` τ (s; null: none) the ice of the air the deep
+ * plume detrains above `shallowTop` outlives the step that made it, as in
+ * Tiedtke (1993), who makes convective detrainment the source of a cloud
+ * with a cover and a water of its own. Each layer above `cumulusK0` keeps a
+ * cover a and a grid-mean ice q_a (`anvilCover`, `anvilIce`, not advected).
+ * Where the plume's mass flux falls upward through such a layer, its
+ * detrained flux D (the flux through the lower interface less that through
+ * the upper, kg/m²/s) carries the ice share 1 − α(T) of the condensate the
+ * plume holds at the lower interface after the rain made there, q_i,u, when
+ * that exceeds CLEAR_AIR: g Δt D q_i,u / Δp, at most the layer's vapor,
+ * leaves the vapor increment of the flux form for q_a, the layer taking L /
+ * c_p times it as temperature so that c_p T + L q_v and q_v + q_c + q_a stay
+ * exact, and the cover rises by (1 − a) g Δt D / Δp, times `anvilSpread` (1)
+ * up to 1, the area the detrained air spreads over in units of the area of
+ * the updraft it left. In the rain's pass, top
+ * down, the layers of the anvil take the ice that falls into them from the
+ * layer above, with the larger of the two covers (the ice falls within the
+ * cloud it fell from), then a and q_a decay by exp(−Δt/τ), the ice lost
+ * sublimating into the layer's vapor, and the share v Δt / (Δz + v Δt) of
+ * the ice leaves downward, implicitly in flux form as the large-scale ice
+ * does, at v = `anvilFall` (ρ q_a / a)^`iceFallExponent` (`anvilFall` null:
+ * `iceFall`, the large-scale ice's coefficient), its cover staying, so that
+ * a cloud thins as its ice falls out and falls more slowly as it does. A
+ * layer at or above `liquidTemperature` passes all its ice down, and ice
+ * under ANVIL_TRACE or cover under CUMULUS_TRACE sublimates whole. What
+ * leaves the lowest layer of the anvil joins the large-scale ice at the
+ * first layer below, which melts, sublimates or snows it as it does that
+ * ice. The cumulus arrays hold a and q_a / a in these layers, so the
+ * radiation takes the anvil as it takes the plumes' cloud below `shallowTop`
+ * (the larger of the resolved and the anvil cover, the waters added), and
+ * the anvil's ice is in the column's cloud water (`diagnostics`) without
+ * weight in the virtual temperature. An anvil lasts about 15 h from the
+ * peak of the convection that made it in trajectories of detrained air in
+ * storm-resolving E3SM over the western Pacific (Gasparini et al. 2021, JGR
+ * Atmospheres 126, e2020JD033487), and tropical cirrus systems 19 to 30 h
+ * in satellite tracking (Luo and Rossow 2004, J. Climate 17, 4541); τ is
+ * the e-folding of the cover that is left once the ice has fallen, and the
+ * reference 6 h (docs/anvil-memory.md) leaves a tenth of it after those 15 h.
+ *
  * Rain: with `iceFall` (m/s; null: none) the ice share 1 − α of each
  * layer's cloud falls at v = iceFall (ρ q_i / f)^`iceFallExponent`, ρ q_i/f
  * the in-cloud ice content in kg/m³ over the uniform distribution's cover
@@ -534,7 +575,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * downdraftEntrainment 1e-4 /m, capeClosure 'bechtold' with pcapeBoundary
  * 'positive' (with 'threshold' plumeCape 120 J/kg and plumeRelaxation 1 h),
  * plumeMomentum, condensation 'uniform', boundaryCondensation 'uniform', iceSaturation true, no
- * iceNucleation, iceFall 2.5 m/s, iceFallExponent 0.16.
+ * iceNucleation, iceFall 2.5 m/s, iceFallExponent 0.16, no anvilLifetime, anvilFall null, anvilSpread 1.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
@@ -544,7 +585,7 @@ export const MOIST_DEFAULTS = {
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', plumeDeparture: 'surface', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: true, plumeConsumption: 'all',
-  condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
+  condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16, anvilLifetime: null, anvilFall: null, anvilSpread: 1,
   liquidTemperature: LIQUID_TEMPERATURE, iceTemperature: ICE_TEMPERATURE,
 };
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
@@ -558,7 +599,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusAscent, cumulusEntrainmentHeight, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeDeparture, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
-    condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature,
+    condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, anvilLifetime, anvilFall, anvilSpread, liquidTemperature, iceTemperature,
   } = { ...MOIST_DEFAULTS, ...options };
   if (condensation !== 'uniform' && condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${condensation}`);
   if (boundaryCondensation !== 'cloudLayer' && boundaryCondensation !== 'uniform' && boundaryCondensation !== 'saturation') throw new Error(`boundaryCondensation must be 'cloudLayer', 'uniform' or 'saturation', not ${boundaryCondensation}`);
@@ -594,6 +635,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   if (plumeCapeParcel !== 'plume' && plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${plumeCapeParcel}`);
   const undilute = plumeCapeParcel === 'undilute';
   if (typeof cumulusMemory !== 'number' || !(cumulusMemory >= 0 && cumulusMemory < Infinity)) throw new Error(`cumulusMemory must be a time in seconds, 0 or more, not ${cumulusMemory}`);
+  if (anvilLifetime !== null && !(typeof anvilLifetime === 'number' && anvilLifetime > 0 && anvilLifetime < Infinity)) throw new Error(`anvilLifetime must be null or a lifetime above 0 in seconds, not ${anvilLifetime}`);
+  if (anvilFall !== null && !(typeof anvilFall === 'number' && anvilFall > 0 && anvilFall < Infinity)) throw new Error(`anvilFall must be null or a speed above 0 in m/s, not ${anvilFall}`);
+  if (!(typeof anvilSpread === 'number' && anvilSpread > 0 && anvilSpread < Infinity)) throw new Error(`anvilSpread must be a factor above 0, not ${anvilSpread}`);
   if (cumulusSource !== 'mean' && cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${cumulusSource}`);
   if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'mixingTop' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer', 'mixingTop' or 'none', not ${autoconversionFloor}`);
   if (cumulusOvershoot !== 'kinetic' && !(cumulusOvershoot >= 0 && cumulusOvershoot <= 1)) throw new Error(`cumulusOvershoot must be a share between 0 and 1 or 'kinetic', not ${cumulusOvershoot}`);
@@ -640,6 +684,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const deep = { deep: false, rooted: true, departure: -1, shallowRain: 0, shallowSnow: 0, top: -1, base: K, cape: 0, consumption: 0, inhibition: 0, start: -1, baseFlux: 0, downdraft: 0, pcape: 0, pcapeBoundary: 0, consumptionP: 0, tau: 0, speed: 0, depth: 0, boundaryWind: 0, boundaryTime: 0, excessT: 0, excessQ: 0, sourceS: 0, sourceQ: 0, sourceMass: 0, parcelDeep: false, parcelBase: 0, parcelTop: 0, conversionMargin: Infinity, typeMargin: Infinity };
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > shallowTop) cumulusK0--;
+  const anvilOn = anvilLifetime !== null, anvilLayers = anvilOn ? cumulusK0 : 0;
+  const anvilCoverBuffer = shared('anvilCover', anvilLayers * C), anvilIceBuffer = shared('anvilIce', anvilLayers * C);
+  const anvilCover = new Float64Array(anvilCoverBuffer), anvilIce = new Float64Array(anvilIceBuffer), plumeIce = new Float64Array(K + 1);
   const cumulus = { top: -1, source: K - 1, inhibition: 0, lclPressure: 0, velocity: 0, baseFlux: 0, snow: 0 };
   const rememberedCover = new Float64Array(K), rememberedPath = new Float64Array(K);
   const falling = { evaporated: 0, convective: 0, frozen: 0, ice: 0, fog: 0, moved: false };
@@ -721,13 +768,47 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     return Math.max(share, iced);
   }
 
+  // Returns the ice (kg/m²) that leaves the lowest anvil layer.
+  function anvilColumn(i, pi, theta, q, dt) {
+    const decay = Math.exp(-dt / anvilLifetime);
+    let fall = 0, fallCover = 0;
+    for (let k = 0; k < cumulusK0; k++) {
+      const idx = k * C + i, mass = pi[i] * dSigma[k] / g, temperature = theta[idx] * exnerLayer[idx];
+      let ice = anvilIce[idx], cover = anvilCover[idx];
+      const arriving = fall / mass, arrivingCover = fallCover;
+      fall = 0; fallCover = 0;
+      if (!(ice > 0 || arriving > 0)) { anvilIce[idx] = 0; anvilCover[idx] = 0; continue; }
+      falling.moved = true;
+      if (temperature >= liquidTemperature) {
+        fall = (ice + arriving) * mass; fallCover = Math.max(cover, arrivingCover);
+        anvilIce[idx] = 0; anvilCover[idx] = 0;
+        continue;
+      }
+      let sublimated = ice * (1 - decay);
+      ice += arriving - sublimated; cover = Math.max(cover * decay, arrivingCover);
+      if (iceFall !== null && ice > 0 && cover > 0) {
+        const speed = (anvilFall ?? iceFall) * Math.pow(pi[i] * sigmaMid[k] / (R * temperature) * ice / cover, iceFallExponent);
+        const courant = speed * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]), leaving = courant / (1 + courant);
+        fall = leaving * ice * mass; fallCover = cover;
+        ice -= leaving * ice;
+      }
+      if (!(ice >= ANVIL_TRACE && cover >= CUMULUS_TRACE)) { sublimated += ice; ice = 0; cover = 0; }
+      q[idx] += sublimated;
+      theta[idx] -= latentHeat * sublimated / (cp * exnerLayer[idx]);
+      anvilIce[idx] = ice; anvilCover[idx] = cover;
+    }
+    return fall;
+  }
+
   function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0, frozenStream = null) {
     let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0;
     falling.moved = false;
+    const anvilFall = anvilOn ? anvilColumn(i, pi, theta, q, dt) : 0;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : autoconversionFloor === 'mixingTop' && (boundaryTop ?? boundaryDepth) ? (boundaryTop ?? boundaryDepth)[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
+      if (k === cumulusK0) descending += anvilFall;
       if (rain > 0 && (evaporationInCloud || !(qc[idx] > CLEAR_AIR)) && rainEvaporation > 0) {
         const ex = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
         const temperature = theta[idx] * ex;
@@ -1199,6 +1280,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     let s = sourceS, w = sourceQ, w2 = 0, below = 0, inhibition = 0, cloudy = false, started = false, top = -1, guess = 0, cape = 0, base = -1, pcape = 0, baseSaturation = 0;
     plumeS[source] = s; plumeQ[source] = w;
     plumeSpeed.fill(0); plumeCounted.fill(0);
+    if (anvilOn) plumeIce.fill(0);
     for (let k = source - 1; k >= 0; k--) {
       const lower = upperInterface(i, k + 1), upper = k > 0 ? upperInterface(i, k) : Infinity, depth = upper - lower;
       const mixes = pi[i] * levels[k + 1] <= lcl.pressure;
@@ -1255,6 +1337,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
           if (mixedPlume && plume.ice > 0) { plumeFrozen[k] = fallen * plume.ice / plume.liquid; s += FUSION_HEAT * plumeFrozen[k]; }
         }
         plumeCarried[k] = plume.liquid - plumeRain[k];
+        if (anvilOn) plumeIce[k] = plumeCarried[k] * (1 - liquidFraction(plume.T, liquidTemperature, iceTemperature));
       } else if (mixes) {
         plumeState(s, w, upper, pi[i] * levels[k], guess);
         const excess = plume.liquid - plumeRainThreshold;
@@ -1263,6 +1346,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
           if (mixedPlume && plume.ice > 0) { plumeFrozen[k] = fallen * plume.ice / plume.liquid; s += FUSION_HEAT * plumeFrozen[k]; }
         }
         plumeCarried[k] = plume.liquid - plumeRain[k];
+        if (anvilOn) plumeIce[k] = plumeCarried[k] * (1 - liquidFraction(plume.T, liquidTemperature, iceTemperature));
       }
       plumeS[k] = s; plumeQ[k] = w;
     }
@@ -1416,6 +1500,18 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       if (mixedPlume) convectiveFrozen[k] *= baseFlux * dt;
       fallen += convectiveFall[k];
     }
+    if (anvilOn) {
+      for (let k = top; k < cumulusK0; k++) {
+        const detrained = baseFlux * (cumulusFlux[k + 1] - cumulusFlux[k]), supply = plumeIce[k + 1];
+        if (!(detrained > 0 && supply > CLEAR_AIR)) continue;
+        const idx = k * C + i, rate = detrained * g * dt / dp[k], added = Math.min(rate * supply, Math.max(0, q[idx]));
+        if (!(added > 0)) continue;
+        anvilCover[idx] += (1 - anvilCover[idx]) * Math.min(1, rate * anvilSpread);
+        anvilIce[idx] += added;
+        q[idx] -= added;
+        theta[idx] += latentHeat * added / (cp * exnerLayer[idx]);
+      }
+    }
     for (let k = bottom - 1; k >= 0; k--) convectiveReserve[k] = Math.max(0, convectiveReserve[k + 1] - convectiveFall[k + 1]);
     for (let k = Math.max(top, cumulusK0); k < source; k++) {
       deepCover[k] = 0; deepWater[k] = plumeLiquid[k];
@@ -1520,6 +1616,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     }
   }
 
+  function anvilCloud(i) {
+    for (let k = 0; k < cumulusK0; k++) {
+      const idx = k * C + i, cover = anvilCover[idx];
+      cumulusCover[idx] = cover;
+      cumulusWater[idx] = cover > 0 ? anvilIce[idx] / cover : 0;
+    }
+  }
+
   let iceConcentration = null;
   function useSeaIce(concentration) { iceConcentration = concentration; }
 
@@ -1551,6 +1655,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       fillColumn(i, pi, q);
       fillColumn(i, pi, qc);
       if (bechtold) saveSubcloud(i, theta, q, qc);
+      if (anvilOn) anvilCloud(i);
       precipitation[i] += rained + convected;
       convectivePrecipitation[i] += convected;
       largeScalePrecipitation[i] += rained;
@@ -1583,14 +1688,20 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     return water;
   }
 
+  function anvilPath(pi, i) {
+    let water = 0;
+    for (let k = 0; k < anvilLayers; k++) water += pi[i] * dSigma[k] / g * anvilIce[k * C + i];
+    return water;
+  }
+
   const settings = { uniform, iceSaturation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, liquidTemperature, iceTemperature };
   return {
     condensation: settings, adjust, useSeaIce, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
     plumeAir(energy, water, height, pressure, guess) { plumeState(energy, water, height, pressure, guess); return { ...plume }; },
     precipitation, rain, convectivePrecipitation, largeScalePrecipitation, fogPrecipitation, convectiveRain, largeScaleRain, fogRain, convectiveSnow, budget, latentHeat, trace, falling,
-    cumulus, cumulusCover, cumulusWater, cumulusCloudPath, cumulusBaseFlux, cumulusTop, cumulusOvershootShare, cumulusFlux, deep, subcloudVirtual, subcloudLayers: KL, saveSubcloud, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, convectiveFrozen, convectiveMelted, plumeFrozen, plumeCarried, plumeInterfaceT, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained, plumeDetrained, envHumidity, plumeCounted, resolutionScale,
+    cumulus, cumulusCover, cumulusWater, cumulusCloudPath, anvilCover, anvilIce, anvilPath, cumulusBaseFlux, cumulusTop, cumulusOvershootShare, cumulusFlux, deep, subcloudVirtual, subcloudLayers: KL, saveSubcloud, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, convectiveFrozen, convectiveMelted, plumeFrozen, plumeCarried, plumeInterfaceT, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained, plumeDetrained, envHumidity, plumeCounted, resolutionScale,
     momentum: { up: momentumUp, upKeep: momentumUpKeep, down: momentumDown, downKeep: momentumDownKeep, source: momentumSource },
-    shared: { momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, fogPrecipitation: fogBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer, subcloudVirtual: subcloudBuffer },
+    shared: { momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, fogPrecipitation: fogBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, anvilCover: anvilCoverBuffer, anvilIce: anvilIceBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer, subcloudVirtual: subcloudBuffer },
   };
 }
 
@@ -1613,4 +1724,22 @@ export function placeCumulus(model, saved) {
     else if (values.length === plume && target.length === whole) target.set(values, K0 * C);
     else if (values.length === whole && target.length === plume) target.set(values.subarray(K0 * C));
   }
+}
+
+/*
+ * The anvil's cover and ice are the layers above `cumulusK0`, K0 × C, on both engines; placeAnvil puts a
+ * saved run's fields into the model's arrays, and leaves an array zero where the field was saved
+ * with another number of values or not at all. A CPU model's cumulus arrays take the anvil in
+ * their upper layers, where the radiation reads it.
+ */
+export function placeAnvil(model, saved) {
+  for (const name of ANVIL_FIELDS) {
+    const target = model.moist[name], values = saved ? saved[name] : null;
+    if (!target) continue;
+    target.fill(0);
+    if (values && values.length === target.length) target.set(values);
+  }
+  const { anvilCover, anvilIce, cumulusCover, cumulusWater } = model.moist;
+  if (!anvilCover || !anvilCover.length || cumulusCover.length !== model.core.K * model.mesh.nCells) return;
+  for (let x = 0; x < anvilCover.length; x++) { cumulusCover[x] = anvilCover[x]; cumulusWater[x] = anvilCover[x] > 0 ? anvilIce[x] / anvilCover[x] : 0; }
 }

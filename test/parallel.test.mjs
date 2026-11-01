@@ -47,6 +47,22 @@ test('with penetrating sunlight the worker-thread step reproduces the single-thr
   }
 });
 
+test('with the anvil the worker-thread step reproduces the single-thread step bit for bit, the anvil\'s cover and ice and the cloud the radiation reads from it included', async () => {
+  const options = { moist: { anvilLifetime: 3 * 3600, anvilSpread: 2 } };
+  const serial = createModel(new Grid(16), options);
+  const parallel = await createParallelModel(new Grid(16), options, 3);
+  const init = initializeState(serial, {});
+  for (let a = 0; a < init.length; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
+  try {
+    for (let n = 0; n < 8; n++) { serial.step(1350); parallel.step(1350); }
+    assert.ok(serial.moist.anvilIce.some((x) => x > 0), 'the anvil formed');
+    for (let a = 0; a < serial.state.length; a++) assert.deepEqual(parallel.state[a], serial.state[a], `array ${a}`);
+    for (const name of ['anvilCover', 'anvilIce', 'cumulusCover', 'cumulusWater']) assert.deepEqual(parallel.moist[name], serial.moist[name], name);
+  } finally {
+    await parallel.close();
+  }
+});
+
 test("with aerosol 'mac' the worker-thread step reproduces the single-thread step bit for bit across a change of the model day", async () => {
   const { bytes } = syntheticAerosol();
   const options = { radiation: { aerosol: 'mac', aerosolData: bytes } };

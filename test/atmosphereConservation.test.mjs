@@ -176,6 +176,39 @@ test("in double precision the CPU's adjustment keeps the energy of the air and i
   assert.ok(largest(rows) < 1e-6, `adjust: ${largest(rows)} W/m²`);
 });
 
+test("in double precision the CPU's adjustment keeps the energy of the air and the water of its vapor, cloud, anvil and rain while the anvil forms, falls and sublimates, over a spun-up slab", () => {
+  const model = createModel(new Grid(N), { ...OPTIONS, moist: { anvilLifetime: 3 * 3600 } });
+  initializeState(model).forEach((values, s) => model.state[s].set(values));
+  for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
+  const { K, C, dSigma, g } = model.core.diagnostics, { phases, moist, mesh } = model, K0 = moist.cumulusK0, [pi, , , , q, qc] = model.state, books = bookkeeper(model);
+  assert.ok(moist.anvilIce.length === K0 * C && K0 < K);
+  const water = () => {
+    let sum = 0, anvil = 0;
+    for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
+      const mass = mesh.areaCell[i] * pi[i] * dSigma[k] / g;
+      sum += mass * (q[k * C + i] + qc[k * C + i] + (k < K0 ? moist.anvilIce[k * C + i] : 0));
+      if (k < K0) anvil += mass * moist.anvilIce[k * C + i];
+    }
+    return { sum, anvil };
+  };
+  const rows = [], waterRows = [], active = [];
+  for (let n = 0; n < MEASURED_STEPS; n++) {
+    model.step(DT);
+    const a = books(model.state), before = water(), lost = moist.budget.lost;
+    phases.adjust(0, C, DT);
+    const b = books(model.state), after = water();
+    let rained = 0;
+    for (let i = 0; i < C; i++) rained += mesh.areaCell[i] * moist.rain[i];
+    rows.push((b.H + b.Lq + b.S - a.H - a.Lq - a.S) / DT);
+    waterRows.push((after.sum + rained - moist.budget.lost + lost - before.sum) / before.sum);
+    active.push([before.anvil, after.anvil]);
+  }
+  console.log(`CPU over a slab with the anvil: adjust ${show(mean(rows))} W/m² on average, ${show(largest(rows))} at most; the column water changes by ${show(largest(waterRows))} of itself at most; the anvil holds ${active.map(([x, y]) => `${x.toExponential(2)}→${y.toExponential(2)}`).join(', ')} kg`);
+  assert.ok(active.every(([x, y]) => x > 0 && y > 0 && x !== y), 'the anvil is there and the adjustment changes it');
+  assert.ok(largest(rows) < 1e-6, `adjust: ${largest(rows)} W/m²`);
+  assert.ok(largest(waterRows) < 1e-12, `water: ${largest(waterRows)} of itself`);
+});
+
 /*
  * The energy tendency (W/m²) of one evaluation of the dynamics, from the
  * tendencies of π, θ and u in `out`: Σ c_p Π (π dθ/dt + (1 + κ) θ dπ/dt)
