@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createSeaIce, openWaterAlbedo, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
+import { createSeaIce, openWaterAlbedo, iceExchangeOptions, ICE_EXCHANGE, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 
 const model = createModel(new Grid(16));
@@ -287,4 +287,125 @@ test('with a transmission, open water keeps the passing share of its absorbed su
   const plain = createSeaIce(model.mesh, { heatCapacity: capacity }), alone = new Float64Array([water]);
   plain.update(alone, new Float64Array(1), flux, 0, dt, 0, solar);
   assert.equal(alone[0], water + dt * flux[0] / capacity[0], 'without a transmission all of the sunlight stays in the mixed layer');
+});
+
+const TURBULENT = (extra = {}) => ({ iceExchange: { mode: 'turbulent', ...extra } });
+const volumeOf = (sea, ice) => sea.concentration[0] * ice[0];
+
+test('iceExchange is the mode name or an object of the exchange constants, CICE\'s by default', () => {
+  assert.equal(iceExchangeOptions().mode, 'instant');
+  assert.equal(iceExchangeOptions('turbulent').turbulent, true);
+  assert.deepEqual(Object.fromEntries(Object.keys(ICE_EXCHANGE).map((key) => [key, iceExchangeOptions('turbulent')[key]])), { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66 });
+  assert.ok(Math.abs(iceExchangeOptions('turbulent').lateralRate - 1.6e-6 * Math.PI / (0.66 * 300)) < 1e-20);
+  assert.equal(iceExchangeOptions({ frictionMinimum: 5e-3 }).mode, 'turbulent', 'an object of constants without a mode is the turbulent exchange');
+  assert.deepEqual(iceExchangeOptions(iceExchangeOptions({ floeDiameter: 100 })).floeDiameter, 100, 'a resolved set resolves to itself');
+  for (const bad of ['gradual', { mode: 'turbulent', speed: 1 }, { heatTransfer: 0 }, { frictionMinimum: -1 }, null, 3]) assert.throws(() => iceExchangeOptions(bad), /iceExchange/, JSON.stringify(bad));
+  assert.equal(createSeaIce(model.mesh).turbulent, false);
+  assert.equal(createSeaIce(model.mesh, TURBULENT()).turbulent, true);
+});
+
+test('under full ice the water gives the base ρ c_p c_h u* (T_w − T_f) as turbulence carries it, no more than the layer holds, and the ice and the water trade exactly that heat', () => {
+  const rise = 0.4, conductance = 80, dt = 900;
+  const run = (c, heat) => {
+    const sea = createSeaIce(model.mesh, TURBULENT({ lateralMelt: 0 })), surfaceT = new Float64Array([FREEZING_POINT]), ice = new Float64Array([1]), flux = new Float64Array(1);
+    sea.concentration[0] = 1; sea.conductance[0] = c; sea.waterHeat[0] = heat;
+    const before = energyOf(sea, surfaceT, ice) + sea.waterHeat[0];
+    sea.update(surfaceT, ice, flux, 0, dt);
+    return { sea, volume: volumeOf(sea, ice), water: sea.waterHeat[0], energy: energyOf(sea, surfaceT, ice) + sea.waterHeat[0] - before };
+  };
+  const stored = sea0().slabHeatCapacity * rise;
+  function sea0() { return createSeaIce(model.mesh); }
+  const free = run(conductance, stored);
+  const taken = conductance * rise * dt;
+  assert.ok(Math.abs(stored - free.water - taken) < 1e-6, `the water gave ${stored - free.water} J/m², McPhee's flux times the step is ${taken}`);
+  assert.ok(Math.abs((1 - free.volume) * free.sea.latent - taken) < 1e-3, `the ice melted ${(1 - free.volume) * free.sea.latent} J/m² of its base`);
+  assert.ok(Math.abs(free.energy) < 1e-9 * free.sea.slabHeatCapacity, `energy moved by ${free.energy} J/m²`);
+  const limited = run(1e5, stored);
+  assert.ok(limited.water < 1e-6 && Math.abs((1 - limited.volume) * limited.sea.latent - stored) < 1e-3, `a conductance of 1e5 empties the layer into ${(1 - limited.volume) * limited.sea.latent} J/m² of ice, of ${stored} held`);
+  assert.ok(Math.abs(limited.energy) < 1e-9 * limited.sea.slabHeatCapacity);
+  const cold = run(conductance, 0);
+  assert.equal(cold.volume, 1, 'water at the freezing point melts nothing');
+  const weak = run(conductance / 4, stored);
+  assert.ok(Math.abs((1 - weak.volume) / (1 - free.volume) - 0.25) < 1e-9, 'the flux is proportional to the conductance');
+});
+
+test('the leads\' net gain, sunlight included, warms the water under the ice and melts none of it; a net loss takes that heat first and freezes new ice only for the rest', () => {
+  const dt = 900, make = (mode) => {
+    const sea = createSeaIce(model.mesh, mode === 'turbulent' ? TURBULENT({ lateralMelt: 0 }) : {}), surfaceT = new Float64Array([FREEZING_POINT]), ice = new Float64Array([1]);
+    sea.concentration[0] = 0.5; sea.conductance[0] = 0;
+    return { sea, surfaceT, ice };
+  };
+  const step = (r, w, contrast = 0, heat = 0) => { r.sea.waterHeat[0] = heat; r.sea.update(r.surfaceT, r.ice, new Float64Array([w]), 0, dt, contrast); return r; };
+  const gain = 0.5 * 100 * dt;
+  const warm = step(make('turbulent'), 100), instant = step(make('instant'), 100);
+  assert.ok(Math.abs(warm.sea.waterHeat[0] - gain) < 1e-9 && Math.abs(volumeOf(warm.sea, warm.ice) - 0.5) < 1e-15, `the water gained ${warm.sea.waterHeat[0]} of ${gain} J/m² and the ice kept ${volumeOf(warm.sea, warm.ice)} m`);
+  assert.ok(volumeOf(instant.sea, instant.ice) < 0.5 - 0.99 * gain / instant.sea.latent, 'the instant exchange melts ice with the same heat');
+  const sun = step(make('turbulent'), 100, 150);
+  assert.ok(Math.abs(sun.sea.waterHeat[0] - 0.5 * (100 + 0.5 * 150) * dt) < 1e-9, 'sunlight absorbed in the leads is part of the gain');
+  const loss = 0.5 * 100 * dt;
+  const covered = step(make('turbulent'), -100, 0, 1.6 * loss);
+  assert.ok(Math.abs(covered.sea.waterHeat[0] - 0.6 * loss) < 1e-9 && covered.sea.budget.leadFrozen === 0, 'a loss the water\'s heat covers freezes nothing');
+  const short = step(make('turbulent'), -100, 0, 0.4 * loss);
+  assert.ok(short.sea.waterHeat[0] < 1e-9, 'a loss beyond it leaves the water at freezing');
+  assert.ok(Math.abs(short.sea.budget.leadFrozen / model.mesh.areaCell[0] * short.sea.latent - 0.6 * loss) < 1e-6, `new ice in the leads took ${short.sea.budget.leadFrozen / model.mesh.areaCell[0] * short.sea.latent} J/m² of the ${0.6 * loss} the water could not give`);
+});
+
+test('floes melt at their sides as Maykut and Perovich (1987) measured: w_lat = m1 (T_w − T_f)^m2 over the floe\'s perimeter, area and volume in proportion, the thickness kept, the heat from the water', () => {
+  const dt = 900, ice0 = 1, A0 = 0.8, run = (rise, options = {}) => {
+    const sea = createSeaIce(model.mesh, TURBULENT(options)), surfaceT = new Float64Array([FREEZING_POINT]), ice = new Float64Array([ice0]);
+    sea.concentration[0] = A0; sea.conductance[0] = 0; sea.waterHeat[0] = sea.slabHeatCapacity * rise;
+    const stored = sea.waterHeat[0];
+    sea.update(surfaceT, ice, new Float64Array(1), 0, dt);
+    return { sea, area: sea.concentration[0], thickness: ice[0], taken: stored - sea.waterHeat[0], r: 1 - sea.concentration[0] / A0 };
+  };
+  const two = run(2), one = run(1);
+  const expected = 1.6e-6 * 2 ** 1.36 * Math.PI / (0.66 * 300) * dt;
+  assert.ok(Math.abs(two.r - expected) < 1e-12, `the cover lost ${two.r} of itself, w_lat π/(α D) dt is ${expected}`);
+  assert.ok(Math.abs(two.thickness - ice0) < 1e-12, `the floes kept their thickness: ${two.thickness}`);
+  assert.ok(Math.abs(two.taken - two.sea.latent * expected * A0 * ice0) < 1e-3, `the water gave ${two.taken} J/m² for ${two.sea.latent * expected * A0 * ice0}`);
+  assert.ok(Math.abs(two.r / one.r - 2 ** 1.36) < 1e-9, `doubling T_w − T_f multiplies the loss by ${two.r / one.r}, 2^1.36 is ${2 ** 1.36}`);
+  assert.equal(run(2, { lateralMelt: 0 }).r, 0, 'a zero coefficient melts nothing at the sides');
+  assert.ok(Math.abs(run(2, { floeDiameter: 150 }).r / two.r - 2) < 1e-9, 'smaller floes melt faster by their perimeter');
+  const big = run(1e4);
+  assert.ok(big.taken <= big.sea.slabHeatCapacity * 1e4 + 1e-6 && big.r <= 1, 'a layer\'s lateral melt cannot exceed the floe or the heat held');
+});
+
+test('with the turbulent exchange the ice and the water under it conserve energy exactly through partial melt, lead freezing, thaw and refreezing, and the ice outlasts the instant exchange\'s', () => {
+  const run = (options, conductance) => {
+    const sea = createSeaIce(model.mesh, options), surfaceT = new Float64Array([FREEZING_POINT - 5]), ice = new Float64Array([0.6]), flux = new Float64Array(1);
+    sea.concentration[0] = 0.5; sea.snow[0] = 5; sea.conductance[0] = conductance;
+    const dt = 900, day = 96, scale = sea.slabHeatCapacity * 2, total = () => energyOf(sea, surfaceT, ice) + (ice[0] > 0 ? sea.waterHeat[0] : 0);
+    let energy = total(), thawed = null, warm = 0, lateral = 0;
+    for (let n = 0; n < 200 * day; n++) {
+      const phase = n < 40 * day ? 'winter' : n < 120 * day ? 'summer' : 'autumn';
+      flux[0] = phase === 'summer' ? 160 : phase === 'winter' ? -120 : -200;
+      if (phase === 'winter' && n % day === 0 && sea.deposit(0, 1.5, MELTING_POINT - 10, ice, surfaceT)) energy -= sea.latentHeatFusion * 1.5;
+      sea.update(surfaceT, ice, flux, 0, dt, phase === 'summer' ? 120 : 0);
+      energy += dt * flux[0];
+      assert.ok(Math.abs(total() - energy) < 1e-9 * scale, `step ${n} (${phase}): energy ${total()} vs ${energy}`);
+      if (ice[0] > 0) warm = Math.max(warm, sea.waterHeat[0] / sea.slabHeatCapacity);
+      else if (thawed === null) thawed = n / day;
+      lateral = sea.budget.lateralMelted;
+    }
+    return { thawed, warm, lateral, sea };
+  };
+  const instant = run({}, 0), turbulent = run(TURBULENT(), 60);
+  console.log(`a half-covered cell through a summer: the instant exchange thaws it on day ${instant.thawed?.toFixed(1)}, the turbulent exchange on day ${turbulent.thawed?.toFixed(1)}, the water under the ice warming to ${turbulent.warm.toFixed(2)} K above freezing`);
+  assert.ok(turbulent.warm > 0.05, `the water under the ice reached ${turbulent.warm} K above freezing`);
+  assert.ok(turbulent.thawed === null || instant.thawed === null || turbulent.thawed > instant.thawed, `the turbulent exchange thaws on day ${turbulent.thawed} against ${instant.thawed}`);
+  assert.ok(turbulent.sea.budget.leadFrozen > 0 && turbulent.lateral > 0);
+});
+
+test('ice that melts away leaves the water with the heat it held above freezing, and ice that forms in open water leaves it at freezing', () => {
+  const sea = createSeaIce(model.mesh, TURBULENT({ lateralMelt: 0 })), dt = 900, flux = new Float64Array([300]);
+  const surfaceT = new Float64Array([MELTING_POINT]), ice = new Float64Array([0.0003]);
+  sea.concentration[0] = 1; sea.waterHeat[0] = 3e6; sea.conductance[0] = 20;
+  const before = energyOf(sea, surfaceT, ice) + sea.waterHeat[0];
+  sea.update(surfaceT, ice, flux, 0, dt);
+  assert.equal(ice[0], 0, 'the thin ice melted away');
+  assert.ok(Math.abs(sea.slabHeatCapacity * (surfaceT[0] - FREEZING_POINT) - (before + dt * flux[0])) < 1e-9 * sea.slabHeatCapacity, `the open water holds ${sea.slabHeatCapacity * (surfaceT[0] - FREEZING_POINT)} J/m² above freezing, ${before + dt * flux[0]} came in`);
+  const open = new Float64Array([FREEZING_POINT + 0.01]), none = new Float64Array([0]);
+  sea.waterHeat[0] = 7e5;
+  for (let n = 0; n < 400 && none[0] === 0; n++) sea.update(open, none, new Float64Array([-250]), 0, dt);
+  assert.ok(none[0] > 0 && sea.waterHeat[0] === 0 && open[0] === FREEZING_POINT, `ice formed at ${none[0]} m with the water at ${sea.waterHeat[0]} J/m²`);
 });

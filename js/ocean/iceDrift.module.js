@@ -94,7 +94,11 @@ import { FREEZING_POINT, MELTING_POINT, MINIMUM_CONCENTRATION } from '../physics
  * a cell at that temperature for the call, where it holds every other iced
  * cell at the freezing point, so that the water's heat melts the arriving ice
  * through the ocean flux. Ice edges are open only where both cells are open
- * sea: not land, not an ice-shelf cavity.
+ * sea: not land, not an ice-shelf cavity. With iceExchange 'turbulent' (ice.module.js)
+ * the water under the ice keeps its heat above freezing in the sea ice's `waterHeat`
+ * for the ocean to read back: ice that reaches an open cell sets it from that
+ * cell's water temperature, in place of `waterT`, and ice that leaves a cell melts
+ * away in the water's temperature, not the freezing point.
  */
 export const ICE_RHEOLOGIES = ['frozen', 'free', 'cavitating'], ICE_HEMISPHERES = ['both', 'south', 'north'];
 export const COUPLED_ICE_DRIFT = { rheology: 'cavitating', hemisphere: 'both' };
@@ -266,7 +270,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
   }
 
   function carry({ surfaceT, ice: thickness, concentration }, dt) {
-    const { skinHeatCapacity, freshSnowAlbedo, snow, snowAlbedo, latent, latentHeatFusion, meltAway } = ice;
+    const { skinHeatCapacity, freshSnowAlbedo, snow, snowAlbedo, latent, latentHeatFusion, meltAway, waterTemperature, holdWater } = ice;
     let courant = 0;
     for (let n = 0; n < nAct; n++) { const e = act[n]; courant = Math.max(courant, Math.abs(velocity[e]) * dt / dcEdge[e]); }
     count.courant = courant; count.removed = 0;
@@ -318,10 +322,10 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
       if (A1 > o.maximumConcentration) { count.closedArea += (A1 - o.maximumConcentration) * areaCell[i]; count.closures++; A1 = o.maximumConcentration; }
       if (A1 < removal.concentration || V1 < removal.volume || (A1 < MINIMUM_CONCENTRATION && remnant(A1, V1, S1, E1))) {
         count.removed += areaCell[i] * V1;
-        meltAway(surfaceT, thickness, i, E1 - latent * V1 - latentHeatFusion * S1, areaCell[i] * V1, areaCell[i] * S1, Astart[i] > 0 ? FREEZING_POINT : surfaceT[i]);
+        meltAway(surfaceT, thickness, i, E1 - latent * V1 - latentHeatFusion * S1, areaCell[i] * V1, areaCell[i] * S1, Astart[i] > 0 ? waterTemperature(i) : surfaceT[i]);
         continue;
       }
-      if (Astart[i] === 0) { waterT[i] = surfaceT[i]; arrived[i] = 1; }
+      if (Astart[i] === 0) { waterT[i] = surfaceT[i]; arrived[i] = 1; holdWater(i, surfaceT[i]); }
       thickness[i] = V1 / A1; concentration[i] = A1; snow[i] = S1 / A1; surfaceT[i] = FREEZING_POINT + E1 / (A1 * skinHeatCapacity); snowAlbedo[i] = S1 > 0 ? Math.min(1, Sa1 / S1) : freshSnowAlbedo;
       count.thickest = Math.max(count.thickest, thickness[i]);
     }
