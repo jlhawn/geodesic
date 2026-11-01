@@ -198,6 +198,13 @@ fields are 2 × 29 × C floats of the physics buffer, 38 MB at N = 128 on bl48.
 - `test/gpuModel.test.mjs`: two parity cases at N = 16, cam26 and bl48, cell by
   cell outside the columns where a discrete decision parted (cover rms
   2.8e-4 and 1.8e-4 of itself, ice 6.9e-4 and 2.1e-4, OLR within 3.5e-2 W/m²).
+- `scripts/compareEngines.mjs` on the 6 h probe's day-367 state (N = 64, bl48),
+  one and two steps: the GPU's anvil cover and ice differ from the CPU's by
+  1.1e-3 and 2.7e-3 (step 1) and 5.1e-4 and 1.0e-3 (step 2) of themselves in
+  rms, and fewer than 6e-5 of the cells part by more than the tolerance; the
+  rows it flags besides (the lake region unmapped, the large-scale rain, the
+  sea ice concentration, the discharge, the mixed-layer top, the stratiform
+  share) are not the anvil's.
 - `test/anvilGpu.test.mjs`: the PH layout, the constants, the anchors, the
   page's cloud totals, and the kernels' text: with the option off the
   adjustment, radiation, physics and layered kernels hash as they did before
