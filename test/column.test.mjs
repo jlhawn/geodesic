@@ -4,7 +4,7 @@ import {
   HYBRID_LAYERS, labelBoundaries, columnScratch, interfacesOf, layerDensities, isopycnalInterfaces, targetInterfaces, remapColumn, remapMeans, solveColumn,
   sunlightShares, mixedLayerDepth, convectiveAdjustment, boundaryLayer, interiorMixing, mixColumn, H_MIN, GRAVITY,
 } from '../js/ocean/column.module.js';
-import { seawaterDensity, labelTemperature, SEAWATER } from '../js/ocean/seawater.module.js';
+import { seawaterDensity, labelTemperature, salinityForDensity, SEAWATER } from '../js/ocean/seawater.module.js';
 import { transmitted } from '../js/ocean/layered.module.js';
 import { ekmanSpiral } from '../explain/ekmanTheory.module.js';
 import { pwpColumn } from './helpers/pwp.mjs';
@@ -414,4 +414,25 @@ test('a steady stress on a column of constant viscosity spins up the Ekman spira
   }
   const [u0, v0] = spiral.at(-0.5 * dz);
   close(Math.atan2(v[0], u[0]) * 180 / Math.PI, Math.atan2(v0, u0) * 180 / Math.PI, 1, 'the surface angle');
+});
+
+test('with thermobaricStability, cold fresh water over warm salty water whose surface densities are 0.005 apart convects and mixes 2000 m down, and without it stays apart', () => {
+  const K = 2, h = Float64Array.of(2000, 500), cold = 273.15, warm = 275.15, salty = 34.9, fresh = salinityForDensity(seawaterDensity(warm, salty) - 0.005, cold);
+  for (const thermobaricStability of [false, true]) {
+    const T = Float64Array.of(cold, warm), S = Float64Array.of(fresh, salty), scratch = columnScratch(K);
+    const { released } = convectiveAdjustment(h, T, S, K, scratch, { thermobaricStability });
+    if (!thermobaricStability) {
+      assert.deepEqual([T[0], T[1], S[0], S[1], released], [cold, warm, fresh, salty, 0]);
+    } else {
+      assert.ok(Math.abs(T[0] - (2000 * cold + 500 * warm) / 2500) < 1e-9 && T[1] === T[0] && S[1] === S[0], `mixed to ${T[0]} and ${T[1]}`);
+      assert.ok(released > 0, `released ${released} J/m2`);
+    }
+    const kappa = new Float64Array(K), nu = new Float64Array(K), Ts = Float64Array.of(cold, warm), Ss = Float64Array.of(fresh, salty);
+    interiorMixing({ h, T: Ts, S: Ss, K, thermobaricStability, convectiveDiffusivity: 0.1 }, kappa, nu, columnScratch(K));
+    if (thermobaricStability) assert.equal(kappa[0], 0.1);
+    else assert.ok(kappa[0] < 1e-3, `interior diffusivity ${kappa[0]}`);
+  }
+  const T = Float64Array.of(cold, warm), S = Float64Array.of(fresh, salty), scratch = columnScratch(K);
+  convectiveAdjustment(Float64Array.of(50, 500), T, S, K, scratch, { thermobaricStability: true });
+  assert.deepEqual([T[0], T[1]], [cold, warm], 'at 50 m the same water is stable either way');
 });

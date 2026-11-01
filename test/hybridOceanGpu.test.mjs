@@ -27,6 +27,7 @@ const FIXED_ENERGY = { ...HYBRID, mstarScheme: 'fixed', langmuirScheme: 'factor'
 const RH18_ENERGY = { ...HYBRID, mstarScheme: 'rh18' };
 const RH18_ENERGY_ALL = { ...RH18_ENERGY, langmuirScheme: 'rescale', mixedLayerRestratification: { coefficient: 50 } };
 const THERMOBARIC = { ...HYBRID, thermobaric: true };
+const NEUTRAL = { ...THERMOBARIC, thermobaricStability: true, eddySlope: 'neutral' };
 const N = 16, DT = 1350;
 
 function stats(cpu, gpu, mask = null) {
@@ -140,6 +141,7 @@ test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'w
 test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
 test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));
 test(`${TRACKING}, with thermobaric`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(THERMOBARIC));
+test(`${TRACKING}, with thermobaric, thermobaricStability and eddySlope 'neutral'`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(NEUTRAL));
 
 /*
  * What each phase of the GPU hybrid step changes of the stores' heat

@@ -178,6 +178,14 @@ export function inertialStepLimit(mesh) {
 }
 
 export const EDDY_WAVE_SPEED = 2, EDDY_BOTTOM_TAPER = 100, EDDY_SLACK = 1e-6;
+/*
+ * eddySlope 'neutral' flattens the neutral surfaces rather than the layer
+ * interfaces: each interface's depth difference across an edge loses the
+ * difference of in situ density along it, both columns' water at the
+ * interface's mean depth, over the vertical gradient there, a shift held
+ * within NEUTRAL_SLOPE_LIMIT of the edge's length.
+ */
+export const EDDY_SLOPES = ['interfaces', 'neutral'], NEUTRAL_SLOPE_LIMIT = 0.01;
 export function deformationRadii(mesh, waveSpeed = EDDY_WAVE_SPEED) {
   const { nEdges: E, latEdge, radius, omega } = mesh;
   const out = new Float64Array(E);
@@ -467,12 +475,12 @@ export function createOcean(mesh, {
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2, langmuirIce = 'tanh',
   momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
-  eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
+  eddyDiffusivity = 1000, eddyTaperDepth = 200, eddySlope = 'interfaces', penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'rh18', langmuirScheme = 'rescale', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
-  iceDrift = false, mixedLayerRestratification = true, thermobaric = false,
+  iceDrift = false, mixedLayerRestratification = true, thermobaric = false, thermobaricStability = false,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -491,6 +499,7 @@ export function createOcean(mesh, {
   const advection = tracerAdvection;
   if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
   if (!EDGE_TRANSPORTS.includes(edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${edgeTransport}`);
+  if (!EDDY_SLOPES.includes(eddySlope)) throw new Error(`eddySlope is one of ${EDDY_SLOPES.join(', ')}, not ${eddySlope}`);
   const beyond = advection === 'third' ? beyondCells(mesh) : null;
   const shearDiffusion = shearDiffusivity;
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
@@ -932,6 +941,14 @@ export function createOcean(mesh, {
   }
   const phases = { dynamics, rescale, eddy: eddyTransport, shift: shiftVelocities, regrid, column: columnPhysics };
 
+  const neutralDensity = (k, i, z) => { const n = at(k, i), hv = h[n]; return hv > 1e-6 ? eos(Q[n] / hv, W[n] / hv) + thermobaricSlope(Q[n] / hv, W[n] / hv) * z : rho[k] + labelTau[k] * z; };
+  function neutralDepths(k, a, b, za, zb, e) {
+    const z = 0.5 * (za + zb + draft[a] + draft[b]);
+    const ua = neutralDensity(k, a, z), la = neutralDensity(k + 1, a, z), ub = neutralDensity(k, b, z), lb = neutralDensity(k + 1, b, z);
+    const vertical = 0.5 * ((la - ua) / Math.max(0.5 * (h[at(k, a)] + h[at(k + 1, a)]), THIN) + (lb - ub) / Math.max(0.5 * (h[at(k, b)] + h[at(k + 1, b)]), THIN));
+    const limit = NEUTRAL_SLOPE_LIMIT * dcEdge[e], shift = vertical > 0 ? 0.5 * (ub + lb - ua - la) / vertical : 0;
+    return zb - za - Math.max(-limit, Math.min(limit, shift));
+  }
   function eddyEdges(from, to) {
     const dt = params[1];
     if (!eddy) eddy = { flux: new Float64Array(L), share: new Float64Array(L) };
@@ -969,7 +986,7 @@ export function createOcean(mesh, {
           const top = ramp(Math.min(za, zb), eddyTaperDepth);
           const bottom = ramp(Math.min(sill - Math.max(za, zb), shared - sharedAbove), EDDY_BOTTOM_TAPER);
           const ceiling = ramp(Math.max(aboveA, aboveB), THIN);
-          lower = -coefficient * top * bottom * ceiling * (zb - za);
+          lower = -coefficient * top * bottom * ceiling * (eddySlope === 'neutral' ? neutralDepths(k, a, b, za, zb, e) : zb - za);
           lower *= Math.min(interfaceWeight(k + 1, a), interfaceWeight(k + 1, b));
         }
         const weight = ramp(Math.max(ha, hb) - EPS, THIN);
@@ -1150,7 +1167,7 @@ export function createOcean(mesh, {
   }
   function columnCells(from, to) {
     const dt = params[1], { h: hCol, T: TCol, S: SCol, rho: rhoCol, shear, kappa, nu, vector } = cols, out = { kappa, nu };
-    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, mstarScheme, langmuirScheme, nstar, langmuir, shearViscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
+    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, mstarScheme, langmuirScheme, nstar, langmuir, shearViscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity, thermobaricStability };
     for (let i = from; i < to; i++) {
       if (!cellOcean[i]) { mixedDepths[i] = 0; boundaryDepths[i] = 0; continue; }
       cellColumn(i, hCol, TCol, SCol);
@@ -1181,7 +1198,7 @@ export function createOcean(mesh, {
         }
         melted[i] = mass; meltBase[i] = Tb; shelfMelted[i] += mass;
       }
-      const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: shelf[i] ? Math.sqrt(topDrag) * Math.hypot(vector[0], vector[1], vector[2]) : Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, heat: meltHeat, salt: meltSalt, buoyancy, capped: shelf[i] === 1 && !(meltOn && melted[i] < 0), options }, out, cs);
+      const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, top: draft[i], ustar: shelf[i] ? Math.sqrt(topDrag) * Math.hypot(vector[0], vector[1], vector[2]) : Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, heat: meltHeat, salt: meltSalt, buoyancy, capped: shelf[i] === 1 && !(meltOn && melted[i] < 0), options }, out, cs);
       for (let k = 0; k < L; k++) { const n = at(k, i); Q[n] = hCol[k] * TCol[k]; W[n] = hCol[k] * SCol[k]; viscosity[n] = nu[k]; }
       layerDensities(TCol, SCol, L, rhoCol);
       mixedDepths[i] = mixedLayerDepth(hCol, rhoCol, L);

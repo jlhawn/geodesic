@@ -28,12 +28,14 @@ test('over a seamount the pressure force at the depths the layers share leaves a
   assert.equal(ocean.diagnostics().oceanDried, 0);
 });
 
-test('with thermobaric the pressure force over a seamount still leaves a uniform stratification nearly at rest', () => {
-  const { ocean, surfaceT, ice, flux, calm } = hybridOcean({ thermobaric: true }, (lat, lon) => 4000 - 3500 * Math.exp(-((lat / (8 * DEG)) ** 2 + (lon / (8 * DEG)) ** 2)));
-  for (let n = 0; n < 64; n++) ocean.advance(surfaceT, ice, flux, calm, DT);
-  const speed = maxSpeed(ocean);
-  console.log(`seamount to 500 m under a uniform stratification, thermobaric: fastest current after a day ${speed.toExponential(2)} m/s`);
-  assert.ok(speed < 0.01, `spurious current ${speed} m/s`);
+test('with thermobaric, alone and with thermobaricStability and eddySlope \'neutral\', the pressure force over a seamount still leaves a uniform stratification nearly at rest', () => {
+  for (const options of [{ thermobaric: true }, { thermobaric: true, thermobaricStability: true, eddySlope: 'neutral' }]) {
+    const { ocean, surfaceT, ice, flux, calm } = hybridOcean(options, (lat, lon) => 4000 - 3500 * Math.exp(-((lat / (8 * DEG)) ** 2 + (lon / (8 * DEG)) ** 2)));
+    for (let n = 0; n < 64; n++) ocean.advance(surfaceT, ice, flux, calm, DT);
+    const speed = maxSpeed(ocean);
+    console.log(`seamount to 500 m under a uniform stratification, ${JSON.stringify(options)}: fastest current after a day ${speed.toExponential(2)} m/s`);
+    assert.ok(speed < 0.01, `spurious current ${speed} m/s`);
+  }
 });
 
 test('below 1500 m, deep water made 2 K colder and fresher at the same surface density on one side of the globe drives a current toward the warm side only with thermobaric', () => {
@@ -70,4 +72,35 @@ test('below 1500 m, deep water made 2 K colder and fresher at the same surface d
   console.log(`deep flow toward the warm side after four steps: thermobaric off ${off.mean.toExponential(2)} m/s (fastest ${off.fastest.toExponential(2)}), on ${on.mean.toExponential(2)} m/s in ${(100 * on.share).toFixed(0)} % of the front's deep edges`);
   assert.ok(off.fastest < 1e-3, `without thermobaric the compensated front moves water at ${off.fastest} m/s`);
   assert.ok(on.mean > 2e-3 && on.share > 0.9, `with thermobaric the deep flow toward the warm side averages ${on.mean} m/s in ${on.share} of the edges`);
+});
+
+test('at a deep front made 2 K colder and fresher at the same surface density, whose layer interfaces stay flat, the eddies move thickness only with eddySlope \'neutral\'', () => {
+  const run = (eddySlope) => {
+    const { ocean, surfaceT, ice, flux, calm } = hybridOcean({ eddySlope });
+    const L = ocean.layers, cold = (i) => Math.cos(mesh.lonCell[i]) < 0, { h, Q, W } = ocean;
+    for (let i = 0; i < C; i++) {
+      if (!cold(i)) continue;
+      let top = 0;
+      for (let k = 0; k < L; k++) {
+        const n = k * C + i, hv = h[n];
+        if (hv > 1 && top + 0.5 * hv > 1500) {
+          const t = Q[n] / hv, s = W[n] / hv, colder = t - 2;
+          Q[n] = hv * colder; W[n] = hv * salinityForDensity(seawaterDensity(t, s), colder);
+        }
+        top += hv;
+      }
+    }
+    const before = Float64Array.from(h);
+    for (let n = 0; n < 4; n++) ocean.advance(surfaceT, ice, flux, calm, DT);
+    let moved = 0;
+    for (let i = 0; i < C; i++) {
+      let top = 0;
+      for (let k = 0; k < L; k++) { const n = k * C + i; if (top + 0.5 * before[n] > 1500) moved = Math.max(moved, Math.abs(h[n] - before[n])); top += before[n]; }
+    }
+    return moved;
+  };
+  const interfaces = run('interfaces'), neutral = run('neutral');
+  console.log(`largest deep thickness change in four steps at the compensated front: layer interfaces ${interfaces.toExponential(2)} m, neutral ${neutral.toExponential(2)} m`);
+  assert.ok(interfaces < 1e-3, `with the layer interfaces the eddies move ${interfaces} m`);
+  assert.ok(neutral > 1e-2 && neutral > 100 * interfaces, `with neutral slopes the eddies move ${neutral} m`);
 });

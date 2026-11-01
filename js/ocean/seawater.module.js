@@ -32,9 +32,12 @@ export function halineContraction(t, s) {
  * seawaterDensity(t, s) + thermobaricSlope(t, s) z. Cold water expands
  * more with heat the deeper it is (α at 1 °C is about twice as large at
  * 3000 m as at the surface), so cold, fresh water grows denser with depth
- * than warm, salty water.
+ * than warm, salty water. At depth z, thermalExpansion gains
+ * THERMOBARIC_EXPANSION z and halineContraction loses
+ * THERMOBARIC_CONTRACTION z.
  */
 export const THERMOBARIC = { mu1: 1.497e-4, mu2: 1.109e-5 };
+export const THERMOBARIC_EXPANSION = a0 * THERMOBARIC.mu1 / rho0, THERMOBARIC_CONTRACTION = b0 * THERMOBARIC.mu2 / rho0;
 
 export function thermobaricSlope(t, s) {
   return -a0 * THERMOBARIC.mu1 * (t - t0) - b0 * THERMOBARIC.mu2 * (s - s0);

@@ -1,4 +1,4 @@
-import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from './seawater.module.js';
+import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction, thermobaricSlope, THERMOBARIC_EXPANSION, THERMOBARIC_CONTRACTION } from './seawater.module.js';
 
 /*
  * The column library of the ALE ocean (docs/ocean-hybrid-coordinate.md):
@@ -193,8 +193,8 @@ export function columnScratch(K) {
   return {
     K, centers: array(K), sorted: array(K), flat: array(K), interfaces: array(K + 1), target: array(K + 1), weight: array(K + 1),
     edges: array(K + 1), left: array(K), slope: array(K), curve: array(K), zOld: array(K + 1), zNew: array(K + 1), knots: array(5), primitive: array(5),
-    gain: array(K), trialT: array(K), trialS: array(K), alpha: array(K), beta: array(K), rho: array(K),
-    boundaryKappa: array(K), interiorKappa: array(K), interiorNu: array(K), start: new Int32Array(K), thick: array(K), heat: array(K), salt: array(K), slabRho: array(K), shares: array(K),
+    gain: array(K), trialT: array(K), trialS: array(K), alpha: array(K), beta: array(K), rho: array(K), tau: array(K),
+    boundaryKappa: array(K), interiorKappa: array(K), interiorNu: array(K), start: new Int32Array(K), thick: array(K), heat: array(K), salt: array(K), slabRho: array(K), slabTau: array(K), shares: array(K),
   };
 }
 
@@ -452,19 +452,22 @@ export function mixedLayerDepth(h, rho, K, excess = 0.03) {
   return H;
 }
 
-export function convectiveAdjustment(h, T, S, K, scratch, { gravity = GRAVITY } = {}) {
-  const { start, thick, heat, salt, slabRho, rho, centers } = scratch;
+export function convectiveAdjustment(h, T, S, K, scratch, { gravity = GRAVITY, thermobaricStability = false } = {}, top = 0) {
+  const { start, thick, heat, salt, slabRho, slabTau, rho, tau, centers } = scratch;
   let z = 0;
-  for (let k = 0; k < K; k++) { centers[k] = z + 0.5 * h[k]; z += h[k]; rho[k] = seawaterDensity(T[k], S[k]); }
-  let n = 0;
+  for (let k = 0; k < K; k++) { centers[k] = z + 0.5 * h[k]; z += h[k]; rho[k] = seawaterDensity(T[k], S[k]); if (thermobaricStability) tau[k] = thermobaricSlope(T[k], S[k]); }
+  let n = 0, bottom = top;
   for (let k = 0; k < K; k++) {
     start[n] = k; thick[n] = h[k]; heat[n] = h[k] * T[k]; salt[n] = h[k] * S[k]; slabRho[n] = rho[k];
+    if (thermobaricStability) slabTau[n] = tau[k];
     n++;
-    while (n >= 2 && slabRho[n - 2] > slabRho[n - 1]) {
+    bottom += h[k];
+    while (n >= 2 && (thermobaricStability ? slabRho[n - 2] - slabRho[n - 1] > (slabTau[n - 1] - slabTau[n - 2]) * (bottom - thick[n - 1]) : slabRho[n - 2] > slabRho[n - 1])) {
       thick[n - 2] += thick[n - 1];
       heat[n - 2] += heat[n - 1];
       salt[n - 2] += salt[n - 1];
       slabRho[n - 2] = thick[n - 2] > 0 ? seawaterDensity(heat[n - 2] / thick[n - 2], salt[n - 2] / thick[n - 2]) : slabRho[n - 2];
+      if (thermobaricStability && thick[n - 2] > 0) slabTau[n - 2] = thermobaricSlope(heat[n - 2] / thick[n - 2], salt[n - 2] / thick[n - 2]);
       n--;
     }
   }
@@ -472,9 +475,9 @@ export function convectiveAdjustment(h, T, S, K, scratch, { gravity = GRAVITY } 
   for (let s = 0; s < n; s++) {
     const from = start[s], to = s + 1 < n ? start[s + 1] : K;
     if (to - from < 2) continue;
-    const t = heat[s] / thick[s], w = salt[s] / thick[s], mixed = seawaterDensity(t, w);
+    const t = heat[s] / thick[s], w = salt[s] / thick[s], mixed = seawaterDensity(t, w), mixedTau = thermobaricStability ? thermobaricSlope(t, w) : 0;
     let drop = 0;
-    for (let k = from; k < to; k++) { drop += gravity * centers[k] * h[k] * (mixed - rho[k]); T[k] = t; S[k] = w; }
+    for (let k = from; k < to; k++) { drop += gravity * centers[k] * h[k] * (thermobaricStability ? mixed - rho[k] + (mixedTau - tau[k]) * (top + centers[k]) : mixed - rho[k]); T[k] = t; S[k] = w; }
     if (from === 0) { released = drop; depth = thick[s]; } else interior += drop;
   }
   return { released, interior, depth };
@@ -494,7 +497,7 @@ export function langmuirRescale(ustar, depth, waves = 1) {
   return inverse > 0 ? Math.min(LANGMUIR_RESCALE.cap, 1 + waves * LANGMUIR_RESCALE.coefficient * inverse ** (-0.5 * LANGMUIR_RESCALE.exponent)) : 1;
 }
 
-export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, rotationLimit = 'algebraic', mstarScheme = 'fixed', langmuirScheme = 'factor', nstar = 0.2, langmuir = 2, waves = 1, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
+export function boundaryLayer({ h, T, S, K, thermobaricStability = false, top = 0, ustar, f, dt, released = 0, buoyancy = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, rotationLimit = 'algebraic', mstarScheme = 'fixed', langmuirScheme = 'factor', nstar = 0.2, langmuir = 2, waves = 1, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
   const { alpha, beta, trialT, trialS, gain } = scratch;
   let H = 0;
   for (let k = 0; k < K; k++) H += h[k];
@@ -502,6 +505,7 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy
     alpha[k] = 0.5 * (thermalExpansion(T[k], S[k]) + thermalExpansion(T[k + 1], S[k + 1]));
     beta[k] = 0.5 * (halineContraction(T[k], S[k]) + halineContraction(T[k + 1], S[k + 1]));
   }
+  if (thermobaricStability) for (let k = 0, z = top; k < K - 1; k++) { z += h[k]; alpha[k] += THERMOBARIC_EXPANSION * z; beta[k] -= THERMOBARIC_CONTRACTION * z; }
   const convective = Math.max(0, released), vstar = Math.cbrt(ustar * ustar * ustar + convective / (rho0 * dt));
   for (let k = 0; k < K; k++) kappa[k] = 0;
   if (!(vstar > 0)) return { depth: 0, energy: 0, work: 0, velocity: 0 };
@@ -604,11 +608,13 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy
   return { depth, energy: available, work: done, velocity: vstar };
 }
 
-export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, rho0 = SEAWATER.rho0, gravity = GRAVITY, shearViscosity = 1e-2, backgroundViscosity = 1e-4, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1 }, kappa, nu, scratch) {
+export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, thermobaricStability = false, top = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, shearViscosity = 1e-2, backgroundViscosity = 1e-4, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1 }, kappa, nu, scratch) {
   const { rho } = scratch;
   layerDensities(T, S, K, rho);
+  let z = top;
   for (let k = 0; k < K - 1; k++) {
-    const dz = Math.max(0.5 * (h[k] + h[k + 1]), DZ_FLOOR), buoyancy = gravity * (rho[k + 1] - rho[k]) / rho0;
+    z += h[k];
+    const dz = Math.max(0.5 * (h[k] + h[k + 1]), DZ_FLOOR), buoyancy = gravity * (thermobaricStability ? rho[k + 1] - rho[k] + (thermobaricSlope(T[k + 1], S[k + 1]) - thermobaricSlope(T[k], S[k])) * z : rho[k + 1] - rho[k]) / rho0;
     if (buoyancy < 0) { kappa[k] = convectiveDiffusivity; nu[k] = convectiveDiffusivity; continue; }
     const du = u ? u[k] - u[k + 1] : 0, dv = v ? v[k] - v[k + 1] : 0, squared = shear ? shear[k] : du * du + dv * dv;
     const richardson = buoyancy * dz / (squared + 1e-12);
@@ -620,7 +626,7 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
   nu[K - 1] = 0;
 }
 
-export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, buoyancy = null, type = 'IB', ustar, f, dt, capped = false, options = {} }, { kappa, nu }, scratch) {
+export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, top = 0, heat = 0, salt = 0, light = 0, buoyancy = null, type = 'IB', ustar, f, dt, capped = false, options = {} }, { kappa, nu }, scratch) {
   const { interfaces, shares, boundaryKappa, interiorKappa, interiorNu } = scratch;
   interfacesOf(h, K, interfaces);
   const flux = buoyancy ?? (options.mstarScheme === 'rh18' ? surfaceBuoyancy(T[0], S[0], heat + light, salt, dt, options.gravity) : 0);
@@ -630,9 +636,9 @@ export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat =
   }
   T[0] += heat / h[0];
   S[0] += salt / h[0];
-  const convection = convectiveAdjustment(h, T, S, K, scratch, options);
-  const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: capped ? 0 : convection.released, buoyancy: flux, ...options }, boundaryKappa, scratch);
-  interiorMixing({ h, T, S, u, v, shear, K, ...options }, interiorKappa, interiorNu, scratch);
+  const convection = convectiveAdjustment(h, T, S, K, scratch, options, top);
+  const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: capped ? 0 : convection.released, buoyancy: flux, ...options, top }, boundaryKappa, scratch);
+  interiorMixing({ h, T, S, u, v, shear, K, ...options, top }, interiorKappa, interiorNu, scratch);
   for (let k = 0; k < K; k++) { kappa[k] = boundaryKappa[k] + interiorKappa[k]; nu[k] = boundaryKappa[k] + interiorNu[k]; }
   if (anyMixing(kappa, K)) solveLayers(h, K, kappa, dt, scratch.gain, T, T, S, S);
   return { depth: layer.depth, energy: layer.energy, work: layer.work, released: convection.released, convectiveDepth: convection.depth };

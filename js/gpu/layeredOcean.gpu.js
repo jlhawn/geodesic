@@ -2,8 +2,8 @@ import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReductio
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
-import { SEAWATER, SEAWATER_WGSL, THERMOBARIC, seawaterDensity, labelTemperature, thermobaricSlope, inSituDensity } from '../ocean/seawater.module.js';
+import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, NEUTRAL_SLOPE_LIMIT, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { SEAWATER, SEAWATER_WGSL, THERMOBARIC, THERMOBARIC_EXPANSION, THERMOBARIC_CONTRACTION, seawaterDensity, labelTemperature, thermobaricSlope, inSituDensity } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
 import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval } from '../physics/ice.module.js';
@@ -60,7 +60,7 @@ export const OCEAN_DEFAULTS = {
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
   edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 20,
-  thermobaric: false,
+  thermobaric: false, thermobaricStability: false, eddySlope: 'interfaces',
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
@@ -156,7 +156,7 @@ function hybridHead(o) {
   let ta = t - ${literal(t0 - HEAT_REFERENCE)}; let sa = s - ${literal(s0 - SALT_REFERENCE)};
   return -${literal(a0)} * (1.0 + ${literal(0.5 * lambda1)} * ta) * ta + ${literal(b0)} * (1.0 - ${literal(0.5 * lambda2)} * sa) * sa - ${literal(nu)} * ta * sa;
 }`;
-  const thermobaricRelative = o.thermobaric ? `
+  const thermobaricRelative = o.thermobaric || o.thermobaricStability || o.eddySlope === 'neutral' ? `
 fn tbA(t: f32, s: f32) -> f32 {
   return -${literal(a0 * THERMOBARIC.mu1)} * (t - ${literal(t0 - HEAT_REFERENCE)}) - ${literal(b0 * THERMOBARIC.mu2)} * (s - ${literal(s0 - SALT_REFERENCE)});
 }` : '';
@@ -570,12 +570,12 @@ ${o.shelfMeltLayer > 0 ? `    var slab = 0.0; var sumT = 0.0; var sumS = 0.0;
     CT[0] = CQ[0] / CH[0]; CS[0] = CW[0] / CH[0];
 `}    OD[O_MELT + i] = m; OD[O_MELTSUM + i] += m; freezing = m < 0.0;
   }
-` : ''}  var n = 0;
+` : ''}  var n = 0;${o.thermobaricStability ? ' var zBottom = OD[O_DRAFT + i];' : ''}
   for (var k = 0; k < L; k++) {
     CK[n] = f32(k); CTT[n] = CH[k]; CTS[n] = CQ[k]; CA[n] = CW[k]; CB[n] = eosA(CT[k], CS[k]);
-    n++;
+    n++;${o.thermobaricStability ? ' zBottom += CH[k];' : ''}
     loop {
-      if (!(n >= 2 && CB[n - 2] > CB[n - 1])) { break; }
+      if (!(n >= 2 && ${o.thermobaricStability ? 'CB[n - 2] - CB[n - 1] > (tbA(CTS[n - 1] / CTT[n - 1], CA[n - 1] / CTT[n - 1]) - tbA(CTS[n - 2] / CTT[n - 2], CA[n - 2] / CTT[n - 2])) * (zBottom - CTT[n - 1])' : 'CB[n - 2] > CB[n - 1]'})) { break; }
       CTT[n - 2] += CTT[n - 1]; CTS[n - 2] += CTS[n - 1]; CA[n - 2] += CA[n - 1];
       CB[n - 2] = select(CB[n - 2], eosA(CTS[n - 2] / CTT[n - 2], CA[n - 2] / CTT[n - 2]), CTT[n - 2] > 0.0);
       n--;
@@ -585,35 +585,35 @@ ${o.shelfMeltLayer > 0 ? `    var slab = 0.0; var sumT = 0.0; var sumS = 0.0;
   for (var s = 0; s < n; s++) {
     let first = i32(CK[s]); let past = select(L, i32(CK[min(s + 1, L - 1)]), s + 1 < n);
     if (past - first < 2) { zTop += CH[first]; continue; }
-    let t = CTS[s] / CTT[s]; let w = CA[s] / CTT[s]; let mixed = eosA(t, w);
+    let t = CTS[s] / CTT[s]; let w = CA[s] / CTT[s]; let mixed = eosA(t, w);${o.thermobaricStability ? ' let mixedTau = tbA(t, w);' : ''}
     var drop = 0.0; var sumQ = 0.0; var sumW = 0.0;
     for (var k = first; k < past; k++) {
-      let hk = CH[k]; drop += OGRAV * (zTop + 0.5 * hk) * hk * (mixed - eosA(CT[k], CS[k])); zTop += hk;
+      let hk = CH[k]; drop += OGRAV * (zTop + 0.5 * hk) * hk * (mixed - eosA(CT[k], CS[k])${o.thermobaricStability ? ' + (mixedTau - tbA(CT[k], CS[k])) * (OD[O_DRAFT + i] + zTop + 0.5 * hk)' : ''}); zTop += hk;
       CT[k] = t; CS[k] = w; CQ[k] = hk * t; CW[k] = hk * w; sumQ += CQ[k]; sumW += CW[k];
     }
     CQ[past - 1] += CTS[s] - sumQ; CW[past - 1] += CA[s] - sumW;
     if (first == 0) { released = drop; }
   }
-  var previous = vec3<f32>(0.0, 0.0, 0.0); var rPrev = 0.0; var hPrev = 0.0; var aPrev = 0.0; var bPrev = 0.0; var mixing = false;
+  var previous = vec3<f32>(0.0, 0.0, 0.0); var rPrev = 0.0; var hPrev = 0.0; var aPrev = 0.0; var bPrev = 0.0; var mixing = false;${o.thermobaricStability ? ' var tauPrev = 0.0; var zLayer = OD[O_DRAFT + i];' : ''}
   for (var k = 0; k < L; k++) {
     let hk = CH[k]; let tk = CT[k] + TREF; let sk = CS[k] + SREF;
-    let rk = eosA(CT[k], CS[k]); let ak = alphaT(tk, sk); let bk = betaS(tk, sk);
+    let rk = eosA(CT[k], CS[k]); let ak = alphaT(tk, sk); let bk = betaS(tk, sk);${o.thermobaricStability ? ' let tauk = tbA(CT[k], CS[k]);' : ''}
     var wv = vec3<f32>(0.0, 0.0, 0.0);
     for (var m = 0; m < MAXE; m++) { wv += weights[m] * IN[uOff(k) + edges[m]] * normals[m]; }
     wv = wv / area;
     if (k > 0) {
       let j = k - 1; let d = previous - wv;
-      let dz = max(0.5 * (hPrev + hk), DZFLOOR); let buoyancy = OGRAV * (rk - rPrev) / RHO0;
+      let dz = max(0.5 * (hPrev + hk), DZFLOOR); let buoyancy = OGRAV * (rk - rPrev${o.thermobaricStability ? ' + (tauk - tauPrev) * zLayer' : ''}) / RHO0;
       var kap = CONVKAPPA; var nu = CONVKAPPA;
       if (buoyancy >= 0.0) {
         let richardson = buoyancy * dz / (dot(d, d) + 1e-12);
         nu = SHEARNU / ((1.0 + 5.0 * richardson) * (1.0 + 5.0 * richardson)) + BACKNU;
         kap = nu / (1.0 + 5.0 * richardson) + BACKKAPPA;
       }
-      CIK[j] = kap; CINU[j] = nu; CA[j] = 0.5 * (aPrev + ak); CB[j] = 0.5 * (bPrev + bk);
+      CIK[j] = kap; CINU[j] = nu; CA[j] = 0.5 * (aPrev + ak)${o.thermobaricStability ? ` + ${THERMOBARIC_EXPANSION.toExponential(10)} * zLayer` : ''}; CB[j] = 0.5 * (bPrev + bk)${o.thermobaricStability ? ` - ${THERMOBARIC_CONTRACTION.toExponential(10)} * zLayer` : ''};
       if (kap > 0.0) { mixing = true; }
     }
-    previous = wv; rPrev = rk; hPrev = hk; aPrev = ak; bPrev = bk;
+    previous = wv; rPrev = rk; hPrev = hk; aPrev = ak; bPrev = bk;${o.thermobaricStability ? ' tauPrev = tauk; zLayer += hk;' : ''}
   }
   CIK[L - 1] = 0.0; CINU[L - 1] = 0.0;
   let convective = select(max(0.0, released), 0.0, capped${o.shelfMelt ? ' && !freezing' : ''}); let vstar = pow(ustar * ustar * ustar + convective / (RHO0 * dt), 1.0 / 3.0);
@@ -948,7 +948,21 @@ fn restratShape(s: f32) -> f32 { let x = 2.0 * s + 1.0; let x2 = x * x; return m
      * stores, so the column keeps its thickness to its finest layer's
      * rounding and gains the heat and salt its edges carried.
      */
-    oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${eddyShared}${restratShared}${K}  let e = ${idx}; if (e >= E) { return; }
+    oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${eddyShared}${restratShared}${o.eddySlope === 'neutral' ? `${constLine('NEUTRALSLOPE', NEUTRAL_SLOPE_LIMIT)}
+fn neutralDensity(k: i32, i: i32, z: f32) -> f32 {
+  let hv = IN[hOff(k) + i]; let thick = hv > 1e-6;
+  let t = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, thick); let s = select(LABEL_S[k] - SREF, IN[wOff(k) + i] / hv, thick);
+  return select(RHOA[k], eosA(t, s), thick) + tbA(t, s) * z;
+}
+fn neutralDepths(k: i32, a: i32, b: i32, za: f32, zb: f32, e: i32) -> f32 {
+  let z = 0.5 * (za + zb + OD[O_DRAFT + a] + OD[O_DRAFT + b]);
+  let ua = neutralDensity(k, a, z); let la = neutralDensity(k + 1, a, z); let ub = neutralDensity(k, b, z); let lb = neutralDensity(k + 1, b, z);
+  let vertical = 0.5 * ((la - ua) / max(0.5 * (IN[hOff(k) + a] + IN[hOff(k + 1) + a]), THINO) + (lb - ub) / max(0.5 * (IN[hOff(k) + b] + IN[hOff(k + 1) + b]), THINO));
+  let limit = NEUTRALSLOPE * MF[F_DC + e];
+  let shift = select(0.0, 0.5 * (ub + lb - ua - la) / vertical, vertical > 0.0);
+  return zb - za - clamp(shift, -limit, limit);
+}
+` : ''}${K}  let e = ${idx}; if (e >= E) { return; }
   for (var k = 0; k < L; k++) { OD[O_EDDYV + k * E + e] = 0.0; OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; }
   let kappa = min(OD[O_EDDYK + e], P[1]);
   if (OD[O_EMASK + e] < 0.5${o.restrat ? '' : ' || !(kappa > 0.0)'}) { return; }
@@ -982,7 +996,7 @@ ${o.restrat ? `  var front = 0.0; var inverseDepth = 0.0;
       let top = clamp(min(za, zb) / EDDYTOP, 0.0, 1.0);
       let bottom = clamp(min(sill - max(za, zb), overlap - overlapAbove) / EDDYBOTTOM, 0.0, 1.0);
       let ceiling = clamp(max(aboveA, aboveB) / THINO, 0.0, 1.0);
-      lower = -coefficient * top * bottom * ceiling * (zb - za);
+      lower = -coefficient * top * bottom * ceiling * ${o.eddySlope === 'neutral' ? 'neutralDepths(k, a, b, za, zb, e)' : '(zb - za)'};
       lower *= min(modeWeight(k + 1, a), modeWeight(k + 1, b));
     }
     let weight = clamp((max(ha, hb) - EPSO) / THINO, 0.0, 1.0);

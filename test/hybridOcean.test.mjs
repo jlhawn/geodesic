@@ -32,9 +32,10 @@ test('a brackish sea keeps its fixed-depth surface layers, hands back its first 
   atMinimum(1e-6, 'after five steps');
 });
 
-test('through dynamics, regrid and column physics the hybrid ocean conserves water, heat and salt to rounding, with no dried layer, whichever edge transport it keeps', () => {
-  for (const edgeTransport of EDGE_TRANSPORTS) {
-    const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean({ edgeTransport });
+test('through dynamics, regrid and column physics the hybrid ocean conserves water, heat and salt to rounding, with no dried layer, whichever edge transport it keeps, and with the thermobaric pressure, stability and neutral eddy slopes', () => {
+  for (const options of [...EDGE_TRANSPORTS.map((edgeTransport) => ({ edgeTransport })), { thermobaric: true, thermobaricStability: true }, { thermobaric: true, thermobaricStability: true, eddySlope: 'neutral' }]) {
+    const edgeTransport = JSON.stringify(options);
+    const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(options);
     const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
     ocean.advance(surfaceT, ice, flux, wind, DT);
     const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean);

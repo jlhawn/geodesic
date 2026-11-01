@@ -198,6 +198,7 @@ async function cavitiesAlike(extra = {}) {
 }
 test(`both engines run the cavities alike at N=${N}: the water under the shelves tracks across engines as the open sea does without them, with no sea ice, ocean flux or light share in a cavity and the land's skin over it`, { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitiesAlike());
 test(`both engines run the cavities alike at N=${N}: the water under the shelves tracks across engines as the open sea does without them, with no sea ice, ocean flux or light share in a cavity and the land's skin over it, with thermobaric`, { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitiesAlike({ thermobaric: true }));
+test(`both engines run the cavities alike at N=${N}: the water under the shelves tracks across engines as the open sea does without them, with no sea ice, ocean flux or light share in a cavity and the land's skin over it, with thermobaric, thermobaricStability and eddySlope 'neutral'`, { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitiesAlike({ thermobaric: true, thermobaricStability: true, eddySlope: 'neutral' }));
 
 test(`a saved state keeps the shelves' load at f64, so on each engine a restart melts beneath them from the same freezing point bit for bit at N=${N}`, { skip: !gpuAvailable && 'webgpu not available' }, async () => {
   const { raster, options } = shelfBands(), setup = { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { iceDrift: false } };
