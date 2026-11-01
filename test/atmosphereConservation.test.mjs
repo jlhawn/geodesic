@@ -46,6 +46,17 @@ function spunUpCountergradient() {
   return model;
 }
 
+const HOLTSLAG = { ...OPTIONS, boundaryLayer: { velocityScale: 'holtslagBoville', countergradient: 7.2 } };
+let spunHoltslag = null;
+function spunUpHoltslag() {
+  if (spunHoltslag) return spunHoltslag;
+  const model = createModel(new Grid(N), HOLTSLAG);
+  initializeState(model).forEach((values, s) => model.state[s].set(values));
+  for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
+  spunHoltslag = model;
+  return model;
+}
+
 let spunBergeron = null;
 function spunUpBergeron() {
   if (spunBergeron) return spunBergeron;
@@ -108,7 +119,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
+for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'holtslagBoville' and countergradient 7.2", spunUpHoltslag], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
@@ -288,7 +299,7 @@ test('the GPU dynamics changes the energy of moist air as it changes its dry twi
  * dispatched alone on the state as it stands. The bounds are two to
  * four times what an M1 Max leaves here.
  */
-for (const [label, build, options] of [['', spunUp, OPTIONS], [' with boundaryLayer.countergradient 7.2', spunUpCountergradient, COUNTERGRADIENT]]) test(`in single precision the GPU's ∇⁴ closure and boundary-layer mixing keep the air's c_p T + L q to their rounding${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const [label, build, options] of [['', spunUp, OPTIONS], [' with boundaryLayer.countergradient 7.2', spunUpCountergradient, COUNTERGRADIENT], [" with boundaryLayer.velocityScale 'holtslagBoville' and countergradient 7.2", spunUpHoltslag, HOLTSLAG]]) test(`in single precision the GPU's ∇⁴ closure and boundary-layer mixing keep the air's c_p T + L q to their rounding${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const model = build(), books = bookkeeper(model);
   const gpuModel = await createGpuModel(model.mesh, options);
   model.state.forEach((a, s) => gpuModel.state[s].set(a));

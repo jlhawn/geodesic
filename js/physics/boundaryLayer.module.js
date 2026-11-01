@@ -170,7 +170,7 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * term of Holtslag and Boville (1993, J. Climate 6, eqs. 3.8–3.10, A11,
  * A12 and appendix B) for heat and water: the flux of c is
  * −ρK (∂c/∂z − γ_c) with γ_c = a w* (w'c')_0 / (w_m² h), w*³ = B0 h and
- * w_m³ = u*³ + 0.6 w*³ (their outer-layer scale, not the profile's), where
+ * w_m³ = u*³ + 0.6 w*³ (their outer-layer scale), where
  * B0 > 0, over the outer layer 0.1 h < z < h of the profile over h,
  * including where that spans a deck or a coupled cloud top (their surface
  * layer takes a = 0), and nowhere on the cloud-top profile, at the
@@ -180,12 +180,23 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * `surfaceHeat` and `surfaceEvaporation` (W/m² and kg m⁻² s⁻¹ per cell,
  * the radiation's, which go with `surfaceBuoyancy`) or the bulk formula's
  * own parts of B0, ρ the lowest layer's density. `nonlocal` keeps each
- * interface's ρK a w* / (w_m² h), K the surface profile's diffusivity, and
- * `kinematicHeat` and `kinematicWater` each cell's (w'c')_0. The column
- * mix adds the fluxes ρKγ_c as an explicit flux divergence before the
- * implicit solve (their B2–B4), which leaves the column's totals
- * unchanged, and leaves out the water's in a column where it would take a
- * layer below zero (their appendix B).
+ * interface's ρK a w* / (w_m² h), K the surface profile's diffusivity for
+ * heat and water, and `kinematicHeat` and `kinematicWater` each cell's
+ * (w'c')_0. The column mix adds the fluxes ρKγ_c as an explicit flux
+ * divergence before the implicit solve (their B2–B4), which leaves the
+ * column's totals unchanged, and leaves out the water's in a column where
+ * it would take a layer below zero (their appendix B).
+ *
+ * With `velocityScale` 'holtslagBoville' ('capped', the default, is the
+ * unstable scale above) the unstable profile's velocity scale is their
+ * w_m = (u*³ + 0.6 w*³)^⅓ (A11, which is u* / φ_m(0.1 h/L) with the
+ * φ_m = (1 − 15 z/L)^−⅓ of A8), with no floor on ζ, and heat and water
+ * take the profile's K divided by their Prandtl number
+ * Pr = φ_h/φ_m + a κ (z/h) w* / w_m at z = 0.1 h (A13, φ_h = (1 − 15 z/L)^−½
+ * of A6, their a = 7.2 whatever `countergradient` is), on the profile's
+ * part of each coefficient alone: `mixing` keeps the coefficients that
+ * mix momentum and `scalarMixing` those that mix heat and water. Stable
+ * columns keep u* and Pr = 1.
  */
 export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2, subsidence: false };
 export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400, cumulusCapped: true };
@@ -194,9 +205,11 @@ export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 export function createBoundaryLayer(mesh, core, {
   dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, openSea = null, seaHumidity = 1, deckTop = null, deckGate = null, deckLayer = null, deckShare = null, deckEntrainment = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
-  countergradient = 0, surfaceHeat = null, surfaceEvaporation = null,
+  countergradient = 0, surfaceHeat = null, surfaceEvaporation = null, velocityScale = 'capped',
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
+  if (velocityScale !== 'capped' && velocityScale !== 'holtslagBoville') throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${velocityScale}`);
+  const holtslag = velocityScale === 'holtslagBoville';
   if (!(countergradient >= 0)) throw new Error(`countergradient must be 0 or more, not ${countergradient}`);
   if (countergradient > 0 && givenBuoyancy && !(surfaceHeat && surfaceEvaporation)) throw new Error('countergradient with surfaceBuoyancy needs the surfaceHeat and surfaceEvaporation it was made from');
   const { efficiency, shear, cap, jumpFloor, shearOnset, evaporativeEnhancement, maximumEfficiency, taper: tapered, jumpLayers, subsidence: subsiding } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
@@ -230,6 +243,8 @@ export function createBoundaryLayer(mesh, core, {
   const kinematicBuffer = countergradient > 0 ? (buffers && buffers.kinematicFlux ? buffers.kinematicFlux : new SharedArrayBuffer(16 * C)) : null;
   const nonlocal = nonlocalBuffer ? new Float64Array(nonlocalBuffer) : null;
   const kinematicHeat = kinematicBuffer ? new Float64Array(kinematicBuffer, 0, C) : null, kinematicWater = kinematicBuffer ? new Float64Array(kinematicBuffer, 8 * C, C) : null;
+  const scalarBuffer = holtslag ? (buffers && buffers.scalarMixing ? buffers.scalarMixing : new SharedArrayBuffer(8 * K * C)) : null;
+  const scalarMixing = scalarBuffer ? new Float64Array(scalarBuffer) : null;
   const { exnerLower } = core.diagnostics;
   const interfaceExchange = (kE, i, rho, velocity) => {
     const flux = subsiding ? Math.max(0, piSigmaDot[(kE + 1) * C + i]) / g : 0;
@@ -285,13 +300,14 @@ export function createBoundaryLayer(mesh, core, {
       }
     }
     if (moistScheme) {
-      for (let i = iFrom; i < iTo; i++) { moistColumn(i, pi, theta, surfaceT, q, qc); if (deckLayer) sealDeck(i, pi, theta); }
+      for (let i = iFrom; i < iTo; i++) { moistColumn(i, pi, theta, surfaceT, q, qc); if (deckLayer) sealDeck(i, pi, theta); if (scalarMixing) addScalarMixing(i); }
       return;
     }
     for (let i = iFrom; i < iTo; i++) {
       const zb = geopotential[bottom * C + i] / g, h = (deckTop && deckTop[i] > 0 ? Math.max(depth[i], deckTop[i]) : depth[i]) - zb;
       for (let k = kTop; k < K; k++) mixing[k * C + i] = 0;
       if (nonlocal) for (let k = kTop; k < K; k++) nonlocal[k * C + i] = 0;
+      if (scalarMixing) for (let k = kTop; k < K; k++) scalarMixing[k * C + i] = 0;
       entrainmentVelocity[i] = 0;
       const base = bottom * C + i;
       const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) * (1 - (1 - seaHumidity) * (openSea ? openSea[i] : 1)) - q[base]) : 0;
@@ -299,8 +315,9 @@ export function createBoundaryLayer(mesh, core, {
       buoyancyFlux[i] = buoyancy;
       if (nonlocal) surfaceFluxes(i, pi, theta, surfaceT, q);
       if (h <= 0) continue;
-      let scale = friction[i];
-      if (stability && buoyancy > 0) scale = friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
+      let scale = friction[i], prandtl = 1;
+      if (stability && buoyancy > 0) scale = holtslag ? Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * h) : friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
+      if (holtslag && stability && buoyancy > 0) prandtl = prandtlNumber(i, h, scale, buoyancy);
       let entrainK = -1;
       for (let k = kTop; k < bottom; k++) {
         const idx = k * C + i, below = idx + C;
@@ -311,8 +328,9 @@ export function createBoundaryLayer(mesh, core, {
         const rhoAbove = pi[i] * sigmaMid[k] / (R * theta[idx] * exnerLayer[idx]);
         const rhoBelow = pi[i] * sigmaMid[k + 1] / (R * theta[below] * exnerLayer[below]);
         mixing[idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
+        if (scalarMixing) scalarMixing[idx] = mixing[idx] * (1 / prandtl - 1);
       }
-      if (nonlocal) layNonlocal(i, pi, theta, zb, h, scale, buoyancy);
+      if (nonlocal) layNonlocal(i, pi, theta, zb, h, scale / prandtl, buoyancy);
       const open = deckGate ? Math.min(1, Math.max(0, (DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN))) : 1;
       const taper = open * (stratiform ? 1 - stratiform[i] : 1);
       if (entraining && entrainK >= kTop && buoyancy > 0 && taper > 0) {
@@ -326,7 +344,16 @@ export function createBoundaryLayer(mesh, core, {
         mixing[idx] = interfaceExchange(entrainK, i, 0.5 * (pi[i] * sigmaMid[entrainK] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[entrainK + 1] / (R * theta[below] * exnerLayer[below])), velocity);
       }
       if (deckLayer) sealDeck(i, pi, theta);
+      if (scalarMixing) addScalarMixing(i);
     }
+  }
+
+  function prandtlNumber(i, h, mixed, buoyancy) {
+    return Math.pow(1 + 1.5 * vonKarman * buoyancy * h / friction[i] ** 3, -1 / 6) + 7.2 * vonKarman * 0.1 * Math.cbrt(buoyancy * h) / mixed;
+  }
+
+  function addScalarMixing(i) {
+    for (let k = kTop; k < K; k++) scalarMixing[k * C + i] += mixing[k * C + i];
   }
 
   function surfaceBuoyancy(i, pi, theta, surfaceT, q) {
@@ -427,6 +454,7 @@ export function createBoundaryLayer(mesh, core, {
     if (!(a > 0) || depth[i] > deckTop[i]) return;
     for (let k = kTop; k < a; k++) mixing[k * C + i] = 0;
     if (nonlocal) for (let k = kTop; k <= a; k++) nonlocal[k * C + i] = 0;
+    if (scalarMixing) for (let k = kTop; k <= a; k++) scalarMixing[k * C + i] = 0;
     const velocity = Math.max(0, deckEntrainment[i]);
     mixing[a * C + i] = interfaceExchange(a, i, 0.5 * (density(pi, a, i, theta) + density(pi, a + 1, i, theta)), velocity / Math.max(deckShare[i], 1e-3));
     entrainmentVelocity[i] = velocity;
@@ -437,6 +465,7 @@ export function createBoundaryLayer(mesh, core, {
     const interfaceZ = (k) => 0.5 * (geopotential[k * C + i] / g + geopotential[(k + 1) * C + i] / g) - zb;
     for (let k = kTop; k < K; k++) mixing[k * C + i] = 0;
     if (nonlocal) for (let k = kTop; k < K; k++) nonlocal[k * C + i] = 0;
+    if (scalarMixing) for (let k = kTop; k < K; k++) scalarMixing[k * C + i] = 0;
     entrainmentVelocity[i] = 0;
     const buoyancy = surfaceBuoyancy(i, pi, theta, surfaceT, q);
     buoyancyFlux[i] = buoyancy;
@@ -495,16 +524,18 @@ export function createBoundaryLayer(mesh, core, {
     if (top >= 0 && layerDepth > 0) velocityCubed = g / thetaV[top * C + i] * cooling / (density(pi, top, i, theta) * cp) * layerDepth;
     const velocity = Math.cbrt(velocityCubed);
     radiativeVelocity[i] = velocity;
-    let scale = friction[i];
-    if (stability && buoyancy > 0 && h > 0) scale = friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
+    let scale = friction[i], prandtl = 1;
+    if (stability && buoyancy > 0 && h > 0) scale = holtslag ? Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * h) : friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
+    if (holtslag && stability && buoyancy > 0 && h > 0) prandtl = prandtlNumber(i, h, scale, buoyancy);
     for (let k = kTop; k < bottom; k++) {
       const z = interfaceZ(k);
       let diffusivity = 0;
       if (z < h) diffusivity += vonKarman * scale * z * (1 - z / h) ** 2;
+      if (scalarMixing && z < h) scalarMixing[k * C + i] = 0.5 * (density(pi, k, i, theta) + density(pi, k + 1, i, theta)) * diffusivity * (1 / prandtl - 1) / (geopotential[k * C + i] / g - geopotential[(k + 1) * C + i] / g);
       if (velocity > 0 && z > base0 && z < cloudTopZ) { const x = (z - base0) / layerDepth; diffusivity += profile * vonKarman * velocity * layerDepth * x * x * Math.sqrt(1 - x); }
       if (diffusivity > 0) mixing[k * C + i] = 0.5 * (density(pi, k, i, theta) + density(pi, k + 1, i, theta)) * diffusivity / (geopotential[k * C + i] / g - geopotential[(k + 1) * C + i] / g);
     }
-    if (nonlocal) layNonlocal(i, pi, theta, zb, h, scale, buoyancy);
+    if (nonlocal) layNonlocal(i, pi, theta, zb, h, scale / prandtl, buoyancy);
     if (!entraining) return;
     const onset = shearOnset > 0 ? Math.min(1, buoyancy / shearOnset) : 1;
     const sheared = buoyancy > 0 ? onset * friction[i] ** 3 : 0;
@@ -550,7 +581,7 @@ export function createBoundaryLayer(mesh, core, {
   }
 
   function mixColumn(i, pi, theta, q, qc, dt) {
-    const coefficient = mixing.subarray(i), wet = moistScheme && q && qc;
+    const coefficient = (scalarMixing || mixing).subarray(i), wet = moistScheme && q && qc;
     const latent = (idx) => (wet ? latentHeat * qc[idx] : 0), energy = (idx) => cp * exnerLayer[idx] * theta[idx] + geopotential[idx] - latent(idx);
     for (let k = kTop; k < K; k++) {
       const idx = k * C + i;
@@ -617,7 +648,7 @@ export function createBoundaryLayer(mesh, core, {
 
   return {
     diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, cloudLayer, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence, implicitDrag, surfaceDrag, surfaceStress, stressReady, formRate, formStress, formDrag: formOptions,
-    countergradient, nonlocal, kinematicHeat, kinematicWater,
-    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, cloudLayer: cloudLayerBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer, surfaceDrag: surfaceDragBuffer, surfaceStress: stressBuffer, ...(formDrag ? { formRate: formRateBuffer, formStress: formStressBuffer } : {}), ...(nonlocal ? { nonlocal: nonlocalBuffer, kinematicFlux: kinematicBuffer } : {}) },
+    countergradient, nonlocal, kinematicHeat, kinematicWater, velocityScale, scalarMixing,
+    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, cloudLayer: cloudLayerBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer, surfaceDrag: surfaceDragBuffer, surfaceStress: stressBuffer, ...(formDrag ? { formRate: formRateBuffer, formStress: formStressBuffer } : {}), ...(nonlocal ? { nonlocal: nonlocalBuffer, kinematicFlux: kinematicBuffer } : {}), ...(scalarMixing ? { scalarMixing: scalarBuffer } : {}) },
   };
 }
