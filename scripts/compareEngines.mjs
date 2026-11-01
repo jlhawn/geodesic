@@ -76,7 +76,7 @@ export const MAY_BE_ZERO = new Set(['OFLUX', 'FSTRESS', 'OSTRESS', 'OLAUNCH', 'O
 // the row's largest CPU value and fail past their bound here, max(3 × the worst share measured on
 // runs/sixteen/sixteen128_day0730.bin through 17 steps, 1e-3); env SHARE sets one bound for every row, env DECISION_EXTRA
 // adds rows (comma separated) under it
-export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001 };
+export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, ANVA: 1e-3, ANVQ: 1e-3, GWE: 0.001, GWN: 0.001, OWAVE: 0.001 };
 for (const name of (process.env.DECISION_EXTRA ?? '').split(',').filter(Boolean)) DECISION_BOUNDS[name] ??= 1e-3;
 export const DECISION_ROWS = new Set(Object.keys(DECISION_BOUNDS));
 const decisionBound = (name) => (process.env.SHARE ? Number(process.env.SHARE) : DECISION_BOUNDS[name]);
