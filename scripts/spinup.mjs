@@ -86,6 +86,8 @@
 // DYNAMICS (JSON options for the dynamical core, e.g.
 // '{"divergenceSurfaces":"hybrid"}' for the divergence damping along hybrid
 // σ–p surfaces; see dynamicsOptions in js/dynamics/sigmaCore.module.js),
+// ICE (JSON options for the sea ice of js/physics/ice.module.js, e.g.
+// '{"areaLossFactor":0.5}', recorded in the state's header when given),
 // RECORD (a directory to write each day's ocean and sea-ice forcing into as
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
 // one at a time, and every eighth waits for the device to finish the eight
@@ -186,7 +188,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, LAKE = JSON.parse(process.env.LAKE ?? '{}');
-const GIVEN_RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), RADIATION = withCadence({ radiation: { clearSkyPass: true, ...GIVEN_RADIATION } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
+const GIVEN_RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), RADIATION = withCadence({ radiation: { clearSkyPass: true, ...GIVEN_RADIATION } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), ICE = JSON.parse(process.env.ICE ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
 const DRAG_EVERY = withCadence({ dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, 1350 * 16 / N, N).dragEvery;
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
@@ -229,7 +231,7 @@ if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (G
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}`;
 const found = base ? stateGrid(base, topography) : null;
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, ...LAND }, lake: LAKE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
@@ -560,7 +562,7 @@ if (days > 0 && !step) {
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
 const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
-const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(GEOGRAPHY), levels: core.levels, options: recordedOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: soilOptions(LAND) }), ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
+const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(GEOGRAPHY), levels: core.levels, options: { ...recordedOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: soilOptions(LAND) }), ...(Object.keys(ICE).length ? { ice: ICE } : {}) }, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
 writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));

@@ -58,7 +58,8 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * and the water's per unit water area average back to it. The ice part
  * evolves as above; the heat the leads gain or lose, with the ocean's
  * flux under them, melts ice or freezes new ice. Melting takes area as
- * Hibler (1979) does, half the relative loss of volume from the area;
+ * Hibler (1979) does, half the relative loss of volume from the area,
+ * times areaLossFactor;
  * ice frozen in the leads closes them as new ice leadClosing thick. Open
  * water that cools below freezing forms ice leadClosing thick over the
  * area its volume covers. Ice below the floors of seaIceRemoval melts
@@ -125,7 +126,7 @@ export function refreshedSnowAlbedo(albedo, fall, { freshSnowAlbedo, refreshSnow
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.62, meltingIceAlbedo = 0.48, iceMeltingRange = 1, fullAlbedoThickness = 0.5,
-  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10,
+  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10, areaLossFactor = 1,
   snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
@@ -251,7 +252,7 @@ export function createSeaIce(mesh, {
     budget.lateralMelted += cellArea * leadMelt;
     const energyLeft = A * skinHeatCapacity * (T - FREEZING_POINT) - latent * (A * thickness - leadHeat / latent) - latentHeatFusion * A * s;
     let volume = A * thickness - leadHeat / latent;
-    const area = Math.min(1, A - melted / (2 * h) + (1 - A) * leadIce / leadClosing);
+    const area = Math.min(1, A - areaLossFactor * melted / (2 * h) + (1 - A) * leadIce / leadClosing);
     let skin = T, snowOnIce = s;
     if (area < A) volume += (A - area) * (s / iceDensity - skinHeatCapacity * (T - FREEZING_POINT) / latent);
     else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; }

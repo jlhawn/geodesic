@@ -179,6 +179,26 @@ test('a half-covered cell in the sun loses its area faster than a full one loses
   assert.ok(half.concentration[0] === 0 && full.concentration[0] === 0 && stepsHalf < stepsFull);
 });
 
+test('areaLossFactor scales the area melting takes, conserves energy, and 1 is Hibler\'s rule', () => {
+  const run = (options) => {
+    const sea = createSeaIce(model.mesh, options), surfaceT = new Float64Array([MELTING_POINT]), ice = new Float64Array([1]), flux = new Float64Array([200]);
+    sea.concentration[0] = 0.8;
+    let energy = energyOf(sea, surfaceT, ice);
+    for (let n = 0; n < 96; n++) {
+      sea.update(surfaceT, ice, flux, 0, 900, 150);
+      energy += 900 * flux[0];
+      assert.ok(Math.abs(energyOf(sea, surfaceT, ice) - energy) < 1e-9 * sea.slabHeatCapacity, `step ${n}: energy ${energyOf(sea, surfaceT, ice)} vs ${energy}`);
+    }
+    return { area: sea.concentration[0], volume: sea.concentration[0] * ice[0] };
+  };
+  const hibler = run({}), one = run({ areaLossFactor: 1 }), half = run({ areaLossFactor: 0.5 }), none = run({ areaLossFactor: 0 });
+  assert.deepEqual(one, hibler);
+  console.log(`a day melting from 0.8 cover of 1 m: area ${hibler.area.toFixed(4)} (Hibler), ${half.area.toFixed(4)} (0.5), ${none.area.toFixed(4)} (0); volume ${hibler.volume.toFixed(4)}, ${half.volume.toFixed(4)}, ${none.volume.toFixed(4)}`);
+  assert.ok(hibler.area < half.area && half.area < none.area && none.area === 0.8, `areas ${hibler.area}, ${half.area}, ${none.area}`);
+  const lost = (r) => 0.8 - r.area;
+  assert.ok(Math.abs(lost(half) / lost(hibler) - 0.5) < 0.1, `half the factor loses ${lost(half) / lost(hibler)} of Hibler's area`);
+});
+
 test('a lead under a cold sky closes: the area rises toward full cover as the volume grows by what freezes', () => {
   const sea = createSeaIce(model.mesh, { leadExchange: 0 }), dt = 900;
   const surfaceT = new Float64Array([FREEZING_POINT - 10]), ice = new Float64Array([1]), flux = new Float64Array([-100]);

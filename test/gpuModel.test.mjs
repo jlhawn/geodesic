@@ -1141,11 +1141,11 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   assert.ok(convective.rmsRel < 1e-3 && largeScaleOfRain < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScaleOfRain} of the rain`);
 });
 
-test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux and the lowest layers, but for the columns where a discrete decision parted (the dry adjustment merging one layer more on one engine, a layer\'s cloud water switching a cover or the boundary layer\'s regime on one engine only) and, outside the ice, their neighbours within two cells', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+async function meltingPolarCells(ice) {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
-  const dt = 1350 * 16 / N, steps = Math.ceil(8 * 3600 / dt), options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' } };
+  const dt = 1350 * 16 / N, steps = Math.ceil(8 * 3600 / dt), options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' }, ice };
   const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
   const C = cpu.mesh.nCells, K = cpu.core.K, init = initializeState(cpu, {});
   const iced = [];
@@ -1185,6 +1185,15 @@ test('step by step from one state with partly iced, melting polar cells, the eng
       worst.skin = Math.max(worst.skin, Math.abs(cpu.state[3][i] - gpu.state[3][i])); worst.iceFlux = Math.max(worst.iceFlux, Math.abs(cpu.radiation.surfaceFlux[i] - flux[i]));
     }
   }
+  if (ice.areaLossFactor !== undefined) {
+    const reference = createModel(new Grid(N), { ...options, ice: {} });
+    for (let a = 0; a < init.length; a++) reference.state[a].set(init[a]);
+    reference.seaIce.load(reference.state[6], concentration); reference.time = 91 * 86400 + 12 * 3600; reference.seaIce.snow.set(snow);
+    for (let n = 0; n < steps; n++) reference.step(dt);
+    const moved = Math.max(...iced.map((i) => Math.abs(reference.seaIce.concentration[i] - cpu.seaIce.concentration[i])));
+    console.log(`against Hibler's rule the option moved the cover by up to ${moved.toExponential(1)}`);
+    assert.ok(moved > 1e-3, `the option moved the cover by only ${moved}, too little for the comparison to see it`);
+  }
   const near = neighbourhood(cpu.mesh, new Set([...merged, ...decided]), 2);
   for (let i = 0; i < C; i++) {
     if (near.has(i)) continue;
@@ -1195,4 +1204,6 @@ test('step by step from one state with partly iced, melting polar cells, the eng
   assert.ok(melted > 0, 'some cell melts');
   assert.ok(worst.h < 1e-4 && worst.A < 1e-4 && worst.snow < 1e-3 && worst.albedo < 1e-4 && worst.skin < 0.01 && worst.iceFlux < 0.5, JSON.stringify(worst));
   assert.ok(worst.flux < 1 && worst.theta < 0.01, JSON.stringify(worst));
-});
+}
+test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux and the lowest layers, but for the columns where a discrete decision parted (the dry adjustment merging one layer more on one engine, a layer\'s cloud water switching a cover or the boundary layer\'s regime on one engine only) and, outside the ice, their neighbours within two cells', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({}));
+test('the engines agree the same way on those melting polar cells when areaLossFactor halves the area melting takes', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({ areaLossFactor: 0.5 }));
