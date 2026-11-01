@@ -59,3 +59,5 @@ test('with a 20 m melt layer, as in Losch (2008), the melt reads T_w and S_w as 
 });
 
 test('with the melt off, a homogeneous ocean under a sloping shelf with a front stays as still for a month as it does with the shelves as land, on the CPU', () => restingShelf(['cpu']));
+
+test('with thermobaric, a homogeneous ocean under a sloping shelf stays as still for a month as it does with the shelves as land, on the CPU, and a load saved without thermobaric takes the in situ weight on loading', () => restingShelf(['cpu'], { thermobaric: true }));

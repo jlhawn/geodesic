@@ -3,6 +3,7 @@ import { Grid } from '../../js/grid.module.js';
 import { createModel } from '../../js/model.module.js';
 import { gridMesh } from '../../js/stateGrid.module.js';
 import { createOcean, displacedWeight } from '../../js/ocean/layered.module.js';
+import { inSituDensity } from '../../js/ocean/seawater.module.js';
 import { syntheticTopography, encodeLandIce, decodeLandIce, ICE_DENSITY, SEAWATER_DENSITY } from '../../js/geography.module.js';
 
 export const N = 16;
@@ -44,9 +45,9 @@ export function warmOcean(mesh, geography, options = {}) {
   return { ocean, surfaceT, ice };
 }
 
-async function restMonth({ raster, options }, iceShelves, profile, engines) {
+async function restMonth({ raster, options }, iceShelves, profile, engines, extra = {}) {
   const setup = { topography: raster, geography: { ...options, iceShelves }, ocean: { iceDrift: false } }, { mesh, geography } = createModel(new Grid(N), setup), C = mesh.nCells, E = mesh.nEdges;
-  const cavity = geography.cavity ?? new Uint8Array(C), cpu = createOcean(mesh, { geography, everySteps: 1, shelfMelt: false }), L = cpu.layers, ice = new Float64Array(C), calm = new Float64Array(E), flux = new Float64Array(C);
+  const cavity = geography.cavity ?? new Uint8Array(C), cpu = createOcean(mesh, { geography, everySteps: 1, shelfMelt: false, ...extra }), L = cpu.layers, ice = new Float64Array(C), calm = new Float64Array(E), flux = new Float64Array(C);
   const [surface] = profile(0);
   cpu.initialize(new Float64Array(C).fill(surface), ice);
   const saved = { ...cpu.serialize(), ...cpu.restartArrays(), flux: new Float64Array(C) };
@@ -61,12 +62,19 @@ async function restMonth({ raster, options }, iceShelves, profile, engines) {
       saved.Q[n] = saved.h[n] * t; saved.W[n] = saved.h[n] * s; saved.T[n] = t; saved.S[n] = s;
     }
     saved.eta[i] = 0; saved.previousT0[i] = saved.T[i];
-    if (saved.shelfLoad) saved.shelfLoad[i] = cavity[i] ? displacedWeight(geography.iceDraft[i], profile) : 0;
+    if (saved.shelfLoad) saved.shelfLoad[i] = cavity[i] ? displacedWeight(geography.iceDraft[i], profile, extra.thermobaric ? inSituDensity : undefined) : 0;
   }
+  if (extra.thermobaric && saved.shelfLoad) saved.shelfLoadThermobaric = true;
   saved.u.fill(0);
   const onCpu = engines.includes('cpu'), onGpu = engines.includes('gpu'), createGpuModel = onGpu ? (await import('../../js/gpu/model.gpu.js')).createGpuModel : null;
-  const gpu = onGpu ? (await createGpuModel(new Grid(N), { ...setup, ocean: { everySteps: 1, shelfMelt: false, iceDrift: false } })).oceanEngine : null, cpuSkin = new Float64Array(C).fill(surface), gpuSkin = new Float64Array(C).fill(surface);
+  const gpu = onGpu ? (await createGpuModel(new Grid(N), { ...setup, ocean: { everySteps: 1, shelfMelt: false, iceDrift: false, ...extra } })).oceanEngine : null, cpuSkin = new Float64Array(C).fill(surface), gpuSkin = new Float64Array(C).fill(surface);
   cpu.load(saved, cpuSkin, ice);
+  if (extra.thermobaric && saved.shelfLoad) {
+    const plain = createOcean(mesh, { geography, everySteps: 1, shelfMelt: false, ...extra });
+    plain.load({ ...saved, shelfLoadThermobaric: undefined, shelfLoad: Float64Array.from(saved.shelfLoad, (_, i) => (cavity[i] ? displacedWeight(geography.iceDraft[i], profile) : 0)) }, Float64Array.from(cpuSkin), ice);
+    const kept = cpu.serialize().shelfLoad, converted = plain.serialize().shelfLoad;
+    for (let i = 0; i < C; i++) assert.ok(Math.abs(kept[i] - converted[i]) <= 1e-9 * kept[i] + 1e-9, `cell ${i}: a load saved without thermobaric becomes ${converted[i]} kg/m² against the in situ ${kept[i]}`);
+  }
   if (onGpu) gpu.upload(saved, gpuSkin, ice);
   for (let n = 0; n < 720; n++) { if (onCpu) cpu.advance(cpuSkin, ice, flux, calm, 3600); if (onGpu) await gpu.advance(gpuSkin, ice, calm, 3600); }
   const b = onGpu ? await gpu.download() : null, most = (a) => a.reduce((m, v) => Math.max(m, Math.abs(v)), 0), under = (u) => {
@@ -78,8 +86,8 @@ async function restMonth({ raster, options }, iceShelves, profile, engines) {
 }
 export const show = (r) => ['cpu', 'gpu', 'cpuEta', 'gpuEta'].filter((k) => k in r).map((k) => `${k} ${r[k].toExponential(1)}`).join(', ');
 
-export async function restingShelf(engines) {
-  const bands = shelfBands(250), still = () => [271.65, 34.4], shelves = await restMonth(bands, 'cavity', still, engines), bare = await restMonth(bands, 'land', still, engines);
+export async function restingShelf(engines, extra = {}) {
+  const bands = shelfBands(250), still = () => [271.65, 34.4], shelves = await restMonth(bands, 'cavity', still, engines, extra), bare = await restMonth(bands, 'land', still, engines, extra);
   console.log(`a month at rest, homogeneous water: with the shelves ${show(shelves)}; with them as land ${show(bare)}`);
   // Rounding walks both oceans off rest; 10× leaves room for the cavity's added cells and catches a load, draft or pin that pushes the water.
   for (const [u, eta] of engines.map((e) => [e, `${e}Eta`])) assert.ok(shelves[u] < 10 * bare[u] && shelves[eta] < 10 * bare[eta], `${u}: ${show(shelves)} against ${show(bare)}`);

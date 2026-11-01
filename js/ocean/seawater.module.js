@@ -27,6 +27,24 @@ export function halineContraction(t, s) {
 }
 
 /*
+ * The thermobaric terms of the same equation of state, −a₀ μ₁ z Tₐ −
+ * b₀ μ₂ z Sₐ at depth z (m), as a slope: in situ density at depth z is
+ * seawaterDensity(t, s) + thermobaricSlope(t, s) z. Cold water expands
+ * more with heat the deeper it is (α at 1 °C is about twice as large at
+ * 3000 m as at the surface), so cold, fresh water grows denser with depth
+ * than warm, salty water.
+ */
+export const THERMOBARIC = { mu1: 1.497e-4, mu2: 1.109e-5 };
+
+export function thermobaricSlope(t, s) {
+  return -a0 * THERMOBARIC.mu1 * (t - t0) - b0 * THERMOBARIC.mu2 * (s - s0);
+}
+
+export function inSituDensity(t, s, z) {
+  return seawaterDensity(t, s) + thermobaricSlope(t, s) * z;
+}
+
+/*
  * The temperature at which water of salinity s has density rho, on the
  * warm side of the density maximum; a density beyond the maximum gives
  * the temperature of the maximum.

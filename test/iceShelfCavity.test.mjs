@@ -147,10 +147,10 @@ test('under a shelf the boundary layer is stirred by the shelf\'s drag on the wa
   assert.ok(beside.size >= 10 && deepened > beside.size / 2, `${deepened} of ${beside.size} open cells beside the front deepened their boundary layer`);
 });
 
-test(`both engines run the cavities alike at N=${N}: the water under the shelves tracks across engines as the open sea does without them, with no sea ice, ocean flux or light share in a cavity and the land's skin over it`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+async function cavitiesAlike(extra = {}) {
   const { raster, options } = shelfBands();
   const pair = async (iceShelves) => {
-    const setup = { topography: raster, geography: { ...options, iceShelves }, ocean: { iceDrift: false } };
+    const setup = { topography: raster, geography: { ...options, iceShelves }, ocean: { iceDrift: false, ...extra } };
     const cpu = await prepare(createModel(new Grid(N), setup)), gpu = await prepare(await createGpuModel(new Grid(N), setup));
     stratify(cpu, gpu);
     for (let n = 0; n < 48; n++) { cpu.step(900); await gpu.step(900); }
@@ -195,7 +195,9 @@ test(`both engines run the cavities alike at N=${N}: the water under the shelves
   console.log(`twelve hours of melt under the shelves: CPU ${melt.cpu.toExponential(4)} kg, GPU ${melt.gpu.toExponential(4)} kg; last step's southern discharge, melt and draw: CPU ${[record.discharge[0], record.melt[0], record.drawn[0]].map((x) => x.toExponential(3))}, GPU ${[pools.pools[0], pools.pools[2], pools.pools[6]].map((x) => x.toExponential(3))}`);
   assert.ok(melt.cpu > 0 && Math.abs(melt.gpu - melt.cpu) < 1e-3 * melt.cpu, `melt: CPU ${melt.cpu} kg, GPU ${melt.gpu} kg`);
   assert.ok(Math.abs(pools.pools[2] - record.melt[0]) < 1e-3 * record.melt[0] && Math.abs(pools.pools[4] + pools.pools[6] - pools.pools[2]) < 1e-6 * pools.pools[2], `the GPU's southern pool ${Array.from(pools.pools)} against the CPU's ${JSON.stringify(record)}`);
-});
+}
+test(`both engines run the cavities alike at N=${N}: the water under the shelves tracks across engines as the open sea does without them, with no sea ice, ocean flux or light share in a cavity and the land's skin over it`, { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitiesAlike());
+test(`both engines run the cavities alike at N=${N}: the water under the shelves tracks across engines as the open sea does without them, with no sea ice, ocean flux or light share in a cavity and the land's skin over it, with thermobaric`, { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitiesAlike({ thermobaric: true }));
 
 test(`a saved state keeps the shelves' load at f64, so on each engine a restart melts beneath them from the same freezing point bit for bit at N=${N}`, { skip: !gpuAvailable && 'webgpu not available' }, async () => {
   const { raster, options } = shelfBands(), setup = { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { iceDrift: false } };

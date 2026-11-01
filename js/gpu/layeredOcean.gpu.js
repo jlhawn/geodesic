@@ -3,7 +3,7 @@ import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './me
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
 import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
-import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
+import { SEAWATER, SEAWATER_WGSL, THERMOBARIC, seawaterDensity, labelTemperature, thermobaricSlope, inSituDensity } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
 import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval } from '../physics/ice.module.js';
@@ -60,6 +60,7 @@ export const OCEAN_DEFAULTS = {
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
   edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 20,
+  thermobaric: false,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
@@ -155,6 +156,10 @@ function hybridHead(o) {
   let ta = t - ${literal(t0 - HEAT_REFERENCE)}; let sa = s - ${literal(s0 - SALT_REFERENCE)};
   return -${literal(a0)} * (1.0 + ${literal(0.5 * lambda1)} * ta) * ta + ${literal(b0)} * (1.0 - ${literal(0.5 * lambda2)} * sa) * sa - ${literal(nu)} * ta * sa;
 }`;
+  const thermobaricRelative = o.thermobaric ? `
+fn tbA(t: f32, s: f32) -> f32 {
+  return -${literal(a0 * THERMOBARIC.mu1)} * (t - ${literal(t0 - HEAT_REFERENCE)}) - ${literal(b0 * THERMOBARIC.mu2)} * (s - ${literal(s0 - SALT_REFERENCE)});
+}` : '';
   const floors = Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m));
   return `
 ${arr('MINIMUM', table.minimum)}
@@ -168,7 +173,7 @@ const LP1: i32 = ${L + 1};
 ${constLine('HMIN', o.minimumLayer)} ${constLine('THINEDGE', 2 * o.minimumLayer)} ${constLine('MODEDEPTH', o.modeDepth)} ${constLine('MSTAR', o.mstar)} ${constLine('EKMANF', o.ekmanFactor)} ${constLine('RH18C2', RH18_NEUTRAL.c2)} ${constLine('RH18C3', RH18_NEUTRAL.c3)} ${constLine('ICEWAVES', ICE_WAVE_DAMPING)} ${constLine('NSTAR', o.nstar)}${o.mstarScheme === 'rh18' ? ` ${Object.keys(RH18_ENERGY).map((key) => constLine(`RH${key}`, RH18_ENERGY[key])).join(' ')}` : ''}
 ${constLine('BACKKAPPA', o.backgroundDiffusivity)} ${constLine('CONVKAPPA', o.convectiveDiffusivity)} ${constLine('VONK', 0.4)} ${constLine('BLFLOOR', 0.1)} ${constLine('DZFLOOR', 1e-3)} ${constLine('HNEGLECT', 1e-6)} ${constLine('MLEXCESS', 0.03)}
 ${constLine('BLTOL', 1e-6)} const BLITER: i32 = 24;
-${eosAnomalyRelative}
+${eosAnomalyRelative}${thermobaricRelative}
 fn modeWeight(k: i32, i: i32) -> f32 {
   if (GEN == 0) { return 1.0; }
   if (GEN == 1) { return 0.0; }
@@ -291,7 +296,7 @@ ${edgeFlow(thickness, 'keptAfter += he * IN[uOff(k) + e]; keptDepth += he;')}  i
     let pa = O_PR + 2 * (k * C + a); let pb = O_PR + 2 * (k * C + b); let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
     let top = max(Ha, Hb); let bottom = min(Ha + ha, Hb + hb);
     let zR = select(0.5 * (Ha + 0.5 * ha + Hb + 0.5 * hb), 0.5 * (top + bottom), bottom > top);
-    let force = OD[pb] + OD[pb + 1] * (zR - Hb) - OD[pa] - OD[pa + 1] * (zR - Ha);
+    let force = ${o.thermobaric ? 'OD[pb] + (OD[pb + 1] + 0.5 * OD[O_TB + k * C + b] * (zR + Hb)) * (zR - Hb) - OD[pa] - (OD[pa + 1] + 0.5 * OD[O_TB + k * C + a] * (zR + Ha)) * (zR - Ha)' : 'OD[pb] + OD[pb + 1] * (zR - Hb) - OD[pa] - OD[pa + 1] * (zR - Ha)'};
     var du = pv / dc - gradK - OGRAV * OD[O_GRADETA + e] - OGRAV / RHO0 * force / dc;
     let he = OD[O_HEDGE + n];
     if (k == 0) { du += OD[O_STRESS + e] / RHO0 / max(he, HMIN) - TOPDRAG * 0.5 * (OD[O_SHELF + a] + OD[O_SHELF + b]) * abs(u) * u / max(he, HMIN); }
@@ -857,11 +862,11 @@ fn restratShape(s: f32) -> f32 { let x = 2.0 * s + 1.0; let x2 = x * x; return m
     oCellTendency: `${K}  let i = ${idx}; if (i >= C) { return; }
   var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
   for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
-  var weighted = OD[O_LOAD + i] + OD[O_DRAFT + i] * eosA(OD[O_LOADT + i], OD[O_LOADS + i]);
+  var weighted = OD[O_LOAD + i] + OD[O_DRAFT + i] * eosA(OD[O_LOADT + i], OD[O_LOADS + i]);${o.thermobaric ? ' var depthTop = OD[O_DRAFT + i];' : ''}
   for (var k = 0; k < L; k++) {
     let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k] - SREF, IN[wOff(k) + i] / hv, hv > 1e-6);
     let r = select(RHOA[k], eosA(IN[qOff(k) + i] / hv, IN[wOff(k) + i] / hv), hv > 1e-6);
-    let n = k * C + i; OD[O_PR + 2 * n] = weighted; OD[O_PR + 2 * n + 1] = r; weighted += r * hv;
+    let n = k * C + i; OD[O_PR + 2 * n] = weighted; OD[O_PR + 2 * n + 1] = r; ${o.thermobaric ? 'let tau = tbA(Ti, Si); OD[O_TB + n] = tau; weighted += (r + tau * (depthTop + 0.5 * hv)) * hv; depthTop += hv;' : 'weighted += r * hv;'}
     var divH = 0.0; var divQ = 0.0; var divW = 0.0; var difQ = 0.0; var difW = 0.0;
     for (var m = 0; m < MAXE; m++) {
       let e = edges[m]; let j = nbrs[m];
@@ -1370,6 +1375,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const smoothed = o.bathymetry ? null : bathymetryFrom(mesh, water, { minimumDepth: o.minimumDepth, flatDepth: o.flatDepth });
   for (let i = 0; i < C; i++) bed[i] = !cellOcean[i] ? 0 : o.bathymetry ? o.bathymetry[i] : smoothed[i];
   const { D, sillEdge } = restingColumns(mesh, bed, draft, edgeOcean, o.edgeSill === undefined ? (water ? water.edgeSill ?? null : null) : o.edgeSill, o.sillFloor ?? o.minimumDepth);
+  const loadDensity = o.thermobaric ? inSituDensity : seawaterDensity;
   const hasShelves = shelf.some((s) => s), shelfLoad = new Float64Array(C), shelfMelted = new Float64Array(C), shelfDraw = new Float64Array(C), meltOn = o.shelfMelt && hasShelves;
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
@@ -1426,6 +1432,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
     ...(third ? [['BEY', 2 * nE], ['BED', 2 * nE]] : []),
     ...(driftOptions ? driftSections(nC, nE).map(([name]) => sec(name, name === 'TAUA' || DRIFT_EDGE_SECTIONS.includes(name) ? 'edge' : 'cell')) : []),
     ...(restrat ? [sec('MLED', 'cell'), sec('MLEH', 'cell'), sec('MLEB', 'cell'), sec('MLEU', 'cell'), sec('MLESCALE', 'edge')] : []),
+    ...(o.thermobaric ? [['TB', L * nC]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1855,6 +1862,7 @@ ${core.fieldConstants}
   function stericSurface(h, Q, W, eta, referenceDepth = 3500) {
     const at = (k, i) => k * C + i;
     const densityAt = (k, i) => { const n = at(k, i); return h[n] > 1e-6 ? eos(Q[n] / h[n], W[n] / h[n]) : rho[k]; };
+    const tauAt = (k, i) => { const n = at(k, i); return h[n] > 1e-6 ? thermobaricSlope(Q[n] / h[n], W[n] / h[n]) : thermobaricSlope(labelT[k], labelS[k]); };
     const deep = abyssalCells(mesh, D, cellOcean, referenceDepth);
     let deepArea = 0, deepMean = 0;
     for (let i = 0; i < C; i++) {
@@ -1862,8 +1870,8 @@ ${core.fieldConstants}
       if (!deep[i]) continue;
       let budget = referenceDepth, anomaly = 0;
       for (let k = 0; k < L && budget > 0; k++) {
-        const part = Math.min(h[at(k, i)], budget);
-        anomaly += (densityAt(k, i) - o.density) * part;
+        const part = Math.min(h[at(k, i)], budget), z = referenceDepth - budget;
+        anomaly += (densityAt(k, i) - o.density + (o.thermobaric ? tauAt(k, i) * (z + 0.5 * part) : 0)) * part;
         budget -= part;
       }
       eta[i] = -anomaly / o.density;
@@ -1950,14 +1958,14 @@ ${core.fieldConstants}
         const [tb, sb] = profileAt(column, bed);
         zs.push(bed); ts.push(tb); ss.push(sb);
         for (let k = 0; k < L; k++) { const n = at(k, i), hk = zCol[k + 1] - zCol[k]; h[n] = hk; Q[n] = integral(ts, lid + zCol[k], lid + zCol[k + 1]); W[n] = integral(ss, lid + zCol[k], lid + zCol[k + 1]); }
-        if (lid > 0) shelfLoad[i] = displacedWeight(lid, (z) => profileAt(column, z));
+        if (lid > 0) shelfLoad[i] = displacedWeight(lid, (z) => profileAt(column, z), loadDensity);
       } else if (atlas) {
         pending.push(i);
         for (let k = 0; k < L; k++) h[at(k, i)] = zCol[k + 1] - zCol[k];
       } else {
         const s0 = salinityProfile(lat), t0 = T0[i], scale = 400 * (1 - o.thermoclineTilt + 2 * o.thermoclineTilt * Math.cos(lat) ** 2);
         const tDeep = 275.15, sDeep = 34.7, decay = (a, b) => scale * (Math.exp(-a / scale) - Math.exp(-b / scale)) / (b - a);
-        if (lid > 0) shelfLoad[i] = displacedWeight(lid, (z) => [tDeep + (t0 - tDeep) * Math.exp(-z / scale), sDeep + (s0 - sDeep) * Math.exp(-z / scale)]);
+        if (lid > 0) shelfLoad[i] = displacedWeight(lid, (z) => [tDeep + (t0 - tDeep) * Math.exp(-z / scale), sDeep + (s0 - sDeep) * Math.exp(-z / scale)], loadDensity);
         for (let k = 0; k < L; k++) {
           const n = at(k, i), hk = zCol[k + 1] - zCol[k], f = decay(lid + zCol[k], lid + zCol[k + 1]);
           h[n] = hk; Q[n] = hk * (tDeep + (t0 - tDeep) * f); W[n] = hk * (sDeep + (s0 - sDeep) * f);
@@ -1983,7 +1991,7 @@ ${core.fieldConstants}
         while (j < L - 1 && top + h[at(j, source)] < y) { if (h[at(j, source)] > 1e-9) last = at(j, source); top += h[at(j, source)]; j++; }
         return shelf[i] && !(h[at(j, source)] > 1e-9) ? last : at(j, source);
       };
-      if (draft[i] > 0) shelfLoad[i] = displacedWeight(draft[i], (y) => { const m = source >= 0 ? sourceAt(y) : -1; return m >= 0 && h[m] > 1e-9 ? [Q[m] / h[m], W[m] / h[m]] : [FREEZING_POINT, o.referenceS]; });
+      if (draft[i] > 0) shelfLoad[i] = displacedWeight(draft[i], (y) => { const m = source >= 0 ? sourceAt(y) : -1; return m >= 0 && h[m] > 1e-9 ? [Q[m] / h[m], W[m] / h[m]] : [FREEZING_POINT, o.referenceS]; }, loadDensity);
       let z = draft[i];
       for (let k = 0; k < L; k++) {
         const n = at(k, i), hk = h[n], center = z + 0.5 * hk;
@@ -2022,7 +2030,7 @@ ${core.fieldConstants}
     encoder.clearBuffer(ob.OD, 0, 4 * ODTOTAL);
     device.queue.submit([encoder.finish()]);
     putSection('ETA', eta); putSection('EMASK', edgeOcean); putSection('CMASK', cellOcean); putSection('SHELF', shelf); putSection('DRAFT', draft);
-    const restoredLoad = restart && [restart.shelfLoadRest, restart.shelfLoadT, restart.shelfLoadS].every((values) => values && values.length === C);
+    const restoredLoad = restart && [restart.shelfLoadRest, restart.shelfLoadT, restart.shelfLoadS].every((values) => values && values.length === C) && !!restart.shelfLoadThermobaric === !!o.thermobaric;
     const load = new Float32Array(C), loadT = new Float32Array(C), loadS = new Float32Array(C);
     if (restoredLoad) { load.set(restart.shelfLoadRest); loadT.set(restart.shelfLoadT); loadS.set(restart.shelfLoadS); }
     else for (let i = 0; i < C; i++) {
@@ -2127,6 +2135,7 @@ ${core.fieldConstants}
     const start = () => { const arrays = initializeArrays(surfaceT, ice, o.climatology ?? null); uploadArrays(arrays, surfaceT, ice, null, concentration); putSection('PREVT0', arrays.previousT0); };
     if (!saved || !saved.h) { start(); return; }
     if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * seawaterDensity(saved.T[i], saved.S[i]);
+    if (hasShelves && !!o.thermobaric !== !!(saved.shelfLoadThermobaric && saved.shelfLoad && saved.shelfLoad.length === C)) for (let i = 0; i < C; i++) if (shelf[i]) shelfLoad[i] += (o.thermobaric ? 0.5 : -0.5) * thermobaricSlope(saved.T[i], saved.S[i]) * draft[i] * draft[i];
     for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     const classes = savedDensities(saved, C), own = classes && sameDensities(classes, labels) && saved.h.length === L * C;
     if (own && restartable(saved)) {
@@ -2212,7 +2221,7 @@ ${core.fieldConstants}
     return z;
   }
   function serializeFrom(d) {
-    return { h: Array.from(d.h), u: Array.from(d.u), T: Array.from(d.T), S: Array.from(d.S), eta: Array.from(d.eta), densities: Array.from(labels), vertical: 'hybrid', generator: o.generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), ...(d.shelfMelted ? { shelfMelted: Array.from(d.shelfMelted), shelfDraw: Array.from(d.shelfDraw) } : {}) } : {}) };
+    return { h: Array.from(d.h), u: Array.from(d.u), T: Array.from(d.T), S: Array.from(d.S), eta: Array.from(d.eta), densities: Array.from(labels), vertical: 'hybrid', generator: o.generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), ...(o.thermobaric ? { shelfLoadThermobaric: true } : {}), ...(d.shelfMelted ? { shelfMelted: Array.from(d.shelfMelted), shelfDraw: Array.from(d.shelfDraw) } : {}) } : {}) };
   }
   async function serialize() { return serializeFrom(await download()); }
   /*
