@@ -125,3 +125,21 @@ test('the workers sum the convective and large-scale rain into the arrays the di
     await parallel.close();
   }
 });
+
+test("with iceExchange 'turbulent' the worker-thread step reproduces the single-thread step bit for bit, the water's heat under the ice and the conductance included", async () => {
+  const options = { ocean: { iceExchange: 'turbulent' } };
+  const serial = createModel(new Grid(16), options);
+  const parallel = await createParallelModel(new Grid(16), options, 3);
+  const init = initializeState(serial, {}), cover = Float64Array.from(init[6], (h) => (h > 0 ? 0.9 : 0));
+  for (let a = 0; a < init.length; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
+  serial.seaIce.load(serial.state[6], cover); parallel.seaIce.load(parallel.state[6], cover);
+  try {
+    for (let n = 0; n < 9; n++) { serial.step(600); parallel.step(600); }
+    assert.ok(serial.seaIce.waterHeat.some((x) => x > 0), 'the water under the ice holds heat');
+    for (let a = 0; a < serial.state.length; a++) assert.deepEqual(parallel.state[a], serial.state[a], `array ${a}`);
+    for (let a = 0; a < serial.ocean.state.length; a++) assert.deepEqual(parallel.ocean.state[a], serial.ocean.state[a], `ocean array ${a}`);
+    for (const name of ['waterHeat', 'conductance', 'oceanFlux', 'concentration']) assert.deepEqual(parallel.seaIce[name], serial.seaIce[name], name);
+  } finally {
+    await parallel.close();
+  }
+});

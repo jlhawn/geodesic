@@ -138,23 +138,24 @@ export function iceExchangeOptions(option = 'instant') {
  * agedSnowAlbedo toward iceSnowFloor and refreshed by snowfall
  * (refreshedSnowAlbedo); without it the snow's albedo is iceSnowAlbedo.
  *
- * With iceExchange 'turbulent' (ICE_EXCHANGE above) the ocean no longer hands
+ * With iceExchange 'turbulent' (ICE_EXCHANGE above) the ocean does not hand
  * the ice the heat of its top layer above freezing. The layer keeps it as
  * `waterHeat`, which the ocean writes after its step, the ice changes in its
  * steps and the ocean reads back before the next, and the ice draws on it at
  * the bottom and lateral rates of conductance[i] and w_lat. The leads' net
- * heat gain, sunlight included, goes into waterHeat instead of melting ice; a
+ * heat gain, sunlight included, goes into waterHeat and melts no ice; a
  * net loss first takes the heat above freezing and freezes new ice for what
- * remains, as the open water of CICE does; the atmosphere still sees the leads
- * at the freezing point, an approximation where the water under them is warmer.
+ * remains, as the open water of CICE does; the atmosphere sees the leads at
+ * the freezing point, an approximation where the water under them is warmer.
  * Lateral melt takes the fraction r of the area and, with it, of the volume
  * and snow, the lost area's snow and skin heat going where area loss sends
  * them, so that the thickness stays; the heat of what melts, the volume's
  * latent heat, comes from waterHeat. Ice that forms in open water leaves the
  * water at freezing and ice that melts away leaves it with waterHeat. Water
- * the ocean finds supercooled under ice still freezes onto the base through
- * `oceanFlux`, as before, which is then never positive. The ice's surface
- * energy plus waterHeat changes by exactly the surface flux plus `oceanFlux`.
+ * the ocean finds supercooled under ice freezes onto the base through
+ * `oceanFlux`, as with the instant exchange, which then holds no heat for the
+ * ice to melt. The ice's surface energy plus waterHeat changes by exactly the
+ * surface flux plus `oceanFlux`.
  */
 export function openWaterAlbedo(mu) {
   return 0.026 / (Math.pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1);

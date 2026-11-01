@@ -32,8 +32,8 @@ import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
  * u_ocean|), found from the drift's edge velocity and the top layer's by the
  * reconstruction the surface stress uses (the drift's C_w, the stirring
  * u*_min alone where the drift is off). Water below freezing under ice
- * still freezes onto the base through `oceanFlux`, which is then never
- * positive; waterHeat and the conductance are saved in restartArrays.
+ * freezes onto the base through `oceanFlux`, which then holds no heat for
+ * the ice to melt; waterHeat and the conductance are saved in restartArrays.
  *
  * The interior classes of the saved slab oceans, placed where the World Ocean Atlas holds its water
  * in this equation of state: 1019.5–1021.5 for the warm pool, the two
