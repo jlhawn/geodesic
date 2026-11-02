@@ -102,7 +102,7 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h, null, model.seaIce.snow[i], model.seaIce.cover(i, h), model.state[3][i], model.seaIce.snowAlbedo[i])));
   if (want.has('shortwave')) out.shortwave = Float32Array.from(model.radiation.surfaceShortwave);
   if (want.has('longwave')) out.longwave = Float32Array.from(model.radiation.outgoing);
-  if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil);
+  if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil, (w, i) => w + model.land.surface[i] + (model.land.deepWater ? model.land.deepWater[i] : 0));
   if (model.land && want.has('snow')) out.snow = Float32Array.from(model.land.snow);
   if (model.land && want.has('vegetation')) out.vegetation = Float32Array.from(model.land.vegetation);
   if (model.foldUpwelling) model.foldUpwelling(time);

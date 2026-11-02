@@ -1363,14 +1363,17 @@ export async function createGpuCore(mesh, {
     device.queue.submit([encoder.finish()]);
     const reads = {};
     for (const name of wanted) { const [buffer, part, n] = FIELDS[name]; (reads[buffer] ??= []).push({ name, offset: L[buffer][part], length: n * C }); }
+    if (wanted.includes('soil')) for (const [name, part] of [['surface', 'SURF'], ['deepWater', 'DEEP']]) if (L.PH[part] !== undefined) reads.PH.push({ name, offset: L.PH[part], length: C });
     if (diagnostics) (reads.FR ??= []).push({ name: 'sums', offset: L.FR.PART, length: REDUCED.length * groupsOf(C) }, { name: 'runoff', offset: L.FR.RDONE, length: C });
     return Promise.all(Object.entries(reads).map(([buffer, ranges]) => readRanges(device, buffers[buffer], ranges).then((views) => views.map((view, n) => [ranges[n].name, view])))).then((lists) => {
-      const out = { fields: {}, sums: null, runoff: null };
+      const out = { fields: {}, sums: null, runoff: null }, stores = [];
       for (const [name, view] of lists.flat()) {
         if (name === 'sums') out.sums = finishReduction(REDUCED, view, C);
         else if (name === 'runoff') out.runoff = view;
+        else if (name === 'surface' || name === 'deepWater') stores.push(view);
         else out.fields[name] = view;
       }
+      for (const store of stores) for (let i = 0; i < C; i++) out.fields.soil[i] += store[i];
       return out;
     });
   }

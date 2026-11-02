@@ -40,7 +40,7 @@ export const FIELDS = {
   albedo: 'surface albedo for diffuse light',
   shortwave: 'sunlight reaching the surface, W/m²',
   longwave: 'outgoing longwave radiation, W/m²',
-  soil: 'soil water, kg/m²',
+  soil: 'land water, kg/m²: the surface layer, the root zone and the deep store together',
   snow: 'snow water, kg/m²',
   vegetation: 'vegetation cover, 0 (bare ground) to 1 (dense forest)',
   sst: 'sea temperature at the depth, K',

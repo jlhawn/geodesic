@@ -112,7 +112,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   const checks = {
     ps: [pi, 0.1], mslp: [mslp, 0.5], water: [water, 1e-3], cloud: [cloud, 1e-6], rain: [physics.RAIN.subarray(0, C), 1e-6], ice: [ice, 1e-6], concentration: [model.seaIce.concentration, 1e-6],
     albedo: [physics.ADIF.subarray(0, C), 1e-6], shortwave: [physics.SWDN.subarray(0, C), 1e-3], longwave: [physics.OLR.subarray(0, C), 1e-3],
-    soil: [physics.SOIL.subarray(0, C), 1e-4], snow: [physics.SNOW.subarray(0, C), 1e-4],
+    soil: [Float64Array.from({ length: C }, (_, i) => physics.SOIL[i] + physics.SURF[i] + (physics.DEEP ? physics.DEEP[i] : 0)), 1e-4], snow: [physics.SNOW.subarray(0, C), 1e-4],
     sst: [sea(ocean.T1), 1e-3], sss: [sea(ocean.S1), 1e-4], layerDepth: [sea(ocean.h1), 1e-3], thermocline: [ocean.thermoclineDepth, 1e-2], ssh: [sea(ocean.eta), 1e-5],
     current: [current, 1e-5], currents: [currents, 1e-5],
     ...Object.fromEntries(Object.entries(types).map(([name, values]) => [name, [values, 1e-6]])),
