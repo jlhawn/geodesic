@@ -10,7 +10,7 @@ let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
-const N = 32, STEPS = 16, DT = 900, topography = readTopography('etopo2022');
+const N = 32, STEPS = 16, DT = 1350 * 16 / N, topography = readTopography('etopo2022');
 const sheets = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'n1024' });
 const setup = (lake) => ({ topography, geography: sheets.geography, land: sheets.land, ...(lake ? { lake } : {}) });
 

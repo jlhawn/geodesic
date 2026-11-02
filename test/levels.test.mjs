@@ -334,8 +334,10 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   for (const i of [...switched, ...decided]) for (let m = 0; m < nEdgesOnCell[i]; m++) near.add(cellsOnCell[maxEdges * i + m]);
   const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i));
   const columns = (array) => Float64Array.from({ length: K * kept.length }, (_, x) => array[Math.floor(x / kept.length) * C + kept[x % kept.length]]);
+  const { nEdges: E, cellsOnEdge } = cpu.mesh, keptEdges = Array.from({ length: E }, (_, e) => e).filter((e) => !near.has(cellsOnEdge[2 * e]) && !near.has(cellsOnEdge[2 * e + 1]));
+  const edges = (array) => Float64Array.from({ length: K * keptEdges.length }, (_, x) => array[Math.floor(x / keptEdges.length) * E + keptEdges[x % keptEdges.length]]);
   const columnWater = (model) => Float64Array.from({ length: C }, (_, i) => model.moist.columnWater(model.state[0], model.state[4], i));
-  const surface = (array) => Float64Array.from(kept, (i) => array[i]), ts = stats(surface(cpu.state[3]), surface(gpu.state[3])), tsAll = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]), q = stats(columns(cpu.state[4]), columns(gpu.state[4])), water = stats(surface(columnWater(cpu)), surface(columnWater(gpu))), waterAll = stats(columnWater(cpu), columnWater(gpu)), u = stats(cpu.state[2], gpu.state[2]);
+  const surface = (array) => Float64Array.from(kept, (i) => array[i]), ts = stats(surface(cpu.state[3]), surface(gpu.state[3])), tsAll = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]), q = stats(columns(cpu.state[4]), columns(gpu.state[4])), water = stats(surface(columnWater(cpu)), surface(columnWater(gpu))), waterAll = stats(columnWater(cpu), columnWater(gpu)), u = stats(edges(cpu.state[2]), edges(gpu.state[2]));
   console.log(`eight steps on bl34 at N=16 over a continent: Ts max ${ts.maxDiff.toExponential(1)} K (${tsAll.maxDiff.toExponential(1)} with the switched columns and their neighbours), θ rms ${theta.rmsRel.toExponential(1)}, ${switched.length} columns with a layer's q apart by more than 1e-5, ${decided.size} whose OLR or absorbed sunlight parted by more than 1 W/m² at a step (a layer's cloud decided apart), away from them q rms ${q.rmsRel.toExponential(1)}, column water rms ${water.rmsRel.toExponential(1)} (${waterAll.rmsRel.toExponential(1)} with them), wind max ${u.maxDiff.toExponential(1)} m/s; mean Ts ${dc.meanSurfaceT.toFixed(3)} vs ${d.meanSurfaceT.toFixed(3)} K, OLR ${dc.outgoingLongwave.toFixed(2)} vs ${d.outgoingLongwave.toFixed(2)} W/m², ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)} m`);
   for (const array of [...cpu.state, ...gpu.state]) assert.ok(array.every(Number.isFinite));
   assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${kept[ts.at]}`);
@@ -344,7 +346,7 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   assert.ok(decided.size <= 0.02 * C, `${decided.size} columns' cloud decided apart`);
   assert.ok(q.rmsRel < 2e-3, `q rms ${q.rmsRel}`);
   assert.ok(water.rmsRel < 1e-5, `column water rms ${water.rmsRel}`);
-  assert.ok(u.maxDiff < 0.05, `wind max ${u.maxDiff} at ${u.at}`);
+  assert.ok(u.maxDiff < 0.05, `wind max ${u.maxDiff} at edge ${keptEdges[u.at % keptEdges.length]}`);
   assert.ok(Math.abs(dc.meanSurfaceT - d.meanSurfaceT) < 0.01 && Math.abs(dc.outgoingLongwave - d.outgoingLongwave) < 0.5 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 0.2);
   gpu.destroy();
 });
