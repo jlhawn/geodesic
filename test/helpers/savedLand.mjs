@@ -26,7 +26,7 @@ export function savedFixture() {
   const model = createModel(new Grid(16), options);
   const { mesh, geography } = model, C = mesh.nCells;
   const state = initializeState(model, {}).map((a) => Float64Array.from(a));
-  const land = createLandSurface(mesh, geography, { soil: 'slab' });
+  const land = createLandSurface(mesh, geography, { soil: 'slab', start: 'neutral' });
   land.initialize();
   const iced = [];
   for (let i = 0; i < C; i++) {

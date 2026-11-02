@@ -71,11 +71,19 @@
 // drag), GRAVITY_WAVES (JSON options for the gravity-wave drag of
 // js/physics/gravityWaves.module.js, e.g. '{"flux":3e-3}', or false),
 // LAND (JSON options for the land surface, e.g. '{"treeMoisture":false}';
-// '{"start":"bare"}' or '{"start":"green"}' make a fresh start's land
-// bare or green in place of 'neutral', see START_CODES in
-// js/physics/land.module.js), LAND_JUMPS (the
-// model days at whose end land.jump() sets every land cell's trees and
-// topsoil carbon to the equilibrium of its own record and ends a fresh
+// a fresh start's land is 'observed' by default: its cover is the observed
+// annual maximum of the green fraction and its trees the observed tree
+// cover (data/landCover.bin, resampled onto the mesh), free from day 0,
+// with only the topsoil carbon held, at the neutral value;
+// '{"start":"neutral"}', '{"start":"bare"}' or '{"start":"green"}' hold
+// the trees and the carbon at those placeholders instead, see
+// START_CODES in js/physics/land.module.js; '{"coverGoal":"observed"}'
+// relaxes the cover toward the observed green maximum and the trees
+// toward the observed tree cover in place of the bucket's fill and the
+// treeline), LAND_JUMPS (the
+// model days at whose end land.jump() sets every land cell's topsoil
+// carbon, and the trees unless the start was observed, to the
+// equilibrium of its own record and ends a fresh
 // start's hold, logging the change by land area globally and by 10° band,
 // e.g. '365,730'; 'fresh', the default, jumps as the land's record passes
 // 365 and 730 days when the land started fresh, which a state saved
@@ -320,8 +328,8 @@ if (saved) {
     model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6], model.time, state[3]);
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
   }
-  const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at'][record[1]];
-  log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}`);
+  const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at', 'the topsoil carbon, the trees free, at'][record[1]];
+  log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green', 'observed'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}`);
   log(`--- ${new Date().toISOString()} fresh start at N=${N} on ${grid}, mesh of ${meshNote}, ${geographyNote} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 }
 const everySteps = model.oceanEngine ? model.oceanEngine.everySteps : 1, radiationEvery = model.gpu.physics.radiationEvery;

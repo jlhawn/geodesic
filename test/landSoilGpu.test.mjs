@@ -137,8 +137,8 @@ test('one GPU step, fed to the CPU land with the fluxes the GPU used, gives the 
 test('for soil \'slab\' the surface kernel\'s text, its constants and the PH layout are the slab\'s', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
   const sha = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16);
   const mesh = createModel(new Grid(16), { physics: false }).mesh;
-  assert.equal(sha(physicsSurfaceKernel(false)), 'ee8de3a466192bb4');
-  assert.equal(sha(physicsSurfaceKernel(true, true)), 'f3367a8e9c2b8972');
+  assert.equal(sha(physicsSurfaceKernel(false)), 'c5353ee194d8caba');
+  assert.equal(sha(physicsSurfaceKernel(true, true)), 'bbc2935f95daa112');
   const plain = layoutFor(mesh, 8), tall = layoutFor(mesh, 8, 1, 1, 1, null, true, 1, 1, 8, true, true, true, true);
   assert.deepEqual([plain.PH.total, sha(JSON.stringify(plain.PH))], [389407, '1f1a4f4766b1ccdd']);
   assert.deepEqual([tall.PH.total, sha(JSON.stringify(tall.PH))], [589251, 'bb66998c08f55b4e']);

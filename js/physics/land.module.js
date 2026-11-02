@@ -115,28 +115,40 @@ import { SOLAR_CONSTANT, AXIAL_TILT } from './radiation.module.js';
  * mean is the plain average of every step so far (weight Δt over the
  * age plus Δt); after it, or with the age −1 (a state saved without a
  * record), it is the exponential running mean. advance() adds each
- * step to the age. A fresh start (`start`: 'neutral', 'bare' or
- * 'green', startPlaceholders) begins the record at age 0 and holds the
- * trees and the topsoil carbon at the start's placeholders (hold 1, 2
- * or 3) while the cover runs free, until jump() sets them to the
- * equilibrium of each cell's own record and lets them run.
+ * step to the age. A fresh start (`start`: 'observed', the default, or
+ * 'neutral', 'bare' or 'green', startPlaceholders) begins the record at
+ * age 0. The last three hold the trees and the topsoil carbon at the
+ * start's placeholders (hold 1, 2 or 3) while the cover runs free, until
+ * jump() sets them to the equilibrium of each cell's own record and lets
+ * them run. 'observed' takes the cover from the annual maximum of the
+ * observed green fraction (geography.greenMax) and the trees from the
+ * observed tree cover (geography.treeCover) or the cover where that is
+ * lower, both of data/landCover.bin; it holds the topsoil carbon only
+ * (hold 4), at the neutral placeholder, and leaves the trees free, and
+ * jump() sets its carbon and never its trees. With `coverGoal`
+ * 'observed' the snow-free cover relaxes toward greenMax in place of
+ * the bucket's fill, and the trees toward the lower of treeCover and the
+ * cover, without the treeline and moisture factors; under snow they hold.
  */
 export const DARKENING_WETNESS = { surface: [0, 1], rootZone: [0.2, 0.5] };
 export const TRACE_SNOW = 1e-6;
 
-export const START_CODES = { neutral: 1, bare: 2, green: 3 };
+export const START_CODES = { neutral: 1, bare: 2, green: 3, observed: 4 };
+export const COVER_GOALS = ['water', 'observed'];
 export const FRESH_JUMPS = [365, 730];
+export const holdsTrees = (hold) => hold > 0 && hold !== START_CODES.observed;
 
 /*
  * A fresh start's cover, the trees' share of it while held (null: the
  * cover times the record's own treeline and moisture factor) and the
  * held topsoil carbon (kg/m²): 'neutral' the dry soil's albedo midway
  * between mineral and humus (c = ln 2 organicScale), 'bare' mineral,
- * 'green' within e⁻⁵ of humus (c = 5 organicScale).
+ * 'green' within e⁻⁵ of humus (c = 5 organicScale), 'observed' the
+ * neutral carbon with its cover and trees (null) from the observed fields.
  */
 export function startPlaceholders({ topsoilMass = 260, organicScale = 1.0 } = {}) {
-  const percent = topsoilMass * organicScale / 100;
-  return { neutral: { cover: 0.5, share: 0.5, carbon: Math.LN2 * percent }, bare: { cover: 0, share: 0, carbon: 0 }, green: { cover: 1, share: null, carbon: 5 * percent } };
+  const percent = topsoilMass * organicScale / 100, neutral = { cover: 0.5, share: 0.5, carbon: Math.LN2 * percent };
+  return { neutral, bare: { cover: 0, share: 0, carbon: 0 }, green: { cover: 1, share: null, carbon: 5 * percent }, observed: { cover: null, share: null, carbon: neutral.carbon } };
 }
 
 export function recordWeight(age, dt, memory) {
@@ -379,13 +391,14 @@ export function createLandSurface(mesh, geography, {
   treeMoisture = true, moistureMemory = 3 * 365 * 86400, forestAridity = FOREST_ARIDITY, grassland = true, forestAlbedo = 0.13, grassAlbedo = 0.20, grassSnowDarkening = 0.06,
   soilCarbon: carbonOn = SOIL_CARBON.soilCarbon, mineralAlbedo = SOIL_CARBON.mineralAlbedo, humusAlbedo = SOIL_CARBON.humusAlbedo, organicScale = SOIL_CARBON.organicScale, topsoilMass = SOIL_CARBON.topsoilMass,
   soilTurnover = SOIL_CARBON.soilTurnover, litterInput = SOIL_CARBON.litterInput, treeLitter = SOIL_CARBON.treeLitter, grassLitter = SOIL_CARBON.grassLitter, decompositionWilting = SOIL_CARBON.decompositionWilting,
-  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'neutral', buffers = null,
+  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'water', buffers = null,
   soil: soilModel = DEFAULT_SOIL, soilDepths, soilHeatCapacity, soilConductivity, firnDensity,
 } = {}) {
   const C = mesh.nCells;
   const column = soilColumn({ soil: soilModel, heatCapacity: givenCapacity, soilDepths, soilHeatCapacity, soilConductivity, firnDensity });
   const layered = column !== null, heatCapacity = layered ? column.soil.capacity[0] : givenCapacity ?? 1e6;
-  if (!START_CODES[start]) throw new Error(`start is 'neutral', 'bare' or 'green', not ${start}`);
+  if (!START_CODES[start]) throw new Error(`start is 'observed', 'neutral', 'bare' or 'green', not ${start}`);
+  if (!COVER_GOALS.includes(coverGoal)) throw new Error(`coverGoal is 'water' or 'observed', not ${coverGoal}`);
   const shared = (name, length = C) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * length));
   const soil = shared('soil'), snow = shared('snow'), runoff = shared('runoff'), vegetation = shared('vegetation'), surface = shared('surface');
   const snowAlbedoField = shared('snowAlbedo'), canopy = shared('canopy'), seasonLength = shared('seasonLength'), seasonWarmth = shared('seasonWarmth');
@@ -395,14 +408,16 @@ export function createLandSurface(mesh, geography, {
   const record = shared('record', 3);
   if (!(buffers && buffers.record)) record[0] = -1;
   if (!(buffers && buffers.snowAlbedo)) snowAlbedoField.fill(freshSnowAlbedo);
-  const placeholders = startPlaceholders({ topsoilMass, organicScale }), held = [null, placeholders.neutral, placeholders.bare, placeholders.green];
+  const placeholders = startPlaceholders({ topsoilMass, organicScale }), held = [null, placeholders.neutral, placeholders.bare, placeholders.green, placeholders.observed];
   const weight = (memory, dt) => recordWeight(record[0], dt, memory);
   const ageing = { freshSnowAlbedo, coldSnowAgeing, meltingSnowAgeing, refreshSnowfall, wetSnowRange, ageingActivation };
   const masked = snowMasking && vegetated, treed = treeline && vegetated, gated = treed && treeMoisture, grassy = grassland && vegetated, humic = carbonOn && vegetated;
   const humus = { mineralAlbedo, humusAlbedo, organicScale, topsoilMass }, carbonOptions = { litterInput, soilTurnover, decompositionWilting, seasonThreshold, wetnessThreshold };
   const bareShare = new Float64Array(C);
   const warmth = (t) => Math.min(1, Math.max(0, (t - growthColdest) / (growthWarmest - growthColdest)));
-  const { land, iceSheet = null } = geography;
+  const { land, iceSheet = null, treeCover = null, greenMax = null } = geography;
+  const observedCover = vegetated && coverGoal === 'observed';
+  if (observedCover && !(treeCover && greenMax)) throw new Error("coverGoal 'observed' needs the land cover of data/landCover.bin (geography.treeCover and geography.greenMax)");
   const onIceSheet = (i) => iceSheet !== null && iceSheet[i] > 0;
   const glacier = (i) => iceSheetBalance && onIceSheet(i);
   const skinCapacity = (i) => (layered ? (onIceSheet(i) ? column.firn : column.soil).capacity[0] : heatCapacity);
@@ -506,14 +521,20 @@ export function createLandSurface(mesh, geography, {
     if (snow[i] > 0) vegetation[i] *= Math.exp(-dt / snowDeclineTime);
     else {
       const cap = capacity(i);
-      const goal = Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));
+      const goal = observedCover ? greenMax[i] : Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));
       if (goal > vegetation[i]) vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt * warmth(temperature) / growthTime));
       else vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt / declineTime));
       snowFreeCover[i] = vegetation[i];
     }
     if (!treed) { canopy[i] = Math.max(vegetation[i], canopy[i] + (vegetation[i] - canopy[i]) * (1 - Math.exp(-dt / canopyMemory))); return; }
+    const kept = holdsTrees(record[1]);
+    if (observedCover && !kept) {
+      const goal = snow[i] > 0 ? canopy[i] : Math.min(treeCover[i], vegetation[i]);
+      canopy[i] += (goal - canopy[i]) * (1 - Math.exp(-dt / (goal > canopy[i] ? treeGrowthTime : treeDeclineTime)));
+      return;
+    }
     const f = treeFactor(i);
-    if (record[1]) { canopy[i] = heldTrees(i, f); return; }
+    if (kept) { canopy[i] = heldTrees(i, f); return; }
     const goal = snow[i] > 0 ? Math.min(canopy[i], f) : f * vegetation[i];
     canopy[i] += (goal - canopy[i]) * (1 - Math.exp(-dt / (goal > canopy[i] ? treeGrowthTime : treeDeclineTime)));
   }
@@ -622,18 +643,21 @@ export function createLandSurface(mesh, geography, {
    * A fresh land surface has half-full buckets, no snow (snowCap on an
    * ice sheet with iceSheetBalance), an empty record of age 0 and the
    * start's cover, trees and topsoil carbon (startPlaceholders), held
-   * until jump(). The sea's cells of `snow`, the snow on the sea ice, are
-   * the sea-ice start's (initializeState).
+   * until jump(); the observed start's cover is greenMax and its trees the
+   * lower of treeCover and that cover, and only its carbon is held. The
+   * sea's cells of `snow`, the snow on the sea ice, are the sea-ice
+   * start's (initializeState).
    */
   function initialize(time = 0) {
-    const code = START_CODES[start], placed = held[code];
+    const code = START_CODES[start], placed = held[code], observed = code === START_CODES.observed;
+    if (observed && vegetated && !(treeCover && greenMax)) throw new Error(`the observed start needs the land cover of data/landCover.bin (geography.treeCover and geography.greenMax); give start 'neutral', 'bare' or 'green' for a geography without it`);
     for (let i = 0; i < C; i++) {
       const grown = land[i] && vegetated && !onIceSheet(i);
-      vegetation[i] = grown ? placed.cover : 0;
+      vegetation[i] = !grown ? 0 : observed ? Math.min(1, Math.max(0, greenMax[i])) : placed.cover;
       snowFreeCover[i] = vegetation[i];
       soil[i] = land[i] ? 0.5 * capacity(i) : 0;
       seasonLength[i] = 0; seasonWarmth[i] = 0; rainMean[i] = 0; demandMean[i] = 0; litterMean[i] = 0; decayMean[i] = 0;
-      canopy[i] = !grown ? 0 : treed ? (placed.share === null ? 0 : placed.share * vegetation[i]) : vegetation[i];
+      canopy[i] = !grown ? 0 : !treed ? vegetation[i] : observed ? Math.min(treeCover[i], vegetation[i]) : placed.share === null ? 0 : placed.share * vegetation[i];
       soilCarbon[i] = grown && humic ? placed.carbon : 0;
       if (land[i]) snow[i] = glacier(i) ? snowCap : 0;
       runoff[i] = 0; discharge[i] = 0; iceLoss[i] = 0; surface[i] = 0; snowAlbedoField[i] = freshSnowAlbedo;
@@ -651,19 +675,20 @@ export function createLandSurface(mesh, geography, {
    * cover, trees and record, and releases a fresh start's hold. Under
    * snow the cover is `snowFreeCover`, the cover at the cell's last
    * snow-free step: the trees do not follow the cover under snow and no
-   * litter falls there. `round`
+   * litter falls there. A record that started observed keeps its trees
+   * and sets the carbon only. `round`
    * gives each value as it will be stored (Math.fround on the GPU), so a
    * repeat at once changes nothing. Returns the change by land area,
    * globally and by 10° band.
    */
   function jump(round = (x) => x) {
     const fields = () => ({ trees: Float64Array.from(canopy), carbon: Float64Array.from(soilCarbon), dry: Float64Array.from({ length: C }, (_, i) => (land[i] ? dryAlbedo(i) : 0)), albedo: Float64Array.from({ length: C }, (_, i) => (land[i] ? surfaceAlbedo(i) : 0)) });
-    const before = fields();
+    const before = fields(), observed = record[2] === START_CODES.observed;
     for (let i = 0; i < C; i++) {
       if (!land[i] || !vegetated) continue;
       if (onIceSheet(i)) { canopy[i] = 0; soilCarbon[i] = 0; continue; }
       const cover = snow[i] > 0 ? snowFreeCover[i] : vegetation[i];
-      if (treed) canopy[i] = round(Math.min(1, treeFactor(i) * cover));
+      if (treed && !observed) canopy[i] = round(Math.min(1, treeFactor(i) * cover));
       if (humic) soilCarbon[i] = round(carbonTarget(i, cover));
     }
     record[1] = 0;

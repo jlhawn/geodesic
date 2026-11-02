@@ -1816,7 +1816,7 @@ ${held ? `  PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT 
   if (CLEAR_SKY) { PH[PH_RADCLROLR + i] = clearOutgoing; PH[PH_RADTC + i] = clearEscape; }` : `  stash(20, i, back); stash(21, i, outgoing);
   if (CLEAR_SKY) { PH[PH_OLRCLRSUM + i] += clearOutgoing; }`}
 }`;
-export const physicsSurfaceKernel = (held, seaSkin = false, soil = null) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}
+export const physicsSurfaceKernel = (held, seaSkin = false, soil = null, cover = false) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
 ${HAND_OFF(held)}  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
@@ -1879,7 +1879,7 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
     if (VEGETATED) {
       var veg = veg0 * exp(-dt / VEG_SNOW);
       if (snow <= 0.0) {
-        let goal = clamp((min(soil, cap) / cap - VEG_DRY) / (VEG_WET - VEG_DRY), 0.0, 1.0);
+        let goal = ${cover ? 'PH[PH_COVERG + i]' : 'clamp((min(soil, cap) / cap - VEG_DRY) / (VEG_WET - VEG_DRY), 0.0, 1.0)'};
         veg = veg0 + (goal - veg0) * (1.0 - exp(-dt * select(1.0, warmth, goal > veg0) / select(VEG_DECLINE, VEG_GROW, goal > veg0)));
       }
       if (onIceSheet) { veg = 0.0; }
@@ -1897,9 +1897,9 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
       if (TREELINE) {
         let moist = select(1.0, clamp((PH[PH_RAINMEAN + i] / max(demand, 1e-3) - ARID_LO) / ARID_SPAN, 0.0, 1.0), GATED);
         let factor = clamp((SEASON_C + seasonWarmth / max(seasonLength, SEASON_SHORTEST) - TREE_LO) / TREE_SPAN, 0.0, 1.0) * moist;
-        let goal = select(factor * veg, min(standing, factor), snow > 0.0);
+        let goal = ${cover ? 'select(min(PH[PH_COVERT + i], veg), standing, snow > 0.0)' : 'select(factor * veg, min(standing, factor), snow > 0.0)'};
         trees = standing + (goal - standing) * smallRate(dt / select(TREE_DECLINE, TREE_GROW, goal > standing));
-        if (hold > 0.5) { trees = select(select(factor * veg, 0.0, hold < 2.5), HELD_SHARE * veg, hold < 1.5); }
+        if (hold > 0.5 && hold < 3.5) { trees = select(select(factor * veg, 0.0, hold < 2.5), HELD_SHARE * veg, hold < 1.5); }
       }
       PH[PH_CANOPY + i] = select(trees, 0.0, onIceSheet);
       if (HUMIC) {
@@ -1912,7 +1912,7 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
         PH[PH_LITTERM + i] = select(PH[PH_LITTERM + i] + (litterFactor - PH[PH_LITTERM + i]) * keep, 0.0, onIceSheet);
         PH[PH_DECAYM + i] = select(PH[PH_DECAYM + i] + (decayFactor - PH[PH_DECAYM + i]) * keep, 0.0, onIceSheet);
         let x = CARBON_ACC * decay * dt; let carbon0 = PH[PH_SOILC + i];
-        let heldCarbon = select(select(HELD_GREEN_C, 0.0, hold < 2.5), HELD_NEUTRAL_C, hold < 1.5);
+        let heldCarbon = select(select(select(HELD_NEUTRAL_C, HELD_GREEN_C, hold < 3.5), 0.0, hold < 2.5), HELD_NEUTRAL_C, hold < 1.5);
         PH[PH_SOILC + i] = select(select(max(0.0, carbon0 + (input - decay * carbon0) * CARBON_ACC * dt * select(1.0 - x * (0.5 - x / 6.0), (1.0 - exp(-x)) / x, x > 1e-2)), heldCarbon, hold > 0.5), 0.0, onIceSheet);
       }
       cap = ROOTCAP;

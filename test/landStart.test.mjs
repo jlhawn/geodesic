@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
-import { createLandSurface, treelineFactor, aridityFactor, litterWarmth, decompositionWarmth, decompositionMoisture, carbonEquilibrium, carbonRecord, recordWeight, freshJumpDue, startPlaceholders, dryHumusAlbedo, START_CODES, FRESH_JUMPS } from '../js/physics/land.module.js';
+import { createLandSurface as createLand, treelineFactor, aridityFactor, litterWarmth, decompositionWarmth, decompositionMoisture, carbonEquilibrium, carbonRecord, recordWeight, freshJumpDue, startPlaceholders, dryHumusAlbedo, START_CODES, FRESH_JUMPS } from '../js/physics/land.module.js';
+const createLandSurface = (mesh, geography, options = {}) => createLand(mesh, geography, { start: 'neutral', ...options });
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
@@ -21,7 +22,7 @@ const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 
 
 test('the start options set the cover, the held trees and the held topsoil carbon, and empty the record at age 0', () => {
   const p = startPlaceholders();
-  assert.deepEqual(p, { neutral: { cover: 0.5, share: 0.5, carbon: 2.6 * Math.LN2 }, bare: { cover: 0, share: 0, carbon: 0 }, green: { cover: 1, share: null, carbon: 13 } });
+  assert.deepEqual(p, { neutral: { cover: 0.5, share: 0.5, carbon: 2.6 * Math.LN2 }, bare: { cover: 0, share: 0, carbon: 0 }, green: { cover: 1, share: null, carbon: 13 }, observed: { cover: null, share: null, carbon: 2.6 * Math.LN2 } });
   assert.ok(near(dryHumusAlbedo(p.neutral.carbon), (0.37 + 0.12) / 2), 'the neutral soil is midway between mineral and humus');
   assert.ok(Math.abs(dryHumusAlbedo(p.green.carbon) - 0.12) < 0.002, 'the green soil is within e⁻⁵ of humus');
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (lat < -1.2 ? 2000 : Math.cos(lon) > 0 ? 100 : -4000)), { landBridges: {}, seaStraits: {} });

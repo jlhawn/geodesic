@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
-import { createLandSurface } from '../js/physics/land.module.js';
+import { createLandSurface as createLand } from '../js/physics/land.module.js';
+const createLandSurface = (mesh, geography, options = {}) => createLand(mesh, geography, { start: 'neutral', ...options });
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 
 const N = 16;
