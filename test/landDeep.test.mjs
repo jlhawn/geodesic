@@ -15,8 +15,8 @@ const geo16 = createGeography(mesh, readTopography('etopo1'));
 const fresh = (geography = flat, extra = {}) => { const land = createLandSurface(mesh, geography, { start: 'neutral', deepCapacity: 300, ...extra }); land.initialize(); return land; };
 const stores = (land, i) => land.soil[i] + land.surface[i] + land.snow[i] + land.deepWater[i];
 
-const PLAIN_LAND = '8f93439d5d613b0832b50350fe8b566bd1dfedfbd061d5b83fbdf1b35285bd3a';
-const PLAIN_STEPPED = '8da09236b850d009fb00ee3b7ac018decef154be168a1abfab49120f5c6dca71';
+const PLAIN_LAND = 'e38fb1d53b703c058349aa4f52fed618451b2b60abfe436a715f445d78be567e';
+const PLAIN_STEPPED = '92645e54f6db88043d8b62b03ec94236d4b01dfc5a3f9c7057035888dda91971';
 
 test('the option is refused below 0 and without vegetation, 0 leaves the land without a deep store, and the default is 300 with vegetation and 0 without', () => {
   assert.throws(() => createLandSurface(mesh, flat, { deepCapacity: -1 }), /deepCapacity/);
