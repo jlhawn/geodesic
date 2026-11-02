@@ -638,7 +638,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const deepCover = new Float64Array(K), deepWater = new Float64Array(K), tendencyS = new Float64Array(K), tendencyQ = new Float64Array(K), convectiveFall = new Float64Array(K), convectiveReserve = new Float64Array(K);
   const plumeCarried = new Float64Array(K), plumeInterfaceT = new Float64Array(K), plumeFrozen = new Float64Array(K), convectiveMelted = new Float64Array(K), convectiveFrozen = new Float64Array(K), convectiveSnow = new Float64Array(C);
   const plume = { T: 0, liquid: 0, ice: 0 }, draft = { q: 0, s: 0 }, plumeSaturated = { qs: 0, slope: 0, liquid: 1 };
-  const plumeExits = plumeTrace ? Object.fromEntries(['excessT', 'excessQ', 'lcl', 'stop', 'parcelBase', 'parcelTop', 'top', 'cape', 'inhibition', 'baseFlux', 'pcape', 'pcapeBoundary', 'tau', 'consumptionP', 'halfEntrainment', 'doubleExcess', 'fastStart'].map((name) => [name, new Float32Array(C)])) : null;
+  const plumeExits = plumeTrace ? Object.fromEntries(['excessT', 'excessQ', 'lcl', 'stop', 'parcelBase', 'parcelTop', 'top', 'cape', 'inhibition', 'baseFlux', 'pcape', 'pcapeBoundary', 'tau', 'consumptionP', 'halfEntrainment', 'doubleExcess', 'fastStart', 'capped', 'rainMade', 'rainDraft', 'rainBelow', 'rainGround'].map((name) => [name, new Float32Array(C)])) : null;
   if (plumeExits) plumeExits.exit = new Uint8Array(C);
   let parcelStop = 0, lclPressure = 0;
   function traceExit(i, code, topPressure = 0, baseFlux = 0) {
@@ -648,7 +648,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     t.inhibition[i] = code === 6 || code === 7 ? deep.inhibition : 0; t.baseFlux[i] = baseFlux;
     const closed = code === 6 || code === 7;
     t.pcape[i] = closed ? deep.pcape : 0; t.pcapeBoundary[i] = closed ? deep.pcapeBoundary : 0; t.tau[i] = closed ? deep.tau : 0; t.consumptionP[i] = closed ? deep.consumptionP : 0;
-    t.halfEntrainment[i] = 0; t.doubleExcess[i] = 0; t.fastStart[i] = 0;
+    t.halfEntrainment[i] = 0; t.doubleExcess[i] = 0; t.fastStart[i] = 0; t.rainMade[i] = 0; t.rainDraft[i] = 0;
   }
   function traceWhatIf(i, pi, q, qc, source, s, w, reference, start) {
     const t = plumeExits, kept = [deep.typeMargin, deep.parcelBase, deep.parcelTop, deep.parcelDeep], stop = parcelStop, entrainment = TEST_PARCEL.entrainment;
@@ -979,7 +979,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     const bottom = K - 1;
     cumulus.top = -1; cumulus.inhibition = 0; cumulus.baseFlux = 0; cumulus.velocity = 0; cumulus.snow = 0; cumulus.overshoot = 1;
     clearCumulus(i);
-    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1) * (capped && cloudBaseFound(i, pi, theta, q) && stratocumulusTopped(i, pi, theta, q) ? 0 : 1);
+    const topped = capped && cloudBaseFound(i, pi, theta, q) && stratocumulusTopped(i, pi, theta, q);
+    if (topped && plumeExits) plumeExits.capped[i] = 1;
+    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1) * (topped ? 0 : 1);
     const buoyancy = surfaceBuoyancy ? surfaceBuoyancy[i] : 0;
     if (!(open > 0) || !(buoyancy > 0) || !boundaryDepth) return 0;
     fillEnvironment(i, pi, theta, q, qc);
@@ -1173,6 +1175,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     deep.deep = false; deep.top = -1; deep.cape = 0; deep.consumption = 0; deep.start = -1; deep.downdraft = 0; deep.baseFlux = 0; deep.inhibition = 0; deep.shallowRain = 0; deep.shallowSnow = 0;
     deep.pcape = 0; deep.pcapeBoundary = 0; deep.consumptionP = 0; deep.tau = 0; deep.speed = 0; deep.depth = 0; deep.boundaryWind = 0; deep.boundaryTime = 0; deep.excessT = 0; deep.excessQ = 0; deep.rooted = true; deep.departure = -1;
     deep.parcelDeep = false; deep.parcelBase = 0; deep.parcelTop = 0; deep.conversionMargin = Infinity; deep.typeMargin = Infinity; cumulus.snow = 0; parcelStop = 0; lclPressure = 0;
+    if (plumeExits) plumeExits.capped[i] = 0;
     if (momentumLayers) {
       momentumSource[i] = K;
       for (let k = 0; k <= K; k++) { momentumUp[k * C + i] = 0; momentumDown[k * C + i] = 0; }
@@ -1471,7 +1474,12 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     deep.baseFlux = baseFlux; deep.downdraft = share * baseFlux; deep.shallowRain = shallowRain; deep.shallowSnow = separate ? cumulus.snow : 0;
     cumulus.top = top; cumulus.baseFlux = baseFlux + cumulusBaseFlux[i];
     cumulusBaseFlux[i] += baseFlux; cumulusTop[i] = pi[i] * levels[top];
-    if (plumeExits) traceExit(i, 7, pi[i] * levels[top], baseFlux);
+    if (plumeExits) {
+      traceExit(i, 7, pi[i] * levels[top], baseFlux);
+      let made = 0, lost = 0;
+      for (let k = top; k <= bottom; k++) { if (k > top && k < source) made += cumulusFlux[k] * plumeRain[k]; lost += share * draftEvaporation[k]; }
+      plumeExits.rainMade[i] = made * baseFlux * dt; plumeExits.rainDraft[i] = lost * baseFlux * dt;
+    }
     return fallen;
   }
 
@@ -1569,6 +1577,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       if (cumulusBaseFlux[i] > 0) condenseColumn(i, pi, theta, q, qc);
       const rained = autoconvertColumn(i, pi, theta, q, qc, dt, deep.deep ? convectiveFall : null, ice && ice[i] > 0 ? (iceConcentration !== null && iceConcentration[i] > 0 ? iceConcentration[i] : 1) : 0, deep.deep && mixedPlume ? convectiveFrozen : null);
       const convected = deep.deep ? falling.convective + deep.shallowRain : produced;
+      if (plumeExits) { plumeExits.rainBelow[i] = deep.deep ? falling.evaporated : 0; plumeExits.rainGround[i] = deep.deep ? falling.convective : 0; }
       if (mixedPlume) convectiveSnow[i] = deep.deep ? falling.frozen + deep.shallowSnow : cumulus.snow;
       if (falling.moved) condenseColumn(i, pi, theta, q, qc);
       if (traced) {
