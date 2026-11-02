@@ -35,7 +35,9 @@
  * ice sheets are Antarctica's land and Greenland's interior above 800 m.
  * With `landCover` (decodeLandCover; the file's under node when not
  * given, null for none) the geography also carries treeCover and
- * greenMax, the observed fractions on the mesh (landCoverOnMesh).
+ * greenMax, the observed fractions on the mesh (landCoverOnMesh). With
+ * `soilWater` (decodeSoilWater, likewise) it carries wetness, the
+ * observed fill of the soil's water at March 20 (soilWaterOnMesh).
  * With `iceShelves` 'sea' the floating ice is taken away: its points
  * count at the depth of the bed beneath them and hold no ice. With
  * 'cavity' the atmosphere's geography is that of 'land', and `ocean` is
@@ -179,24 +181,60 @@ export function readLandCover() {
   return (landCoverFile ??= decodeLandCover(fs.readFileSync(landCoverUrl)));
 }
 
-const coverSums = new WeakMap();
-function coverSumsOn(cover, mesh) {
-  if (!coverSums.has(cover)) coverSums.set(cover, new WeakMap());
-  const byMesh = coverSums.get(cover);
+/*
+ * data/soilwater_march.bin, which scripts/soilWater.mjs writes: CPC's fill
+ * of its 760 mm column at March 20 on a 0.5° grid laid out as the cover's
+ * (720 × 360), after a 12-byte header ('SWF1', columns, rows), as uint8
+ * times SOIL_SCALE, SOIL_NONE where the source has none. soilWaterOnMesh
+ * resamples it as landCoverOnMesh does, NaN on the sea and where no value
+ * reaches.
+ */
+export const SOIL_SCALE = 250, SOIL_NONE = 255;
+export const soilWaterUrl = new URL('../data/soilwater_march.bin', import.meta.url);
+
+export function encodeSoilWater({ cols, rows, fill }) {
+  const out = new Uint8Array(12 + rows * cols), head = new DataView(out.buffer);
+  [83, 87, 70, 49].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, cols, true); head.setUint32(8, rows, true);
+  out.set(fill, 12);
+  return out.buffer;
+}
+
+export function decodeSoilWater(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const head = new DataView(bytes);
+  if (bytes.byteLength < 12 || String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'SWF1') throw new Error('not a soil-water file');
+  const cols = head.getUint32(4, true), rows = head.getUint32(8, true);
+  if (bytes.byteLength !== 12 + rows * cols) throw new Error('soil-water file of the wrong size');
+  return { cols, rows, fill: new Uint8Array(bytes, 12, rows * cols) };
+}
+
+let soilWaterFile = null;
+export function readSoilWater() {
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+  if (!fs || !fs.existsSync(soilWaterUrl)) return null;
+  return (soilWaterFile ??= decodeSoilWater(fs.readFileSync(soilWaterUrl)));
+}
+
+const rasterSums = new WeakMap();
+function rasterSumsOn(raster, fields, none, mesh) {
+  if (!rasterSums.has(raster)) rasterSums.set(raster, new WeakMap());
+  const byMesh = rasterSums.get(raster);
   if (byMesh.has(mesh)) return byMesh.get(mesh);
-  const { nCells: C, cellsOnCell, nEdgesOnCell, maxEdges: M, latCell, lonCell } = mesh, { cols, rows } = cover;
+  const { nCells: C, cellsOnCell, nEdgesOnCell, maxEdges: M, latCell, lonCell } = mesh, { cols, rows } = raster;
   const P = new Float64Array(3 * C);
   for (let i = 0; i < C; i++) { const cl = Math.cos(latCell[i]); P[3 * i] = cl * Math.cos(lonCell[i]); P[3 * i + 1] = cl * Math.sin(lonCell[i]); P[3 * i + 2] = Math.sin(latCell[i]); }
   const cosLon = new Float64Array(cols), sinLon = new Float64Array(cols);
   for (let c = 0; c < cols; c++) { const lon = (-180 + (c + 0.5) * 360 / cols) * Math.PI / 180; cosLon[c] = Math.cos(lon); sinLon[c] = Math.sin(lon); }
-  const sums = { sum: [new Float64Array(C), new Float64Array(C)], count: [new Float64Array(C), new Float64Array(C)] };
-  const fields = [cover.treeCover, cover.greenMax];
+  const sums = { sum: fields.map(() => new Float64Array(C)), count: fields.map(() => new Float64Array(C)) };
   let at = 0;
   for (let r = 0; r < rows; r++) {
     const lat = (-90 + (r + 0.5) * 180 / rows) * Math.PI / 180, cl = Math.cos(lat), z = Math.sin(lat);
     for (let c = 0; c < cols; c++) {
       const n = r * cols + c;
-      if (fields[0][n] === COVER_NONE && fields[1][n] === COVER_NONE) continue;
+      let any = false;
+      for (const field of fields) if (field[n] !== none) any = true;
+      if (!any) continue;
       const x = cl * cosLon[c], y = cl * sinLon[c];
       let dot = x * P[3 * at] + y * P[3 * at + 1] + z * P[3 * at + 2];
       for (;;) {
@@ -208,38 +246,49 @@ function coverSumsOn(cover, mesh) {
         if (next === at) break;
         at = next;
       }
-      for (let f = 0; f < 2; f++) if (fields[f][n] !== COVER_NONE) { sums.sum[f][at] += fields[f][n]; sums.count[f][at]++; }
+      for (let f = 0; f < fields.length; f++) if (fields[f][n] !== none) { sums.sum[f][at] += fields[f][n]; sums.count[f][at]++; }
     }
   }
   byMesh.set(mesh, sums);
   return sums;
 }
 
+function meanOnMesh({ sum, count }, f, scale, mesh, land) {
+  const { nCells: C, cellsOnCell, nEdgesOnCell, maxEdges: M } = mesh;
+  const value = new Float64Array(C), has = new Uint8Array(C);
+  let holes = [];
+  for (let i = 0; i < C; i++) {
+    if (count[f][i] > 0) { value[i] = sum[f][i] / count[f][i] / scale; has[i] = 1; }
+    else if (land[i]) holes.push(i);
+  }
+  while (holes.length) {
+    const filled = [], left = [];
+    for (const i of holes) {
+      let total = 0, n = 0;
+      for (let m = 0; m < nEdgesOnCell[i]; m++) { const j = cellsOnCell[M * i + m]; if (has[j]) { total += value[j]; n++; } }
+      if (n > 0) filled.push([i, total / n]); else left.push(i);
+    }
+    if (filled.length === 0) break;
+    for (const [i, v] of filled) { value[i] = v; has[i] = 1; }
+    holes = left;
+  }
+  return { value, has };
+}
+
 export function landCoverOnMesh(cover, mesh, land) {
-  const { sum, count } = coverSumsOn(cover, mesh), { nCells: C, cellsOnCell, nEdgesOnCell, maxEdges: M } = mesh;
-  const out = {};
+  const sums = rasterSumsOn(cover, [cover.treeCover, cover.greenMax], COVER_NONE, mesh), out = {};
   ['treeCover', 'greenMax'].forEach((name, f) => {
-    const value = new Float64Array(C), has = new Uint8Array(C);
-    let holes = [];
-    for (let i = 0; i < C; i++) {
-      if (count[f][i] > 0) { value[i] = sum[f][i] / count[f][i] / COVER_SCALE; has[i] = 1; }
-      else if (land[i]) holes.push(i);
-    }
-    while (holes.length) {
-      const filled = [], left = [];
-      for (const i of holes) {
-        let total = 0, n = 0;
-        for (let m = 0; m < nEdgesOnCell[i]; m++) { const j = cellsOnCell[M * i + m]; if (has[j]) { total += value[j]; n++; } }
-        if (n > 0) filled.push([i, total / n]); else left.push(i);
-      }
-      if (filled.length === 0) break;
-      for (const [i, v] of filled) { value[i] = v; has[i] = 1; }
-      holes = left;
-    }
-    for (let i = 0; i < C; i++) if (!land[i]) value[i] = 0;
+    const { value } = meanOnMesh(sums, f, COVER_SCALE, mesh, land);
+    for (let i = 0; i < mesh.nCells; i++) if (!land[i]) value[i] = 0;
     out[name] = value;
   });
   return out;
+}
+
+export function soilWaterOnMesh(soil, mesh, land) {
+  const { value, has } = meanOnMesh(rasterSumsOn(soil, [soil.fill], SOIL_NONE, mesh), 0, SOIL_SCALE, mesh, land);
+  for (let i = 0; i < mesh.nCells; i++) if (!land[i] || !has[i]) value[i] = NaN;
+  return { wetness: value };
 }
 
 /*
@@ -283,9 +332,10 @@ export const NARROW_STRAITS = {
   danish: { sill: 50, points: [[55.5, 12.7], [56.1, 12.3], [56.8, 11.5], [57.6, 10.5]] },
 };
 
-export function createGeography(mesh, topography, { landCover = readLandCover(), ...options } = {}) {
+export function createGeography(mesh, topography, { landCover = readLandCover(), soilWater = readSoilWater(), ...options } = {}) {
   const geography = buildGeography(mesh, topography, options);
-  return landCover ? { ...geography, ...landCoverOnMesh(landCover, mesh, geography.land) } : geography;
+  if (!landCover && !soilWater) return geography;
+  return { ...geography, ...(landCover && landCoverOnMesh(landCover, mesh, geography.land)), ...(soilWater && soilWaterOnMesh(soilWater, mesh, geography.land)) };
 }
 
 function buildGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land', cavityDepth = 50, mask = 'raster', maskData = null } = {}) {

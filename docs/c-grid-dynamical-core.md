@@ -4923,17 +4923,27 @@ The work, in order:
      reload to the bit.
 
    - The observed start (`start: 'observed'`, the default; Nov 1). A
-     fresh start takes its cover and its trees from observation in place
-     of a placeholder year: every land cell's cover is the annual
-     maximum of the AVHRR green fraction (`greenMax`), its trees the
-     lower of the MODIS tree cover (`treeCover`) and that cover, its
-     bucket half full as before and its topsoil carbon the neutral
-     placeholder, held (hold code 4) until the jump. The trees run free
+     fresh start takes its cover, its trees and its water from
+     observation in place of a placeholder year: every land cell's cover
+     is the annual maximum of the AVHRR green fraction (`greenMax`), its
+     trees the lower of the MODIS tree cover (`treeCover`) and that
+     cover, and its topsoil carbon the neutral placeholder, held (hold
+     code 4) until the jump. Off the ice sheets its water (Nov 2) is
+     CPC's fill at March 20 (`wetness`): the root zone holds that share
+     of its capacity and the surface layer that share of
+     `surfaceCapacity`, and the deep store, which starts at the root
+     zone's fill, follows; a cell without a fill keeps the half-full
+     bucket and the empty surface layer. Carrying CPC's fill of its
+     760 mm column one to one onto the root zone, the surface layer and,
+     through the root zone's fill, the deep store is a judgment, not a
+     calibration: none of the three is CPC's column. The trees run free
      from day 0 (`heldTrees` does not apply to code 4), and `land.jump()`
      at 365 and 730 days sets the carbon only, never the trees, and
      releases the hold; the other starts hold their trees and set them
-     as above. Ice sheets start at 0. A geography without the two fields
-     throws an error naming `data/landCover.bin` unless `start` is given.
+     as above. Ice sheets start at 0. A geography without the two cover
+     fields throws an error naming `data/landCover.bin`, and one without
+     `wetness` an error naming `data/soilwater_march.bin`, unless
+     `start` is given.
      `load()` takes a saved record with hold 4; the GPU holds the carbon
      at the neutral value and leaves the trees free under code 4.
    - The cover file. `data/landCover.bin` (2.07 MB, `scripts/landCover.mjs`)
@@ -4957,6 +4967,28 @@ The work, in order:
      neighbors that have one, repeated until none is left, else 0, and
      the sea is 0. At N = 64 the land without its ice sheets means 0.262
      and 0.511, the Amazon (10°S–5°N, 75–50°W) 0.750 and 0.843.
+   - The soil-water file. `data/soilwater_march.bin` (259 KB,
+     `scripts/soilWater.mjs`) holds the fill of the soil's
+     plant-available water at March 20, day 0, on a 0.5° grid (720 ×
+     360, cell centers −179.75 + 0.5 i and −89.75 + 0.5 j, south to
+     north) as uint8 of the fill × 250, 255 where the source has no
+     value, behind a 12-byte header ('SWF1', columns, rows). Source: CPC
+     Soil Moisture, NOAA PSL (Fan and van den Dool 2004, J. Geophys.
+     Res. 109, D10102), the 1991–2020 monthly means of `soilw`, the
+     water a 760 mm column holds, read as the `.dods` response of PSL's
+     OPeNDAP server over HTTP/1.1; the fill is `soilw`/760 interpolated
+     between the mid-month means of March and April (5/31 of the way to
+     April) and clamped to 0–1. CPC has values over Greenland's ice and,
+     in February–June only, over Antarctica's; the start skips the ice
+     sheets, as it does for the cover. `createGeography` resamples the
+     file as it does the cover (the worker fetches it for an observed
+     fresh start), except that the sea and a land cell left without a
+     value are NaN. At N = 64 the land cells of the Amazon mean 0.712,
+     Europe (40–60°N, 10°W–40°E) 0.467, the Sahara (18–30°N,
+     10°W–30°E) 0.016, the eastern United States (30–45°N, 90–75°W)
+     0.675 and India (10–28°N, 70–90°E) 0.255. `test/soilWater.test.mjs`
+     holds the file, the resampling and the start, and
+     `test/landStart.test.mjs` the engines' agreement at N = 16.
    - `coverGoal` ('water', the default, or 'observed'; `scripts/spinup.mjs`
      gives 'observed' unless `LAND` says otherwise, a hold for spin-ups
      that the page never runs: a published state's cover follows the
@@ -4989,7 +5021,8 @@ The work, in order:
      surface layer, the cover's goal, the litter's and the
      decomposition's water factors, the darkening and the carbon read the
      root zone alone, and `water()` counts the store. A fresh start fills
-     it to the root zone's fill (half); a state saved without `land.deep`
+     it to the root zone's fill (CPC's under the observed start, else
+     half); a state saved without `land.deep`
      starts it at its root zone's fill times `deepCapacity`, and one saved
      with it keeps it, capped at the capacity. The option needs
      vegetation. The GPU compiles the capacity in (`DEEPCAP`) and keeps
@@ -5004,8 +5037,8 @@ The work, in order:
      `test/landModel.test.mjs` the CPU model's land water with the store.
 
    Defaults: land `start` 'observed' (`startPlaceholders`: observed
-   cover and trees from `data/landCover.bin`, carbon the neutral value
-   held; neutral cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` ×
+   cover and trees from `data/landCover.bin`, water from
+   `data/soilwater_march.bin`, carbon the neutral value held; neutral cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` ×
    `organicScale`/100 = 1.802 kg/m²; bare 0, 0, 0; green 1, f m v,
    13 kg/m², each holding its trees and carbon); `coverGoal` 'water' (the
    spin-up gives 'observed');

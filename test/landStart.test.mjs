@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createGeography, syntheticTopography } from '../js/geography.module.js';
+import { createGeography, syntheticTopography, readTopography } from '../js/geography.module.js';
 import { createLandSurface as createLand, treelineFactor, aridityFactor, litterWarmth, decompositionWarmth, decompositionMoisture, carbonEquilibrium, carbonRecord, recordWeight, freshJumpDue, startPlaceholders, dryHumusAlbedo, START_CODES, FRESH_JUMPS } from '../js/physics/land.module.js';
 const createLandSurface = (mesh, geography, options = {}) => createLand(mesh, geography, { start: 'neutral', coverGoal: 'water', deepCapacity: 0, ...options });
 import { MELTING_POINT } from '../js/physics/ice.module.js';
@@ -342,4 +342,24 @@ test('the GPU holds the start\'s placeholders, jumps to the hand-computed equili
   const freed = await green.land.serialize();
   assert.ok(cells.filter((i) => Math.abs(freed.canopy[i] - jumped.canopy[i]) > 1e-6).length > cells.length / 5, 'after the jump the trees run free');
   green.destroy(); reloaded.destroy();
+});
+
+test('both engines start the observed land alike: the root zone and the surface layer at the observed fill and the deep store at the root zone\'s', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const real = readTopography('etopo1'), options = { topography: real, land: { start: 'observed' } };
+  const cpu = createModel(new Grid(16), options), gpu = await createGpuModel(new Grid(16), options);
+  for (const model of [cpu, gpu]) {
+    const init = initializeState(model, {});
+    for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+    if (model.load) model.load();
+    model.land.initialize();
+  }
+  const back = await gpu.land.serialize(), C = cpu.mesh.nCells, { land, iceSheet, wetness } = cpu.geography;
+  const seeded = [...Array(C).keys()].filter((i) => land[i] && !iceSheet[i] && Number.isFinite(wetness[i]));
+  assert.ok(seeded.length > 400 && seeded.some((i) => wetness[i] < 0.2) && seeded.some((i) => wetness[i] > 0.7), `${seeded.length} cells with a fill`);
+  for (const i of seeded) { assert.equal(cpu.land.soil[i], wetness[i] * 300); assert.equal(cpu.land.surface[i], wetness[i] * 15); }
+  for (const [name, saved] of [['soil', 'soil'], ['surface', 'surface'], ['deepWater', 'deep']]) {
+    assert.ok(back[saved], `the GPU saves ${saved}`);
+    for (let i = 0; i < C; i++) assert.equal(back[saved][i], Math.fround(cpu.land[name][i]), `${name} ${i}`);
+  }
+  gpu.destroy();
 });

@@ -85,7 +85,7 @@ test('the observed start sets the cover to the green maximum, the trees to the l
     assert.equal(land.snowFreeCover[i], land.vegetation[i]);
     assert.equal(land.canopy[i], Math.min(geo64.treeCover[i], land.vegetation[i]));
     assert.equal(land.soilCarbon[i], p.neutral.carbon);
-    assert.equal(land.soil[i], 150);
+    assert.equal(land.soil[i], geo64.wetness[i] * 300);
   }
   assert.ok(cells > 0.2 * mesh64.nCells, `${cells} land cells`);
   const plain = createLandSurface(mesh64, geo64, { treeline: false });
