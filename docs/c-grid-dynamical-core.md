@@ -4957,7 +4957,10 @@ The work, in order:
      neighbors that have one, repeated until none is left, else 0, and
      the sea is 0. At N = 64 the land without its ice sheets means 0.262
      and 0.511, the Amazon (10°S–5°N, 75–50°W) 0.750 and 0.843.
-   - `coverGoal` ('observed', the default, or 'water'). 'observed'
+   - `coverGoal` ('water', the default, or 'observed'; `scripts/spinup.mjs`
+     gives 'observed' unless `LAND` says otherwise, a hold for spin-ups
+     that the page never runs: a published state's cover follows the
+     model's own water). 'observed'
      relaxes the snow-free cover toward `greenMax` in place of the
      bucket's fill (rising over `growthTime` at the warmth, falling over
      `declineTime`, decaying under snow over `snowDeclineTime`, all
@@ -5004,7 +5007,8 @@ The work, in order:
    cover and trees from `data/landCover.bin`, carbon the neutral value
    held; neutral cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` ×
    `organicScale`/100 = 1.802 kg/m²; bare 0, 0, 0; green 1, f m v,
-   13 kg/m², each holding its trees and carbon); `coverGoal` 'observed';
+   13 kg/m², each holding its trees and carbon); `coverGoal` 'water' (the
+   spin-up gives 'observed');
    `FRESH_JUMPS` 365 and 730 days of the record; the spin-up's
    `LAND_JUMPS` 'fresh'; `seasonMemory` and `moistureMemory` 3 years (the
    plain average's length).

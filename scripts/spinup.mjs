@@ -77,10 +77,12 @@
 // with only the topsoil carbon held, at the neutral value;
 // '{"start":"neutral"}', '{"start":"bare"}' or '{"start":"green"}' hold
 // the trees and the carbon at those placeholders instead, see
-// START_CODES in js/physics/land.module.js; '{"coverGoal":"observed"}'
-// relaxes the cover toward the observed green maximum and the trees
-// toward the observed tree cover in place of the bucket's fill and the
-// treeline), LAND_JUMPS (the
+// START_CODES in js/physics/land.module.js; a spin-up holds the cover,
+// '{"coverGoal":"observed"}' unless LAND says otherwise, relaxing it
+// toward the observed green maximum and the trees toward the observed
+// tree cover in place of the bucket's fill and the treeline, a hold the
+// page never runs: '{"coverGoal":"water"}' lets the cover follow the
+// bucket as the page does), LAND_JUMPS (the
 // model days at whose end land.jump() sets every land cell's topsoil
 // carbon, and the trees unless the start was observed, to the
 // equilibrium of its own record and ends a fresh
@@ -237,7 +239,7 @@ if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (G
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}`;
 const found = base ? stateGrid(base, topography) : null;
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, ...LAND }, lake: LAKE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));

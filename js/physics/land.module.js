@@ -392,7 +392,7 @@ export function createLandSurface(mesh, geography, {
   treeMoisture = true, moistureMemory = 3 * 365 * 86400, forestAridity = FOREST_ARIDITY, grassland = true, forestAlbedo = 0.13, grassAlbedo = 0.20, grassSnowDarkening = 0.06,
   soilCarbon: carbonOn = SOIL_CARBON.soilCarbon, mineralAlbedo = SOIL_CARBON.mineralAlbedo, humusAlbedo = SOIL_CARBON.humusAlbedo, organicScale = SOIL_CARBON.organicScale, topsoilMass = SOIL_CARBON.topsoilMass,
   soilTurnover = SOIL_CARBON.soilTurnover, litterInput = SOIL_CARBON.litterInput, treeLitter = SOIL_CARBON.treeLitter, grassLitter = SOIL_CARBON.grassLitter, decompositionWilting = SOIL_CARBON.decompositionWilting,
-  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'observed', deepCapacity = null, buffers = null,
+  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'water', deepCapacity = null, buffers = null,
   soil: soilModel = DEFAULT_SOIL, soilDepths, soilHeatCapacity, soilConductivity, firnDensity,
 } = {}) {
   const C = mesh.nCells;

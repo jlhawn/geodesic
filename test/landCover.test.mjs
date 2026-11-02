@@ -96,13 +96,13 @@ test('the observed start sets the cover to the green maximum, the trees to the l
   assert.ok(bare.vegetation.every((v) => v === 0) && bare.record[1] === 0);
 });
 
-test('a geography without the cover throws an error naming data/landCover.bin unless the start and the goal are given, and a land without vegetation needs neither', () => {
+test('a geography without the cover throws an error naming data/landCover.bin for the observed start and the observed goal, not for a placeholder start under the water goal, and a land without vegetation needs neither', () => {
   const without = { ...geo16, treeCover: undefined, greenMax: undefined };
   assert.throws(() => createLandSurface(mesh16, without).initialize(), /data\/landCover\.bin/);
   assert.throws(() => createLandSurface(mesh16, without, { start: 'observed', coverGoal: 'water' }).initialize(), /data\/landCover\.bin/);
-  for (const start of ['neutral', 'bare', 'green']) createLandSurface(mesh16, without, { start, coverGoal: 'water' }).initialize();
+  for (const start of ['neutral', 'bare', 'green']) createLandSurface(mesh16, without, { start }).initialize();
   createLandSurface(mesh16, without, { vegetation: false }).initialize();
-  assert.throws(() => createLandSurface(mesh16, without, { start: 'neutral' }), /data\/landCover\.bin.*coverGoal 'water'/);
+  assert.throws(() => createLandSurface(mesh16, without, { start: 'neutral', coverGoal: 'observed' }), /data\/landCover\.bin.*coverGoal 'water'/);
   assert.throws(() => createLandSurface(mesh16, geo16, { coverGoal: 'dry' }), /coverGoal/);
   assert.equal(createGeography(mesh16, readTopography('etopo1'), { landCover: null }).treeCover, undefined, 'null turns the cover off');
 });
