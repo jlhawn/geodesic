@@ -18,15 +18,18 @@ const stores = (land, i) => land.soil[i] + land.surface[i] + land.snow[i] + land
 const PLAIN_LAND = '8f93439d5d613b0832b50350fe8b566bd1dfedfbd061d5b83fbdf1b35285bd3a';
 const PLAIN_STEPPED = '8da09236b850d009fb00ee3b7ac018decef154be168a1abfab49120f5c6dca71';
 
-test('the option is refused below 0, without vegetation, and off by default, where the land has no deep store', () => {
+test('the option is refused below 0 and without vegetation, 0 leaves the land without a deep store, and the default is 300 with vegetation and 0 without', () => {
   assert.throws(() => createLandSurface(mesh, flat, { deepCapacity: -1 }), /deepCapacity/);
   assert.throws(() => createLandSurface(mesh, flat, { deepCapacity: 300, vegetation: false }), /needs vegetation/);
-  for (const extra of [{}, { deepCapacity: 0 }]) {
+  for (const extra of [{ deepCapacity: 0 }]) {
     const land = createLandSurface(mesh, flat, { start: 'neutral', ...extra });
     land.initialize();
     assert.equal(land.deepWater, null);
     assert.ok(!('deep' in land.serialize()) && !('deepWater' in land.shared));
   }
+  const byDefault = createLandSurface(mesh, flat, { start: 'neutral' });
+  assert.equal(byDefault.deepCapacity, 300);
+  assert.equal(createLandSurface(mesh, flat, { start: 'neutral', vegetation: false }).deepCapacity, 0, 'without vegetation the default is no store');
   const land = fresh();
   assert.ok(land.deepWater instanceof Float64Array && land.shared.deepWater instanceof SharedArrayBuffer);
   for (let i = 0; i < C; i++) assert.equal(land.deepWater[i], flat.land[i] && !(flat.iceSheet && flat.iceSheet[i] > 0) ? 150 : 0, `cell ${i}: a fresh start fills the store to the root zone's fill, off the ice sheets`);
@@ -152,14 +155,14 @@ test('a save keeps land.deep through the land and the state file, a save without
   }
   other.load(saved);
   for (const i of cells) assert.equal(other.deepWater[i], Math.min(200, saved.deep[i]), `cell ${i}: capped at the capacity`);
-  const plain = createLandSurface(mesh, geo16, {});
+  const plain = createLandSurface(mesh, geo16, { deepCapacity: 0 });
   plain.load(saved);
-  assert.ok(!('deep' in plain.serialize()), 'a land without the option drops it');
+  assert.ok(!('deep' in plain.serialize()), 'a land without the store drops it');
 });
 
-test('with deepCapacity 0, or without it, four steps of the CPU model give the plain land\'s digests, for the land and for the atmosphere with it', () => {
-  for (const extra of [{}, { deepCapacity: 0 }]) {
-    const model = createModel(new Grid(N), { ...options, land: { soil: 'layers', ...extra } });
+test('with deepCapacity 0, coverGoal \'water\' and velocityScale \'capped\' four steps of the CPU model give the plain land\'s digests, for the land and for the atmosphere with it', () => {
+  for (const extra of [{ deepCapacity: 0, coverGoal: 'water' }]) {
+    const model = createModel(new Grid(N), { ...options, boundaryLayer: { velocityScale: 'capped' }, land: { soil: 'layers', ...extra } });
     initializeState(model, {}).forEach((a, k) => model.state[k].set(a));
     for (let i = 0; i < C; i++) if (model.geography.land[i]) model.state[6][i] = 0;
     if (model.load) model.load();

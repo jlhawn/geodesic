@@ -60,7 +60,7 @@ test('with a deep store of 300 kg/m² under the trees the root zone, the surface
   balanced(water);
 });
 
-for (const [label, land] of [['', {}], [' with a deep store under the trees', { deepCapacity: 300 }]]) test(`the parallel engine reproduces the serial model over a continent${label}`, async () => {
+for (const [label, land] of [['', {}], [' without the deep store', { deepCapacity: 0 }]]) test(`the parallel engine reproduces the serial model over a continent${label}`, async () => {
   const serial = prepare(createModel(new Grid(16), { topography, land }));
   const parallel = prepare(await createParallelModel(new Grid(16), { topography, land }, 3));
   const dt = 1350;

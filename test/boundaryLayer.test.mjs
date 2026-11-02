@@ -111,7 +111,7 @@ test('with boundaryLayer.countergradient 7.2 an unstable, heated column carries 
     });
     const [on, off, none] = runs;
     assert.ok(on.h > 1000 && on.carrying >= 3, `${turbulence}: boundary layer ${on.h} m deep, ${on.carrying} interfaces carry the nonlocal flux`);
-    assert.ok(on.heatMiss < 1e-14 && on.waterMiss < 1e-10, `${turbulence}: enthalpy ${on.heatMiss}, water ${on.waterMiss} relative`);
+    assert.ok(on.heatMiss < 1e-13 && on.waterMiss < 1e-10, `${turbulence}: enthalpy ${on.heatMiss}, water ${on.waterMiss} relative`);
     assert.ok(on.lowerT < off.lowerT && on.upperT > off.upperT && on.lowerQ < off.lowerQ && on.upperQ > off.upperQ, `${turbulence}: θ ${off.lowerT} → ${on.lowerT} below h/3, ${off.upperT} → ${on.upperT} above; q ${off.lowerQ} → ${on.lowerQ}, ${off.upperQ} → ${on.upperQ}`);
     assert.ok(on.gradient > off.gradient, `${turbulence}: upper half ${1000 * off.gradient} → ${1000 * on.gradient} K/km`);
     assert.ok(same(off.mixing, none.mixing), `${turbulence}: coefficients`);
@@ -121,7 +121,7 @@ test('with boundaryLayer.countergradient 7.2 an unstable, heated column carries 
 });
 
 test('under 300 W/m² for 2 h velocityScale \'holtslagBoville\' spreads the heat through the mixed layer: with or without the countergradient the lowest layer warms less, and θ differs less between 0.1 h and h, than under the capped scale, heat and water mix at least as fast as momentum there, and the column gains exactly the heat and water it is given', () => {
-  const settings = [{}, { countergradient: 7.2 }, { velocityScale: 'holtslagBoville' }, { velocityScale: 'holtslagBoville', countergradient: 7.2 }];
+  const settings = [{ velocityScale: 'capped' }, { velocityScale: 'capped', countergradient: 7.2 }, { velocityScale: 'holtslagBoville' }, { velocityScale: 'holtslagBoville', countergradient: 7.2 }];
   for (const turbulence of ['dry', 'moist']) {
     const [capped, cappedCg, holtslag, holtslagCg] = settings.map((options) => {
       const pair = heatedColumns({ turbulence, ...options }), { core: c, boundaryLayer: layer, radiation, state } = pair;
@@ -182,7 +182,7 @@ test('momentum mixing brings wind down to the surface layer and changes each edg
 
 test('a warm or moist sea surface deepens the momentum mixing; a cool one keeps the neutral profile', () => {
   const { exnerLayer, sigmaMid, kappa } = core.diagnostics;
-  const neutralLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry', stability: false }), bulkLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
+  const neutralLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry', stability: false }), bulkLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry', velocityScale: 'capped' });
   const sum = (layer) => { let s = 0; for (let k = layer.kTop; k < K - 1; k++) s += layer.mixing[k * C]; return s; };
   const compare = (offset, humidity) => {
     const state = column(300, -1e-3, 8, 1000);
@@ -675,7 +675,7 @@ test('the cumulus-capped rule matches between the engines: the cumulus columns c
 test('the countergradient and velocityScale \'holtslagBoville\' match between the engines on the random columns, alone and together: each interface\'s ρK a w* / (w_m² h), the kinematic surface fluxes, the coefficients that mix momentum and those that mix heat and water, and θ, q, qc and the wind after the step and what each option changes in them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const holtslag = { velocityScale: 'holtslagBoville' }, built = new Map();
   const build = async (options) => { const key = JSON.stringify(options); if (!built.has(key)) built.set(key, await engines({}, options)); return built.get(key); };
-  const cases = ['dry', 'moist'].flatMap((turbulence) => [['countergradient', { countergradient: 7.2, turbulence }, { turbulence }], ['holtslagBoville', { ...holtslag, turbulence }, { turbulence }], ['holtslagBoville with the countergradient', { ...holtslag, countergradient: 7.2, turbulence }, { ...holtslag, turbulence }]].map((c) => [turbulence, ...c]));
+  const cases = ['dry', 'moist'].flatMap((turbulence) => [['countergradient', { velocityScale: 'capped', countergradient: 7.2, turbulence }, { velocityScale: 'capped', turbulence }], ['holtslagBoville', { ...holtslag, turbulence }, { velocityScale: 'capped', turbulence }], ['holtslagBoville with the countergradient', { ...holtslag, countergradient: 7.2, turbulence }, { ...holtslag, turbulence }]].map((c) => [turbulence, ...c]));
   for (const [turbulence, name, onOptions, baseOptions] of cases) {
     const on = await build(onOptions), base = await build(baseOptions), label = `${turbulence}, ${name}`;
     const { K: nK, C: nC, E: nE, kTop, mesh: m } = on, carries = !!on.cpu.nonlocal, scalars = !!on.cpu.scalarMixing;

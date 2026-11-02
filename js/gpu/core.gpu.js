@@ -8,7 +8,7 @@ import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, SURFACE_VERTICAL_SIGMA } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { SNOW_AGEING } from '../physics/ice.module.js';
-import { FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
+import { DEEP_CAPACITY, FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
 import { orographyConstants, OROGRAPHY_KERNELS } from './orography.gpu.js';
 import { spongeGeometry, spongeRates as layerRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { longwaveTableFor } from '../physics/longwave.module.js';
@@ -844,13 +844,13 @@ export const PHYSICS_DEFAULTS = {
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.62, meltingIceAlbedo: 0.48, iceMeltingRange: 1, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   snowAgeing: true, iceSnowFloor: 0.70, ...SNOW_AGEING,
   ...MOIST_DEFAULTS,
-  richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5, stability: true, turbulence: 'moist', cloudTop: {}, countergradient: 0, velocityScale: 'capped',
+  richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5, stability: true, turbulence: 'moist', cloudTop: {}, countergradient: 0, velocityScale: 'holtslagBoville',
   boundaryCover: 'variance', varianceFloor: 0.002, varianceScale: 5, mixingLength: 300, stableMixingLength: 30, varianceCover: 'water', buoyancyLength: 0.53, deckRegime: 'inversion', deckBypass: false,
   landed: false, soilColumn: null, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.2, snowAlbedo: 0.55, fullSnow: 20,
   vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, soilDarkening: 'surface', wetSoilAlbedo: 0.15, darkeningWetness: null, rootZoneCapacity: 300, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8, iceSheetBalance: false, snowCap: 1000, bareIceAlbedo: 0.5,
   oldSnowAlbedo: 0.50, snowMasking: true, forestSnowAlbedo: 0.27, closedCanopy: 0.7, canopyMemory: 365 * 86400,
   treeline: true, seasonThreshold: 0.9, minimumSeason: 94, treelineWarmth: [6.4, 8.0], seasonMemory: 3 * 365 * 86400, treeGrowthTime: 10 * 365 * 86400, treeDeclineTime: 3 * 365 * 86400,
-  treeMoisture: true, moistureMemory: 3 * 365 * 86400, forestAridity: FOREST_ARIDITY, grassland: true, forestAlbedo: 0.13, grassAlbedo: 0.20, grassSnowDarkening: 0.06, coverGoal: 'water', deepCapacity: 0, ...SOIL_CARBON,
+  treeMoisture: true, moistureMemory: 3 * 365 * 86400, forestAridity: FOREST_ARIDITY, grassland: true, forestAlbedo: 0.13, grassAlbedo: 0.20, grassSnowDarkening: 0.06, coverGoal: 'observed', deepCapacity: null, ...SOIL_CARBON,
   growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,
   surfaceExchange: 'roughness', implicitDrag: true, exchangeOptions: {}, ...SKIN_DEFAULTS, skinLight: JERLOV.IB,
 };
@@ -884,6 +884,7 @@ export async function createGpuCore(mesh, {
   if (!(Number.isInteger(phys.radiationEvery) && phys.radiationEvery >= 1)) throw new Error(`radiationEvery must be a whole number of steps, 1 or more, not ${phys.radiationEvery}`);
   if (!(Number.isInteger(phys.dragEvery) && phys.dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${phys.dragEvery}`);
   const heldRadiation = phys.radiationEvery > 1, skinOn = !!(phys.warmLayer || phys.coolSkin), layeredOn = phys.shortwave === 'layered', macOn = phys.aerosol === 'mac';
+  if (phys.deepCapacity === null) phys.deepCapacity = phys.landed && phys.vegetation ? DEEP_CAPACITY : 0;
   if (!(typeof phys.deepCapacity === 'number' && phys.deepCapacity >= 0 && Number.isFinite(phys.deepCapacity))) throw new Error(`deepCapacity is the deep store's capacity in kg/m², 0 (none) or more, not ${phys.deepCapacity}`);
   const deepOn = phys.deepCapacity > 0;
   if (deepOn && !phys.vegetation) throw new Error('deepCapacity needs vegetation: only the trees draw on the deep store');

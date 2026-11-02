@@ -189,7 +189,7 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
 
 async function engines(radiation, levels = undefined) {
   const grid = levels ? { levels } : {};
-  const cpu = createModel(new Grid(16), { ocean: false, radiation, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, ...grid });
+  const cpu = createModel(new Grid(16), { ocean: false, radiation, boundaryLayer: { velocityScale: 'capped' }, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, boundaryLayer: { velocityScale: 'capped' }, ...grid });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();

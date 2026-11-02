@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
 import { createLandSurface as createLand, treelineFactor, aridityFactor, litterWarmth, decompositionWarmth, decompositionMoisture, carbonEquilibrium, carbonRecord, recordWeight, freshJumpDue, startPlaceholders, dryHumusAlbedo, START_CODES, FRESH_JUMPS } from '../js/physics/land.module.js';
-const createLandSurface = (mesh, geography, options = {}) => createLand(mesh, geography, { start: 'neutral', ...options });
+const createLandSurface = (mesh, geography, options = {}) => createLand(mesh, geography, { start: 'neutral', coverGoal: 'water', deepCapacity: 0, ...options });
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';

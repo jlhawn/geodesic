@@ -7,6 +7,7 @@ import { sunDirection, sunDistance, orbitOf, YEAR } from '../js/physics/radiatio
 import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, DECISION_KINDS } from './helpers/decisions.mjs';
 import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
+const CAPPED = { velocityScale: 'capped' };
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -123,10 +124,10 @@ test('the stratiform share of the estimated inversion strength and the boundary-
 
 test('with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (divergenceDamping) => {
-    const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping, radiation: PREVIOUS_AEROSOL });
+    const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping, radiation: PREVIOUS_AEROSOL, boundaryLayer: CAPPED });
     const init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model), physics: PREVIOUS_AEROSOL });
+    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model), physics: { ...PREVIOUS_AEROSOL, ...CAPPED } });
     gpu.upload(model.state);
     gpu.uploadPhysics();
     const decisions = decisionTracker(model.core.K, model.mesh.nCells);
@@ -152,7 +153,7 @@ test('with the ∇⁴ closures off, the divergence damping alone and the heat it
  * enough that the rounding of θ is far below the tolerance.
  */
 function heatingState(radiation = {}) {
-  const model = createModel(new Grid(N), { ocean: false, divergenceDamping: 0, levels: PREVIOUS_LEVELS, moist: PREVIOUS_MOIST, radiation: { ...PREVIOUS_RADIATION, stratus: true, mixedLayerDeck: false, exchangeCoefficient: 1.5e-3, ...radiation }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 } });
+  const model = createModel(new Grid(N), { ocean: false, divergenceDamping: 0, levels: PREVIOUS_LEVELS, moist: PREVIOUS_MOIST, radiation: { ...PREVIOUS_RADIATION, stratus: true, mixedLayerDeck: false, exchangeCoefficient: 1.5e-3, ...radiation }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3, ...CAPPED }, surface: { dragCoefficient: 1.5e-3 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
@@ -162,8 +163,8 @@ function heatingState(radiation = {}) {
   return model;
 }
 async function physicsHeating(base, options, dt = 864000, cumulus = null, mixingTop = null) {
-  const physics = { ...PREVIOUS_RADIATION, ...PREVIOUS_MOIST, stratus: true, mixedLayerDeck: false, ...options };
-  const model = createModel(base.mesh, { ocean: false, levels: base.core.levels, radiation: physics, moist: physics, ice: physics });
+  const physics = { ...PREVIOUS_RADIATION, ...PREVIOUS_MOIST, stratus: true, mixedLayerDeck: false, ...CAPPED, ...options };
+  const model = createModel(base.mesh, { ocean: false, levels: base.core.levels, radiation: physics, moist: physics, ice: physics, boundaryLayer: CAPPED });
   if (cumulus) { model.moist.cumulusCover.set(cumulus.cover); model.moist.cumulusWater.set(cumulus.water); }
   model.state.forEach((a, n) => a.set(base.state[n]));
   model.seaIce.concentration.set(base.seaIce.concentration);
@@ -579,7 +580,7 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
 });
 
 for (const [label, transmission] of [['', null], [', with open water passing a share of its sunlight to the ocean below', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, state, physics, penetrated } = await pair(12, 900, 0, false, {}, {}, {}, null, { transmission });
+  const { model, state, physics, penetrated } = await pair(12, 900, 0, false, {}, {}, CAPPED, null, { transmission });
   const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
   const C = model.mesh.nCells;
   let area = 0, ts = 0, abs = 0, atmosphere = 0, olr = 0, rain = 0;
@@ -610,7 +611,7 @@ for (const [label, transmission] of [['', null], [', with open water passing a s
 });
 
 test('with the radiation held between full calls every fourth step, twelve GPU steps track the CPU model: the call\'s cosine, the shares of the surface\'s emission, the OLR and the surface fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, state, physics } = await pair(12, 900, 10, true, { radiationEvery: 4, clearSkyPass: true });
+  const { model, state, physics } = await pair(12, 900, 10, true, { radiationEvery: 4, clearSkyPass: true }, {}, CAPPED);
   const C = model.mesh.nCells, { held } = model.radiation;
   const theta = stats(model.state[1], state[1]), ts = stats(model.state[3], state[3]), mu = stats(held.mu, physics.RADMU.subarray(0, C)), escape = stats(held.escape, physics.RADT.subarray(0, C));
   const olr = stats(model.radiation.outgoing, physics.OLR.subarray(0, C)), sw = stats(model.radiation.surfaceShortwave, physics.SWDN.subarray(0, C)), share = stats(held.share, physics.RADDF.subarray(0, model.core.K * C));
@@ -653,7 +654,7 @@ test('with the gravity-wave drag laid every fourth step, twelve GPU steps track 
 test('on bl60 twelve full GPU steps track the CPU model and its energy budget, cool each layer above 30 hPa alike with bl60\'s longwave table outside the columns whose cloud decided apart, and lay the same gravity-wave drag in each of its layers outside the columns where the regime or the plume decided apart', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   let decisions = null, plumes = null;
-  const { model, state, physics } = await pair(12, 900, 0, false, { levels: sigmaInterfaces('bl60'), clearSkyPass: true }, {}, {}, async (cpu, device, core) => {
+  const { model, state, physics } = await pair(12, 900, 0, false, { levels: sigmaInterfaces('bl60'), clearSkyPass: true }, {}, CAPPED, async (cpu, device, core) => {
     decisions ??= cloudDecisions(cpu.mesh.nCells);
     decisions.check(cpu, device);
     plumes ??= decisionTracker(cpu.core.K, cpu.mesh.nCells);
@@ -1145,7 +1146,7 @@ test('step by step from one state with partly iced, melting polar cells, the eng
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
-  const dt = 1350 * 16 / N, steps = Math.ceil(8 * 3600 / dt), options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' } };
+  const dt = 1350 * 16 / N, steps = Math.ceil(8 * 3600 / dt), options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' }, boundaryLayer: CAPPED };
   const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
   const C = cpu.mesh.nCells, K = cpu.core.K, init = initializeState(cpu, {});
   const iced = [];

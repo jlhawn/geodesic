@@ -36,7 +36,7 @@ const apart = (a, b, keep) => { let worst = 0; for (let i = 0; i < a.length; i++
 for (const coverGoal of ['water', 'observed']) {
   test(`from an observed start both engines relax the cover and the trees alike under coverGoal '${coverGoal}', hold the carbon at the placeholder, and a jump leaves the trees`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const land = { ...FAST, coverGoal };
-    const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS })), gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS }));
+    const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, boundaryLayer: { velocityScale: 'capped' } })), gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, boundaryLayer: { velocityScale: 'capped' } }));
     const C = cpu.mesh.nCells, grown = (i) => cpu.geography.land[i] && !cpu.geography.iceSheet[i], count = Array.from({ length: C }, (_, i) => i).filter(grown).length;
     assert.deepEqual([...cpu.land.record], [0, 4, 4]);
     for (let n = 0; n < 16; n++) { cpu.step(900); await gpu.step(900); }

@@ -216,6 +216,7 @@ export function treelineFactor(length, warmth, { seasonThreshold = 0.9, minimumS
 }
 
 export const FOREST_ARIDITY = [0.2, 1.0];
+export const DEEP_CAPACITY = 300;
 
 export function aridityFactor(rain, demand, [dry, wet] = FOREST_ARIDITY) {
   return Math.min(1, Math.max(0, (rain / Math.max(demand, 1e-3) - dry) / (wet - dry)));
@@ -391,7 +392,7 @@ export function createLandSurface(mesh, geography, {
   treeMoisture = true, moistureMemory = 3 * 365 * 86400, forestAridity = FOREST_ARIDITY, grassland = true, forestAlbedo = 0.13, grassAlbedo = 0.20, grassSnowDarkening = 0.06,
   soilCarbon: carbonOn = SOIL_CARBON.soilCarbon, mineralAlbedo = SOIL_CARBON.mineralAlbedo, humusAlbedo = SOIL_CARBON.humusAlbedo, organicScale = SOIL_CARBON.organicScale, topsoilMass = SOIL_CARBON.topsoilMass,
   soilTurnover = SOIL_CARBON.soilTurnover, litterInput = SOIL_CARBON.litterInput, treeLitter = SOIL_CARBON.treeLitter, grassLitter = SOIL_CARBON.grassLitter, decompositionWilting = SOIL_CARBON.decompositionWilting,
-  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'water', deepCapacity = 0, buffers = null,
+  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'observed', deepCapacity = null, buffers = null,
   soil: soilModel = DEFAULT_SOIL, soilDepths, soilHeatCapacity, soilConductivity, firnDensity,
 } = {}) {
   const C = mesh.nCells;
@@ -399,6 +400,7 @@ export function createLandSurface(mesh, geography, {
   const layered = column !== null, heatCapacity = layered ? column.soil.capacity[0] : givenCapacity ?? 1e6;
   if (!START_CODES[start]) throw new Error(`start is 'observed', 'neutral', 'bare' or 'green', not ${start}`);
   if (!COVER_GOALS.includes(coverGoal)) throw new Error(`coverGoal is 'water' or 'observed', not ${coverGoal}`);
+  if (deepCapacity === null) deepCapacity = vegetated ? DEEP_CAPACITY : 0;
   if (!(typeof deepCapacity === 'number' && deepCapacity >= 0 && Number.isFinite(deepCapacity))) throw new Error(`deepCapacity is the deep store's capacity in kg/m², 0 (none) or more, not ${deepCapacity}`);
   if (deepCapacity > 0 && !vegetated) throw new Error('deepCapacity needs vegetation: only the trees draw on the deep store');
   const shared = (name, length = C) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * length));
@@ -420,7 +422,7 @@ export function createLandSurface(mesh, geography, {
   const warmth = (t) => Math.min(1, Math.max(0, (t - growthColdest) / (growthWarmest - growthColdest)));
   const { land, iceSheet = null, treeCover = null, greenMax = null } = geography;
   const observedCover = vegetated && coverGoal === 'observed';
-  if (observedCover && !(treeCover && greenMax)) throw new Error("coverGoal 'observed' needs the land cover of data/landCover.bin (geography.treeCover and geography.greenMax)");
+  if (observedCover && !(treeCover && greenMax)) throw new Error("coverGoal 'observed' needs the land cover of data/landCover.bin (geography.treeCover and geography.greenMax); give coverGoal 'water' for a geography without it");
   const onIceSheet = (i) => iceSheet !== null && iceSheet[i] > 0;
   const glacier = (i) => iceSheetBalance && onIceSheet(i);
   const skinCapacity = (i) => (layered ? (onIceSheet(i) ? column.firn : column.soil).capacity[0] : heatCapacity);

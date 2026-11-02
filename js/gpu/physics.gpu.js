@@ -235,7 +235,7 @@ export function physicsConstants(o) {
   if (o.convectionType !== 'testParcel' && o.convectionType !== 'cloudDepth' && o.convectionType !== 'top') throw new Error(`convectionType must be 'testParcel', 'cloudDepth' or 'top', not ${o.convectionType}`);
   if (o.stratusIndex !== 'eis' && o.stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${o.stratusIndex}`);
   if (!((o.countergradient ?? 0) >= 0)) throw new Error(`countergradient must be 0 or more, not ${o.countergradient}`);
-  if (!['capped', 'holtslagBoville'].includes(o.velocityScale ?? 'capped')) throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${o.velocityScale}`);
+  if (!['capped', 'holtslagBoville'].includes(o.velocityScale ?? 'holtslagBoville')) throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${o.velocityScale}`);
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');

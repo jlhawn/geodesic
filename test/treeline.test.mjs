@@ -59,7 +59,7 @@ test('the treeline factor reads the season\'s mean over at least 94 days against
 });
 
 test('trees grow toward the cover times the treeline factor over ten years of snow-free time, die back over three, and under snow hold unless the warmth fails', () => {
-  const land = createLandSurface(mesh, flat(), { treeMoisture: false });
+  const land = createLandSurface(mesh, flat(), { treeMoisture: false, coverGoal: 'water', deepCapacity: 0 });
   land.initialize();
   land.record.set([-1, 0, 0]);
   const i = 6, cap = land.capacity(i), flux = new Float64Array(mesh.nCells);

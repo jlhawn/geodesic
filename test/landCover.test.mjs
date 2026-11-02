@@ -96,13 +96,13 @@ test('the observed start sets the cover to the green maximum, the trees to the l
   assert.ok(bare.vegetation.every((v) => v === 0) && bare.record[1] === 0);
 });
 
-test('a geography without the cover throws an error naming data/landCover.bin unless the start is given, and the goal needs it too', () => {
+test('a geography without the cover throws an error naming data/landCover.bin unless the start and the goal are given, and a land without vegetation needs neither', () => {
   const without = { ...geo16, treeCover: undefined, greenMax: undefined };
   assert.throws(() => createLandSurface(mesh16, without).initialize(), /data\/landCover\.bin/);
-  assert.throws(() => createLandSurface(mesh16, without, { start: 'observed' }).initialize(), /data\/landCover\.bin/);
-  for (const start of ['neutral', 'bare', 'green']) createLandSurface(mesh16, without, { start }).initialize();
+  assert.throws(() => createLandSurface(mesh16, without, { start: 'observed', coverGoal: 'water' }).initialize(), /data\/landCover\.bin/);
+  for (const start of ['neutral', 'bare', 'green']) createLandSurface(mesh16, without, { start, coverGoal: 'water' }).initialize();
   createLandSurface(mesh16, without, { vegetation: false }).initialize();
-  assert.throws(() => createLandSurface(mesh16, without, { start: 'neutral', coverGoal: 'observed' }), /data\/landCover\.bin/);
+  assert.throws(() => createLandSurface(mesh16, without, { start: 'neutral' }), /data\/landCover\.bin.*coverGoal 'water'/);
   assert.throws(() => createLandSurface(mesh16, geo16, { coverGoal: 'dry' }), /coverGoal/);
   assert.equal(createGeography(mesh16, readTopography('etopo1'), { landCover: null }).treeCover, undefined, 'null turns the cover off');
 });
@@ -119,7 +119,7 @@ function run(land, steps, { dt = 900, air = 288 } = {}) {
 const vegetated = (i) => geo16.land[i] && !geo16.iceSheet[i];
 
 test('under hold 4 the trees run free from day 0 and the carbon stays at the placeholder until the jump, which sets the carbon and leaves the trees', () => {
-  const land = createLandSurface(mesh16, geo16, FAST), neutral = startPlaceholders().neutral.carbon;
+  const land = createLandSurface(mesh16, geo16, { ...FAST, coverGoal: 'water' }), neutral = startPlaceholders().neutral.carbon;
   land.initialize();
   const trees0 = Float64Array.from(land.canopy), open = Array.from({ length: mesh16.nCells }, (_, i) => i).filter(vegetated);
   run(land, 24);
@@ -157,7 +157,7 @@ test('a land saved under hold 4 loads with its hold and keeps the carbon at the 
 test("coverGoal 'observed' relaxes the cover toward the green maximum and the trees toward the lower of the tree cover and the cover, and under snow the trees hold", () => {
   const land = createLandSurface(mesh16, geo16, { ...FAST, start: 'neutral', coverGoal: 'observed' });
   land.initialize(); land.jump();
-  const open = Array.from({ length: mesh16.nCells }, (_, i) => i).filter(vegetated), wet = createLandSurface(mesh16, geo16, { ...FAST, start: 'neutral' });
+  const open = Array.from({ length: mesh16.nCells }, (_, i) => i).filter(vegetated), wet = createLandSurface(mesh16, geo16, { ...FAST, start: 'neutral', coverGoal: 'water' });
   wet.initialize(); wet.jump();
   const gap = (l) => open.reduce((s, i) => s + Math.abs(l.vegetation[i] - geo16.greenMax[i]), 0) / open.length;
   const before = gap(land);

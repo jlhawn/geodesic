@@ -101,13 +101,14 @@ function stats(cpu, gpu) {
  * The CPU model and a GPU core of the same options, stepped together `steps` times from model time `time`;
  * `aerosol` false is the same without the climatology.
  */
+const CAPPED = { boundaryLayer: { velocityScale: 'capped' } };
 async function pair(aerosol, radiation, { steps = 3, time = 200 * DAY - 2 * DT, thickness = 1, data = syntheticAerosol().bytes, model: modelOptions = {} } = {}) {
   const options = { stratus: true, clearSkyPass: true, ...radiation, ...(aerosol ? { aerosol: 'mac', aerosolData: data } : PREVIOUS_AEROSOL) };
   const model = createModel(new Grid(N), { ocean: false, radiation: options, surface: { exchange: 'roughness' }, ...modelOptions });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   cloudier(model, thickness);
   model.time = time;
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: options });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...options, ...(modelOptions.boundaryLayer ?? {}) } });
   gpu.upload(model.state);
   gpu.uploadPhysics({});
   for (let n = 0; n < steps; n++) { const t = model.time; model.step(DT); await gpu.stepModel(DT, t); }
@@ -150,7 +151,7 @@ for (const [label, radiation, options] of [['layered', { shortwave: 'layered' },
 
 test('twelve steps on the GPU across a change of day and of the month\'s weights track the CPU model, whose fields they take from the same sampler', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const data = syntheticAerosol().bytes, start = (15 - 78 + 365) * DAY - 5 * DT;
-  const flat = await pair(false, { shortwave: 'layered' }, { steps: 12, time: start }), mac = await pair(true, { shortwave: 'layered' }, { steps: 12, time: start, data });
+  const flat = await pair(false, { shortwave: 'layered' }, { steps: 12, time: start, model: CAPPED }), mac = await pair(true, { shortwave: 'layered' }, { steps: 12, time: start, data, model: CAPPED });
   const f = measure('twelve steps, without the aerosol', flat), m = measure('twelve steps, aerosol \'mac\'', mac);
   assert.equal(mac.model.aerosol.day, 15 - 78 + 365);
   let worst = 0;
@@ -199,7 +200,7 @@ test('over a 4 km mountain the engines agree on what the aerosol does to the lay
   }), data = syntheticAerosol().bytes, runs = [];
   for (const aerosol of [false, true]) {
     const options = { stratus: true, shortwave: 'layered', radiationEvery: 4, mixedLayerDeck: false, ...(aerosol ? { aerosol: 'mac', aerosolData: data } : PREVIOUS_AEROSOL) };
-    const cpu = createModel(new Grid(N), { ocean: false, topography: mountain, radiation: options }), gpu = await createGpuModel(new Grid(N), { ocean: false, topography: mountain, radiation: options });
+    const cpu = createModel(new Grid(N), { ocean: false, topography: mountain, radiation: options, boundaryLayer: { velocityScale: 'capped' } }), gpu = await createGpuModel(new Grid(N), { ocean: false, topography: mountain, radiation: options, boundaryLayer: { velocityScale: 'capped' } });
     const { K, R } = cpu.core.diagnostics, phis = cpu.surfaceGeopotential;
     for (let i = 0; i < C; i++) cpu.state[0][i] = 101325 * Math.exp(-phis[i] / (R * 280));
     cpu.core.diagnose(cpu.state[0], cpu.state[1], null, null);

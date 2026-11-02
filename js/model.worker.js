@@ -723,7 +723,7 @@ async function start(message) {
     const sheets = geographyOptions(geography, geography.iceSheets === 'rule' ? null : await loadLandIce());
     options.geography = { ...(options.geography ?? {}), ...sheets.geography, ...(geography.mask && geography.mask !== 'raster' ? { maskData: await loadMask(N, geography.mask) } : {}) };
     options.land = { ...sheets.land, ...(options.land ?? {}) };
-    if (options.land.coverGoal === 'observed' || (!saved && (options.land.start ?? 'observed') === 'observed')) options.geography.landCover = await loadLandCover();
+    if ((options.land.coverGoal ?? 'observed') === 'observed' || (!saved && (options.land.start ?? 'observed') === 'observed')) options.geography.landCover = await loadLandCover();
   }
   if (!saved && message.land !== false && message.climatology !== false) {
     const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);

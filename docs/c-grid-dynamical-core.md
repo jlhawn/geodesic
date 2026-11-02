@@ -1421,11 +1421,14 @@ the shear, first exceeds 0.5 (interpolated between layers; u* is
 the K-profile κ u* z (1 − z/h)² over the layer interfaces below it.
 Where the surface is warmer than the lowest layer, u* in that profile
 becomes the unstable velocity scale of Holtslag and Boville (1993),
-u* (1 − 15 ζ)^¼ with ζ = 0.1 h/L from the bulk surface buoyancy flux
-(virtual, with a sea surface's saturation humidity; dry over land;
-floored at −2), so a convective marine boundary layer mixes momentum
-down to the surface instead of leaving the lowest layer to the drag;
-stable columns keep the neutral profile.
+w_m = (u*³ + 0.6 w*³)^⅓ with w* from the bulk surface buoyancy flux
+(virtual, with a sea surface's saturation humidity; dry over land) over
+the depth h, and heat and water take the profile's K over their Prandtl
+number (`boundaryLayer.velocityScale` 'holtslagBoville', the default;
+'capped' takes u* (1 − 15 ζ)^¼ with ζ = 0.1 h/L floored at −2 for
+momentum, heat and water alike), so a convective marine boundary layer
+mixes momentum down to the surface instead of leaving the lowest layer
+to the drag; stable columns keep the neutral profile.
 The interface coefficients ρK/Δz live in a shared array. In the adjust
 phase the cell units mix θ, q and qc down each column and new edge
 units mix the normal velocity down each edge, both by implicit Euler on
@@ -4954,7 +4957,7 @@ The work, in order:
      neighbors that have one, repeated until none is left, else 0, and
      the sea is 0. At N = 64 the land without its ice sheets means 0.262
      and 0.511, the Amazon (10°S–5°N, 75–50°W) 0.750 and 0.843.
-   - `coverGoal` ('water', the default, or 'observed'). 'observed'
+   - `coverGoal` ('observed', the default, or 'water'). 'observed'
      relaxes the snow-free cover toward `greenMax` in place of the
      bucket's fill (rising over `growthTime` at the warmth, falling over
      `declineTime`, decaying under snow over `snowDeclineTime`, all
@@ -4966,7 +4969,7 @@ The work, in order:
      and `COVERG`, allocated only under 'observed'). `test/landCover.test.mjs`
      and `test/landCoverGpu.test.mjs` hold the file, the resampling, the
      start, the jump and the N = 16 parity of both goals.
-   - `deepCapacity` (kg/m², 0 by default: none). Above 0 every land
+   - `deepCapacity` (kg/m², 300 by default with vegetation and 0 without it; 0: none). Above 0 every land
      cell off the ice sheets carries a deep store of that capacity below
      the root zone, which only the trees reach (saved as `land.deep`; on
      the land object `deepWater`). Recharge: what the root zone sheds,
@@ -4991,7 +4994,7 @@ The work, in order:
      only when the option is on), uploaded and read back with the other
      land water; with `deepCapacity` 0 nothing is allocated or saved and
      the kernels' text is that of the model without it. The spin-up takes
-     it from `LAND`, e.g. `LAND='{"deepCapacity":300}'`, and its land line
+     it from `LAND`, e.g. `LAND='{"deepCapacity":0}'`, and its land line
      names the store. `test/landDeep.test.mjs` and
      `test/landDeepGpu.test.mjs` hold the recharge, the draw, the water's
      closure, the save and the N = 16 parity, and
@@ -5001,7 +5004,7 @@ The work, in order:
    cover and trees from `data/landCover.bin`, carbon the neutral value
    held; neutral cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` ×
    `organicScale`/100 = 1.802 kg/m²; bare 0, 0, 0; green 1, f m v,
-   13 kg/m², each holding its trees and carbon); `coverGoal` 'water';
+   13 kg/m², each holding its trees and carbon); `coverGoal` 'observed';
    `FRESH_JUMPS` 365 and 730 days of the record; the spin-up's
    `LAND_JUMPS` 'fresh'; `seasonMemory` and `moistureMemory` 3 years (the
    plain average's length).

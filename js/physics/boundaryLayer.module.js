@@ -187,7 +187,7 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * column's totals unchanged, and leaves out the water's in a column where
  * it would take a layer below zero (their appendix B).
  *
- * With `velocityScale` 'holtslagBoville' ('capped', the default, is the
+ * With `velocityScale` 'holtslagBoville' (the default; 'capped' is the
  * unstable scale above) the unstable profile's velocity scale is their
  * w_m = (u*³ + 0.6 w*³)^⅓ (A11, which is u* / φ_m(0.1 h/L) with the
  * φ_m = (1 − 15 z/L)^−⅓ of A8), with no floor on ζ, and heat and water
@@ -205,7 +205,7 @@ export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 export function createBoundaryLayer(mesh, core, {
   dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, openSea = null, seaHumidity = 1, deckTop = null, deckGate = null, deckLayer = null, deckShare = null, deckEntrainment = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
-  countergradient = 0, surfaceHeat = null, surfaceEvaporation = null, velocityScale = 'capped',
+  countergradient = 0, surfaceHeat = null, surfaceEvaporation = null, velocityScale = 'holtslagBoville',
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
   if (velocityScale !== 'capped' && velocityScale !== 'holtslagBoville') throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${velocityScale}`);

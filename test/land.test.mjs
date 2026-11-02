@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
 import { createLandSurface as createLand } from '../js/physics/land.module.js';
-const createLandSurface = (mesh, geography, options = {}) => createLand(mesh, geography, { start: 'neutral', ...options });
+const createLandSurface = (mesh, geography, options = {}) => createLand(mesh, geography, { start: 'neutral', coverGoal: 'water', deepCapacity: 0, ...options });
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 
 const N = 16;

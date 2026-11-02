@@ -7,7 +7,7 @@ import { createLandSurface } from '../../js/physics/land.module.js';
 import { PREVIOUS_LEVELS, PREVIOUS_AEROSOL } from './previousDefaults.mjs';
 
 export const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
-export const options = { topography, ocean: false, levels: PREVIOUS_LEVELS, land: { soil: 'slab' }, radiation: PREVIOUS_AEROSOL };
+export const options = { topography, ocean: false, levels: PREVIOUS_LEVELS, land: { soil: 'slab', coverGoal: 'water', deepCapacity: 0 }, boundaryLayer: { velocityScale: 'capped' }, radiation: PREVIOUS_AEROSOL };
 
 export const digest = (arrays) => {
   const hash = createHash('sha256');

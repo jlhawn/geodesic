@@ -273,7 +273,7 @@ test('started on the column\'s profile about the saved skin and forced at its to
 
 const hashOf = (arrays) => { const hash = createHash('sha256'); for (const a of arrays) hash.update(Buffer.from(Float64Array.from(a).buffer)); return hash.digest('hex'); };
 function slabRun() {
-  const land = createLandSurface(mesh, geography, { iceSheetBalance: true, soil: 'slab', start: 'neutral' });
+  const land = createLandSurface(mesh, geography, { iceSheetBalance: true, soil: 'slab', start: 'neutral', coverGoal: 'water', deepCapacity: 0 });
   land.initialize();
   const surfaceT = Float64Array.from({ length: C }, (_, i) => 255 + 40 * Math.cos(mesh.latCell[i]));
   const cells = [landCell, northCell, southCell, firnCell], flux = new Float64Array(C);

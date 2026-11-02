@@ -23,7 +23,7 @@ async function gpuLoaded(fixture, land = options.land) {
 test('a slab land loaded the way the scripts load it, from a save with snow on sea ice, is bit-identical to the load of 5738db9, and a CPU model steps from it to the same digest', () => {
   const f = savedFixture();
   assert.ok(f.iced.length > 10);
-  const before = createLandSurface(f.mesh, f.geography, { soil: 'slab' }), now = createLandSurface(f.mesh, f.geography, { soil: 'slab' });
+  const before = createLandSurface(f.mesh, f.geography, { soil: 'slab', deepCapacity: 0 }), now = createLandSurface(f.mesh, f.geography, { soil: 'slab', deepCapacity: 0 });
   before.load(f.saved.land, f.state[6]);
   now.load(f.saved.land, f.state[6], f.saved.time, f.state[3]);
   assert.equal(digest(landArrays(before.serialize())), LAND_AFTER_LOAD);
@@ -31,7 +31,7 @@ test('a slab land loaded the way the scripts load it, from a save with snow on s
   for (const i of f.iced) assert.equal(now.snow[i], 12, `sea ice cell ${i}`);
   assert.equal(cpuStepped(f, (model, saved) => model.land.load(saved.land, model.state[6])), CPU_ONE_STEP);
   assert.equal(cpuStepped(f, (model, saved) => model.land.load(saved.land, model.state[6], saved.time, model.state[3])), CPU_ONE_STEP);
-  const dropped = createLandSurface(f.mesh, f.geography, { soil: 'slab' });
+  const dropped = createLandSurface(f.mesh, f.geography, { soil: 'slab', deepCapacity: 0 });
   dropped.load(f.saved.land, null, f.saved.time, f.state[3]);
   for (const i of f.iced) assert.equal(dropped.snow[i], 0);
   assert.notEqual(digest(landArrays(dropped.serialize())), LAND_AFTER_LOAD);
