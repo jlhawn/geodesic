@@ -1701,6 +1701,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ capeClosure: 'threshold' });
   await parity({ pcapeBoundary: 'signed' });
   await parity({ pcapeMinimum: 0.05 });
+  await parity({ pcapeMinimum: 0.05, pcapeMinimumOver: 'land', pcapeTimescale: 'sea' }, { land: true });
   await parity({ pcapeTimescale: 'sea' }, { land: true });
   await parity({ excessVelocity: 'convective' });
   await parity({ plumeSourceDepth: 'boundaryLayer' });
