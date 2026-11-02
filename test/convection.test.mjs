@@ -1698,6 +1698,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
   await parity({ pcapeBoundary: 'signed' });
+  await parity({ pcapeMinimum: 0.05 });
   await parity({ excessVelocity: 'convective' });
   await parity({ plumeSourceDepth: 'boundaryLayer' });
   await parity({ convectionType: 'top' });

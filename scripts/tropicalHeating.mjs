@@ -635,7 +635,7 @@ moist.adjust = (st, iFrom, iTo, step) => {
       P.candidateCape[Math.min(7, Math.floor(d.cape / 60))] += a;
       if (d.deep) {
         P.fired += a; P.firedCape += a * d.cape; P.firedInhibition += a * d.inhibition; P.firedFlux += a * d.baseFlux; P.firedTop[bin100(dilute.topPressure)] += a; P.consumption += a * d.consumption;
-        const relaxed = bechtold ? (d.consumptionP > 0 ? Math.max(0, d.pcape - d.pcapeBoundary) / (d.tau * d.consumptionP) : 0) : d.consumption > 0 && d.cape > O.plumeCape ? (d.cape - O.plumeCape) / (O.plumeRelaxation * d.consumption) : 0;
+        const relaxed = bechtold ? (d.consumptionP > 0 ? Math.max(0, O.pcapeMinimum * d.pcape, d.pcape - d.pcapeBoundary) / (d.tau * d.consumptionP) : 0) : d.consumption > 0 && d.cape > O.plumeCape ? (d.cape - O.plumeCape) / (O.plumeRelaxation * d.consumption) : 0;
         const gate = ramp(0.5 + (O.inhibitionThreshold - d.inhibition) / Math.max(1, O.inhibitionThreshold));
         if (d.baseFlux < open * gate * relaxed * (1 - 1e-12)) P.limited += a;
         if (bechtold) { P.pcape += a * d.pcape; P.pcapeBoundary += a * d.pcapeBoundary; P.tau += a * d.tau; P.speed += a * d.speed; P.taus.push([d.tau, a]); }
