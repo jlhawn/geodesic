@@ -33,6 +33,9 @@
  * depth of the sea beneath its points, land counting as none, averaged
  * over the cell: the water a cell holds per unit area. Without it the
  * ice sheets are Antarctica's land and Greenland's interior above 800 m.
+ * With `landCover` (decodeLandCover; the file's under node when not
+ * given, null for none) the geography also carries treeCover and
+ * greenMax, the observed fractions on the mesh (landCoverOnMesh).
  * With `iceShelves` 'sea' the floating ice is taken away: its points
  * count at the depth of the bed beneath them and hold no ice. With
  * 'cavity' the atmosphere's geography is that of 'land', and `ocean` is
@@ -137,6 +140,109 @@ export function decodeLandIce(buffer) {
 }
 
 /*
+ * data/landCover.bin, which scripts/landCover.mjs writes: the tree cover
+ * and the annual maximum of the green fraction of the land on a 0.25°
+ * grid, 1440 columns from −180° and 720 rows from −90°, each row west to
+ * east (cell centers at −179.875 + 0.25 i and −89.875 + 0.25 j). A
+ * 12-byte header ('LCV1', the columns and the rows, uint32), then the
+ * tree cover and the green maximum as uint8, each the fraction times
+ * COVER_SCALE, COVER_NONE where the cell holds no land point of its
+ * source. landCoverOnMesh gives each mesh cell the mean of the cells
+ * nearest to it; a land cell that has none takes the mean of its
+ * neighbors that have one, repeated until none is left, else 0; the
+ * sea's cells are 0.
+ */
+export const COVER_SCALE = 200, COVER_NONE = 255;
+export const landCoverUrl = new URL('../data/landCover.bin', import.meta.url);
+
+export function encodeLandCover({ cols, rows, treeCover, greenMax }) {
+  const out = new Uint8Array(12 + 2 * rows * cols), head = new DataView(out.buffer);
+  [76, 67, 86, 49].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, cols, true); head.setUint32(8, rows, true);
+  out.set(treeCover, 12); out.set(greenMax, 12 + rows * cols);
+  return out.buffer;
+}
+
+export function decodeLandCover(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const head = new DataView(bytes);
+  if (bytes.byteLength < 12 || String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'LCV1') throw new Error('not a land-cover file');
+  const cols = head.getUint32(4, true), rows = head.getUint32(8, true), n = rows * cols;
+  if (bytes.byteLength !== 12 + 2 * n) throw new Error('land-cover file of the wrong size');
+  return { cols, rows, treeCover: new Uint8Array(bytes, 12, n), greenMax: new Uint8Array(bytes, 12 + n, n) };
+}
+
+let landCoverFile = null;
+export function readLandCover() {
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+  if (!fs || !fs.existsSync(landCoverUrl)) return null;
+  return (landCoverFile ??= decodeLandCover(fs.readFileSync(landCoverUrl)));
+}
+
+const coverSums = new WeakMap();
+function coverSumsOn(cover, mesh) {
+  if (!coverSums.has(cover)) coverSums.set(cover, new WeakMap());
+  const byMesh = coverSums.get(cover);
+  if (byMesh.has(mesh)) return byMesh.get(mesh);
+  const { nCells: C, cellsOnCell, nEdgesOnCell, maxEdges: M, latCell, lonCell } = mesh, { cols, rows } = cover;
+  const P = new Float64Array(3 * C);
+  for (let i = 0; i < C; i++) { const cl = Math.cos(latCell[i]); P[3 * i] = cl * Math.cos(lonCell[i]); P[3 * i + 1] = cl * Math.sin(lonCell[i]); P[3 * i + 2] = Math.sin(latCell[i]); }
+  const cosLon = new Float64Array(cols), sinLon = new Float64Array(cols);
+  for (let c = 0; c < cols; c++) { const lon = (-180 + (c + 0.5) * 360 / cols) * Math.PI / 180; cosLon[c] = Math.cos(lon); sinLon[c] = Math.sin(lon); }
+  const sums = { sum: [new Float64Array(C), new Float64Array(C)], count: [new Float64Array(C), new Float64Array(C)] };
+  const fields = [cover.treeCover, cover.greenMax];
+  let at = 0;
+  for (let r = 0; r < rows; r++) {
+    const lat = (-90 + (r + 0.5) * 180 / rows) * Math.PI / 180, cl = Math.cos(lat), z = Math.sin(lat);
+    for (let c = 0; c < cols; c++) {
+      const n = r * cols + c;
+      if (fields[0][n] === COVER_NONE && fields[1][n] === COVER_NONE) continue;
+      const x = cl * cosLon[c], y = cl * sinLon[c];
+      let dot = x * P[3 * at] + y * P[3 * at + 1] + z * P[3 * at + 2];
+      for (;;) {
+        let next = at;
+        for (let m = 0; m < nEdgesOnCell[at]; m++) {
+          const j = cellsOnCell[M * at + m], d = x * P[3 * j] + y * P[3 * j + 1] + z * P[3 * j + 2];
+          if (d > dot) { dot = d; next = j; }
+        }
+        if (next === at) break;
+        at = next;
+      }
+      for (let f = 0; f < 2; f++) if (fields[f][n] !== COVER_NONE) { sums.sum[f][at] += fields[f][n]; sums.count[f][at]++; }
+    }
+  }
+  byMesh.set(mesh, sums);
+  return sums;
+}
+
+export function landCoverOnMesh(cover, mesh, land) {
+  const { sum, count } = coverSumsOn(cover, mesh), { nCells: C, cellsOnCell, nEdgesOnCell, maxEdges: M } = mesh;
+  const out = {};
+  ['treeCover', 'greenMax'].forEach((name, f) => {
+    const value = new Float64Array(C), has = new Uint8Array(C);
+    let holes = [];
+    for (let i = 0; i < C; i++) {
+      if (count[f][i] > 0) { value[i] = sum[f][i] / count[f][i] / COVER_SCALE; has[i] = 1; }
+      else if (land[i]) holes.push(i);
+    }
+    while (holes.length) {
+      const filled = [], left = [];
+      for (const i of holes) {
+        let total = 0, n = 0;
+        for (let m = 0; m < nEdgesOnCell[i]; m++) { const j = cellsOnCell[M * i + m]; if (has[j]) { total += value[j]; n++; } }
+        if (n > 0) filled.push([i, total / n]); else left.push(i);
+      }
+      if (filled.length === 0) break;
+      for (const [i, v] of filled) { value[i] = v; has[i] = 1; }
+      holes = left;
+    }
+    for (let i = 0; i < C; i++) if (!land[i]) value[i] = 0;
+    out[name] = value;
+  });
+  return out;
+}
+
+/*
  * The geography and land options of a geography record: the observed
  * ice sheets take the ice of data/landice_0p25.bin (`landIce` when
  * given, else read from the file under node) and the land's
@@ -177,7 +283,12 @@ export const NARROW_STRAITS = {
   danish: { sill: 50, points: [[55.5, 12.7], [56.1, 12.3], [56.8, 11.5], [57.6, 10.5]] },
 };
 
-export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land', cavityDepth = 50, mask = 'raster', maskData = null } = {}) {
+export function createGeography(mesh, topography, { landCover = readLandCover(), ...options } = {}) {
+  const geography = buildGeography(mesh, topography, options);
+  return landCover ? { ...geography, ...landCoverOnMesh(landCover, mesh, geography.land) } : geography;
+}
+
+function buildGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land', cavityDepth = 50, mask = 'raster', maskData = null } = {}) {
   if (!MASKS.includes(mask)) throw new Error(`mask is ${MASKS.join(' or ')}, not ${mask}`);
   if (mask !== 'raster') return maskedGeography(mesh, maskData ?? readMask(mesh), iceShelves, cavityDepth);
   const { nCells: C, nEdges: E, xCell, cellsOnCell, nEdgesOnCell, edgesOnCell, cellsOnEdge, areaCell, latCell, lonCell } = mesh;
@@ -187,7 +298,7 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
   if (iceShelves !== 'land' && !landIce) throw new Error(`ice shelves at ${iceShelves} need the land ice`);
   if (iceShelves === 'cavity') {
     const options = { landThreshold, landBridges, seaStraits, landIce };
-    return cavityGeography(mesh, createGeography(mesh, topography, options), createGeography(mesh, topography, { ...options, iceShelves: 'sea' }), cavityDepth);
+    return cavityGeography(mesh, buildGeography(mesh, topography, options), buildGeography(mesh, topography, { ...options, iceShelves: 'sea' }), cavityDepth);
   }
   const slot = landIce ? new Int32Array(rows * cols).fill(-1) : null, afloat = iceShelves === 'sea';
   if (landIce) landIce.index.forEach((n, k) => { slot[n] = k; });

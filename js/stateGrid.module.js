@@ -70,7 +70,7 @@ function landMask(N, relax, topography, geography, built) {
   if (!kept.has(key)) {
     const made = build(N, relax);
     built.set(relax, made);
-    kept.set(key, Uint8Array.from(createGeography(made.mesh, topography, geography).land, (l) => (l ? 1 : 0)));
+    kept.set(key, Uint8Array.from(createGeography(made.mesh, topography, { ...geography, landCover: null }).land, (l) => (l ? 1 : 0)));
   }
   return kept.get(key);
 }

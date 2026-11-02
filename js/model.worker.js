@@ -7,7 +7,7 @@ import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
 import { CUMULUS_FIELDS, placeCumulus } from './physics/moist.module.js';
-import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, missingMask, decodeMask, decodeLandIce, landIceUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
+import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, missingMask, decodeMask, decodeLandIce, landIceUrl, decodeLandCover, landCoverUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
@@ -431,6 +431,14 @@ async function loadLandIce() {
   return (landIce = decodeLandIce(await response.arrayBuffer()));
 }
 
+let landCover = null;
+async function loadLandCover() {
+  if (landCover) return landCover;
+  const response = await fetch(landCoverUrl);
+  if (!response.ok) throw new Error(`land cover ${landCoverUrl}: ${response.status}`);
+  return (landCover = decodeLandCover(await response.arrayBuffer()));
+}
+
 let aerosolBytes = null;
 async function loadAerosolFile() {
   if (aerosolBytes) return aerosolBytes;
@@ -715,6 +723,7 @@ async function start(message) {
     const sheets = geographyOptions(geography, geography.iceSheets === 'rule' ? null : await loadLandIce());
     options.geography = { ...(options.geography ?? {}), ...sheets.geography, ...(geography.mask && geography.mask !== 'raster' ? { maskData: await loadMask(N, geography.mask) } : {}) };
     options.land = { ...sheets.land, ...(options.land ?? {}) };
+    if (saved ? options.land.coverGoal === 'observed' : (options.land.start ?? 'observed') === 'observed') options.geography.landCover = await loadLandCover();
   }
   if (!saved && message.land !== false && message.climatology !== false) {
     const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);
