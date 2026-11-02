@@ -4919,9 +4919,59 @@ The work, in order:
      break is not bit-exact in this spin-up, while the land's own fields
      reload to the bit.
 
-   Defaults: land `start` 'neutral' (`startPlaceholders`: neutral
-   cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` × `organicScale`/100
-   = 1.802 kg/m²; bare 0, 0, 0; green 1, f m v, 13 kg/m²);
+   - The observed start (`start: 'observed'`, the default; Nov 1). A
+     fresh start takes its cover and its trees from observation in place
+     of a placeholder year: every land cell's cover is the annual
+     maximum of the AVHRR green fraction (`greenMax`), its trees the
+     lower of the MODIS tree cover (`treeCover`) and that cover, its
+     bucket half full as before and its topsoil carbon the neutral
+     placeholder, held (hold code 4) until the jump. The trees run free
+     from day 0 (`heldTrees` does not apply to code 4), and `land.jump()`
+     at 365 and 730 days sets the carbon only, never the trees, and
+     releases the hold; the other starts hold their trees and set them
+     as above. Ice sheets start at 0. A geography without the two fields
+     throws an error naming `data/landCover.bin` unless `start` is given.
+     `load()` takes a saved record with hold 4; the GPU holds the carbon
+     at the neutral value and leaves the trees free under code 4.
+   - The cover file. `data/landCover.bin` (2.07 MB, `scripts/landCover.mjs`)
+     holds `treeCover` and `greenMax` on a 0.25° grid (1440 × 720, cell
+     centers −179.875 + 0.25 i and −89.875 + 0.25 j, south to north) as
+     uint8 of the fraction × 200, 255 where a cell has no land point,
+     behind a 12-byte header ('LCV1', columns, rows). Sources, two WPS
+     geogrid datasets: `modis_landuse_20class_30s_with_lakes`, the
+     MODIS IGBP class of each 30″ point (land is every class but 0
+     missing, 17 water and 21 lake), whose tree cover by class is 0.8 for
+     the forests 1–5, 0.45 woody savanna 8, 0.2 savanna 9, 0.15
+     cropland/natural mosaic 14, 0.2 wooded tundra 18, 0.1 permanent
+     wetland 11 and urban 13 and 0 for the rest, averaged over a cell's
+     land points; and `greenfrac`, the AVHRR monthly green fraction
+     (0.144° points, scale 0.01), whose largest monthly value at each
+     point is averaged over the cell's points that are land by the
+     land-use classes read every sixth point (a 0.05° mask).
+     `createGeography` resamples both onto the mesh under node (the
+     worker fetches the file for a fresh start): the nearest mesh cell
+     takes each 0.25° cell, a land cell with none takes the mean of its
+     neighbors that have one, repeated until none is left, else 0, and
+     the sea is 0. At N = 64 the land without its ice sheets means 0.262
+     and 0.511, the Amazon (10°S–5°N, 75–50°W) 0.750 and 0.843.
+   - `coverGoal` ('water', the default, or 'observed'). 'observed'
+     relaxes the snow-free cover toward `greenMax` in place of the
+     bucket's fill (rising over `growthTime` at the warmth, falling over
+     `declineTime`, decaying under snow over `snowDeclineTime`, all
+     unchanged) and the trees toward the lower of `treeCover` and the
+     cover over `treeGrowthTime` and `treeDeclineTime`, with neither the
+     treeline nor the moisture factor, since the map holds both; under
+     snow the trees hold. The GPU compiles the goal in and reads the
+     two fields from static float32 slots of the physics buffer (`COVERT`
+     and `COVERG`, allocated only under 'observed'). `test/landCover.test.mjs`
+     and `test/landCoverGpu.test.mjs` hold the file, the resampling, the
+     start, the jump and the N = 16 parity of both goals.
+
+   Defaults: land `start` 'observed' (`startPlaceholders`: observed
+   cover and trees from `data/landCover.bin`, carbon the neutral value
+   held; neutral cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` ×
+   `organicScale`/100 = 1.802 kg/m²; bare 0, 0, 0; green 1, f m v,
+   13 kg/m², each holding its trees and carbon); `coverGoal` 'water';
    `FRESH_JUMPS` 365 and 730 days of the record; the spin-up's
    `LAND_JUMPS` 'fresh'; `seasonMemory` and `moistureMemory` 3 years (the
    plain average's length).
