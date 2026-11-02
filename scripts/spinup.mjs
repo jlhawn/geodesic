@@ -241,6 +241,7 @@ const model = await createGpuModel(found ? found.mesh : new Grid(N), { topograph
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
+const deepNote = (land) => (model.land.deepWater ? `deep store of ${model.land.deepCapacity} kg/m² under the trees, ${land && land.deep ? 'from the saved land.deep' : 'started at the root zone\'s fill'}` : '');
 function loadSaved(saved) {
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
   model.seaIce.load(state[6], saved.concentration ?? null);
@@ -280,6 +281,7 @@ if (saved) {
     log(`ocean, sea ice and sea surface of ${file} replaced by those of ${OCEAN_FROM} (day ${alone.day}, ${alone.oceanYears ?? 0} years alone; ${oceanYears} in all)`);
   }
   loadSaved(saved);
+  if (model.land.deepWater) log(`land: ${deepNote(saved.land)}`);
   log(`--- ${new Date().toISOString()} continuing from ${file} (day ${saved.day}${startStep ? `, step ${startStep} of ${perDay}` : ''}) on ${grid}, mesh of ${meshNote}, ${geographyNote}, after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 } else {
   if (OCEAN_FROM) throw new Error(`OCEAN_FROM needs a ${TAG}_dayDDDD.bin in ${OUT} to hand the ocean to`);
@@ -329,7 +331,7 @@ if (saved) {
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
   }
   const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at', 'the topsoil carbon, the trees free, at'][record[1]];
-  log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green', 'observed'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}`);
+  log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green', 'observed'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}${model.land.deepWater ? `; ${deepNote(process.env.LAND_FROM ? null : fromState ? fromState.land : null)}` : ''}`);
   log(`--- ${new Date().toISOString()} fresh start at N=${N} on ${grid}, mesh of ${meshNote}, ${geographyNote} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 }
 const everySteps = model.oceanEngine ? model.oceanEngine.everySteps : 1, radiationEvery = model.gpu.physics.radiationEvery;

@@ -4966,6 +4966,36 @@ The work, in order:
      and `COVERG`, allocated only under 'observed'). `test/landCover.test.mjs`
      and `test/landCoverGpu.test.mjs` hold the file, the resampling, the
      start, the jump and the N = 16 parity of both goals.
+   - `deepCapacity` (kg/m², 0 by default: none). Above 0 every land
+     cell off the ice sheets carries a deep store of that capacity below
+     the root zone, which only the trees reach (saved as `land.deep`; on
+     the land object `deepWater`). Recharge: what the root zone sheds,
+     the (soil/capacity)⁴ share of the infiltration and the water above
+     its capacity, fills the deep store first, and only what the store
+     cannot hold runs off. Draw: the cover's transpiration splits by the
+     trees' share s = canopy / cover (0 where there is no cover). The
+     grass's part 1 − s keeps the root zone's factor min(1, soil /
+     (`wetnessThreshold` × capacity)) and draws on the root zone; the
+     trees' part takes the larger of that factor and min(1, deep /
+     (`wetnessThreshold` × `deepCapacity`)) and draws on the store whose
+     factor is the larger, the root zone on a tie, and on the root zone
+     for whatever an emptied store cannot give. Bare-soil evaporation, the
+     surface layer, the cover's goal, the litter's and the
+     decomposition's water factors, the darkening and the carbon read the
+     root zone alone, and `water()` counts the store. A fresh start fills
+     it to the root zone's fill (half); a state saved without `land.deep`
+     starts it at its root zone's fill times `deepCapacity`, and one saved
+     with it keeps it, capped at the capacity. The option needs
+     vegetation. The GPU compiles the capacity in (`DEEPCAP`) and keeps
+     the store in a float32 slot of the physics buffer (`DEEP`, allocated
+     only when the option is on), uploaded and read back with the other
+     land water; with `deepCapacity` 0 nothing is allocated or saved and
+     the kernels' text is that of the model without it. The spin-up takes
+     it from `LAND`, e.g. `LAND='{"deepCapacity":300}'`, and its land line
+     names the store. `test/landDeep.test.mjs` and
+     `test/landDeepGpu.test.mjs` hold the recharge, the draw, the water's
+     closure, the save and the N = 16 parity, and
+     `test/landModel.test.mjs` the CPU model's land water with the store.
 
    Defaults: land `start` 'observed' (`startPlaceholders`: observed
    cover and trees from `data/landCover.bin`, carbon the neutral value

@@ -52,7 +52,7 @@ export const PH_MAP = {
   CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
   PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo',
   SURF: 'land.surface', SOIL: 'land.soil', RUNOFF: 'land.runoff', DISCHARGE: 'land.discharge', ICELOSS: 'land.iceLoss', MLMK: 'radiation.mlmLayer', MLMM: 'radiation.mlmShare', DECKK: 'radiation.deckLayer', DECKFROM: 'radiation.deckFrom', VEG: 'land.vegetation', CANOPY: 'land.canopy', SEASONL: 'land.seasonLength', SEASONW: 'land.seasonWarmth', DEMAND: 'land.demandMean', RAINMEAN: 'land.rainMean',
-  LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4',
+  LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4', DEEP: 'land.deepWater',
   GWE: 'gravityWaves.east', GWN: 'gravityWaves.north', OLAUNCH: 'orography.launch', OWAVE: 'orography.wave', OSTRESS: 'orography.stress', OBETA: 'orography.beta', OBLOCK: 'orography.blocking', ODIR: 'orography.direction',
   OSTD: 'orography.fields.deviation', OORI: 'orography.fields.orientation', OANI: 'orography.fields.anisotropy', OSLP: 'orography.fields.slope',
   RADT: 'radiation.held.escape', RADTC: 'radiation.held.clearEscape', RADDF: 'radiation.held.share', RADDIR: 'radiation.held.direct', RADREFL: 'radiation.held.reflected', RADABS: 'radiation.held.absorbed',

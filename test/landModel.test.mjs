@@ -19,24 +19,29 @@ function prepare(model) {
   return model;
 }
 
-test('with a continent the ocean flows only through ocean edges, land carries no sea ice, and the bucket accounts for every drop', async () => {
-  const model = prepare(createModel(new Grid(16), { topography }));
-  const { mesh, geography, land, ocean } = model;
-  assert.ok(geography.landArea > 0.35 && geography.landArea < 0.55, `land area ${geography.landArea.toFixed(2)}`);
-  const dt = 1350;
+function landWater(model, steps = 12, dt = 1350) {
+  const { mesh, geography, land } = model;
   const waterBefore = land.water();
   let rainOnLand = 0, evaporationFromLand = 0;
-  for (let n = 0; n < 12; n++) {
+  for (let n = 0; n < steps; n++) {
     model.step(dt);
     for (let i = 0; i < mesh.nCells; i++) if (geography.land[i]) {
       rainOnLand += mesh.areaCell[i] * model.moist.rain[i];
       evaporationFromLand += mesh.areaCell[i] * model.radiation.evaporation[i] * dt;
     }
   }
+  return { waterBefore, rainOnLand, evaporationFromLand, imbalance: land.water() - waterBefore - (rainOnLand - evaporationFromLand) };
+}
+const balanced = ({ waterBefore, rainOnLand, evaporationFromLand, imbalance }) => assert.ok(Math.abs(imbalance) < 1e-9 * waterBefore, `land water balance off by ${(imbalance / waterBefore).toExponential(2)} of the store (rain ${(rainOnLand / waterBefore).toExponential(2)}, evaporation ${(evaporationFromLand / waterBefore).toExponential(2)})`);
+
+test('with a continent the ocean flows only through ocean edges, land carries no sea ice, and the bucket accounts for every drop', async () => {
+  const model = prepare(createModel(new Grid(16), { topography }));
+  const { mesh, geography, ocean } = model;
+  assert.ok(geography.landArea > 0.35 && geography.landArea < 0.55, `land area ${geography.landArea.toFixed(2)}`);
+  const water = landWater(model);
   const d = model.diagnostics();
   assert.ok(d.landFraction > 0.35 && d.landMeanT > 250 && d.landMeanT < 320, `land diagnostics ${JSON.stringify({ f: d.landFraction, T: d.landMeanT })}`);
-  const imbalance = land.water() - waterBefore - (rainOnLand - evaporationFromLand);
-  assert.ok(Math.abs(imbalance) < 1e-9 * waterBefore, `land water balance off by ${(imbalance / waterBefore).toExponential(2)} of the store (rain ${(rainOnLand / waterBefore).toExponential(2)}, evaporation ${(evaporationFromLand / waterBefore).toExponential(2)})`);
+  balanced(water);
   for (let i = 0; i < mesh.nCells; i++) if (geography.land[i]) assert.equal(model.state[6][i], 0);
   for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < mesh.nEdges; e++) if (!geography.edgeOcean[e]) assert.equal(ocean.u[k * mesh.nEdges + e], 0);
   let moved = 0;
@@ -45,18 +50,29 @@ test('with a continent the ocean flows only through ocean edges, land carries no
   for (let i = 0; i < mesh.nCells; i++) if (geography.land[i]) assert.equal(ocean.h[i], 0);
 });
 
-test('the parallel engine reproduces the serial model over a continent', async () => {
-  const serial = prepare(createModel(new Grid(16), { topography }));
-  const parallel = prepare(await createParallelModel(new Grid(16), { topography }, 3));
+test('with a deep store of 300 kg/m² under the trees the root zone, the surface layer, the store and the runoff account for every drop', () => {
+  const model = prepare(createModel(new Grid(16), { topography, land: { deepCapacity: 300 } }));
+  const { mesh, geography, land } = model, before = Float64Array.from(land.deepWater);
+  const water = landWater(model);
+  let moved = 0;
+  for (let i = 0; i < mesh.nCells; i++) if (geography.land[i] && land.deepWater[i] !== before[i]) moved++;
+  assert.ok(moved > 0, 'the trees draw on the store');
+  balanced(water);
+});
+
+for (const [label, land] of [['', {}], [' with a deep store under the trees', { deepCapacity: 300 }]]) test(`the parallel engine reproduces the serial model over a continent${label}`, async () => {
+  const serial = prepare(createModel(new Grid(16), { topography, land }));
+  const parallel = prepare(await createParallelModel(new Grid(16), { topography, land }, 3));
   const dt = 1350;
   for (let n = 0; n < 4; n++) { serial.step(dt); await parallel.step(dt); }
-  let maxT = 0, maxSoil = 0, maxTheta = 0;
+  let maxT = 0, maxSoil = 0, maxTheta = 0, maxDeep = 0;
   for (let i = 0; i < serial.mesh.nCells; i++) {
     maxT = Math.max(maxT, Math.abs(serial.state[3][i] - parallel.state[3][i]));
     maxSoil = Math.max(maxSoil, Math.abs(serial.land.soil[i] - parallel.land.soil[i]));
+    if (serial.land.deepWater) maxDeep = Math.max(maxDeep, Math.abs(serial.land.deepWater[i] - parallel.land.deepWater[i]));
   }
   for (let x = 0; x < serial.state[1].length; x++) maxTheta = Math.max(maxTheta, Math.abs(serial.state[1][x] - parallel.state[1][x]));
-  assert.ok(maxT < 1e-9 && maxSoil < 1e-9 && maxTheta < 1e-9, `serial vs parallel: Ts ${maxT} soil ${maxSoil} theta ${maxTheta}`);
+  assert.ok(maxT < 1e-9 && maxSoil < 1e-9 && maxTheta < 1e-9 && maxDeep < 1e-9, `serial vs parallel: Ts ${maxT} soil ${maxSoil} theta ${maxTheta} deep store ${maxDeep}`);
   await parallel.close();
 });
 

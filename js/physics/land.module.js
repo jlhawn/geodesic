@@ -391,7 +391,7 @@ export function createLandSurface(mesh, geography, {
   treeMoisture = true, moistureMemory = 3 * 365 * 86400, forestAridity = FOREST_ARIDITY, grassland = true, forestAlbedo = 0.13, grassAlbedo = 0.20, grassSnowDarkening = 0.06,
   soilCarbon: carbonOn = SOIL_CARBON.soilCarbon, mineralAlbedo = SOIL_CARBON.mineralAlbedo, humusAlbedo = SOIL_CARBON.humusAlbedo, organicScale = SOIL_CARBON.organicScale, topsoilMass = SOIL_CARBON.topsoilMass,
   soilTurnover = SOIL_CARBON.soilTurnover, litterInput = SOIL_CARBON.litterInput, treeLitter = SOIL_CARBON.treeLitter, grassLitter = SOIL_CARBON.grassLitter, decompositionWilting = SOIL_CARBON.decompositionWilting,
-  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'water', buffers = null,
+  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'water', deepCapacity = 0, buffers = null,
   soil: soilModel = DEFAULT_SOIL, soilDepths, soilHeatCapacity, soilConductivity, firnDensity,
 } = {}) {
   const C = mesh.nCells;
@@ -399,7 +399,10 @@ export function createLandSurface(mesh, geography, {
   const layered = column !== null, heatCapacity = layered ? column.soil.capacity[0] : givenCapacity ?? 1e6;
   if (!START_CODES[start]) throw new Error(`start is 'observed', 'neutral', 'bare' or 'green', not ${start}`);
   if (!COVER_GOALS.includes(coverGoal)) throw new Error(`coverGoal is 'water' or 'observed', not ${coverGoal}`);
+  if (!(typeof deepCapacity === 'number' && deepCapacity >= 0 && Number.isFinite(deepCapacity))) throw new Error(`deepCapacity is the deep store's capacity in kg/m², 0 (none) or more, not ${deepCapacity}`);
+  if (deepCapacity > 0 && !vegetated) throw new Error('deepCapacity needs vegetation: only the trees draw on the deep store');
   const shared = (name, length = C) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * length));
+  const deepWater = deepCapacity > 0 ? shared('deepWater') : null, deepShare = deepWater ? new Float64Array(C) : null;
   const soil = shared('soil'), snow = shared('snow'), runoff = shared('runoff'), vegetation = shared('vegetation'), surface = shared('surface');
   const snowAlbedoField = shared('snowAlbedo'), canopy = shared('canopy'), seasonLength = shared('seasonLength'), seasonWarmth = shared('seasonWarmth');
   const rainMean = shared('rainMean'), demandMean = shared('demandMean'), soilCarbon = shared('soilCarbon'), litterMean = shared('litterMean'), decayMean = shared('decayMean');
@@ -474,10 +477,17 @@ export function createLandSurface(mesh, geography, {
   const coverAlbedo = (i) => (grassy ? (vegetation[i] > 0 ? grassAlbedo + (forestAlbedo - grassAlbedo) * Math.min(1, canopy[i] / vegetation[i]) : grassAlbedo) : vegetatedAlbedo);
   const bareGround = (i) => { if (!vegetated) return albedo; const s = soilAlbedo(i); return s + (coverAlbedo(i) - s) * vegetation[i]; };
 
+  const spill = (i, shed) => {
+    if (!deepWater || onIceSheet(i)) return shed;
+    const taken = Math.min(shed, Math.max(0, deepCapacity - deepWater[i]));
+    deepWater[i] += taken;
+    return shed - taken;
+  };
+
   function overflow(i) {
     const cap = capacity(i);
     if (soil[i] > cap) {
-      const excess = soil[i] - cap;
+      const excess = spill(i, soil[i] - cap);
       runoff[i] += excess;
       budget.runoff += mesh.areaCell[i] * excess;
       soil[i] = cap;
@@ -485,13 +495,17 @@ export function createLandSurface(mesh, geography, {
   }
 
   function wetness(i, aero = 0, temperature = growthWarmest) {
-    if (snow[i] > TRACE_SNOW) { bareShare[i] = 0; return 1; }
+    if (snow[i] > TRACE_SNOW) { bareShare[i] = 0; if (deepShare) deepShare[i] = 0; return 1; }
     const roots = Math.min(1, soil[i] / (wetnessThreshold * capacity(i)));
     if (!vegetated) { bareShare[i] = 0; return roots; }
     const bare = (1 - vegetation[i]) * Math.min(1, surface[i] / surfaceCapacity);
-    const canopy = vegetation[i] * roots / (1 + stomatalResistance * aero / Math.max(0.05, warmth(temperature)));
-    const total = bare + canopy;
+    const trees = deepWater && vegetation[i] > 0 ? Math.min(1, canopy[i] / vegetation[i]) : 0;
+    const deepFactor = deepWater ? Math.min(1, deepWater[i] / (wetnessThreshold * deepCapacity)) : 0;
+    const drawing = deepWater ? (1 - trees) * roots + trees * Math.max(roots, deepFactor) : roots;
+    const transpiring = vegetation[i] * drawing / (1 + stomatalResistance * aero / Math.max(0.05, warmth(temperature)));
+    const total = bare + transpiring;
     bareShare[i] = total > 0 ? bare / total : 0;
+    if (deepShare) deepShare[i] = deepFactor > roots && trees > 0 ? (1 - bareShare[i]) * trees * deepFactor / drawing : 0;
     return total;
   }
 
@@ -563,8 +577,10 @@ export function createLandSurface(mesh, geography, {
     snow[i] -= fromSnow; left -= fromSnow;
     surfaceT[i] -= latentHeatFusion * fromSnow / skinC;
     if (vegetated) {
+      const drawn = left;
       const fromSurface = Math.min(surface[i], left * bareShare[i]);
       surface[i] -= fromSurface; left -= fromSurface;
+      if (deepWater) { const fromDeep = Math.min(deepWater[i], drawn * deepShare[i]); deepWater[i] -= fromDeep; left -= fromDeep; }
       const seep = surface[i] * (1 - Math.exp(-dt / percolationTime));
       surface[i] -= seep; soil[i] += seep;
     }
@@ -607,9 +623,9 @@ export function createLandSurface(mesh, geography, {
     if (surface[i] > surfaceCapacity) {
       const infiltration = surface[i] - surfaceCapacity;
       surface[i] = surfaceCapacity;
-      const shed = infiltration * Math.pow(Math.min(1, soil[i] / capacity(i)), 4);
-      runoff[i] += shed;
-      budget.runoff += mesh.areaCell[i] * shed;
+      const shed = infiltration * Math.pow(Math.min(1, soil[i] / capacity(i)), 4), spilled = spill(i, shed);
+      runoff[i] += spilled;
+      budget.runoff += mesh.areaCell[i] * spilled;
       soil[i] += infiltration - shed;
       overflow(i);
     }
@@ -626,6 +642,7 @@ export function createLandSurface(mesh, geography, {
     rainMean[i] = e.rain; demandMean[i] = e.demand;
   }
   const startingTrees = (i) => (treed ? treeFactor(i) * vegetation[i] : vegetation[i]);
+  const startingDeep = (i) => (land[i] && !onIceSheet(i) ? Math.min(1, Math.max(0, soil[i] / capacity(i))) * deepCapacity : 0);
   function estimateCarbon(i) {
     if (!land[i] || !humic || onIceSheet(i)) { soilCarbon[i] = 0; return; }
     const { mean, amplitude } = airCycle(mesh.latCell[i], geography.elevation ? geography.elevation[i] : 0);
@@ -661,6 +678,7 @@ export function createLandSurface(mesh, geography, {
       soilCarbon[i] = grown && humic ? placed.carbon : 0;
       if (land[i]) snow[i] = glacier(i) ? snowCap : 0;
       runoff[i] = 0; discharge[i] = 0; iceLoss[i] = 0; surface[i] = 0; snowAlbedoField[i] = freshSnowAlbedo;
+      if (deepWater) deepWater[i] = startingDeep(i);
     }
     record[0] = 0; record[1] = vegetated ? code : 0; record[2] = code;
     if (layered) startDeepLayers(time);
@@ -714,7 +732,7 @@ export function createLandSurface(mesh, geography, {
 
   function water() {
     let total = 0;
-    for (let i = 0; i < C; i++) if (land[i]) total += mesh.areaCell[i] * (soil[i] + surface[i] + snow[i] + runoff[i] - iceLoss[i]);
+    for (let i = 0; i < C; i++) if (land[i]) total += mesh.areaCell[i] * (soil[i] + surface[i] + snow[i] + runoff[i] - iceLoss[i] + (deepWater ? deepWater[i] : 0));
     return total;
   }
 
@@ -765,6 +783,7 @@ export function createLandSurface(mesh, geography, {
       if (land[i] && humic && !onIceSheet(i) && saved.litterMean && saved.decayMean) { litterMean[i] = Math.max(0, saved.litterMean[i]); decayMean[i] = Math.max(0, saved.decayMean[i]); }
       else estimateCarbonRecord(i);
     }
+    if (deepWater) for (let i = 0; i < C; i++) deepWater[i] = !land[i] || onIceSheet(i) ? 0 : saved.deep ? Math.min(deepCapacity, Math.max(0, saved.deep[i])) : startingDeep(i);
     runoff.fill(0); discharge.fill(0); iceLoss.fill(0);
     if (!layered) return;
     const kept = deepNames.every((name) => saved[name]);
@@ -783,8 +802,8 @@ export function createLandSurface(mesh, geography, {
 
   return {
     layered, column, deep, deepNames, skinCapacity, startDeep, ...Object.fromEntries(deepNames.map((name, k) => [name, deep[k]])),
-    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, discharge, iceLoss, record, dryAlbedo, treeFactor, moistureFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load, advance, jump, weights, placeholders,
-    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean), snowFreeCover: Float64Array.from(snowFreeCover), record: Float64Array.from(record) } : {}), ...(humic ? { soilCarbon: Float64Array.from(soilCarbon), litterMean: Float64Array.from(litterMean), decayMean: Float64Array.from(decayMean) } : {}), ...Object.fromEntries(deepNames.map((name, k) => [name, Float64Array.from(deep[k])])) }; },
-    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer, soilCarbon: soilCarbon.buffer, litterMean: litterMean.buffer, decayMean: decayMean.buffer, snowFreeCover: snowFreeCover.buffer, discharge: discharge.buffer, iceLoss: iceLoss.buffer, record: record.buffer, ...Object.fromEntries(deepNames.map((name, k) => [name, deep[k].buffer])) },
+    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, discharge, iceLoss, record, dryAlbedo, treeFactor, moistureFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load, advance, jump, weights, placeholders, deepWater, deepCapacity,
+    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean), snowFreeCover: Float64Array.from(snowFreeCover), record: Float64Array.from(record) } : {}), ...(humic ? { soilCarbon: Float64Array.from(soilCarbon), litterMean: Float64Array.from(litterMean), decayMean: Float64Array.from(decayMean) } : {}), ...Object.fromEntries(deepNames.map((name, k) => [name, Float64Array.from(deep[k])])), ...(deepWater ? { deep: Float64Array.from(deepWater) } : {}) }; },
+    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer, soilCarbon: soilCarbon.buffer, litterMean: litterMean.buffer, decayMean: decayMean.buffer, snowFreeCover: snowFreeCover.buffer, discharge: discharge.buffer, iceLoss: iceLoss.buffer, record: record.buffer, ...Object.fromEntries(deepNames.map((name, k) => [name, deep[k].buffer])), ...(deepWater ? { deepWater: deepWater.buffer } : {}) },
   };
 }

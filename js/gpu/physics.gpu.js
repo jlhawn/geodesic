@@ -401,7 +401,7 @@ const HUMIC: bool = ${!!o.soilCarbon && !!o.vegetation}; const ALB_MINERAL: f32 
 const LITTER_IN: f32 = ${o.litterInput}; const LITTER_TREE: f32 = ${o.treeLitter}; const LITTER_GRASS: f32 = ${o.grassLitter}; const DECAY_RATE: f32 = ${1 / o.soilTurnover}; const DECAY_WILT: f32 = ${o.decompositionWilting}; const DECAY_OPT: f32 = ${0.5 * (1 + o.decompositionWilting)}; const CARBON_ACC: f32 = ${o.carbonAcceleration};
 const LT_E: f32 = ${LLOYD_TAYLOR.activation}; const LT_REF: f32 = ${1 / LLOYD_TAYLOR.reference}; const LT_T0: f32 = ${LLOYD_TAYLOR.offset}; const MIAMI_A: f32 = ${MIAMI[0]}; const MIAMI_B: f32 = ${MIAMI[1]};
 const HELD_SHARE: f32 = ${startPlaceholders(o).neutral.share}; const HELD_NEUTRAL_C: f32 = ${startPlaceholders(o).neutral.carbon}; const HELD_GREEN_C: f32 = ${startPlaceholders(o).green.carbon};
-${exchangeConstants(o)}${o.soilColumn ? `\n${soilConstants(o.soilColumn)}` : ''}${mac ? aerosolConstants(o) : ''}`;
+${exchangeConstants(o)}${o.soilColumn ? `\n${soilConstants(o.soilColumn)}` : ''}${mac ? aerosolConstants(o) : ''}${o.deepCapacity > 0 ? `\nconst DEEPCAP: f32 = ${o.deepCapacity};` : ''}`;
 }
 
 export const physicsFunctions = (o) => (o.aerosol === 'mac' ? aerosolLight(PHYSICS_FUNCTIONS) : PHYSICS_FUNCTIONS);
@@ -1390,7 +1390,35 @@ const HELD_TOA = `  let atmosphereSolar = sunScale * PH[PH_RADATM + i]; let abso
 `;
 const HELD_CLEAR = `  if (CLEAR_SKY) { PH[PH_ABSCLRSUM + i] += sunScale * PH[PH_RADCLRSW + i]; PH[PH_OLRCLRSUM + i] += PH[PH_RADCLROLR + i] + PH[PH_RADTC + i] * lift; }
 `;
-export const physicsKernel = (seaSkin = false, aerosol = false) => `${aerosol ? aerosolLight(MIXED_LAYER_WGSL, false) : MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+const DEEP_STORE_WGSL = `fn deepTrees(i: i32, veg: f32) -> f32 { return select(0.0, min(1.0, PH[PH_CANOPY + i] / veg), veg > 0.0); }
+fn deepFactor(i: i32) -> f32 { return min(1.0, PH[PH_DEEP + i] / (WETT * DEEPCAP)); }
+fn deepDrawing(i: i32, roots: f32, veg: f32) -> f32 { let trees = deepTrees(i, veg); return (1.0 - trees) * roots + trees * max(roots, deepFactor(i)); }
+fn deepShare(i: i32, roots: f32, veg: f32, bareShare: f32, snow: f32) -> f32 {
+  let trees = deepTrees(i, veg); let deep = deepFactor(i);
+  return select(0.0, (1.0 - bareShare) * trees * deep / max(1e-12, (1.0 - trees) * roots + trees * deep), deep > roots && trees > 0.0 && snow <= ${TRACE_SNOW});
+}
+fn deepSpill(i: i32, shed: f32) -> f32 {
+  let taken = select(min(shed, max(0.0, DEEPCAP - PH[PH_DEEP + i])), 0.0, PH[PH_LAND + i] > 1.5);
+  PH[PH_DEEP + i] += taken;
+  return shed - taken;
+}
+`;
+const DEEP_DRAW = `      let fromDeep = min(PH[PH_DEEP + i], drawn * deepShare(i, min(1.0, soil0 / (WETT * bucket)), veg0, bareShare, snow0));
+      PH[PH_DEEP + i] -= fromDeep; left -= fromDeep;
+`;
+const DEEP_RAIN = [
+  ['          PH[PH_RUNOFF + i] += shed; soil += infiltration - shed;\n', '          PH[PH_RUNOFF + i] += deepSpill(i, shed); soil += infiltration - shed;\n'],
+  ['      if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }\n      PH[PH_SOIL + i] = soil;\n', '      if (soil > cap) { PH[PH_RUNOFF + i] += deepSpill(i, soil - cap); soil = cap; }\n      PH[PH_SOIL + i] = soil;\n'],
+];
+
+export function deepStoreRain(body) {
+  return DEEP_STORE_WGSL + DEEP_RAIN.reduce((text, [from, to]) => {
+    const at = text.indexOf(from);
+    if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error('the deep store\'s recharge anchor is not in the adjustRain kernel exactly once');
+    return text.slice(0, at) + to + text.slice(at + from.length);
+  }, body);
+}
+export const physicsKernel = (seaSkin = false, aerosol = false, deep = false) => `${aerosol ? aerosolLight(MIXED_LAYER_WGSL, false) : MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -1424,14 +1452,14 @@ export const physicsKernel = (seaSkin = false, aerosol = false) => `${aerosol ? 
   let ts = ${seaSkin ? 'skinAdded(i, onLand, ice, ' : ''}select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0)${seaSkin ? ')' : ''};
   let warmth = clamp((ts - GROWCOLD) / (GROWWARM - GROWCOLD), 0.0, 1.0);
   let roots = min(1.0, soil0 / (WETT * bucket));
-  let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
+${deep ? '  let drawing = deepDrawing(i, roots, veg0);\n' : ''}  let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
   if (ROUGH) {
-    let before = select(0.0, xWetness(PH[PH_HEATX + i] * xWind(i, ws), roots, bareWet, veg0, snow0, warmth), onLand);
+    let before = select(0.0, xWetness(PH[PH_HEATX + i] * xWind(i, ws), ${deep ? 'drawing' : 'roots'}, bareWet, veg0, snow0, warmth), onLand);
     let exchange = surfaceExchange(i, pi, ts, ws, select(0.0, cover, !onLand), snow0, veg0, trees0, onLand, onIceSheet, before, PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV);
     PH[PH_DRAG + i] = exchange.x; PH[PH_HEATX + i] = exchange.y; PH[PH_REFX + i] = exchange.z;
   }
   let aero = PH[PH_HEATX + i] * xWind(i, ws);
-  let canopyWet = veg0 * roots / (1.0 + RSTOM * aero / max(0.05, warmth));
+  let canopyWet = veg0 * ${deep ? 'drawing' : 'roots'} / (1.0 + RSTOM * aero / max(0.05, warmth));
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
   let wetness = select(1.0, select(landWet, 1.0, snow0 > ${TRACE_SNOW}), onLand);
   let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= ${TRACE_SNOW});
@@ -1816,7 +1844,7 @@ ${held ? `  PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT 
   if (CLEAR_SKY) { PH[PH_RADCLROLR + i] = clearOutgoing; PH[PH_RADTC + i] = clearEscape; }` : `  stash(20, i, back); stash(21, i, outgoing);
   if (CLEAR_SKY) { PH[PH_OLRCLRSUM + i] += clearOutgoing; }`}
 }`;
-export const physicsSurfaceKernel = (held, seaSkin = false, soil = null, cover = false) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}
+export const physicsSurfaceKernel = (held, seaSkin = false, soil = null, cover = false, deep = false) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
 ${HAND_OFF(held)}  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
@@ -1858,9 +1886,9 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
     snow -= fromSnow; left -= fromSnow;
     T -= LFUS * fromSnow / ${soil ? SOIL_SKIN : 'LANDC'};
     if (VEGETATED) {
-      let fromSurface = min(surf, left * bareShare);
+${deep ? '      let drawn = left;\n' : ''}      let fromSurface = min(surf, left * bareShare);
       surf -= fromSurface; left -= fromSurface;
-      let seep = surf * (1.0 - exp(-dt / PERCT));
+${deep ? DEEP_DRAW : ''}      let seep = surf * (1.0 - exp(-dt / PERCT));
       surf -= seep; soil += seep;
     }
     soil = max(0.0, soil - left);
@@ -1917,7 +1945,7 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
       }
       cap = ROOTCAP;
     }
-    if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }
+    if (soil > cap) { PH[PH_RUNOFF + i] += ${deep ? 'deepSpill(i, soil - cap)' : 'soil - cap'}; soil = cap; }
     PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow; PH[PH_SURF + i] = surf;
     PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ALB_OLDSNOW), snow > 0.0);
   } else ${SEA_SURFACE_WGSL}
