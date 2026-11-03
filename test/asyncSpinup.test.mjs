@@ -7,10 +7,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { decodeState, encodeState } from '../js/stateFile.module.js';
+import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
 import { SST_FIELDS } from '../js/sstMeans.module.js';
+import { withoutMeans } from '../js/intervalMeans.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -203,7 +204,8 @@ test('a coupled run split at each day\'s end ends byte for byte where the uninte
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '3' }), 0);
   const [x, y] = await Promise.all([whole, parts].map((out) => load(join(out, 's_day0003.bin'))));
   assert.deepEqual(apart(x, y), [], 'the arrays the split run ends with differ from the uninterrupted one\'s');
-  assert.ok(readFileSync(join(whole, 's_day0003.bin')).equals(readFileSync(join(parts, 's_day0003.bin'))), 'the split run ends where the uninterrupted one does');
+  assert.deepEqual([x.means.days, y.means.days], [3, 1], 'each save\'s means cover its own segment');
+  assert.ok(Buffer.from(encodeState(withoutMeans(x), { f64: f64Names(x) })).equals(Buffer.from(encodeState(withoutMeans(y), { f64: f64Names(y) }))), 'the split run ends where the uninterrupted one does');
 });
 
 test('a state saved with the instantaneous cumulus cloud loads with that cloud as the memory\'s start: the first step relaxes each layer\'s cover and cover × water from it toward the plume\'s', { skip }, async () => {

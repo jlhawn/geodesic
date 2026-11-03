@@ -10,6 +10,7 @@ import { layerVelocities, velocityAt } from './helpers/upwelling.mjs';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
 import { createModel } from '../js/model.module.js';
+import { LATENT_HEAT } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
 import { PREVIOUS_LEVELS, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
 
@@ -109,12 +110,18 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   const currents = cellVector(mesh, ocean.u1);
   for (let i = 0; i < C; i++) if (model.geography.land[i]) currents.fill(0, 3 * i, 3 * i + 3);
   const current = sea(Float64Array.from({ length: C }, (_, i) => Math.hypot(currents[3 * i], currents[3 * i + 1], currents[3 * i + 2])));
+  const stress = cellVector(mesh, Float64Array.from(physics.STRESS.subarray(0, E)));
+  assert.ok(stress.some((t) => Math.abs(t) > 0.01), 'some surface stress');
   const checks = {
     ps: [pi, 0.1], mslp: [mslp, 0.5], water: [water, 1e-3], cloud: [cloud, 1e-6], rain: [physics.RAIN.subarray(0, C), 1e-6], ice: [ice, 1e-6], concentration: [model.seaIce.concentration, 1e-6],
     albedo: [physics.ADIF.subarray(0, C), 1e-6], shortwave: [physics.SWDN.subarray(0, C), 1e-3], longwave: [physics.OLR.subarray(0, C), 1e-3],
     soil: [Float64Array.from({ length: C }, (_, i) => physics.SOIL[i] + physics.SURF[i] + (physics.DEEP ? physics.DEEP[i] : 0)), 1e-4], snow: [physics.SNOW.subarray(0, C), 1e-4],
     sst: [sea(ocean.T1), 1e-3], sss: [sea(ocean.S1), 1e-4], layerDepth: [sea(ocean.h1), 1e-3], thermocline: [ocean.thermoclineDepth, 1e-2], ssh: [sea(ocean.eta), 1e-5],
     current: [current, 1e-5], currents: [currents, 1e-5],
+    surfaceT: [surfaceT, 1e-3], precipitation: [Float64Array.from(physics.STEPRAIN.subarray(0, C), (r) => r * 86400 / 900), 1e-4],
+    latentHeat: [Float64Array.from(physics.EVAP.subarray(0, C), (e) => LATENT_HEAT * e), 1e-3], sensibleHeat: [physics.SH.subarray(0, C), 1e-4],
+    zonalStress: [Float64Array.from({ length: C }, (_, i) => -Math.sin(mesh.lonCell[i]) * stress[3 * i] + Math.cos(mesh.lonCell[i]) * stress[3 * i + 1]), 1e-6],
+    meridionalStress: [Float64Array.from({ length: C }, (_, i) => { const s = Math.sin(mesh.latCell[i]); return -s * Math.cos(mesh.lonCell[i]) * stress[3 * i] - s * Math.sin(mesh.lonCell[i]) * stress[3 * i + 1] + Math.cos(mesh.latCell[i]) * stress[3 * i + 2]; }), 1e-6],
     ...Object.fromEntries(Object.entries(types).map(([name, values]) => [name, [values, 1e-6]])),
   };
   const misses = ['top', 'base'].map((name) => {

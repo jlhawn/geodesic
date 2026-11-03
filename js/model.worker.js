@@ -4,43 +4,39 @@ import { createParallelModel } from './parallel.module.js';
 import { createGpuModel } from './gpu/model.gpu.js';
 import { withCadence } from './cadence.module.js';
 import { initializeState } from './physics/init.module.js';
-import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
 import { CUMULUS_FIELDS, placeCumulus } from './physics/moist.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, missingMask, decodeMask, decodeLandIce, landIceUrl, decodeLandCover, landCoverUrl, decodeSoilWater, soilWaterUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
-import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels, groupHeader, groupArrays } from './stateFile.module.js';
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
-import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH, frameIsFinite } from './frames.module.js';
+import { RAIN_MEMORY, frameIsFinite } from './frames.module.js';
+import { cpuFrameFields } from './cpuFrame.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
 import { lakeArrays, savedLake } from './physics/lake.module.js';
 import { AEROSOL_FILE, climatologyOn } from './aerosol.module.js';
 
-const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
-let subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false }, layerWinds = [];
+let subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false };
 const rain = { total: null, time: 0 };
 const vertical = { values: null, level: null, time: 0 };
 
 function restartRain() { rain.total = null; rain.time = model.time; if (model.restartPrecipitation) model.restartPrecipitation(); }
 
 /*
- * A frame for the CPU engines, from the model's own arrays: the rain
- * folds into its three-hour memory every frame, and only the subscribed
- * fields and diagnostics are built. The cell-center winds of a layer are
- * reconstructed only when that layer bounds the level somewhere.
+ * A frame for the CPU engines (cpuFrame.module.js): the rain folds into
+ * its three-hour memory every frame, and only the subscribed fields and
+ * diagnostics are built.
  */
 async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
-  const { mesh, core, state } = model;
-  const C = mesh.nCells, E = mesh.nEdges, [pi, theta, u, , q, , iceField] = state;
-  const time = model.time, interval = time - rain.time;
+  const { mesh } = model;
+  const C = mesh.nCells, time = model.time, interval = time - rain.time;
   if (!rain.total || interval < 0) rain.total = new Float32Array(C);
   const keep = Math.exp(-Math.max(0, interval) / RAIN_MEMORY), fallen = model.moist.precipitation;
   for (let i = 0; i < C; i++) rain.total[i] = rain.total[i] * keep + fallen[i];
@@ -56,66 +52,8 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   } else {
     model.restartPrecipitation();
   }
-  const want = new Set(fields), out = {};
-  const onLand = model.geography ? model.geography.land : null;
-  const sea = (source) => Float32Array.from({ length: C }, (_, i) => (onLand && onLand[i] ? NaN : source[i]));
-  if (fields.some((name) => LEVEL_FIELDS.has(name))) {
-    layerWinds.fill(null);
-    const layerWind = (k) => layerWinds[k] ??= cellVector(mesh, u.subarray(k * E, (k + 1) * E), new Float64Array(3 * C));
-    const f = levelFields(core, pi, theta, layerWind, level, q);
-    for (const [name, values] of Object.entries({ temperature: f.temperature, height: f.height, humidity: f.humidity, speed: f.speed, wind: f.vector })) if (want.has(name)) out[name] = values;
-    const comfort = (fn) => Float32Array.from(f.temperature, (t, i) => fn(t - FREEZING, f.humidity[i], f.speed[i]) + FREEZING);
-    if (want.has('dewPoint')) out.dewPoint = comfort(dewPoint);
-    if (want.has('wetBulb')) out.wetBulb = comfort(wetBulb);
-    if (want.has('misery')) out.misery = comfort(miseryIndex);
-    if (want.has('vertical')) {
-      const smoothed = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, theta));
-      const keep = vertical.values && vertical.level === level ? Math.exp(-Math.max(0, time - vertical.time) / VERTICAL_MEMORY) : 0;
-      if (!vertical.values || vertical.values.length !== C) vertical.values = new Float32Array(C);
-      for (let i = 0; i < C; i++) vertical.values[i] = keep * vertical.values[i] + (1 - keep) * smoothed[i];
-      vertical.level = level; vertical.time = time;
-      out.vertical = Float32Array.from(vertical.values);
-    } else vertical.level = null;
-  }
-  if (want.has('ps')) out.ps = Float32Array.from(pi);
-  if (want.has('mslp')) {
-    out.mslp = Float32Array.from(pi);
-    if (model.surfaceGeopotential) {
-      const phis = model.surfaceGeopotential, { R, g, exnerLayer } = core.diagnostics, bottom = (core.K - 1) * C;
-      for (let i = 0; i < C; i++) out.mslp[i] = pi[i] * Math.exp(phis[i] / (R * (theta[bottom + i] * exnerLayer[bottom + i] + 0.00325 * phis[i] / g)));
-    }
-  }
-  if (want.has('water')) out.water = Float32Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, q, i));
-  if (want.has('cloud')) out.cloud = Float32Array.from({ length: C }, (_, i) => model.cloudWater(i));
-  if (CLOUD_TYPES.some((name) => want.has(name))) {
-    const parts = Array.from({ length: C }, (_, i) => model.cloudParts(i));
-    for (const name of CLOUD_TYPES) if (want.has(name)) out[name] = Float32Array.from(parts, (part) => part[name]);
-  }
-  if (want.has('cloudTop') || want.has('cloudBase')) {
-    const heights = model.cloudHeights();
-    if (want.has('cloudTop')) out.cloudTop = heights.top;
-    if (want.has('cloudBase')) out.cloudBase = heights.base;
-  }
-  if (want.has('rain')) out.rain = Float32Array.from(rain.total);
-  if (want.has('ice')) out.ice = Float32Array.from(iceField);
-  if (want.has('concentration')) out.concentration = Float32Array.from(model.seaIce.concentration);
-  if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h, null, model.seaIce.snow[i], model.seaIce.cover(i, h), model.state[3][i], model.seaIce.snowAlbedo[i])));
-  if (want.has('shortwave')) out.shortwave = Float32Array.from(model.radiation.surfaceShortwave);
-  if (want.has('longwave')) out.longwave = Float32Array.from(model.radiation.outgoing);
-  if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil, (w, i) => w + model.land.surface[i] + (model.land.deepWater ? model.land.deepWater[i] : 0));
-  if (model.land && want.has('snow')) out.snow = Float32Array.from(model.land.snow);
-  if (model.land && want.has('vegetation')) out.vegetation = Float32Array.from(model.land.vegetation);
   if (model.foldUpwelling) model.foldUpwelling(time);
-  const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields(depth === 'surface' ? 0 : Number(depth), depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth)) : null;
-  if (ocean) {
-    for (const [name, values] of Object.entries({ sst: ocean.temperature, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta, current: ocean.speed, upwelling: ocean.upwelling })) if (want.has(name)) out[name] = sea(values);
-    if (want.has('currents')) {
-      const vector = ocean.current;
-      if (onLand) for (let i = 0; i < C; i++) if (onLand[i]) vector.fill(0, 3 * i, 3 * i + 3);
-      out.currents = Float32Array.from(vector);
-    }
-  }
-  return { time, level, depth, fields: out, diagnostics };
+  return { time, level, depth, fields: cpuFrameFields(model, { level, depth, fields }, { step: dt, memories: { rain: rain.total, vertical } }), diagnostics };
 }
 
 const captureFrame = () => (model.beginFrame ? model.beginFrame(subscription) : cpuFrame(subscription));
@@ -779,7 +717,6 @@ async function start(message) {
   placeLand(model, saved, N);
   await model.settle?.();
   placeEnergy(model, saved);
-  layerWinds = new Array(model.core.K).fill(null);
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
   serving = true;

@@ -1,10 +1,10 @@
-import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
+import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, readAcross, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, sunDistance, DEFAULT_ORBIT, DEFAULT_SHORTWAVE, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { createAerosolSampler, loadAerosol, AEROSOL_FIELDS, DEFAULT_AEROSOL } from '../aerosol.module.js';
 import { physicsConstants, physicsFunctions, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, bergeronRain, deepStoreRain, PHYSICS_PASSES, LAYERED_PASSES, layeredPass, LAYERED_SLOTS, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
-import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
+import { MOIST_DEFAULTS, SUBCLOUD_LAYERS, LATENT_HEAT } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, SURFACE_VERTICAL_SIGMA } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { SNOW_AGEING } from '../physics/ice.module.js';
@@ -57,7 +57,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const stage = seq([['FLUX', KE], ['QV', KV], ['QE', KE], ['PHI', KC]]), closure = seq([['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC]]);
   const D = { ...stage, ...closure, ...seq([['SCRATCH', Math.max(stage.total, closure.total)], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['DRAG', C], ['WIND', C], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]) };
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['DISCHARGE', C], ['ICELOSS', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['CUFALL', KC], ['CURESERVE', KC], ['CUFROZEN', KC], ['CURAIN', C], ['CUDEEP', C], ['CUBASE', C], ['CUSHALLOW', C], ['CUSNOW', C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['FOG', C], ['FOGMEAN', C], ['SUBTV', subcloudLayers * C], ['PEN', C], ['TRANS', C], ['MLMK', C], ['MLMM', C], ['DECKK', C], ['DECKFROM', C],...(countergradient ? [['CG', KC], ['CGH', C], ['CGW', C]] : []), ...(scalarMixing ? [['MIXH', KC]] : []), ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : []), ...(skin ? [['WARM', C], ['COOL', C]] : []), ...(lake ? [['LAKE', LAKE_SLOTS.length * C]] : []), ...(layered ? [['LYR', LAYERED_SLOTS * C]] : []), ...Array.from({ length: soilDeep }, (_, k) => [`SOILT${k + 2}`, C]), ...(aerosol ? [['AER', AEROSOL_FIELDS * C]] : []), ...(cover ? [['COVERT', C], ['COVERG', C]] : []), ...(deep ? [['DEEP', C]] : [])]);
-  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['CTOP', C], ['CBASE', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
+  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['CTOP', C], ['CBASE', C], ['MSLP', C], ['TAU', 3 * C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
 }
 
@@ -166,7 +166,9 @@ const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
  * interpolates in ln p to the pressure P[0] (0 for the lowest layer) as
  * levels.module.js does, with the column's geopotential integrated in
  * registers, derives the comfort measures there as levels.module.js
- * does, adds the column water, cloud and sea-level pressure, and when
+ * does, adds the column water, cloud and sea-level pressure and the
+ * surface stress at the cell, reconstructed from the edges' as the wind
+ * is, and when
  * P[3] asks for it the vertical velocity at the level as
  * levels.module.js derives it from the layers' mass-flux divergences,
  * at σ = SURFACE_SIGMA when the level is the surface;
@@ -261,6 +263,13 @@ const CLOUD_PATH: f32 = ${CLOUD_OPACITY_PATH}; const CLOUD_SEEN_OPACITY: f32 = $
   OUT[FR_SPD + i] = speed;
   OUT[FR_DP + i] = dewPointC(celsius, rh) + 273.15; OUT[FR_WB + i] = wetBulbC(celsius, rh) + 273.15; OUT[FR_MI + i] = miseryC(celsius, rh, speed) + 273.15;
   OUT[FR_WIND + 3 * i] = wind.x; OUT[FR_WIND + 3 * i + 1] = wind.y; OUT[FR_WIND + 3 * i + 2] = wind.z;
+  var stress = vec3<f32>(0.0, 0.0, 0.0);
+  for (var m = 0; m < MAXE; m++) {
+    let e = MI[EOC + MAXE * i + m];
+    stress += abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * PH[PH_STRESS + e] * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+  }
+  stress = stress / MF[F_AREA + i];
+  OUT[FR_TAU + 3 * i] = stress.x; OUT[FR_TAU + 3 * i + 1] = stress.y; OUT[FR_TAU + 3 * i + 2] = stress.z;
   var water = 0.0; var cloud = 0.0; var low = 0.0; var mid = 0.0; var high = 0.0; var cumulus = 0.0; var cleanCloud = 0.0;
   for (var j = 0; j < K; j++) {
     let d = pi * LV[L_DS + j] / GRAV; let condensed = d * IN[S_QC + j * C + i]; let p = pi * LV[L_SM + j];
@@ -1147,9 +1156,10 @@ export async function createGpuCore(mesh, {
     aerosolSent = true;
   }
 
-  let stepCount = 0, dragCall = -1;
+  let stepCount = 0, dragCall = -1, lastStep = 0;
   const hooks = { beforePhysics: null, afterPhysics: null, landWeights: null };
   async function stepModel(dt, time) {
+    lastStep = dt;
     const sun = sunDirection(time, undefined, phys.orbit);
     rungeKutta(dt);
     stepCount++;
@@ -1345,8 +1355,35 @@ export async function createGpuCore(mesh, {
     water: ['FR', 'TPW', 1], cloud: ['FR', 'TCW', 1], cloudLow: ['FR', 'CLOW', 1], cloudMid: ['FR', 'CMID', 1], cloudHigh: ['FR', 'CHIGH', 1], cloudCumulus: ['FR', 'CCU', 1], cloudDeck: ['FR', 'CDECK', 1], cloudTop: ['FR', 'CTOP', 1], cloudBase: ['FR', 'CBASE', 1],
     mslp: ['FR', 'MSLP', 1], rain: ['FR', 'RAIN', 1], ps: ['S', 'PI', 1], ice: ['S', 'ICE', 1],
     albedo: ['PH', 'ADIF', 1], shortwave: ['PH', 'SWDN', 1], longwave: ['PH', 'OLR', 1], soil: ['PH', 'SOIL', 1], snow: ['PH', 'SNOW', 1], vegetation: ['PH', 'VEG', 1],
-    concentration: ['PH', 'CONC', 1],
+    concentration: ['PH', 'CONC', 1], surfaceT: ['S', 'TS', 1], precipitation: ['PH', 'STEPRAIN', 1], latentHeat: ['PH', 'EVAP', 1], sensibleHeat: ['PH', 'SH', 1],
+    ...(phys.surfaceExchange === 'roughness' && phys.implicitDrag ? { zonalStress: ['FR', 'TAU', 3], meridionalStress: ['FR', 'TAU', 3] } : {}),
   };
+  const STRESS = ['zonalStress', 'meridionalStress'], MEMORIES = ['rain', 'vertical'];
+  const scaleOf = { precipitation: () => (lastStep > 0 ? 86400 / lastStep : 0), latentHeat: () => LATENT_HEAT };
+  function rangesOf(wanted) {
+    const ranges = [];
+    for (const name of wanted) { if (STRESS.includes(name)) continue; const [buffer, part, n] = FIELDS[name]; ranges.push({ source: buffer, name, offset: L[buffer][part], length: n * C }); }
+    if (STRESS.some((name) => wanted.includes(name))) ranges.push({ source: 'FR', name: 'stress', offset: L.FR.TAU, length: 3 * C });
+    if (wanted.includes('soil')) for (const [name, part] of [['surface', 'SURF'], ['deepWater', 'DEEP']]) if (L.PH[part] !== undefined) ranges.push({ source: 'PH', name, offset: L.PH[part], length: C });
+    return ranges;
+  }
+  function fieldsOf(named, wanted, out) {
+    const stores = [];
+    let stress = null;
+    for (const [name, view] of named) {
+      if (name === 'surface' || name === 'deepWater') stores.push(view);
+      else if (name === 'stress') stress = view;
+      else if (scaleOf[name]) { const scale = scaleOf[name](); out[name] = Float32Array.from(view, (v) => v * scale); }
+      else out[name] = view;
+    }
+    for (const store of stores) for (let i = 0; i < C; i++) out.soil[i] += store[i];
+    if (stress) {
+      const { latCell, lonCell } = mesh;
+      if (wanted.includes('zonalStress')) out.zonalStress = Float32Array.from({ length: C }, (_, i) => -Math.sin(lonCell[i]) * stress[3 * i] + Math.cos(lonCell[i]) * stress[3 * i + 1]);
+      if (wanted.includes('meridionalStress')) out.meridionalStress = Float32Array.from({ length: C }, (_, i) => { const s = Math.sin(latCell[i]); return -s * Math.cos(lonCell[i]) * stress[3 * i] - s * Math.sin(lonCell[i]) * stress[3 * i + 1] + Math.cos(latCell[i]) * stress[3 * i + 2]; });
+    }
+    return out;
+  }
   const frameParams = new Float32Array(8);
   function frame({ pressure = 0, keep = 1, keepVertical = 0, fields = [], diagnostics = false, rainScale = 0, meanScale = 0 } = {}) {
     const wanted = fields.filter((name) => name in FIELDS), vertical = wanted.includes('vertical');
@@ -1362,24 +1399,43 @@ export async function createGpuCore(mesh, {
     pass.end();
     device.queue.submit([encoder.finish()]);
     const reads = {};
-    for (const name of wanted) { const [buffer, part, n] = FIELDS[name]; (reads[buffer] ??= []).push({ name, offset: L[buffer][part], length: n * C }); }
-    if (wanted.includes('soil')) for (const [name, part] of [['surface', 'SURF'], ['deepWater', 'DEEP']]) if (L.PH[part] !== undefined) reads.PH.push({ name, offset: L.PH[part], length: C });
+    for (const range of rangesOf(wanted)) (reads[range.source] ??= []).push(range);
     if (diagnostics) (reads.FR ??= []).push({ name: 'sums', offset: L.FR.PART, length: REDUCED.length * groupsOf(C) }, { name: 'runoff', offset: L.FR.RDONE, length: C });
     return Promise.all(Object.entries(reads).map(([buffer, ranges]) => readRanges(device, buffers[buffer], ranges).then((views) => views.map((view, n) => [ranges[n].name, view])))).then((lists) => {
-      const out = { fields: {}, sums: null, runoff: null }, stores = [];
+      const out = { fields: {}, sums: null, runoff: null }, named = [];
       for (const [name, view] of lists.flat()) {
         if (name === 'sums') out.sums = finishReduction(REDUCED, view, C);
         else if (name === 'runoff') out.runoff = view;
-        else if (name === 'surface' || name === 'deepWater') stores.push(view);
-        else out.fields[name] = view;
+        else named.push([name, view]);
       }
-      for (const store of stores) for (let i = 0; i < C; i++) out.fields.soil[i] += store[i];
+      fieldsOf(named, wanted, out.fields);
       return out;
     });
+  }
+  /*
+   * The named fields as `frame` reads them, without what a frame folds
+   * and clears: frameFields alone runs, and its results and the other
+   * fields are copied in one submission, so the rain, runoff and
+   * radiation sums, the means made of them and the memories stay as they
+   * were. The rain and vertical memories, which only frames advance, are
+   * not read.
+   */
+  function sample({ pressure = 0, fields = [] } = {}) {
+    const wanted = fields.filter((name) => name in FIELDS && !MEMORIES.includes(name));
+    const encoder = device.createCommandEncoder();
+    if (wanted.some((name) => FIELDS[name][0] === 'FR')) {
+      frameParams.set([pressure, 1, 0, 0, 0, 0, 0, wanted.includes('cloudTop') || wanted.includes('cloudBase') ? 1 : 0]);
+      device.queue.writeBuffer(buffers.FP, 0, frameParams);
+      const pass = encoder.beginComputePass();
+      dispatch(pass, 'frameFields', group(buffers.S, buffers.FR, buffers.D, buffers.FP), C);
+      pass.end();
+    }
+    const ranges = rangesOf(wanted);
+    return readAcross(device, encoder, ranges.map((r) => ({ ...r, buffer: buffers[r.source] }))).then((views) => fieldsOf(views.map((view, n) => [ranges[n].name, view]), wanted, {}));
   }
   function clearFrame() { submitNow((encoder) => encoder.clearBuffer(buffers.FR, 0, 4 * L.FR.total)); }
   function uploadLake(values) { retained.lake = values; device.queue.writeBuffer(buffers.PH, 4 * L.PH.LAKE, values); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, fieldConstants: sharedConstants, layout: L, buffers, kernels, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, uploadLake, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys, aerosol, refreshAerosol };
+  return { device, mesh, meshSpacing, preludeConstants, fieldConstants: sharedConstants, layout: L, buffers, kernels, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, uploadLake, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, sample, frameFields: Object.keys(FIELDS), clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys, aerosol, refreshAerosol };
 }

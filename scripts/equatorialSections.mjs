@@ -3,7 +3,9 @@
 // and armMetrics.mjs the model, ERA5's values in a model day's month, as
 // day means and at the day's UTC hour, and a pair's table from armMetrics
 // outputs: each section's stress and sea-level pressure as the mean over a
-// side's runs ± its standard error, and the difference ± its own.
+// side's runs ± its standard error, and the difference ± its own. A table
+// of the saves' 30-day means (js/intervalMeans.module.js) sets them
+// against ERA5's day means alone.
 //   node scripts/equatorialSections.mjs base-s0.txt base-s1.txt base-s2.txt -- fix-s0.txt fix-s1.txt fix-s2.txt
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +37,11 @@ export function era5Sections(era5, modelDay) {
 }
 
 const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '—');
-export function sectionTable({ tau, slp, era5Tau, era5Slp, era5TauAt, era5SlpAt }, hours) {
+export function sectionTable({ tau, slp, era5Tau, era5Slp, era5TauAt, era5SlpAt }, hours, means = null) {
+  if (means) {
+    const rows = SECTIONS.map((s, k) => `| ${sectionName(s)} | ${f(tau[k], 2)} | ${f(era5Tau[k], 2)} | ${f(tau[k] / era5Tau[k], 2)} | ${f(slp[k], 2)} | ${f(era5Slp[k], 2)} |`);
+    return [`| section | tau_x (mN/m2), ${means} | ERA5 tau_x, day means | ratio | SLP (hPa), ${means} | ERA5 SLP, day means |`, '|---|---|---|---|---|---|', ...rows].join('\n');
+  }
   const rows = SECTIONS.map((s, k) => `| ${sectionName(s)} | ${f(tau[k], 2)} | ${f(era5Tau[k], 2)} | ${f(tau[k] / era5Tau[k], 2)} | ${f(era5TauAt[k], 2)} | ${f(slp[k], 2)} | ${f(era5Slp[k], 2)} | ${f(era5SlpAt[k], 2)} |`);
   return [`| section | tau_x (mN/m2) | ERA5 tau_x | ratio | ERA5 tau_x at ${hours} | SLP (hPa) | ERA5 SLP | ERA5 SLP at ${hours} |`, '|---|---|---|---|---|---|---|---|', ...rows].join('\n');
 }
@@ -44,7 +50,9 @@ export function readSections(text) {
   return SECTIONS.map((s) => {
     const line = text.split('\n').find((l) => l.startsWith(`| ${sectionName(s)} |`));
     if (!line) throw new Error(`no ${sectionName(s)} row`);
-    const [tau, era5Tau, , era5TauAt, slp, era5Slp, era5SlpAt] = line.split('|').slice(2, -1).map(Number);
+    const cells = line.split('|').slice(2, -1).map(Number);
+    if (cells.length === 5) { const [tau, era5Tau, , slp, era5Slp] = cells; return { tau, era5Tau, era5TauAt: NaN, slp, era5Slp, era5SlpAt: NaN }; }
+    const [tau, era5Tau, , era5TauAt, slp, era5Slp, era5SlpAt] = cells;
     return { tau, era5Tau, era5TauAt, slp, era5Slp, era5SlpAt };
   });
 }
@@ -52,17 +60,22 @@ export function readSections(text) {
 const stats = (xs) => { const n = xs.length, mean = xs.reduce((a, x) => a + x, 0) / n; return { mean, se: n > 1 ? Math.sqrt(xs.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1) / n) : NaN }; };
 export function pairTable(baseTexts, fixTexts) {
   const [base, fix] = [baseTexts, fixTexts].map((texts) => texts.map(readSections));
-  const pm = ({ mean, se }, d) => `${f(mean, d)} ± ${f(se, d)}`, at = baseTexts[0].match(/\| ERA5 tau_x at ([^|]*?) \|/)[1];
+  const meansOf = (text) => { const found = text.match(/\| tau_x \(mN\/m2\), ([^|]*?) \|/); return found ? found[1] : null; };
+  const kinds = [...baseTexts, ...fixTexts].map((text) => (meansOf(text) ? 'means' : 'snapshots'));
+  if (new Set(kinds).size > 1) throw new Error('the tables mix the saves\' 30-day means with their snapshots');
+  const means = meansOf(baseTexts[0]), at = means ? null : baseTexts[0].match(/\| ERA5 tau_x at ([^|]*?) \|/)[1];
+  const pm = ({ mean, se }, d) => `${f(mean, d)} ± ${f(se, d)}`;
   const table = (key, obs, d, ratio) => SECTIONS.map((s, k) => {
     const b = stats(base.map((run) => run[k][key])), x = stats(fix.map((run) => run[k][key])), diff = { mean: x.mean - b.mean, se: Math.hypot(b.se, x.se) };
     const of = (v) => (ratio ? ` | ${f(v.mean / base[0][k][obs], 2)}` : '');
-    return `| ${sectionName(s)} | ${f(base[0][k][obs], d)} | ${f(base[0][k][`${obs}At`], d)} | ${pm(b, d)}${of(b)} | ${pm(x, d)}${of(x)} | ${pm(diff, d)} |`;
+    return `| ${sectionName(s)} | ${f(base[0][k][obs], d)}${at ? ` | ${f(base[0][k][`${obs}At`], d)}` : ''} | ${pm(b, d)}${of(b)} | ${pm(x, d)}${of(x)} | ${pm(diff, d)} |`;
   });
+  const atColumn = at ? ` ERA5 at ${at} |` : '', atRule = at ? '---|' : '';
   return [
-    `tau_x (mN/m2), mean over ${base.length} base and ${fix.length} feature runs ± its standard error; ERA5's day mean, then at ${at}`,
-    `| section | ERA5 | ERA5 at ${at} | base | base/ERA5 | feature | feature/ERA5 | feature - base |`, '|---|---|---|---|---|---|---|---|', ...table('tau', 'era5Tau', 1, true),
+    `tau_x (mN/m2), mean over ${base.length} base and ${fix.length} feature runs ± its standard error; ${means ? `the runs' ${means}, ERA5's day mean` : `ERA5's day mean, then at ${at}`}`,
+    `| section | ERA5 |${atColumn} base | base/ERA5 | feature | feature/ERA5 | feature - base |`, `|---|---|${atRule}---|---|---|---|---|`, ...table('tau', 'era5Tau', 1, true),
     '', 'SLP (hPa)',
-    `| section | ERA5 | ERA5 at ${at} | base | feature | feature - base |`, '|---|---|---|---|---|---|', ...table('slp', 'era5Slp', 2, false),
+    `| section | ERA5 |${atColumn} base | feature | feature - base |`, `|---|---|${atRule}---|---|---|`, ...table('slp', 'era5Slp', 2, false),
   ].join('\n');
 }
 

@@ -2,7 +2,11 @@
 // on the CPU with the ocean off, ending with the stress and sea-level
 // pressure in the sections of equatorialSections.mjs against ERA5's in the
 // saves' months, as day means and at the saves' UTC hours
-// (data/era5_equatorial_stress.json):
+// (data/era5_equatorial_stress.json). Saves that all carry 30-day
+// means (js/intervalMeans.module.js) give the sea-level pressure, the
+// lowest layer's wind speed and the stress as those means, set against
+// ERA5's day means in the months of the windows' middles; the rest comes
+// from the snapshots:
 //   MOIST='{...}' node scripts/armMetrics.mjs <label> <state.bin>...
 import { readFileSync } from 'node:fs';
 import { SECTIONS, sectionName as binName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable } from './equatorialSections.mjs';
@@ -36,6 +40,7 @@ const addSections = (key, vals) => vals.forEach((v, k) => sectionSums[key][k] +=
 const vec = new Float64Array(3 * C);
 const east = (i) => -Math.sin(lonCell[i]) * vec[3 * i] + Math.cos(lonCell[i]) * vec[3 * i + 1];
 const vectorCells = [...new Set([...cells, ...sectionCells])];
+const meaned = (saved) => !!(saved.means && saved.means.mslp && saved.means.zonalStress), useMeans = meaned(first), meanDays = [];
 function eastAt(edgeField, out) {
   for (const i of vectorCells) {
     let x = 0, y = 0, z = 0;
@@ -56,6 +61,8 @@ const atHeight = (arr, i, zq) => { for (let k = K - 1; k > 0; k--) { const za = 
 let files = 0;
 for (const file of FILES) {
   const saved = file === FILES[0] ? first : await decodeState(new Uint8Array(readFileSync(file)));
+  if (meaned(saved) !== useMeans) throw new Error(`${file} ${useMeans ? 'carries no' : 'carries'} 30-day means, unlike ${FILES[0]}; give saves of one kind`);
+  const means = useMeans ? saved.means : null;
   STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
   seaIce.load(state[6], saved.concentration ?? null);
   for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
@@ -70,11 +77,12 @@ for (const file of FILES) {
   eastAt(u.subarray((K - 1) * E, K * E), uE); eastAt(stressEdge, tauE);
   const tv = new Float64Array(K * C); for (let k = 0; k < K; k++) for (const i of cells) tv[k * C + i] = thv[k * C + i] * exL[k * C + i];
   const T = (k, i) => theta[k * C + i] * exL[k * C + i];
-  const slpOf = (i) => pi[i] * Math.exp(g * zs[i] / (Rd * T(K - 1, i))) / 100;
+  const slpOf = means ? (i) => means.mslp[i] / 100 : (i) => pi[i] * Math.exp(g * zs[i] / (Rd * T(K - 1, i))) / 100;
+  const tauOf = means ? (i) => 1000 * means.zonalStress[i] : (i) => 1000 * tauE[i], speedOf = means && means.speed ? (i) => means.speed[i] : (i) => speed[i];
   add('sea-level pressure (hPa)', binMean(slpOf));
   add('u lowest layer (m/s)', binMean((i) => uE[i]));
-  add('|V| lowest layer (m/s)', binMean((i) => speed[i]));
-  add('stress tau_x (mN/m2)', binMean((i) => 1000 * tauE[i]));
+  add('|V| lowest layer (m/s)', binMean(speedOf));
+  add('stress tau_x (mN/m2)', binMean(tauOf));
   for (const k of LAYERS) { add(`T k=${k} (C)`, binMean((i) => T(k, i) - 273.15)); add(`z k=${k} (m)`, binMean((i) => zMid[k * C + i] - zs[i])); }
   for (const k of [26, 24, 23]) add(`RH k=${k}`, binMean((i) => q[k * C + i] / saturationHumidity(T(k, i), pi[i] * sigmaMid[k])));
   if (saved.mlmHeight) add('deck height mlmHeight (m)', binMean((i) => saved.mlmHeight[i]));
@@ -95,14 +103,17 @@ for (const file of FILES) {
     }
   }
   for (let b = 0; b < BANDS.length - 1; b++) { const v = binMean((i) => bandOf[b * C + i]); add(`SLP weight ${BANDS[b] / 1000}-${BANDS[b + 1] / 1000} km less ${binName(BINS[REF])}'s (hPa)`, v.map((x) => x - v[REF])); }
-  const day = saved.time / 86400;
-  months.add(monthOfDay(day)); hours.add(utcHourOfDay(day));
-  addSections('tau', sectionMean((i) => 1000 * tauE[i])); addSections('slp', sectionMean(slpOf));
+  const day = means ? (saved.time - 43200 * means.days) / 86400 : saved.time / 86400;
+  months.add(monthOfDay(day));
+  if (means) meanDays.push(means.days); else hours.add(utcHourOfDay(day));
+  addSections('tau', sectionMean(tauOf)); addSections('slp', sectionMean(slpOf));
   for (const [key, vals] of Object.entries(era5Sections(era5, day))) addSections(key, vals);
   files++;
 }
 const f = (x, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : '—');
-console.log(`== ${LABEL}: mean of ${files} states (${FILES.map((p) => p.replace(/.*day/, '')).join(', ')}), sea cells within ${LAT} deg`);
+const span = (xs) => { const lo = Math.min(...xs), hi = Math.max(...xs); return lo === hi ? `${lo}` : `${lo}–${hi}`; };
+const meansNote = useMeans ? `${span(meanDays)}-day means ending at the save` : null;
+console.log(`== ${LABEL}: mean of ${files} states (${FILES.map((p) => p.replace(/.*day/, '')).join(', ')}), sea cells within ${LAT} deg${meansNote ? `; sea-level pressure, |V| and tau_x are the saves' ${meansNote}, the rest from the snapshots` : ''}`);
 console.log('| | ' + BINS.map(binName).join(' | ') + ' |\n|---|' + BINS.map(() => '---|').join(''));
 for (const [name, s] of Object.entries(sums)) if (!name.startsWith('profile')) console.log(`| ${name} | ${Array.from(s, (x) => f(x / files)).join(' | ')} |`);
 const m = (name) => Array.from(sums[name], (x) => x / files);
@@ -111,5 +122,5 @@ console.log(`summary ${LABEL}: SLP 180-160W less 120W-100W ${f(slp[2] - slp[5])}
 
 console.log('profile (bin means): layer, then for 180-160W and 120W-100W: z m, T C, RH, q g/kg');
 for (let k = K - 1; k >= 18; k--) { const cols = []; for (const b of [2, 5]) { const name = binName(BINS[b]); const v = (what) => sums[`profile k=${k} ${name} ${what}`][b] / files; cols.push(`${f(v('z (m)'), 0).padStart(5)} ${f(v('T (C)'), 1).padStart(5)} ${f(v('RH'), 2)} ${f(v('q (g/kg)'), 1).padStart(4)}`); } console.log(`k=${String(k).padStart(2)}  ${cols.join('   |   ')}`); }
-console.log(`sections, sea cells within ${LAT} deg, mean of ${files} states; ERA5 ${era5.years.join('-')} in ${[...months].map((m) => MONTHS[m]).join(', ')}, its sea points within ${era5.latitude} deg`);
-console.log(sectionTable(Object.fromEntries(Object.entries(sectionSums).map(([key, sum]) => [key, Array.from(sum, (x) => x / files)])), `${[...hours].join(', ')} UTC`));
+console.log(`sections, sea cells within ${LAT} deg, mean of ${files} states${meansNote ? `, their ${meansNote}` : ''}; ERA5 ${era5.years.join('-')} in ${[...months].map((m) => MONTHS[m]).join(', ')}, its sea points within ${era5.latitude} deg`);
+console.log(sectionTable(Object.fromEntries(Object.entries(sectionSums).map(([key, sum]) => [key, Array.from(sum, (x) => x / files)])), `${[...hours].join(', ')} UTC`, meansNote));

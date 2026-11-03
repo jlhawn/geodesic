@@ -51,6 +51,12 @@ export const FIELDS = {
   current: 'current speed at the depth, m/s',
   currents: 'current at the depth, m/s, three components per cell',
   upwelling: 'vertical velocity at the depth, m/s, positive upward, from the ocean\'s layer mass fluxes, its running mean over upwellingTimescale(depth): 5 days at 50 m and above, 30 days from 150 m down',
+  surfaceT: 'surface temperature: the skin of the sea, the sea ice or the ground, K',
+  precipitation: 'precipitation over the model\'s last step as a rate, mm/d',
+  latentHeat: 'surface latent heat flux, the evaporation times the latent heat of vaporization, W/m², positive upward',
+  sensibleHeat: 'surface sensible heat flux, W/m², positive upward',
+  zonalStress: 'eastward surface stress of the air on the surface, reconstructed at the cell from the edges\' as the wind is, N/m²',
+  meridionalStress: 'northward surface stress of the air on the surface, reconstructed at the cell from the edges\' as the wind is, N/m²',
 };
 
 export const LEVEL_FIELDS = new Set(['temperature', 'height', 'humidity', 'speed', 'wind', 'dewPoint', 'wetBulb', 'misery', 'vertical']);

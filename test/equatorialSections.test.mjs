@@ -81,4 +81,26 @@ test('armMetrics.mjs ends with the sections against ERA5 in the saves\' month an
     if (Number.isFinite(row.tau)) assert.ok(Math.abs(ratio - row.tau / row.era5Tau) < 0.01, `${sectionName(SECTIONS[s])}: ratio ${ratio}, ${row.tau} over ${row.era5Tau}`);
   });
   assert.ok(rows.filter((row) => Number.isFinite(row.tau) && row.tau !== 0 && row.slp > 950 && row.slp < 1070).length >= 12, rows.map((row) => `${row.tau} ${row.slp}`).join(', '));
+
+  const C = model.mesh.nCells, means = { fields: ['mslp', 'speed', 'zonalStress'], every: 8, samples: 240, days: 30, mslp: new Float32Array(C).fill(101000), speed: new Float32Array(C).fill(7), zonalStress: new Float32Array(C).fill(-0.05) };
+  const meanDir = mkdtempSync(join(tmpdir(), 'armMetrics-')), files = [882, 913].map((day) => join(meanDir, `arm16_day0${day}.bin`));
+  for (const [n, path] of files.entries()) writeFileSync(path, encodeState({ N: 16, ...gridHeader(model.mesh), K: model.core.K, day: 882 + 31 * n, time: (882 + 31 * n) * 86400, terrain: true, ...geographyHeader(record), levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize(), means }));
+  const meaned = spawnSync(process.execPath, [new URL('../scripts/armMetrics.mjs', import.meta.url).pathname, 'arm16', ...files], { encoding: 'utf8' });
+  const mixed = spawnSync(process.execPath, [new URL('../scripts/armMetrics.mjs', import.meta.url).pathname, 'arm16', files[0], file], { encoding: 'utf8' });
+  rmSync(meanDir, { recursive: true, force: true });
+  assert.equal(meaned.status, 0, meaned.stderr);
+  assert.notEqual(mixed.status, 0);
+  assert.match(meaned.stdout, /^== arm16: mean of 2 states \(0882\.bin, 0913\.bin\), sea cells within 3 deg; sea-level pressure, \|V\| and tau_x are the saves' 30-day means ending at the save, the rest from the snapshots$/m);
+  assert.match(meaned.stdout, new RegExp(`^sections, sea cells within 3 deg, mean of 2 states, their 30-day means ending at the save; ERA5 2007-2019 in ${[...new Set([867, 898].map(monthOfDay))].map((m) => MONTHS[m]).join(', ')}, its sea points within 3 deg$`, 'm'));
+  assert.ok(meaned.stdout.split('\n').includes('| section | tau_x (mN/m2), 30-day means ending at the save | ERA5 tau_x, day means | ratio | SLP (hPa), 30-day means ending at the save | ERA5 SLP, day means |'));
+  const meanRows = readSections(meaned.stdout), [earlier, later] = [867, 898].map((day) => era5Sections(era5, day));
+  meanRows.forEach((row, s) => {
+    assert.deepEqual([row.tau, row.slp, row.era5TauAt, row.era5SlpAt], [-50, 1010, NaN, NaN], sectionName(SECTIONS[s]));
+    assert.equal(row.era5Tau, Number(((earlier.era5Tau[s] + later.era5Tau[s]) / 2).toFixed(2)), `ERA5 day-mean stress at ${sectionName(SECTIONS[s])}`);
+  });
+  assert.match(meaned.stdout, /^\| \|V\| lowest layer \(m\/s\) \| 7\.00 \| 7\.00 \|/m);
+  const paired = pairTable([meaned.stdout, meaned.stdout], [meaned.stdout]).split('\n');
+  assert.equal(paired[0], 'tau_x (mN/m2), mean over 2 base and 1 feature runs ± its standard error; the runs\' 30-day means ending at the save, ERA5\'s day mean');
+  assert.equal(paired.find((l) => l.startsWith('| section |')), '| section | ERA5 | base | base/ERA5 | feature | feature/ERA5 | feature - base |');
+  assert.throws(() => pairTable([meaned.stdout], [run.stdout]), /mix the saves' 30-day means with their snapshots/);
 });

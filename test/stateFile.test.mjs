@@ -57,6 +57,18 @@ function assertClose(actual, expected, label) {
   for (let i = 0; i < expected.length; i++) assert.ok(Math.abs(actual[i] - expected[i]) <= 1e-7 * Math.max(1, Math.abs(expected[i])), `${label}[${i}]: ${actual[i]} against ${expected[i]}`);
 }
 
+test('a means group rides in a binary state: its list of fields and scalars in the header, its means as float32 and its sums as float64', async () => {
+  const C = 6, means = { fields: ['mslp', 'sst'], every: 8, samples: 3, days: 0.5, start: 43200, mslp: Float32Array.from({ length: C }, (_, i) => 1e5 + i), sst: Float32Array.of(280, NaN, 281, 282, NaN, 283), mslpSum: Float64Array.from({ length: C }, (_, i) => 3e5 + 3 * i + 1 / 3), sstSum: Float64Array.of(840, NaN, 843, 846, NaN, 849) };
+  const bytes = encodeState({ N: 1, day: 0, pi: Float64Array.from({ length: C }, (_, i) => i), means });
+  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + new DataView(bytes.buffer).getUint32(4, true))));
+  assert.deepEqual(header.means, { fields: ['mslp', 'sst'], every: 8, samples: 3, days: 0.5, start: 43200 });
+  assert.deepEqual(header.arrays.filter((a) => a.name.startsWith('means.')).map((a) => `${a.name} ${a.type}`), ['means.mslp f32', 'means.sst f32', 'means.mslpSum f64', 'means.sstSum f64']);
+  const decoded = await decodeState(bytes);
+  assert.deepEqual(decoded.means, means);
+  assert.deepEqual(groupHeader(decoded.means), { fields: ['mslp', 'sst'], every: 8, samples: 3, days: 0.5, start: 43200 });
+  assert.deepEqual(Object.keys(groupArrays(decoded.means)), ['mslp', 'sst', 'mslpSum', 'sstSum']);
+});
+
 test('a binary state decodes to the JSON state shape, float32 by default and float64 where asked, gzipped or not', async () => {
   const saved = binarySample();
   const encoded = encodeState(saved, { f64: ['pi', 'ocean.eta'] });
