@@ -13,7 +13,7 @@ import { createLayeredOcean, oceanStateLength, OCEAN_DEFAULTS } from './layeredO
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { createGeography, surfaceGeopotential, geographyRecordOf } from '../geography.module.js';
 import { readRanges } from './device.module.js';
-import { RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH } from '../frames.module.js';
+import { RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH, OCEAN_FIELDS } from '../frames.module.js';
 import { createLandSurface, soilColumn, SOIL_CARBON } from '../physics/land.module.js';
 import { loadClimatology } from '../ocean/climatology.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from '../physics/exchange.module.js';
@@ -302,6 +302,20 @@ export async function createGpuModel(gridOrMesh, {
     });
   };
   model.diagnostics = async function diagnostics() { return (await model.beginFrame({ diagnostics: true })).diagnostics; };
+  /*
+   * The named fields as beginFrame gives them, read without a frame's
+   * folds and clears (see `sample` in core.gpu.js), so that a host may
+   * sample between frames without changing them; the rain, vertical and
+   * upwelling memories are not among them. `frameFields` names the
+   * fields the frames give.
+   */
+  model.frameFields = new Set([...gpu.frameFields, ...(gpuOcean ? OCEAN_FIELDS : [])]);
+  model.sampleFrame = function sampleFrame({ level = 'surface', depth = 'surface', fields = [] } = {}) {
+    const time = model.time, sea = fields.filter((name) => OCEAN_FIELDS.has(name) && name !== 'upwelling');
+    const atmosphere = gpu.sample({ pressure: level === 'surface' ? 0 : 100 * level, fields });
+    const ocean = gpuOcean && sea.length ? gpuOcean.frame({ fields: sea, depth: depth === 'surface' ? 0 : Number(depth), upwellingDepth: depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth) }) : null;
+    return Promise.all([atmosphere, ocean]).then(([a, o]) => ({ time, level, depth, fields: { ...a, ...(o ? o.fields : {}) } }));
+  };
 
   model.ocean = gpuOcean ? {
     initialize(surfaceT, iceField, options) {

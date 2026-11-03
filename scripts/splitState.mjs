@@ -4,7 +4,8 @@
 // each and the <name>.parts.json manifest the page loads them from, each
 // part listed with its SHA-256 and the run with its id, the SHA-256 of
 // those hashes one per line. A binary state goes in without its SST ring
-// (js/sstMeans.module.js), which the page keeps no recorder for, and with
+// (js/sstMeans.module.js) and its 30-day means
+// (js/intervalMeans.module.js), which the page keeps no recorders for, and with
 // RADIATION, MOIST and LAND (JSON, as scripts/spinup.mjs takes them; of LAND
 // the soil options) recorded in its header as the options the page's model
 // starts it with, with the radiation's shortwave scheme and aerosol, the
@@ -16,6 +17,7 @@ import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { SST_FIELDS, withoutSstRing } from '../js/sstMeans.module.js';
+import { withoutMeans } from '../js/intervalMeans.module.js';
 import { recordedOptions, soilOptions } from './stateOptions.mjs';
 
 const [file, mib = '10'] = process.argv.slice(2);
@@ -36,8 +38,9 @@ if (file.endsWith('.parts.json')) {
   const stamped = Object.keys(given).length > 0;
   const raw = readFileSync(file), saved = kind === 'bin' ? await decodeState(new Uint8Array(raw)) : null;
   if (stamped && !saved) throw new Error('RADIATION and MOIST are recorded in binary states only');
-  const ringed = !!saved && SST_FIELDS.some((name) => name in saved);
-  const kept = stamped ? { ...withoutSstRing(saved), options: { ...saved.options, ...recordedOptions(saved.options, given) } } : ringed ? withoutSstRing(saved) : null;
+  const ringed = !!saved && SST_FIELDS.some((name) => name in saved), meaned = !!saved && 'means' in saved;
+  const bare = saved ? withoutMeans(withoutSstRing(saved)) : null;
+  const kept = stamped ? { ...bare, options: { ...saved.options, ...recordedOptions(saved.options, given) } } : ringed || meaned ? bare : null;
   const gz = kept ? gzipSync(encodeState(kept, { f64: f64Names(saved) }), { level: 9 }) : file.endsWith('.gz') ? raw : gzipSync(raw, { level: 9 });
   const parts = [];
   for (let at = 0; at < gz.length; at += chunk) {
@@ -47,5 +50,5 @@ if (file.endsWith('.parts.json')) {
     parts.push({ file: name.replace(/.*\//, ''), bytes: bytes.length, sha256: sha256(bytes) });
   }
   writeFileSync(`${base}.parts.json`, manifest(base.replace(/.*\//, ''), null, parts));
-  console.log(`${base}.parts.json: ${parts.length} parts, ${(gz.length / 1048576).toFixed(1)} MiB gzipped${ringed ? ', its SST ring left out' : ''}${stamped ? `, with the options ${JSON.stringify(kept.options)}` : ''}`);
+  console.log(`${base}.parts.json: ${parts.length} parts, ${(gz.length / 1048576).toFixed(1)} MiB gzipped${ringed ? ', its SST ring left out' : ''}${meaned ? ', its 30-day means left out' : ''}${stamped ? `, with the options ${JSON.stringify(kept.options)}` : ''}`);
 }

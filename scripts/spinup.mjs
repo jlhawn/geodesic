@@ -37,7 +37,13 @@
 // It also carries the daily means of the sea surface temperature over the
 // last SST_WINDOW days and their days (js/sstMeans.module.js), each the
 // mean of the ocean's top layer after every ocean step of its day, which
-// a day's end adds when the whole day was stepped.
+// a day's end adds when the whole day was stepped, and the means over the
+// MEANS_WINDOW (30) days to the save of the fields MEANS names
+// (js/intervalMeans.module.js: each field sampled every MEANS_EVERY steps
+// at the lowest layer and the ocean's top, each day's samples averaged
+// into a ring of daily means, the group `means`), the ring starting empty
+// with the segment, so that a segment of 30 days or more ends with a full
+// window.
 //
 // SIGTERM or SIGINT stops the segment at the next step that ends an
 // ocean step, a held radiation interval (the radiation's radiationEvery)
@@ -47,7 +53,9 @@
 // the running rain and runoff totals the ocean takes its freshwater from
 // as differences and, when RECORD is set, the forcing recorder's part of
 // the day), which the next segment continues from and deletes once it has
-// saved a whole day.
+// saved a whole day. Either save at a stop also keeps the means' ring and
+// the sums of the day under way, from which the run continuing it carries
+// the window on.
 // Whole-day names alone count towards KEEP, and only whole-day names match
 // the day patterns of the shell drivers.
 // The header records the radiation's shortwave scheme and aerosol, the moist
@@ -109,6 +117,19 @@
 // snapshot that already does is continued without replacing again),
 // SST_WINDOW (30: the daily means of sea surface temperature the states
 // keep; 0 keeps none and adds nothing to the steps),
+// MEANS (the fields of js/frames.module.js whose 30-day means the states
+// keep, as a JSON list, MEANS in
+// js/intervalMeans.module.js by default: sea-level and surface pressure,
+// the lowest layer's wind speed, temperature and relative humidity, the
+// sea's top-layer temperature, the surface temperature, the last step's
+// precipitation rate, column cloud water, the surface's diffuse albedo, the
+// sunlight reaching the surface, the outgoing longwave at the top, sea-ice
+// thickness and concentration, the eastward and northward surface stress
+// and the surface latent and sensible heat fluxes, less any the model's frames
+// do not give (the GPU engine's stress needs the implicit drag); 'none' keeps none and
+// adds nothing to the steps), MEANS_EVERY (the steps between samples, by
+// default 64 samples a day: 8 at N=128; with BATCH above 1 a sample falls
+// at the end of each batch that passes a multiple of it),
 // SYNC_CMD (a shell command run after every snapshot, forcing file and log
 // update with the file's path as $1, see scripts/runControl.mjs),
 // STOP_AFTER_STEPS (for tests: stop as on SIGTERM once this many steps
@@ -171,6 +192,7 @@ import { THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
 import { createGpuSstRecorder } from '../js/gpu/sstMeans.gpu.js';
 import { createSstRing, SST_WINDOW } from '../js/sstMeans.module.js';
+import { createIntervalMeans, meansFields, meansEvery, availableMeans, meansGroup, savedMeansPart, MEANS_WINDOW } from '../js/intervalMeans.module.js';
 import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
 import { START_CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
@@ -396,6 +418,12 @@ if (sstRing) {
   const held = sstRing.days, span = held.length ? `days ${held[0]}–${held[held.length - 1]}` : 'none yet';
   log(`SST means: the daily mean of the ocean's top layer over its ${oceanSteps} steps a day, the last ${SST_DAYS} days kept (${span})${startStep && !sstPart ? `; day ${saved.day + 1}'s covers only its last ${perDay - startStep} steps and stays out` : ''}`);
 }
+const ASKED_MEANS = meansFields(process.env.MEANS), MEANS = availableMeans(model, ASKED_MEANS), unoffered = ASKED_MEANS.filter((name) => !MEANS.includes(name)), MEANS_EVERY = process.env.MEANS_EVERY === undefined ? meansEvery(dt) : Number(process.env.MEANS_EVERY);
+if (!(Number.isInteger(MEANS_EVERY) && MEANS_EVERY >= 1)) throw new Error(`MEANS_EVERY is a whole number of steps, not ${process.env.MEANS_EVERY}`);
+if (unoffered.length && process.env.MEANS) throw new Error(`MEANS names ${unoffered.join(', ')}, which this model's frames do not give`);
+const meansPart = MEANS.length ? savedMeansPart(saved) : null, meansGoOn = !!meansPart && meansPart.every === MEANS_EVERY && meansPart.fields.join() === MEANS.join();
+const meansRecorder = MEANS.length ? createIntervalMeans(model, { fields: MEANS, every: MEANS_EVERY, offset: startStep, from: meansGoOn ? meansPart : null }) : null;
+if (meansRecorder) log(`means over the ${MEANS_WINDOW} days to each save: ${MEANS.join(', ')}, every ${MEANS_EVERY} steps (${(perDay / MEANS_EVERY).toFixed(1)} a day)${unoffered.length ? `, without ${unoffered.join(' and ')}, which this model's frames do not give` : ''}${meansGoOn ? `, carrying on the ring of ${file} (${meansPart.days.length} days, and ${meansPart.daySamples} samples of the day under way)` : startStep ? `; ${file} carries no ring of these fields, so the window starts with the next day` : ''}`);
 if (stop.requested) { log(`stopped by ${stop.requested} before the first step; nothing to save`); await hook.drain(); process.exit(0); }
 const start = performance.now();
 const day0 = Math.round((model.time - startStep * dt) / 86400);
@@ -452,6 +480,7 @@ async function dayEnd(day, stepsToday, jump) {
   const time = model.time;
   const sums = readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.ABSSUM, length: C }, { offset: PH.ATMSUM, length: C }, { offset: PH.LWSFCSUM, length: C }]);
   const diagnosed = model.diagnostics(), splitRead = readSplit(), sstDay = sstRecorder ? sstRecorder.day() : null;
+  meansRecorder?.day();
   if (recorder) {
     await diagnosed;
     const file = `${RECORD}/${forcingName(day)}`;
@@ -502,7 +531,7 @@ for (;;) {
   if (BATCH === 1) {
     while (step < perDay) {
       budgetArmed = !!budget && (step + 1) % (perDay / TOP_BUDGET) === 0;
-      await model.step(dt); recorder?.step(); sstRecorder?.step(); step++; taken++;
+      await model.step(dt); recorder?.step(); sstRecorder?.step(); meansRecorder?.step(); step++; taken++;
       if (budgetArmed) { await model.sync(); budget.sample(state); budgetArmed = false; }
       if (step % 8 === 0) { await model.settleBehind(); passTurn(); }
       if (halted() && step % cadence === 0) break;
@@ -511,6 +540,7 @@ for (;;) {
     while (step < perDay) {
       const count = Math.min(BATCH, perDay - step);
       await model.stepBatch(count, dt, recorder || sstRecorder ? () => { recorder?.step(); sstRecorder?.step(); } : null, false);
+      meansRecorder?.step(count);
       await model.settleBehind();
       passTurn();
       step += count; taken += count;
@@ -548,6 +578,7 @@ if (step && recorder) {
 }
 await model.sync();
 const sstFields = sstRing ? { ...sstRing.serialize(), ...(step ? await sstRecorder.checkpoint().then(({ sum, samples }) => ({ sstSum: sum, sstSamples: samples })) : {}) } : {};
+const meansSaved = meansRecorder ? meansGroup(await meansRecorder.checkpoint(), { inside: !!step || !!halted() }) : {};
 const days = day - day0;
 const landState = await model.land.serialize(), lakeState = model.lake ? lakeArrays(await model.lake.serialize()) : {};
 const kT = ocean.densities.filter((r) => r < THERMOCLINE_DENSITY).length;
@@ -573,12 +604,12 @@ const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(s
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
 const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
 const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(GEOGRAPHY), levels: core.levels, options: recordedOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: soilOptions(LAND) }), ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...meansSaved, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));
 for (const old of whole.slice(0, Math.max(0, whole.length - KEEP))) unlinkSync(`${OUT}/${old}`);
 for (const old of kept) if (inDay(old) && old !== name) unlinkSync(`${OUT}/${old}`);
-log(`saved ${name} after ${((performance.now() - t0) / 60000).toFixed(1)} min; keeping ${snapshots().join(', ')}`);
+log(`saved ${name} after ${((performance.now() - t0) / 60000).toFixed(1)} min${meansSaved.means ? `, with ${meansSaved.means.days ? `${meansSaved.means.days}-day means ending at the save (${meansSaved.means.samples} samples)` : 'no whole day of means'}${'daySamples' in meansSaved.means ? ', and their ring to carry on' : ''}` : ''}; keeping ${snapshots().join(', ')}`);
 if (halted()) log(`stopped by ${stop.requested ?? `STOP_AFTER_STEPS=${STOP_AFTER_STEPS}`} at day ${day}${step ? ` and ${step} of ${perDay} steps` : ''}`);
 hook.after(`${OUT}/${name}`);
 hook.after(`${OUT}/${TAG}.log`);

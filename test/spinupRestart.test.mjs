@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeState } from '../js/stateFile.module.js';
+import { withoutMeans } from '../js/intervalMeans.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -27,8 +28,9 @@ for (const [arm, env] of Object.entries(arms)) {
       run({ TAG: 'split', DAYS: '1' });
       run({ TAG: 'split', DAYS: '2' });
       const [whole, split] = await Promise.all(['whole', 'split'].map((tag) => decodeState(new Uint8Array(readFileSync(join(out, `${tag}_day0002.bin`))))));
-      const other = Object.fromEntries(fields(split)), apart = [];
-      for (const [name, values] of fields(whole)) {
+      assert.deepEqual([whole.means.days, whole.means.samples, split.means.days, split.means.samples], [2, 128, 1, 64], 'each save\'s means cover its own segment');
+      const other = Object.fromEntries(fields(withoutMeans(split))), apart = [];
+      for (const [name, values] of fields(withoutMeans(whole))) {
         const theirs = other[name];
         if (!theirs || theirs.length !== values.length) { apart.push(`${name} missing`); continue; }
         let count = 0, largest = 0;

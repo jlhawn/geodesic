@@ -13,8 +13,8 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * (which may end in spaces counted in that length), zero padding to a
  * multiple of 4, then each array at its byte offset from the end of the
  * padding, as float32 unless its type is 'f64'. Array names are the JSON
- * state's keys, with 'ocean.' and 'land.' prefixes for the nested ones;
- * the header's `ocean` and `land` hold those groups' scalar entries, the
+ * state's keys, with 'ocean.', 'land.' and 'means.' prefixes for the nested ones;
+ * the header's `ocean`, `land` and `means` hold those groups' scalar entries and lists of names, the
  * ocean's `vertical` ('hybrid'; older states carry 'slab' and are converted on load) and `generator`.
  * Gzip and the binary format are recognised by their magic bytes rather
  * than the file name, since a server may already have inflated a .gz
@@ -78,15 +78,18 @@ export function savedLevels(saved) {
 
 /*
  * The binary form of a state: its top-level arrays and those under
- * `ocean` and `land`, as float32 or, listed in `f64` or in F64, float64,
+ * `ocean`, `land` and `means`, as float32 or, listed in `f64` or in F64 or
+ * a means group's sums (intervalMeans.module.js), float64,
  * with the header padded with spaces so the arrays start 8-byte aligned.
  */
-const GROUPS = ['ocean', 'land'], F64 = ['levels', 'ocean.densities', 'ocean.shelfLoad', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum'];
-const isArray = (value) => ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer;
-const isScalar = (value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+const GROUPS = ['ocean', 'land', 'means'], F64 = ['levels', 'ocean.densities', 'ocean.shelfLoad', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum'];
+const isF64 = (name) => F64.includes(name) || /^means\.\w+Sum$/.test(name);
+const isNames = (value) => Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string');
+const isArray = (value) => (ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer) && !isNames(value);
+const isScalar = (value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || isNames(value);
 
 /*
- * A saved group's (`ocean`, `land`) scalar entries, and its arrays, as
+ * A saved group's (`ocean`, `land`, `means`) scalar entries, and its arrays, as
  * two objects: the arrays travel as buffers or typed arrays while the
  * scalars ride along as they are.
  */
@@ -105,7 +108,7 @@ export function encodeState(state, { f64 = [] } = {}) {
   }
   let offset = 0;
   const arrays = named.map(([name, values]) => {
-    const type = f64.includes(name) || F64.includes(name) ? 'f64' : 'f32', size = type === 'f64' ? 8 : 4;
+    const type = f64.includes(name) || isF64(name) ? 'f64' : 'f32', size = type === 'f64' ? 8 : 4;
     offset = Math.ceil(offset / size) * size;
     const entry = { name, length: values.length, offset, type };
     offset += size * values.length;

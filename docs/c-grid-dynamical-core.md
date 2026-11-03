@@ -2484,6 +2484,57 @@ every step (`createForcingRecorder`, `js/gpu/forcing.gpu.js`), rain
 among them from each step's own total (PH STEPRAIN); runoff is the
 change of the land's runoff tally over the day.
 
+**Thirty-day means.** A saved state is the model at one instant, the
+end of its segment at 12 UTC, and set against a day-mean climatology it
+misreads the tide in sea-level pressure, the diurnal cycles of land
+temperature and surface stress, and samples one hour of each month's
+weather. Besides the daily SST means of its last SST_WINDOW days
+(`js/sstMeans.module.js`), each state of `scripts/spinup.mjs` carries
+the group `means` (`js/intervalMeans.module.js`): the means over the
+30 days ending at its save of the fields MEANS names. By default these are the sea-level and
+surface pressure; the lowest layer's wind speed, air temperature and
+relative humidity (the frames' `surface` level is the lowest model
+layer at its middle, not 2 m or 10 m); the ocean's top-layer
+temperature; the surface skin temperature; the last step's
+precipitation rate; the column cloud water; the surface's diffuse
+albedo; the all-sky sunlight reaching the surface; the outgoing
+longwave at the top; the sea-ice thickness and concentration; the
+eastward and northward stress of the air on the surface, reconstructed
+at the cells from the implicit drag's edge stress as the wind is (a
+GPU model without the implicit drag has none, and the default leaves
+it out); and the surface latent and sensible heat fluxes. The recorder samples them
+every MEANS_EVERY steps, 64 samples a model day at any N (every 8th
+step at N=128). On the GPU it reads them through `model.sampleFrame`,
+which runs the frame kernel and one copy into a staging buffer without a
+page frame's folds and clears: a frame resets the rain, runoff and
+radiation sums from which the ocean's freshwater and the day line's
+means are made. On the CPU it reads them through `cpuFrameFields`
+(`js/cpuFrame.module.js`). Each sample is added into float64 sums on the
+host as its read lands, so the steps queued behind a sample are not
+held, and with the recorder on or off the model steps bit for bit the
+same, and at N=128 the samples cost less than a timing's noise, about
+2 % of a 76 ms step. Each day's samples are averaged into a ring of
+daily means, float32 and MEANS_WINDOW = 30 days deep, held in memory:
+about 354 MB for the 18 default fields at N=128, with 24 MB of float64
+sums for the day under way. A save's `means.<field>` is the float32
+mean of the ring's days, and the header's
+`means: { fields, every, days, samples }` says how many days the ring
+held and how many samples they took. The ring starts empty with each
+segment, so a segment of 30 days or more, as from one monthly save to
+the next, ends with a full window and a shorter one with fewer days; a
+day a run began partway through without the ring stays out. A save
+inside a day, or at a stop before the segment's end, also keeps the
+ring and the day under way, the header's `daySamples` and the arrays
+`means.ringSamples`, `means.<field>Ring` and the float64
+`means.<field>Sum`, from which the run continuing it carries the window
+on exactly; the segment's closing save keeps the means alone.
+`scripts/splitState.mjs` leaves the group out of the page's states.
+When every save carries it, `scripts/armMetrics.mjs` takes the
+sea-level pressure, wind speed and stress from it and sets them against
+ERA5's day means in the month of each window's middle.
+`scripts/stateMeans.mjs` prints the group's global, land, sea and
+30S–30N means.
+
 `scripts/oceanSpinup.mjs` loads a coupled snapshot (STATE) into the GPU
 model and loops the first DAYS_PER_YEAR (365) recorded days over it for
 YEARS years, never stepping the atmosphere (`createForcedOcean`). At
