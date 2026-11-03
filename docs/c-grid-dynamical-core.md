@@ -9866,6 +9866,21 @@ convective share 0.823 → 0.826, firing 0.476 → 0.496, Q1R centroid 714.7
 rain 2.049 → 2.041 mm/d, wettest cell 258 → 242 mm/d; GPU day 186 ASR −
 OLR 11.8 → 11.9, SWCRE −45.8 → −44.9, LWCRE 23.8 → 23.1 W/m².
 
+**A PCAPE minimum (Nov 2).** `pcapeMinimum` m (0 by default) gives the deep
+base flux max(0, m PCAPE, PCAPE − PCAPE_bl) / (τ F): the IFS's RMINCAPE
+(OpenIFS `cumastrn.F90`, 0.05 in `sucumf.F90`), absent from the
+Cy40r1-derived WRF and CM1 ports. `pcapeMinimumOver` 'land' keeps it to
+land columns ('all', the default, takes every column): a design arm. At
+0.05 over every column an N=64 year adds 0.95 mm/d to the Amazon's dry
+season but cools the 30S–30N sea 0.5 K under more low cloud, the sea's
+own deep rain down 0.5 mm/d.
+
+**The sea's τ_bl over land (Nov 2).** `pcapeTimescale` 'sea' takes τ_bl =
+(z_b − z_s) / max(2 m/s, ū_bl) over land as over sea, in place of H/w̄
+('surface', the default): a design arm. The IFS's sea form is
+min(10 km, z_b) / (2 m/s + |V|), |V| from the winds at cloud base and
+NJKT3 (`cumastrn.F90`).
+
 **The source excess over the IFS's own w\* (review, Oct 2).** Element 3
 took eq. 6.19's coefficients with the shallow closure's w* = max((B₀
 h)^⅓, u*); the IFS forms w* at the lowest model level (Cy43r1 eq. 6.20):

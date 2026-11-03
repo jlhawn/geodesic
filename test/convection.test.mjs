@@ -1486,9 +1486,10 @@ test('the IFS updraught conversion: on Jordan\'s column each layer rains l (1 âˆ
   for (let n = 1; n < tops.length; n++) assert.ok(tops[n] >= tops[n - 1], `top ${tops[n]} under ${tops[n - 1]}`);
 });
 
-async function parity(options, { momentum = false, nocturnal = false } = {}) {
+async function parity(options, { momentum = false, nocturnal = false, land = false } = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
-  const model = build(options), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
+  const landMask = land ? Uint8Array.from({ length: 16 * 16 * 10 + 2 }, (_, i) => (i % 3 === 0 ? 1 : 0)) : null;
+  const model = build(landMask ? { ...options, land: landMask } : options), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   const { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation } = randomColumns(model, { nocturnal });
   let cloudSeed = 4242;
@@ -1508,6 +1509,7 @@ async function parity(options, { momentum = false, nocturnal = false } = {}) {
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SUBTV, Float32Array.from(saved));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(sensible));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(evaporation));
+  if (landMask) device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LAND, Float32Array.from(landMask));
   let dragSeed = 31;
   const dragRandom = () => { dragSeed = (dragSeed * 1103515245 + 12345) % 2147483648; return dragSeed / 2147483648; };
   model.boundaryLayer.surfaceDrag.set(Float64Array.from({ length: C }, () => (momentum ? 0 : Math.fround(0.08 * dragRandom()))));
@@ -1698,6 +1700,9 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
   await parity({ pcapeBoundary: 'signed' });
+  await parity({ pcapeMinimum: 0.05 });
+  await parity({ pcapeMinimum: 0.05, pcapeMinimumOver: 'land', pcapeTimescale: 'sea' }, { land: true });
+  await parity({ pcapeTimescale: 'sea' }, { land: true });
   await parity({ excessVelocity: 'convective' });
   await parity({ plumeSourceDepth: 'boundaryLayer' });
   await parity({ convectionType: 'top' });

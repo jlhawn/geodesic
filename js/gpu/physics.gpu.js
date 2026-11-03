@@ -273,6 +273,9 @@ export function physicsConstants(o) {
   if (o.excessVelocity !== 'surfaceLayer' && o.excessVelocity !== 'convective') throw new Error(`excessVelocity must be 'surfaceLayer' or 'convective', not ${o.excessVelocity}`);
   if (o.capeClosure !== 'bechtold' && o.capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${o.capeClosure}`);
   if (o.pcapeBoundary !== 'positive' && o.pcapeBoundary !== 'signed') throw new Error(`pcapeBoundary must be 'positive' or 'signed', not ${o.pcapeBoundary}`);
+  if (!(o.pcapeMinimum >= 0 && o.pcapeMinimum <= 1)) throw new Error(`pcapeMinimum must be a fraction from 0 to 1, not ${o.pcapeMinimum}`);
+  if (o.pcapeMinimumOver !== 'all' && o.pcapeMinimumOver !== 'land') throw new Error(`pcapeMinimumOver must be 'all' or 'land', not ${o.pcapeMinimumOver}`);
+  if (o.pcapeTimescale !== 'surface' && o.pcapeTimescale !== 'sea') throw new Error(`pcapeTimescale must be 'surface' or 'sea', not ${o.pcapeTimescale}`);
   if (o.plumeDeparture !== 'surface' && o.plumeDeparture !== 'elevated' && o.plumeDeparture !== 'elevatedStable') throw new Error(`plumeDeparture must be 'surface', 'elevated' or 'elevatedStable', not ${o.plumeDeparture}`);
   if (o.plumeDeparture !== 'surface' && !(o.convectionType === 'testParcel' && o.capeClosure === 'bechtold')) throw new Error(`plumeDeparture '${o.plumeDeparture}' needs convectionType 'testParcel' and capeClosure 'bechtold'`);
   if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
@@ -386,7 +389,7 @@ const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.p
 const PL_SURFACE50: bool = ${o.plumeSourceDepth === 'surface50'}; const EX_COEF: f32 = ${SOURCE_EXCESS.coefficient}; const EX_T: f32 = ${SOURCE_EXCESS.temperature}; const EX_Q: f32 = ${SOURCE_EXCESS.humidity};
 const EX_LAYER: bool = ${o.excessVelocity === 'surfaceLayer'}; const EX_SCALE: f32 = ${SOURCE_EXCESS.scale}; const EX_STAB: f32 = ${SOURCE_EXCESS.layer}; const EX_KARMAN: f32 = ${SOURCE_EXCESS.karman}; const EX_USTAR: f32 = ${SOURCE_EXCESS.friction}; const EX_VIRT: f32 = ${SOURCE_EXCESS.virtual};
 const PL_ELEVATED: bool = ${o.plumeDeparture !== 'surface'}; const PL_STABLE: bool = ${o.plumeDeparture === 'elevatedStable'}; const DEP_DEPTH: f32 = ${DEPARTURE.depth}; const DEP_DT: f32 = ${DEPARTURE.temperature}; const DEP_DQ: f32 = ${DEPARTURE.humidity}; const DEP_OWN: bool = ${DEPARTURE.reference === 'departure'};
-const PL_BECHTOLD: bool = ${o.capeClosure === 'bechtold'}; const BT_POSITIVE: bool = ${o.pcapeBoundary === 'positive'}; const BT_SCALE: f32 = ${BECHTOLD.resolution / BECHTOLD.reference}; const BT_SHORT: f32 = ${BECHTOLD.shortest}; const BT_LONG: f32 = ${BECHTOLD.longest}; const BT_WIND: f32 = ${BECHTOLD.boundaryWind}; const BT_TSTAR: f32 = ${BECHTOLD.temperatureScale}; const SUB_K: i32 = ${o.subcloudLayers ?? 0};
+const PL_BECHTOLD: bool = ${o.capeClosure === 'bechtold'}; const BT_POSITIVE: bool = ${o.pcapeBoundary === 'positive'}; const BT_MINIMUM: f32 = ${o.pcapeMinimum}; const BT_LAND_MINIMUM: bool = ${o.pcapeMinimumOver === 'land'}; const BT_SEA: bool = ${o.pcapeTimescale === 'sea'}; const BT_SCALE: f32 = ${BECHTOLD.resolution / BECHTOLD.reference}; const BT_SHORT: f32 = ${BECHTOLD.shortest}; const BT_LONG: f32 = ${BECHTOLD.longest}; const BT_WIND: f32 = ${BECHTOLD.boundaryWind}; const BT_TSTAR: f32 = ${BECHTOLD.temperatureScale}; const SUB_K: i32 = ${o.subcloudLayers ?? 0};
 const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_SUBSIDENCE: bool = ${!!entrainment.subsidence}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop}; const BL_CG: f32 = ${o.countergradient ?? 0}; const BL_HB: bool = ${o.velocityScale === 'holtslagBoville'};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${darkening !== false}; const DARK_SURFACE: bool = ${darkening === 'surface'}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${wetting[0]}; const DARK_SPAN: f32 = ${wetting[1] - wetting[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
@@ -2541,10 +2544,10 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
         if (saved > 0.0) { forcing += (plumeT(i, k) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + idx]) - CU_LOADING * max(0.0, IN[S_QC + idx])) - saved) / dt * dpk; }
         wind += dpk * length(cellWind(i, k)); layerMass += dpk;
       }
-      let boundaryTime = select((baseHeight - ground) / max(BT_WIND, wind / layerMass), turnover, PH[PH_LAND + i] > 0.5);
+      let boundaryTime = select((baseHeight - ground) / max(BT_WIND, wind / layerMass), turnover, PH[PH_LAND + i] > 0.5 && !BT_SEA);
       pcapeBoundary = boundaryTime / BT_TSTAR * select(forcing, max(0.0, forcing), BT_POSITIVE);
     }
-    if (consumptionP > 0.0) { relaxed = max(0.0, pcape - pcapeBoundary) / (tau * consumptionP); }
+    if (consumptionP > 0.0) { relaxed = max(max(0.0, select(BT_MINIMUM, 0.0, BT_LAND_MINIMUM && !(PH[PH_LAND + i] > 0.5)) * pcape), pcape - pcapeBoundary) / (tau * consumptionP); }
   } else if (consumption > 0.0 && cape > PL_CAPE) { relaxed = (cape - PL_CAPE) / (PL_TAU * consumption); }
   let gate = clamp(0.5 + (CIN_MAX - inhibition) / max(1.0, CIN_MAX), 0.0, 1.0);
   let buoyancyFlux = PH[PH_BUOY + i];
