@@ -113,7 +113,7 @@ if (which === 'wet') {
   const STEP = 450, WORKERS = 6, GRID = 'bl36', FRAME_DAYS = 5, BINS = 36, ICE = JSON.parse(process.env.WET_ICE ?? '{}');
   const weatherFrom = Math.max(0, Math.min(287, RECORD_DAYS - 30)), WEATHER_DAYS = [weatherFrom, Math.min(RECORD_DAYS, weatherFrom + 30)];
   const cadence = withCadence({ ocean: false }, STEP, N);
-  const options = { ocean: false, levels: sigmaInterfaces(GRID), ...cadence, radiation: { ...cadence.radiation, clearSkyPass: true, orbit: PUBLISHED_RADIATION.orbit, shortwave: PUBLISHED_RADIATION.shortwave, aerosol: PUBLISHED_RADIATION.aerosol }, moist: { bergeronAutoconversion: PUBLISHED_MOIST.bergeronAutoconversion }, ice: ICE };
+  const options = { ocean: false, levels: sigmaInterfaces(GRID), ...cadence, radiation: { ...cadence.radiation, clearSkyPass: true, orbit: PUBLISHED_RADIATION.orbit, shortwave: PUBLISHED_RADIATION.shortwave, aerosol: PUBLISHED_RADIATION.aerosol }, moist: { bergeronAutoconversion: PUBLISHED_MOIST.bergeronAutoconversion, pcapeMinimum: PUBLISHED_MOIST.pcapeMinimum }, ice: ICE };
   const t0 = performance.now(), seconds = () => (performance.now() - t0) / 1000;
   const model = await createParallelModel(new Grid(N), options, WORKERS);
   initializeState(model).forEach((values, s) => model.state[s].set(values));
