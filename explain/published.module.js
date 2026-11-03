@@ -4,6 +4,6 @@
  * the text that describes them.
  */
 export const PUBLISHED_RADIATION = { cloudColumns: false, cloudSpread: 0, varianceCover: 'deficit', buoyancyLength: null, deckResolved: 'added', orbit: 'circular', shortwave: 'sequential', aerosol: 'flat' };
-export const PUBLISHED_MOIST = { stratocumulusInversion: null, cumulusEntrainmentHeight: null, cumulusAscent: 'buoyant', bergeronAutoconversion: false };
+export const PUBLISHED_MOIST = { stratocumulusInversion: null, cumulusEntrainmentHeight: null, cumulusAscent: 'buoyant', bergeronAutoconversion: false, pcapeMinimum: 0 };
 export const PUBLISHED_OCEAN = { rotationLimit: 'algebraic', langmuirIce: 'none', shelfMeltLayer: 0, mstarScheme: 'fixed', langmuirScheme: 'factor', mixedLayerRestratification: false };
 export const PUBLISHED_SURFACE = { seaHumidity: 1 };

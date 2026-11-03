@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { clearLongwave, longwaveTableFor, LONGWAVE_TABLE } from '../js/physics/longwave.module.js';
 import { sigmaInterfaces, GRAVITY, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, interfaceAt, layerHeating, referenceHeating, MOLAR } from '../scripts/standardAtmospheres.mjs';
-import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM } from './helpers/previousDefaults.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
 import { SOLAR_CONSTANT, GREENHOUSE_GASES, VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
 import { ozoneWeights, ozoneAbove } from '../js/physics/ozone.module.js';
@@ -189,7 +189,7 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
 
 async function engines(radiation, levels = undefined) {
   const grid = levels ? { levels } : {};
-  const cpu = createModel(new Grid(16), { ocean: false, radiation, boundaryLayer: { velocityScale: 'capped' }, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, boundaryLayer: { velocityScale: 'capped' }, ...grid });
+  const cpu = createModel(new Grid(16), { ocean: false, radiation, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { velocityScale: 'capped' }, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { velocityScale: 'capped' }, ...grid });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();

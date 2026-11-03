@@ -13,7 +13,7 @@ import { DEFAULT_SOIL } from '../js/physics/land.module.js';
 import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
 import { recordedOptions } from '../scripts/stateOptions.mjs';
 import { syntheticTopography } from '../js/geography.module.js';
-import { PREVIOUS_SHORTWAVE, PREVIOUS_BERGERON, PREVIOUS_AEROSOL, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_BERGERON, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_AEROSOL, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -106,14 +106,23 @@ test('radiation.aerosol defaults to the MACv2 climatology and the previous defau
   assert.deepEqual(recordedOptions({ radiation: PREVIOUS_AEROSOL }).radiation, { shortwave: DEFAULT_SHORTWAVE, aerosol: 'flat' });
 });
 
-test('the GPU engine takes the same defaults: PHYSICS_DEFAULTS names the layered shortwave and the Bergeron factor, and a model asked for the previous options keeps them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('moist.pcapeMinimum defaults to 0.05, the IFS\'s RMINCAPE, over every column under the surface timescale, and the previous default is 0: a state records the default', () => {
+  assert.deepEqual([MOIST_DEFAULTS.pcapeMinimum, MOIST_DEFAULTS.pcapeMinimumOver, MOIST_DEFAULTS.pcapeTimescale], [0.05, 'all', 'surface']);
+  assert.deepEqual(PREVIOUS_PCAPE_MINIMUM, { pcapeMinimum: 0 });
+  assert.equal(PREVIOUS_MOIST.pcapeMinimum, 0);
+  assert.equal(recordedOptions().moist.pcapeMinimum, 0.05);
+  assert.equal(recordedOptions({ moist: PREVIOUS_PCAPE_MINIMUM }).moist.pcapeMinimum, 0);
+});
+
+test('the GPU engine takes the same defaults: PHYSICS_DEFAULTS names the layered shortwave, the Bergeron factor and the PCAPE minimum, and a model asked for the previous options keeps them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
   assert.equal(PHYSICS_DEFAULTS.shortwave, DEFAULT_SHORTWAVE);
   assert.equal(PHYSICS_DEFAULTS.bergeronAutoconversion, true);
+  assert.equal(PHYSICS_DEFAULTS.pcapeMinimum, 0.05);
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
-  const plain = await createGpuModel(new Grid(16), { ocean: false }), previous = await createGpuModel(new Grid(16), { ocean: false, radiation: PREVIOUS_SHORTWAVE, moist: PREVIOUS_BERGERON });
-  assert.deepEqual([plain.gpu.physics.shortwave, plain.gpu.physics.bergeronAutoconversion], ['layered', true]);
-  assert.deepEqual([previous.gpu.physics.shortwave, previous.gpu.physics.bergeronAutoconversion], ['sequential', false]);
+  const plain = await createGpuModel(new Grid(16), { ocean: false }), previous = await createGpuModel(new Grid(16), { ocean: false, radiation: PREVIOUS_SHORTWAVE, moist: { ...PREVIOUS_BERGERON, ...PREVIOUS_PCAPE_MINIMUM } });
+  assert.deepEqual([plain.gpu.physics.shortwave, plain.gpu.physics.bergeronAutoconversion, plain.gpu.physics.pcapeMinimum], ['layered', true, 0.05]);
+  assert.deepEqual([previous.gpu.physics.shortwave, previous.gpu.physics.bergeronAutoconversion, previous.gpu.physics.pcapeMinimum], ['sequential', false, 0]);
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 300 : -4000));
   const land = await createGpuModel(new Grid(16), { ocean: false, topography }), slab = await createGpuModel(new Grid(16), { ocean: false, topography, land: PREVIOUS_LAND });
   assert.deepEqual([land.gpu.physics.soilColumn.depths.length, land.land.deepNames], [4, ['soilT2', 'soilT3', 'soilT4']]);

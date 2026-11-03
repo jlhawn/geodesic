@@ -8,7 +8,7 @@ import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSIO
 import { syntheticTopography } from '../js/geography.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
-import { PREVIOUS_MOIST, PREVIOUS_BERGERON } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_MOIST, PREVIOUS_BERGERON, PREVIOUS_PCAPE_MINIMUM } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -818,7 +818,7 @@ test('under the Bechtold closure the Jordan plume removes its PCAPE over α_x H 
   assert.ok(Math.abs(ratio / expected - 1) < 1e-9, `halving dx scales the flux by ${ratio}, α_x(dx)/α_x(dx/2) ${expected}`);
 });
 
-test('under the Bechtold closure a warming subcloud layer over the sea takes its PCAPE_bl over the advective time z_base / ū_bl, and over land over the turnover time, which holds a plume under strong heating back', () => {
+test('under the Bechtold closure a warming subcloud layer over the sea takes its PCAPE_bl over the advective time z_base / ū_bl, and over land over the turnover time, which holds a plume under strong heating back unless the PCAPE minimum keeps it firing', () => {
   const dt = 600, model = plumeColumn({}, null, 16), { moist, mesh } = model, [pi, theta, u, , q, qc] = model.state;
   const { K, C, dSigma } = model.core.diagnostics, E = mesh.nEdges, lon = mesh.lonCell[0], east = [-Math.sin(lon), Math.cos(lon), 0];
   for (let k = 0; k < K; k++) for (let e = 0; e < E; e++) u[k * E + e] = 5 * (east[0] * mesh.nEdge[3 * e] + east[1] * mesh.nEdge[3 * e + 1] + east[2] * mesh.nEdge[3 * e + 2]);
@@ -830,16 +830,17 @@ test('under the Bechtold closure a warming subcloud layer over the sea takes its
   const expected = hand.baseHeight / 5 * 2 / 86400 * below;
   console.log(`sea: subcloud +2 K/d over ${(below / 100).toFixed(0)} hPa, ū_bl ${deep.boundaryWind.toFixed(3)} m/s (5 by construction), z_base ${hand.baseHeight.toFixed(0)} m: PCAPE_bl ${deep.pcapeBoundary.toFixed(3)} Pa against ${expected.toFixed(3)} by hand, PCAPE ${deep.pcape.toFixed(1)} Pa`);
   assert.ok(Math.abs(deep.pcapeBoundary / expected - 1) < 0.01, `PCAPE_bl ${deep.pcapeBoundary} against ${expected}`);
-  const fire = (heating) => {
-    const land = plumeColumn({ land: Uint8Array.from({ length: 16 * 16 * 10 + 2 }, (_, i) => (i === 0 ? 1 : 0)) }, null, 16), [lp, lt, , , lq, lqc] = land.state;
+  const fire = (heating, options = PREVIOUS_PCAPE_MINIMUM) => {
+    const land = plumeColumn({ ...options, land: Uint8Array.from({ length: 16 * 16 * 10 + 2 }, (_, i) => (i === 0 ? 1 : 0)) }, null, 16), [lp, lt, , , lq, lqc] = land.state;
     subcloudVirtual(land, 0, heating, dt);
     land.moist.plumeColumn(0, lp, lt, lq, lqc, dt);
     return { ...land.moist.deep };
   };
-  const heated = fire(10), calm = fire(0);
+  const heated = fire(10), calm = fire(0), floored = fire(10, {});
   console.log(`land: under +10 K/d below cloud base τ_bl ${heated.boundaryTime.toFixed(0)} s (H / w̄) gives PCAPE_bl ${heated.pcapeBoundary.toFixed(0)} Pa against PCAPE ${heated.pcape.toFixed(0)}: deep ${heated.deep}; with no heating base flux ${calm.baseFlux.toFixed(4)} kg/m²/s`);
   assert.ok(!heated.deep && heated.pcapeBoundary > heated.pcape && Math.abs(heated.boundaryTime - heated.depth / heated.speed) < 1e-9 * heated.boundaryTime, 'strong heating holds the land plume back over the turnover time');
   assert.ok(calm.deep && calm.baseFlux > 0 && calm.pcapeBoundary === 0, 'the calm land column fires');
+  assert.ok(floored.deep && floored.baseFlux > 0 && floored.pcapeBoundary > floored.pcape, 'under the default PCAPE minimum the heated land plume fires');
 });
 
 test('a cooling subcloud layer gives no boundary-layer part under pcapeBoundary positive, so the land plume at night removes its PCAPE over τ as with no tendency; signed lets the cooling add to the PCAPE', () => {
@@ -1274,12 +1275,12 @@ test("plumeDeparture 'elevatedStable' searches only where the surface buoyancy f
   }
 });
 
-test("under a +10 K/d subcloud warming over land the elevated plume has no PCAPE_bl and fires, where the same warming holds a surface-rooted Jordan plume back, and a column whose surface test is deep steps alike under 'surface' and 'elevated'", () => {
+test("under a +10 K/d subcloud warming over land the elevated plume has no PCAPE_bl and fires, where the same warming holds a surface-rooted Jordan plume back without the PCAPE minimum, and a column whose surface test is deep steps alike under 'surface' and 'elevated'", () => {
   const dt = 300, land = () => Uint8Array.from({ length: 16 * 16 * 10 + 2 }, (_, i) => (i === 0 ? 1 : 0));
   const heated = (model) => { subcloudVirtual(model, 0, 10, dt); return stepColumn(model, dt); };
   const night = heated(nocturnalColumn({ plumeDeparture: 'elevated', land: land() })), calm = stepColumn(nocturnalColumn({ plumeDeparture: 'elevated', land: land() }), dt);
   assert.ok(night.deep.deep && !night.deep.rooted && night.deep.pcapeBoundary === 0 && night.deep.baseFlux === calm.deep.baseFlux, 'the heated elevated plume fires as the calm one does');
-  const held = heated(plumeColumn({ plumeDeparture: 'elevated', land: land() })), alone = heated(plumeColumn({ land: land() }));
+  const held = heated(plumeColumn({ ...PREVIOUS_PCAPE_MINIMUM, plumeDeparture: 'elevated', land: land() })), alone = heated(plumeColumn({ ...PREVIOUS_PCAPE_MINIMUM, land: land() }));
   assert.ok(!held.deep.deep && held.deep.pcapeBoundary > held.deep.pcape && held.deep.rooted, 'the surface-rooted plume is held back');
   assert.deepEqual(held.state, alone.state);
   assert.deepEqual({ ...held.deep, typeMargin: 0 }, { ...alone.deep, typeMargin: 0 });
@@ -1700,10 +1701,10 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
   await parity({ pcapeBoundary: 'signed' });
-  await parity({ pcapeMinimum: 0.05 });
-  await parity({ pcapeMinimum: 0.05, pcapeMinimumOver: 'land', pcapeTimescale: 'sea' }, { land: true });
+  await parity({ pcapeMinimum: 0 });
+  await parity({ pcapeMinimumOver: 'land', pcapeTimescale: 'sea' }, { land: true });
   await parity({ pcapeTimescale: 'sea' }, { land: true });
-  await parity({ excessVelocity: 'convective' });
+  await parity({ excessVelocity: 'convective', ...PREVIOUS_PCAPE_MINIMUM });
   await parity({ plumeSourceDepth: 'boundaryLayer' });
   await parity({ convectionType: 'top' });
   await parity({ convectionType: 'cloudDepth' });
