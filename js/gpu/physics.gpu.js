@@ -3,7 +3,7 @@ import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders }
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, MID_LEVEL, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, longwaveCores, LONGWAVE_CORES, CORE_EDGES, CORE_FACTOR_POINTS, coreFactors } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -234,6 +234,7 @@ export function physicsConstants(o) {
   if (o.plumePhase !== 'mixed' && o.plumePhase !== 'liquid') throw new Error(`plumePhase must be 'mixed' or 'liquid', not ${o.plumePhase}`);
   if (o.convectionType !== 'testParcel' && o.convectionType !== 'cloudDepth' && o.convectionType !== 'top') throw new Error(`convectionType must be 'testParcel', 'cloudDepth' or 'top', not ${o.convectionType}`);
   if (typeof o.convectionRetype !== 'boolean') throw new Error(`convectionRetype must be true or false, not ${o.convectionRetype}`);
+  if (typeof o.midLevelConvection !== 'boolean') throw new Error(`midLevelConvection must be true or false, not ${o.midLevelConvection}`);
   if (o.stratusIndex !== 'eis' && o.stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${o.stratusIndex}`);
   if (!((o.countergradient ?? 0) >= 0)) throw new Error(`countergradient must be 0 or more, not ${o.countergradient}`);
   if (!['capped', 'holtslagBoville'].includes(o.velocityScale ?? 'holtslagBoville')) throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${o.velocityScale}`);
@@ -2699,6 +2700,44 @@ const BERGERON_RAIN = [
   ['exp(-AUTO_R * dt)) + liquid * (1.0 - exp(-dt / lifetime))', 'exp(-AUTO_R * bergeron * dt)) + liquid * (1.0 - exp(-bergeron * dt / lifetime))'],
 ];
 
+const wgslFloat = (x) => (Number.isInteger(x) ? x.toFixed(1) : String(x));
+const MID_LEVEL_PLUME = [
+  ['  if (!typed) { return cumulusColumn(i, pi, dt); }\n', `  var middle = false;
+  if (!typed) {
+    let shallowRain = cumulusColumn(i, pi, dt);
+    if (PH[PH_CUMF + i] > 0.0) { return shallowRain; }
+    let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
+    var kb = -1;
+    for (var k = bottom; k > 0; k--) {
+      if (!(plumeZ(i, k) - ground < MID_HEIGHT)) { break; }
+      if (D[D_PSD + k * C + i] + D[D_PSD + (k + 1) * C + i] < 0.0 && max(0.0, IN[S_Q + k * C + i]) > MID_RH * cloudSat(plumeT(i, k), layerP(pi, k)).x) { kb = k; break; }
+    }
+    if (kb < 0) { return shallowRain; }
+    let env = plumeEnv(i, kb);
+    lcl = condensationLevel((env.x - GRAV * plumeZ(i, kb)) / CP, env.y, layerP(pi, kb));
+    if (!(lcl.y > pi * LV[L_SL + 0])) { return shallowRain; }
+    source = kb; sourceBottom = kb; mass = layerDp(pi, kb); sourceS = env.x; sourceQ = env.y; rooted = false; middle = true;
+  }
+`],
+  ['epsilon = IFS_EPS * (IFS_RH - rh) * ratio * ratio * ratio;', 'epsilon = IFS_EPS * select(1.0, MID_FE, middle) * (IFS_RH - rh) * ratio * ratio * ratio;'],
+  ['if (PL_RETYPE && cloudy && top >= 1', 'if (PL_RETYPE && !middle && cloudy && top >= 1'],
+  ['PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }', 'PL_BY_DEPTH))) { if (middle) { return 0.0; } return cumulusColumn(i, pi, dt); }'],
+  ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
+  if (middle) {
+    let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
+    drive = max(0.0, max(-D[D_PSD + base * C + i] / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, base) - ground))));
+  }
+  var baseFlux = min(open * drive, CU_LOSS * mass / (GRAV * dt));
+`],
+  ['if (PL_RELAXED) { return cumulusColumn(i, pi, dt); }', 'if (PL_RELAXED && !middle) { return cumulusColumn(i, pi, dt); }'],
+];
+export function midLevelPlume(body) {
+  return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)};\n` + MID_LEVEL_PLUME.reduce((text, [from, to]) => {
+    const at = text.indexOf(from);
+    if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error('a mid-level anchor is not in the plume kernel exactly once');
+    return text.slice(0, at) + to + text.slice(at + from.length);
+  }, body);
+}
 export function bergeronRain(body) {
   return BERGERON_RAIN.reduce((text, [from, to]) => {
     const at = text.indexOf(from);
