@@ -2,7 +2,7 @@ import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReductio
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, backgroundDiffusivities, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -55,7 +55,7 @@ export const OCEAN_DEFAULTS = {
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   vorticityCentring: 0.5, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917, latentHeatFusion: 3.34e5, langmuir: 2, langmuirIce: 'tanh',
   momentumDepth: 50, shearViscosity: 1e-2, shearCutoff: Infinity, backgroundViscosity: 1e-4, bottomDrag: 3e-3, topDrag: 2.5e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, everySteps: 4,
-  eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: true,
+  eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: true, eddyTracers: 'donor',
   gustiness: 3,
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   backgroundLatitude: 'uniform', equatorialDiffusivity: 1e-6,
@@ -1023,11 +1023,28 @@ ${o.restrat ? `    depth += 0.5 * (ha + hb); shapeBelow = restratShape(-depth * 
     let moved = flux[k];
     if (moved == 0.0) { continue; }
     let qa = IN[qOff(k) + a]; let qb = IN[qOff(k) + b]; let wa = IN[wOff(k) + a]; let wb = IN[wOff(k) + b];
-    let toB = moved > 0.0; let carried = moved / IN[hOff(k) + select(b, a, toB)];
+    let toB = moved > 0.0;
     OD[O_EDDYV + k * E + e] = moved / P[0];
+${o.eddyTracers === 'donor' ? `    let carried = moved / IN[hOff(k) + select(b, a, toB)];
     OD[O_EDDYQ + k * E + e] = eddyShare(qa, qb, sa, sb, carried * select(qb, qa, toB)) / P[0];
     OD[O_EDDYW + k * E + e] = eddyShare(wa, wb, sa, sb, carried * select(wb, wa, toB)) / P[0];
-  }
+` : `    let up = select(b, a, toB); let hu = IN[hOff(k) + up]; let hd = IN[hOff(k) + select(a, b, toB)];
+    var te = select(qb, qa, toB) / hu; var se = select(wb, wa, toB) / hu;
+    if (hd > 1e-6) {
+      let td = select(qa, qb, toB) / hd; let sd = select(wa, wb, toB) / hd;
+${o.eddyTracers === 'centered' ? `      let tl = 0.5 * (te + td); let sl = 0.5 * (se + sd);
+` : `      var tl = te; var sl = se;
+      let side = select(1, 0, toB); let uu = i32(OD[O_BEY + 2 * e + side]); let huu = IN[hOff(k) + uu];
+      if (OD[O_CMASK + uu] > 0.5 && huu > 1e-6) {
+        let ratio = MF[F_DC + e] / MF[F_DC + i32(OD[O_BED + 2 * e + side])];
+        tl = limitedValue(te, td, IN[qOff(k) + uu] / huu, ratio); sl = limitedValue(se, sd, IN[wOff(k) + uu] / huu, ratio);
+      }
+`}      let blend = max(0.0, 1.0 - abs(moved) / (P[0] * eddyAllowance(k, up)));
+      te += blend * (tl - te); se += blend * (sl - se);
+    }
+    OD[O_EDDYQ + k * E + e] = eddyShare(qa, qb, sa, sb, moved * te) / P[0];
+    OD[O_EDDYW + k * E + e] = eddyShare(wa, wb, sa, sb, moved * se) / P[0];
+`}  }
 }`,
     oEddyApply: eddyApply(o.restrat ? 0 : 1),
     oEddyLeftover: eddyLeftover(o.restrat ? 0 : 1),
@@ -1362,7 +1379,9 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const nu4 = closureCoefficient(meshSpacing, o.closureHours, o.closureSpacing);
   const restrat = restratificationOptions(o.mixedLayerRestratification);
   const eddyKappa = eddyDiffusivities(mesh, o.eddyDiffusivity), eddyLimit = o.eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0;
-  const restratScale = restrat ? Float64Array.from(deformationRadii(mesh), (radiusE, e) => restrat.coefficient * Math.min(mesh.dcEdge[e], radiusE) / restrat.frontLength) : null;
+  const restratScale = restrat ? restratificationScale(mesh, restrat) : null;
+  if (!EDDY_TRACERS.includes(o.eddyTracers)) throw new Error(`eddyTracers is one of ${EDDY_TRACERS.join(', ')}, not ${o.eddyTracers}`);
+  if (o.eddyTracers === 'third' && !third) throw new Error("eddyTracers 'third' reads the beyond cells of tracerAdvection 'third'");
   if (!(o.shearCutoff > 0)) throw new Error(`shearCutoff is a positive Richardson number, or Infinity for none, not ${o.shearCutoff}`);
   if (!BACKGROUND_LATITUDES.includes(o.backgroundLatitude)) throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${o.backgroundLatitude}`);
   if (!(o.equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${o.equatorialDiffusivity}`);

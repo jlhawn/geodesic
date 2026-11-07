@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND } from '../js/ocean/layered.module.js';
+import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND, restratificationScale, restratificationOptions, deformationRadii, limitedFaceValue, limitedEdgeValue } from '../js/ocean/layered.module.js';
 import { interiorMixing, shearTaper } from '../js/ocean/column.module.js';
 
 /*
@@ -10,9 +10,11 @@ import { interiorMixing, shearTaper } from '../js/ocean/column.module.js';
  * its published form and against the default it leaves alone: the
  * latitude dependence of the background diffusivity (backgroundLatitude)
  * and the Richardson-number cutoff of the interior shear mixing
- * (shearCutoff).
+ * (shearCutoff), the restratification's equatorial taper
+ * (mixedLayerRestratification.taperLatitude) and the temperature and
+ * salinity the eddy phase's layer fluxes carry (eddyTracers).
  */
-const mesh = buildMesh(new Grid(16)), { nCells: C, nEdges: E, latCell, latEdge } = mesh;
+const mesh = buildMesh(new Grid(16)), { nCells: C, nEdges: E, latCell, latEdge, fEdge, dcEdge, areaCell } = mesh;
 const DT = 1350, DEGREE = Math.PI / 180;
 const latitudes = (degrees) => ({ nCells: degrees.length, latCell: Float64Array.from(degrees, (d) => d * DEGREE) });
 
@@ -132,4 +134,78 @@ test('shearCutoff reaches the ocean\'s column phase: under a sheared surface cur
     if (cut.viscosity[n] < base.viscosity[n] * (1 - 1e-6)) less++;
   }
   assert.ok(less > 0, 'the cutoff changed no viscosity');
+});
+
+test('taperLatitude scales the restratification by |f|/√(f² + f_t²): none without it, half at the equator\'s first edges of a wide taper, 1/√2 at the taper latitude', () => {
+  const plain = restratificationScale(mesh, restratificationOptions(true)), radii = deformationRadii(mesh);
+  for (let e = 0; e < E; e++) assert.equal(plain[e], 1 * Math.min(dcEdge[e], radii[e]) / 500);
+  const tapered = restratificationScale(mesh, restratificationOptions({ taperLatitude: 5 })), ft = 2 * mesh.omega * Math.sin(5 * DEGREE);
+  let equator = Infinity;
+  for (let e = 0; e < E; e++) {
+    const expected = Math.abs(fEdge[e]) / Math.sqrt(fEdge[e] ** 2 + ft ** 2);
+    assert.ok(Math.abs(tapered[e] / plain[e] - expected) < 1e-12, `edge ${e}: ${tapered[e] / plain[e]} against ${expected}`);
+    equator = Math.min(equator, Math.abs(latEdge[e]));
+  }
+  const at = (degrees) => { const f = 2 * mesh.omega * Math.sin(degrees * DEGREE); return Math.abs(f) / Math.hypot(f, ft); };
+  assert.ok(Math.abs(at(5) - Math.SQRT1_2) < 1e-12 && at(30) > 0.98 && at(1) < 0.2);
+  assert.throws(() => restratificationOptions({ taperLatitude: -1 }), /taperLatitude/);
+  assert.throws(() => restratificationOptions({ taperLatitude: 90 }), /taperLatitude/);
+});
+
+test('limitedFaceValue is limitedEdgeValue on the cells\' values: the midpoint on a line, the upwind value at an extremum', () => {
+  const field = Float64Array.of(1, 2, 3, 2.5, 0.5);
+  for (const [up, down, uu] of [[1, 2, 0], [2, 1, 3], [3, 4, 2], [1, 0, 2], [3, 2, 4]]) {
+    const ratio = 1.3 / 1.1;
+    assert.ok(Math.abs(limitedFaceValue(field[up], field[down], field[uu], ratio) - limitedEdgeValue(field, up, down, uu, 1.1, 1.3)) < 1e-15);
+  }
+  assert.equal(limitedFaceValue(2, 3, 1, 1), 2.5);
+  assert.equal(limitedFaceValue(3, 2, 2.5, 1), 3);
+});
+
+function uniformFront(options) {
+  const ocean = createOcean(mesh, { everySteps: 1, iceDrift: false, eddyDiffusivity: 0, ...options }), L = ocean.layers;
+  ocean.initialize(new Float64Array(C).fill(288), new Float64Array(C));
+  for (let i = 0; i < C; i++) {
+    let top = 0;
+    for (let k = 0; k < L && top < 150; k++) { const n = k * C + i; ocean.Q[n] = ocean.h[n] * (288 + 4 * Math.tanh((latCell[i] - 0.8) / 0.12)); ocean.W[n] = ocean.h[n] * 35; top += ocean.h[n]; }
+  }
+  ocean.boundaryDepths.fill(100);
+  return ocean;
+}
+const columnHeat = (ocean) => Float64Array.from({ length: C }, (_, i) => { let s = 0; for (let k = 0; k < ocean.layers; k++) s += ocean.Q[k * C + i]; return s; });
+
+test('across a front uniform with depth the donor-cell eddy fluxes carry heat from the warm columns to the cold, the centered ones none, and the limited ones less than the donor\'s', () => {
+  const moved = {};
+  for (const eddyTracers of ['donor', 'third', 'centered']) {
+    const ocean = uniformFront({ eddyTracers, mixedLayerRestratification: { coefficient: 20 } }), before = columnHeat(ocean);
+    ocean.phases.eddy(DT);
+    const after = columnHeat(ocean);
+    let total = 0, warmed = 0, scale = 0;
+    for (let i = 0; i < C; i++) { const d = (after[i] - before[i]) * areaCell[i]; total += Math.abs(d); scale += Math.abs(before[i]) * areaCell[i]; if (latCell[i] < 0.8 && d > 0) warmed += d; }
+    moved[eddyTracers] = { total, warmed, scale };
+  }
+  console.log(`column heat moved across the front (m·K·m²): ${Object.entries(moved).map(([k, v]) => `${k} ${v.total.toExponential(3)}`).join(', ')}`);
+  assert.ok(moved.donor.warmed > 0, 'the donor-cell fluxes did not warm the cold side');
+  assert.ok(moved.centered.total < 1e-9 * moved.centered.scale, `the centered fluxes moved ${moved.centered.total}`);
+  assert.ok(moved.third.total < 0.5 * moved.donor.total, `the limited fluxes moved ${moved.third.total} against the donor's ${moved.donor.total}`);
+});
+
+test('under eddyTracers third and centered the eddy phase keeps water, heat and salt to rounding, the limited values every layer\'s temperature within its start\'s range and the centered ones within a kelvin of it, with the coefficient far too large', () => {
+  for (const eddyTracers of ['third', 'centered']) {
+    const ocean = uniformFront({ eddyTracers, eddyDiffusivity: 1000, mixedLayerRestratification: { coefficient: 4000 } }), L = ocean.layers;
+    const sums = () => { let v = 0, q = 0, w = 0; for (let n = 0; n < L * C; n++) { const a = areaCell[n % C]; v += a * ocean.h[n]; q += a * ocean.Q[n]; w += a * ocean.W[n]; } return { v, q, w }; };
+    const before = sums();
+    let low = Infinity, high = -Infinity;
+    for (let n = 0; n < L * C; n++) if (ocean.h[n] > 1e-6) { const t = ocean.Q[n] / ocean.h[n]; low = Math.min(low, t); high = Math.max(high, t); }
+    for (let n = 0; n < 200; n++) ocean.phases.eddy(DT);
+    const after = sums();
+    for (const name of ['v', 'q', 'w']) assert.ok(Math.abs(after[name] / before[name] - 1) < 1e-12, `${eddyTracers} ${name}: ${after[name] / before[name] - 1}`);
+    let lowAfter = Infinity, highAfter = -Infinity;
+    for (let n = 0; n < L * C; n++) if (ocean.h[n] > 0.1) { const t = ocean.Q[n] / ocean.h[n]; assert.ok(Number.isFinite(t)); lowAfter = Math.min(lowAfter, t); highAfter = Math.max(highAfter, t); }
+    console.log(`${eddyTracers}: layer temperatures ${low.toFixed(3)}-${high.toFixed(3)} K before, ${lowAfter.toFixed(3)}-${highAfter.toFixed(3)} K after 200 eddy phases`);
+    const slack = eddyTracers === 'third' ? 1e-9 : 1;
+    assert.ok(lowAfter > low - slack && highAfter < high + slack, `${eddyTracers}: ${lowAfter}-${highAfter} K from ${low}-${high} K`);
+  }
+  assert.throws(() => createOcean(mesh, { eddyTracers: 'upwind' }), /eddyTracers is one of/);
+  assert.throws(() => createOcean(mesh, { eddyTracers: 'third', tracerAdvection: 'upwind' }), /beyond cells/);
 });

@@ -248,7 +248,13 @@ export function backgroundDiffusivities(mesh, shape, kappa, equatorial) {
  * carries Ψ(top) − Ψ(bottom) from a to b, which sends light water over
  * dense, with the donor's temperature and salinity. H is the boundary
  * depth of the column physics run through a mean that jumps to a deeper
- * depth at once and relaxes to a shallower one over decayDays.
+ * depth at once and relaxes to a shallower one over decayDays. A
+ * taperLatitude φ_t scales Ψ by |f|/√(f² + f_t²), f_t = 2Ω sin φ_t, which
+ * goes to zero at the equator: the change in Fox-Kemper et al.'s (2011)
+ * scaling when the front's width follows the mixed layer's deformation
+ * radius NH/|f| (Fox-Kemper, Ferrari and Hallberg 2008) where |f| < f_t
+ * instead of holding at Lf. MOM6's OM4 form has no taper: its τ tends to
+ * H/(2κπ²u*) as f → 0.
  */
 export const RESTRATIFICATION = { coefficient: 1, frontLength: 500, decayDays: 30 };
 export const RESTRATIFICATION_VON_KARMAN = 0.41, RESTRATIFICATION_PI_SQUARED = 9.8696, RESTRATIFICATION_USTAR_MIN = 1e-6, RESTRATIFICATION_NEGLECT = 1e-9;
@@ -256,7 +262,15 @@ export function restratificationOptions(option) {
   if (!option) return null;
   const o = { ...RESTRATIFICATION, ...(option === true ? {} : option) };
   if (!(o.coefficient > 0) || !(o.frontLength > 0) || !(o.decayDays >= 0)) throw new Error(`mixedLayerRestratification takes a positive coefficient and frontLength and a non-negative decayDays, not ${o.coefficient}, ${o.frontLength} and ${o.decayDays}`);
+  if (o.taperLatitude !== undefined && !(o.taperLatitude >= 0 && o.taperLatitude < 90)) throw new Error(`mixedLayerRestratification's taperLatitude is a latitude from 0 to 90 degrees, not ${o.taperLatitude}`);
   return o;
+}
+export function restratificationScale(mesh, restrat) {
+  const { dcEdge, fEdge, omega } = mesh, taper = restrat.taperLatitude > 0 ? 2 * omega * Math.sin(restrat.taperLatitude * Math.PI / 180) : 0;
+  return Float64Array.from(deformationRadii(mesh), (radiusE, e) => {
+    const scale = restrat.coefficient * Math.min(dcEdge[e], radiusE) / restrat.frontLength;
+    return taper > 0 ? scale * Math.abs(fEdge[e]) / Math.hypot(fEdge[e], taper) : scale;
+  });
 }
 export function restratificationShape(s) {
   const x = 2 * s + 1, x2 = x * x;
@@ -320,10 +334,26 @@ export function beyondCells(mesh) {
  * the upwind one holds no water in the layer.
  */
 export const TRACER_ADVECTIONS = ['upwind', 'third'], EDGE_TRANSPORTS = ['remapped', 'kept'], SHEAR_DIFFUSIVITY = 0.2, HYCOM_DIFFUSION_SPEED = 0.005;
+export const EDDY_TRACERS = ['donor', 'third', 'centered'];
 export function limitedEdgeValue(field, up, down, uu, dUp, dCentral) {
   const phiU = field[up], central = field[down] - phiU;
   if (central === 0) return phiU;
   const r = (phiU - field[uu]) * dCentral / dUp / central;
+  return phiU + 0.5 * Math.max(0, Math.min(2 * r, (2 + r) / 3, 2)) * central;
+}
+
+/*
+ * limitedEdgeValue on the values themselves, `ratio` being dCentral/dUp.
+ * Under eddyTracers 'third' or 'centered' an eddy-phase layer flux carries
+ * this value or the two cells' mean, moved toward the donor's own in
+ * proportion to the share of the donor's allowance the flux takes, so that
+ * a layer the flux nearly drains keeps a bounded value; under 'donor' it
+ * carries the donor's.
+ */
+export function limitedFaceValue(phiU, phiD, phiUU, ratio) {
+  const central = phiD - phiU;
+  if (central === 0) return phiU;
+  const r = (phiU - phiUU) * ratio / central;
   return phiU + 0.5 * Math.max(0, Math.min(2 * r, (2 + r) / 3, 2)) * central;
 }
 
@@ -505,7 +535,7 @@ export function createOcean(mesh, {
   backgroundLatitude = 'uniform', equatorialDiffusivity = 1e-6,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
-  iceDrift = false, mixedLayerRestratification = true,
+  iceDrift = false, mixedLayerRestratification = true, eddyTracers = 'donor',
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -524,6 +554,8 @@ export function createOcean(mesh, {
   const advection = tracerAdvection;
   if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
   if (!EDGE_TRANSPORTS.includes(edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${edgeTransport}`);
+  if (!EDDY_TRACERS.includes(eddyTracers)) throw new Error(`eddyTracers is one of ${EDDY_TRACERS.join(', ')}, not ${eddyTracers}`);
+  if (eddyTracers === 'third' && advection !== 'third') throw new Error("eddyTracers 'third' reads the beyond cells of tracerAdvection 'third'");
   const beyond = advection === 'third' ? beyondCells(mesh) : null;
   const shearDiffusion = shearDiffusivity;
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
@@ -546,7 +578,7 @@ export function createOcean(mesh, {
   const nu4 = closureCoefficient(spacing, closureHours, closureSpacing);
   const restrat = restratificationOptions(mixedLayerRestratification);
   const eddyKappa = eddyDiffusivities(mesh, eddyDiffusivity), eddyLimit = eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0, eddyFirst = restrat ? 0 : 1;
-  const restratScale = restrat ? Float64Array.from(deformationRadii(mesh), (radiusE, e) => restrat.coefficient * Math.min(dcEdge[e], radiusE) / restrat.frontLength) : null;
+  const restratScale = restrat ? restratificationScale(mesh, restrat) : null;
   let eddy = null;
 
   const { water, cellOcean, shelf, cellOpen, draft } = oceanCells(C, geography);
@@ -1032,7 +1064,27 @@ export function createOcean(mesh, {
       for (let k = eddyFirst; k < L; k++) eddyFlux[k * E + e] = scale * classFlux[k];
     }
   }
+  const carried = new Float64Array(2);
+  function eddyEdgeValues(k, e, f, dt) {
+    const side = f > 0 ? 0 : 1, up = cellsOnEdge[2 * e + side], down = cellsOnEdge[2 * e + 1 - side], u = at(k, up), d = at(k, down);
+    let T = Q[u] / h[u], S = W[u] / h[u];
+    if (h[d] > 1e-6) {
+      const Td = Q[d] / h[d], Sd = W[d] / h[d];
+      let Tl = T, Sl = S;
+      if (eddyTracers === 'centered') { Tl = 0.5 * (T + Td); Sl = 0.5 * (S + Sd); } else {
+        const uu = beyond.cell[2 * e + side];
+        if (uu >= 0 && cellOcean[uu] && h[at(k, uu)] > 1e-6) {
+          const ratio = dcEdge[e] / dcEdge[beyond.edge[2 * e + side]], n = at(k, uu);
+          Tl = limitedFaceValue(T, Td, Q[n] / h[n], ratio); Sl = limitedFaceValue(S, Sd, W[n] / h[n], ratio);
+        }
+      }
+      const allowance = (Math.max(0, h[u] - EPS) + EDDY_SLACK) * areaCell[up] / (nEdgesOnCell[up] * dt), blend = Math.max(0, 1 - Math.abs(f) / allowance);
+      T += blend * (Tl - T); S += blend * (Sl - S);
+    }
+    carried[0] = T; carried[1] = S;
+  }
   function eddyCells(from, to) {
+    const dt = params[1];
     for (let i = from; i < to; i++) {
       for (let k = 0; k < L; k++) { const n = at(k, i); eddyVolume[n] = 0; eddyHeat[n] = 0; eddySalt[n] = 0; }
       if (!cellOcean[i]) continue;
@@ -1042,7 +1094,9 @@ export function createOcean(mesh, {
           const f = eddyFlux[k * E + e];
           if (f === 0) continue;
           const d = at(k, f > 0 ? a : b), n = at(k, i);
-          eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * Q[d] / h[d]); eddySalt[n] += sign * (f * W[d] / h[d]);
+          if (eddyTracers === 'donor') { eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * Q[d] / h[d]); eddySalt[n] += sign * (f * W[d] / h[d]); continue; }
+          eddyEdgeValues(k, e, f, dt);
+          eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * carried[0]); eddySalt[n] += sign * (f * carried[1]);
         }
       }
     }

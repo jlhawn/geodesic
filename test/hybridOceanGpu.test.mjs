@@ -140,6 +140,8 @@ test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not 
 test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));
 test(`${TRACKING}, with backgroundLatitude equatorial`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, backgroundLatitude: 'equatorial' }));
 test(`${TRACKING}, with shearViscosity 5e-3 and shearCutoff 0.7`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, shearViscosity: 5e-3, shearCutoff: 0.7 }));
+test(`${TRACKING}, with eddyTracers third and mixedLayerRestratification taperLatitude 5`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, eddyTracers: 'third', mixedLayerRestratification: { coefficient: 50, taperLatitude: 5 } }));
+test(`${TRACKING}, with eddyTracers centered and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...RESTRAT, eddyTracers: 'centered' }));
 
 /*
  * What each phase of the GPU hybrid step changes of the stores' heat
@@ -224,6 +226,7 @@ async function conservation(options) {
 const CONSERVATION = 'in single precision the GPU hybrid ocean keeps the heat, salt and water it stores through the regrid and the column physics to the stores\' rounding, and through the other phases of its step';
 test(CONSERVATION, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(HYBRID));
 test(`${CONSERVATION}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(RESTRAT));
+test(`${CONSERVATION}, with mixedLayerRestratification and eddyTracers third`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation({ ...RESTRAT, eddyTracers: 'third' }));
 
 test('the GPU hybrid ocean keeps a brackish band\'s fixed-depth surface layers as the CPU does and tracks it over five steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const brackish = (lat) => (Math.abs(lat) < 0.35 ? 12 : 34.5);
