@@ -143,7 +143,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
+for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics to within 0.02 W/m² on average`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
@@ -194,7 +194,7 @@ for (const [label, build] of [['over a slab', spunUp], ['over a slab with berger
 });
 
 const terrain = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-test("in double precision over the real terrain at N=16, twelve hours from initializeState over a slab, the CPU's RK4 dynamics keeps the energy with the column's φ_s π/g within its truncation, and 'vanLeerWater' within 1 % of a watt of 'centered'", () => {
+test("in double precision over the real terrain at N=16, twelve hours from initializeState over a slab, the CPU's RK4 dynamics keeps the energy with the column's φ_s π/g to within 0.05 W/m² on average, and 'vanLeerWater' within 1 % of a watt of 'centered'", () => {
   const rates = {};
   for (const verticalAdvection of ['centered', 'vanLeerWater']) {
     const model = createModel(new Grid(N), { ...OPTIONS, topography: terrain, dynamics: { verticalAdvection } });
