@@ -26,7 +26,8 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * by group ({ radiation, moist, land }), which the page's model starts with;
  * `given`, every option group the run was given, and `terrainOptions`, its
  * terrain's options (see terrainOptions in geography.module.js), are the
- * scripts' records, which the page does not read.
+ * scripts' records, of which the page reads only the terrain
+ * (savedTerrain) and builds its model's surface on it.
  */
 export function stateName(file) {
   return file.replace(/(?:\.json(?:\.gz)?|\.parts\.json|\.bin(?:\.gz)?)$/, '');
@@ -87,6 +88,12 @@ export function savedLevels(saved) {
  */
 const GROUPS = ['ocean', 'land', 'means'], F64 = ['levels', 'ocean.densities', 'ocean.shelfLoad', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum'];
 const RECORDS = ['grid', 'options', 'given', 'terrainOptions'];
+
+/*
+ * The terrain options a state's header records, undefined when it records
+ * none (the default terrain).
+ */
+export const savedTerrain = (header) => header.given?.terrain ?? header.terrainOptions;
 const isF64 = (name) => F64.includes(name) || /^means\.\w+Sum$/.test(name);
 const isNames = (value) => Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string');
 const isArray = (value) => (ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer) && !isNames(value);
