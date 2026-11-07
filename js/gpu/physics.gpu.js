@@ -2726,7 +2726,7 @@ const MID_LEVEL_PLUME = [
     source = kb; sourceBottom = kb; mass = layerDp(pi, kb); sourceS = env.x; sourceQ = env.y; rooted = false; middle = true;
   }
 `],
-  ['epsilon = IFS_EPS * (IFS_RH - rh) * ratio * ratio * ratio;', 'epsilon = IFS_EPS * select(1.0, MID_FE, middle) * (IFS_RH - rh) * ratio * ratio * ratio;'],
+  ['epsilon = IFS_EPS * (IFS_RH - rh) * ratio * ratio * ratio; }\n', 'epsilon = IFS_EPS * select(1.0, MID_FE, middle) * (IFS_RH - rh) * ratio * ratio * ratio; }\n      if (middle) { detrained = select(0.0, epsilon * (IFS_DRH - rh), mixes); }\n'],
   ['PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }', 'PL_BY_DEPTH))) { if (middle) { return 0.0; } return cumulusColumn(i, pi, dt); }'],
   ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
   if (middle) {

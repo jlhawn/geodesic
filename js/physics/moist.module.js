@@ -378,6 +378,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * up, as cuascn.F90's type-3 cancellations do), departs with its own s_l
  * and q_t
  * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
+ * detraining that rate times (1.6 − RH) as the IFS code's types 2 and 3 do,
  * with eq. 6.31's base flux max(−π σ̇/g at its cloud base, (H + L E)/(g
  * z_base)), z_base the cloud base's height above the ground. With
  * `plumeDeparture` 'elevated' (IFS Cy41r2 Part IV
@@ -1420,6 +1421,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         envHumidity[k] = humidity;
         plumeDetrained[k] = mixes ? IFS_ENTRAINMENT.detrainment * (IFS_ENTRAINMENT.detrainmentHumidity - humidity) : 0;
         epsilon = mixes && below > 0 ? IFS_ENTRAINMENT.entrainment * (middle ? MID_LEVEL.entrainment : 1) * (IFS_ENTRAINMENT.humidity - humidity) * (saturated.qs / baseSaturation) ** IFS_ENTRAINMENT.scaleExponent : 0;
+        if (middle) plumeDetrained[k] = mixes ? epsilon * (IFS_ENTRAINMENT.detrainmentHumidity - humidity) : 0;
         mixing = IFS_ENTRAINMENT.drag * (epsilon > 0 ? epsilon : plumeDetrained[k]);
       } else {
         epsilon = mixes ? Math.max(plumeEntrainmentFloor, plumeEntrainment * Math.max(0, below) / w2) : 0;

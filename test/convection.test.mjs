@@ -1809,7 +1809,7 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
     const before = budget(model, 0);
     moist.adjust(model.state, 0, 1, dt);
     const after = budget(model, 0), source = Array.from({ length: K }, (_, k) => k).find((k) => Math.abs(pi[0] * dSigma[k] - moist.deep.sourceMass) < 1e-12 * moist.deep.sourceMass);
-    return { deep: { ...moist.deep }, rain: moist.rain[0], before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, g };
+    return { deep: { ...moist.deep }, rain: moist.rain[0], entrained: Float64Array.from(moist.plumeEntrained), detrained: Float64Array.from(moist.plumeDetrained), before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, g };
   };
   const same = (a, b) => a.state.every((x, n) => x.every((v, j) => v === b.state[n][j]));
   const off = run({}), on = run({ midLevelConvection: true }), g = on.g;
@@ -1819,6 +1819,8 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   assert.ok(on.height > 800 && on.height < 3000 && on.deep.cape > 0 && on.rain > 0, `the plume departs ${on.height} m above the lowest layer with CAPE ${on.deep.cape} J/kg and rain ${on.rain} kg/m²`);
   const lifted = run({ midLevelConvection: true }, { profile: (k) => (k === on.deep.base ? 0.05 : -0.2) });
   assert.ok(lifted.deep.midLevel && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14 && lifted.height > on.height, `with no ascent at its cloud base the lowest candidate gives way to the next one up: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
+  const mixing = Array.from({ length: on.deep.base - on.deep.top }, (_, n) => on.deep.top + n).filter((k) => on.entrained[k] > 0);
+  assert.ok(mixing.length >= 3 && mixing.every((k) => on.detrained[k] >= 0.6 * on.entrained[k] * (1 - 1e-12) && on.detrained[k] <= 1.6 * on.entrained[k] * (1 + 1e-12)), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(3)).join(' ')}`);
   assert.ok(!same(on, off), 'the mid-level plume moves the column');
   assert.ok(Math.abs(on.after.enthalpy - on.before.enthalpy) < 1e-12 * on.before.enthalpy, `enthalpy ${on.before.enthalpy} → ${on.after.enthalpy}`);
   assert.ok(Math.abs(on.after.water + on.rain - on.before.water) < 1e-12 * on.before.water, `water ${on.before.water} → ${on.after.water} + ${on.rain}`);
