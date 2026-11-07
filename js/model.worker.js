@@ -284,6 +284,7 @@ function placeDeck(model, saved, N) {
   for (const name of Object.keys(RADIATION_FIELDS)) model.radiation[name].set(savedRadiationField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   placeCumulus(model, saved && saved.N === N ? saved : null);
   if (model.skin) model.skin.load(saved && saved.N === N ? saved : null);
+  placeBoundaryLayer(model, saved && saved.N === N ? saved : null);
 }
 
 /*
@@ -723,4 +724,15 @@ async function start(message) {
   self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   refresh();
   sourceModel = null;
+}
+
+function placeBoundaryLayer(model, saved) {
+  const layer = model.boundaryLayer, ground = model.gpu ? null : model.surfaceGeopotential;
+  if (!saved || !layer) return;
+  for (const [name, field, height] of [['boundaryDepth', 'depth', true], ['mixingTop', 'mixingTop', true], ['boundaryRegime', 'regime', false]]) {
+    const value = saved[name], target = layer[field];
+    if (!value || !target || value.length !== target.length) continue;
+    target.set(value);
+    if (height && ground) for (let i = 0; i < target.length; i++) target[i] += ground[i] / model.core.diagnostics.g;
+  }
 }
