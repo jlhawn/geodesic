@@ -2880,6 +2880,12 @@ const SHALLOW_RETYPE = [['  if (!typed) { return cumulusColumn(i, pi, dt); }\n',
 `], ['  if (!cloudy || top < 1 || !(PL_PARCEL ||', '  if (deepened && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||'],
   ['upS = select(belowS / belowMass, sourceS, PL_LOWEST); upQ = select(belowQ / belowMass, sourceQ, PL_LOWEST);', 'upS = select(belowS / belowMass, sourceS, select(PL_LOWEST, CU_LOWEST, deepened)); upQ = select(belowQ / belowMass, sourceQ, select(PL_LOWEST, CU_LOWEST, deepened));']];
 export const shallowPlumeRetype = (body) => SHALLOW_DEPTH_WGSL + replaceOnce(SHALLOW_RETYPE, body, 'shallow re-typing');
+const SENT_BACK = [
+  ['  var deepened = false;\n  if (!typed && lcl.y', '  for (var retypePass = 0; retypePass < 2; retypePass++) {\n  var deepened = false;\n  if (retypePass == 0 && !typed && lcl.y'],
+  ['DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||', 'DEEP_DEPTH)) { typed = false; continue; }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||'],
+  ['  cuShallowRain = shallowRain;\n  return fallen;\n}\nfn staticEnergy(', '  cuShallowRain = shallowRain;\n  return fallen;\n  }\n  return 0.0;\n}\nfn staticEnergy('],
+];
+export const sentBackMidLevel = (body, retype = false) => replaceOnce(retype ? [...SENT_BACK, ['if (PL_RETYPE && !middle && cloudy && top >= 1', 'if (PL_RETYPE && !middle && !deepened && cloudy && top >= 1']] : SENT_BACK, body, 'mid-level after the depth rule');
 export function midLevelPlume(body, retype = false) {
   const text = replaceOnce(MID_LEVEL_PLUME, body, 'mid-level');
   return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)}; const MID_BUOYANCY: f32 = ${wgslFloat(MID_LEVEL.buoyancy)};\n` + (retype ? replaceOnce([[RETYPE_TEST, 'if (PL_RETYPE && !middle && cloudy && top >= 1']], text, 'mid-level retype exemption') : text);

@@ -1560,7 +1560,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   const threshold = new Set();
   const typedAtEdge = new Set();
   const departure = new Int16Array(C).fill(-1);
-  let midLevel = 0, deepened = 0, continued = 0;
+  let midLevel = 0, deepened = 0, continued = 0, sentBack = 0;
   const continuedColumns = [];
   const downdraftAtEdge = new Set(), { cp, exnerLayer } = core.diagnostics, phiLayer = core.diagnostics.geopotential;
   for (let i = 0; i < C; i++) {
@@ -1572,6 +1572,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     departure[i] = moist.deep.departure;
     if (moist.deep.midLevel) midLevel++;
     if (moist.deep.deepened) deepened++;
+    if (moist.deep.deepened && moist.deep.midLevel) sentBack++;
     if (moist.deep.deepened && needsContinuation(moist.deep, pi[i], core.diagnostics.levels, core.diagnostics.sigmaMid)) { continued++; continuedColumns.push(i); }
     const { start, top, base } = moist.deep;
     if (start >= 0) {
@@ -1703,7 +1704,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     const plumed = moist.cumulusBaseFlux[i] > 0 && pi[i] * sigmaMid[k] >= moist.cumulusTop[i];
     if (!plumed && Math.max(below ? (regime[i] === COUPLED_REGIME ? 1 : 0) : stratiform[i], iced) > 0) shared[k * C + i] = 1;
   }
-  return { midLevel, deepened, continued, continuedLeftOut, continuedApart, cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared, largeScale: Float64Array.from(moist.largeScalePrecipitation), gpuLargeScale: Float64Array.from(ph.COND.subarray(0, C)) };
+  return { midLevel, deepened, continued, continuedLeftOut, continuedApart, sentBack, cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared, largeScale: Float64Array.from(moist.largeScalePrecipitation), gpuLargeScale: Float64Array.from(ph.COND.subarray(0, C)) };
 }
 
 test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, carried through non-buoyant layers by its w² and entraining at 1/z, shut where the EIS of its column passes stratocumulusInversion, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -2212,6 +2213,38 @@ test("with shallowRetype a re-typed deep plume feeds its stack below the source 
   }
   console.log(`  ${compared} columns re-type under both plumeSource values, ${fed} of them firing from a stack of more than one layer`);
   assert.ok(fed > 0, `${compared} columns re-type under both, ${fed} of them firing from a stack of more than one layer`);
+});
+test("with shallowRetype and midLevelConvection a column re-typed deep whose own deep cloud the depth rule finds shallow tries the mid-level type, stepping as without shallowRetype where a shallow plume closed at 1e-9 does not rise", () => {
+  const dt = 900;
+  const step = (options) => {
+    const model = createModel(new Grid(16), { ocean: false, levels, moist: { ...LIGHT_CUMULUS, cumulusClosure: 1e-9, midLevelConvection: true, ...options } }), C = model.mesh.nCells, { moist, core } = model, { K } = core.diagnostics;
+    randomColumns(model);
+    let seed = 777;
+    const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.omega[k * C + i] = 0.6 * random() - 0.4;
+    const [pi, theta, , , q, qc] = model.state, columns = [];
+    for (let i = 0; i < C; i++) {
+      core.diagnoseColumn(i, pi, theta, q, qc);
+      moist.plumeColumn(i, pi, theta, q, qc, dt);
+      columns.push({ ...moist.deep });
+    }
+    return { state: model.state, columns, C };
+  };
+  const both = step({ shallowRetype: true }), alone = step({}), C = both.C;
+  let fired = 0, sentBack = 0, apart = 0;
+  for (let i = 0; i < C; i++) {
+    const d = both.columns[i];
+    if (d.deepened && d.deep && !d.midLevel) { fired++; continue; }
+    if (d.deepened && d.midLevel) sentBack++;
+    if (!both.state.every((a, n) => { for (let x = i; x < a.length; x += C) if (a[x] !== alone.state[n][x]) return false; return true; })) apart++;
+  }
+  console.log(`random columns under a random omega with midLevelConvection: with shallowRetype too ${fired} run the re-typed deep plume and ${sentBack} are sent back by the depth rule and convect at mid-level; ${apart} of the other columns step otherwise than without shallowRetype`);
+  assert.ok(sentBack > 0 && apart === 0, `${fired} run the re-typed deep plume, ${sentBack} sent back convect at mid-level, ${apart} of the others step otherwise than without shallowRetype`);
+});
+test("with midLevelConvection and shallowRetype the engines agree on random columns under a random large-scale ascent, where columns sent back by the depth rule try the mid-level type under a shallow plume closed at 1e-9", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { midLevel, deepened, sentBack } = await parity({ midLevelConvection: true, shallowRetype: true, ...LIGHT_CUMULUS, cumulusClosure: 1e-9 }, { ascent: true });
+  console.log(`under midLevelConvection and shallowRetype: ${midLevel} columns convect at mid-level on the CPU, ${deepened} re-type deep, ${sentBack} of them sent back by the depth rule to convect at mid-level`);
+  assert.ok(midLevel >= 50 && sentBack > 0, `${midLevel} columns convect at mid-level, ${sentBack} of them sent back by the depth rule`);
 });
 test("with shallowRetype the column of the N=64 page state at 30N (seventeen64 day 365, column 13676, after two steps), whose shallow parcel first holds condensate at 539 hPa, is not re-typed: its w² from the closure's velocity scale vanishes below that layer", () => {
   const [off, on] = [false, true].map((deepen) => replayPageColumn(PAGE_COLUMN_13676, deepen));

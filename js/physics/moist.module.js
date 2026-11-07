@@ -373,8 +373,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * there it restarts at `plumeVelocity`² as the shallow plume's does, and
  * the cloud runs to the last interface the ascent passes. Where the deep
  * plume's own cloud is then no deeper than DEEP_CLOUD_DEPTH, the column
- * keeps its shallow plume. With `midLevelConvection` (default
- * false) a column that no
+ * keeps its shallow plume, and with `midLevelConvection` tries the
+ * mid-level type as a column the test parcels leave shallow does. With
+ * `midLevelConvection` (default false) a column that no
  * test parcel types deep and whose shallow plume does not rise tries the
  * mid-level type (IFS Cy41r2 Part IV §6.4.3): the lowest layer, from the
  * second lowest up, whose midpoint lies within MID_LEVEL.height (10 km) of
@@ -1350,7 +1351,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
    * convectiveFall holds each layer's share of it and convectiveReserve
    * what must still fall past each layer for the downdraft below it.
    */
-  function plumeColumn(i, pi, theta, q, qc, dt, u = null) {
+  function plumeColumn(i, pi, theta, q, qc, dt, u = null, retype = true) {
     const bottom = K - 1;
     convectiveFall.fill(0); convectiveReserve.fill(0);
     if (mixedPlume) { convectiveFrozen.fill(0); convectiveMelted.fill(0); }
@@ -1405,7 +1406,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       deep.typeMargin = margin;
     }
     let middle = false, deepened = false;
-    if (!typed && deepening && lcl && lcl.pressure > pi[i] * levels[1]) {
+    if (!typed && deepening && retype && lcl && lcl.pressure > pi[i] * levels[1]) {
       deep.shallowDepth = shallowCloudDepth(i, pi, theta, q, qc);
       if (deep.shallowDepth > 0) deep.typeMargin = Math.min(deep.typeMargin, Math.abs(deep.shallowDepth - DEEP_CLOUD_DEPTH) / DEEP_CLOUD_DEPTH);
       deepened = deep.deepened = deep.shallowDepth > DEEP_CLOUD_DEPTH;
@@ -1518,7 +1519,13 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (((retyped && !middle) || deepened) && cloudy && top >= 1) {
       const depth = pi[i] * (levels[base] - levels[top + 1]);
       deep.typeMargin = Math.min(deep.typeMargin, Math.abs(depth - DEEP_CLOUD_DEPTH) / DEEP_CLOUD_DEPTH);
-      if (!(depth > DEEP_CLOUD_DEPTH)) { if (plumeExits) traceExit(i, 5, pi[i] * levels[top]); return cumulusColumn(i, pi, theta, q, qc, dt); }
+      if (!(depth > DEEP_CLOUD_DEPTH)) {
+        if (plumeExits) traceExit(i, 5, pi[i] * levels[top]);
+        if (!(deepened && midLevel)) return cumulusColumn(i, pi, theta, q, qc, dt);
+        const kept = [deep.shallowDepth, deep.shallowBase, deep.shallowReach, deep.typeMargin], rain = plumeColumn(i, pi, theta, q, qc, dt, u, false);
+        deep.deepened = true; deep.shallowDepth = kept[0]; deep.shallowBase = kept[1]; deep.shallowReach = kept[2]; deep.typeMargin = Math.min(deep.typeMargin, kept[3]);
+        return rain;
+      }
     }
     if (!cloudy || top < 1 || !(byParcel || (byDepth ? pi[i] * (levels[base] - levels[top]) > DEEP_CLOUD_DEPTH : levels[top] * DEEP_REFERENCE < shallowTop))) { if (plumeExits) traceExit(i, 5, top >= 1 ? pi[i] * levels[top] : 0); return middle ? 0 : cumulusColumn(i, pi, theta, q, qc, dt); }
     clearCumulus(i);
