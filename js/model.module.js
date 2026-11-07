@@ -1,6 +1,6 @@
 import { buildMesh } from './mesh.module.js';
 import { createEnergyRecord } from './physics/energyRecord.module.js';
-import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, dynamicsOptions } from './dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, dynamicsOptions, VIRTUAL_FACTOR } from './dynamics/sigmaCore.module.js';
 import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from './dynamics/sponge.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
@@ -120,9 +120,10 @@ export function createModel(gridOrMesh, {
   const exchange = geography || rough ? createSurfaceExchange(mesh, core, { ...surfaceOptions, geography, vegetated: landOptions.vegetation !== false, mode, seaDrag: surfaceOptions.dragCoefficient ?? SEA_DRAG, landDrag: landOptions.dragCoefficient ?? LAND_DRAG, gustiness: surfaceOptions.gustiness ?? 3, buffers: buffers ? buffers.exchange : null }) : null;
   const dragCoefficients = exchange ? exchange.drag : null, heatCoefficients = exchange ? exchange.heat : null, gusty = !!(exchange && exchange.gusty);
   const aerosol = physics && climatologyOn(radiationOptions) ? createAerosolSampler(mesh, loadAerosol(radiationOptions.aerosolData)) : null;
-  const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, ...(aerosol ? { aerosolFields: aerosol.fields } : {}), ...(gusty ? { gustiness: 0 } : {}), exchangeCoefficients: heatCoefficients, referenceCoefficients: rough ? exchange.reference : null, surfaceLayer: rough, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, seaHumidity, ...radiationOptions });
+  const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, ...(aerosol ? { aerosolFields: aerosol.fields } : {}), ...(gusty ? { gustiness: 0 } : {}), virtualDensity: surfaceOptions.virtualDensity === true, exchangeCoefficients: heatCoefficients, referenceCoefficients: rough ? exchange.reference : null, surfaceLayer: rough, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, seaHumidity, ...radiationOptions });
   if (surfaceOptions.relativeWind && !implicitDrag) throw new Error('surface.relativeWind needs the implicit drag of the roughness exchange');
   const seaFlow = surfaceOptions.relativeWind ? new Float64Array(mesh.nEdges) : null;
+  const virtualBefore = surfaceOptions.virtualDensity === true ? new Float64Array(C).fill(1) : null;
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, heatCoefficients: rough ? heatCoefficients : null, surfaceBuoyancy: rough ? radiation.surfaceBuoyancy : null, surfaceHeat: rough ? radiation.sensibleHeat : null, surfaceEvaporation: rough ? radiation.evaporation : null, implicitDrag, formDrag, ...(gusty ? { surfaceWind: exchange.wind, gustiness: 0 } : {}), land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, deckLayer: radiation.deckInversion === 'subgrid' ? radiation.mlmLayer : null, deckShare: radiation.mlmShare, deckEntrainment: radiation.mlmEntrainment, stratiform: radiation.stratiform, longwave: radiation.longwave, openSea, seaHumidity, depositedHeat: radiation.sensibleHeat, depositedWater: moist ? radiation.evaporation : null, seaFlow, ...boundaryLayerOptions }) : null;
   if (boundaryLayer && boundaryLayer.turbulence === 'moist') radiation.useBoundaryLayer(boundaryLayer.regime, boundaryLayer.mixingTop, boundaryLayer.buoyancyFlux);
   const gravityWaves = physics && gravityWaveOptions !== false ? createGravityWaveDrag(mesh, core, { buffers: buffers ? buffers.gravityWaves : null, ...gravityWaveOptions }) : null;
@@ -229,12 +230,13 @@ export function createModel(gridOrMesh, {
       }
       radiation.apply(moist ? fluxState : dryFluxState, forcing, gusty ? exchange.wind : surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null, moist ? openSea : null, boundaryLayer ? boundaryLayer.depth : null, dt, callAlbedo);
       if (rough) for (let i = iFrom; i < iTo; i++) airBefore[i] = state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i];
+      if (virtualBefore && moist) for (let i = iFrom; i < iTo; i++) virtualBefore[i] = 1 + VIRTUAL_FACTOR * state[4][bottom + i];
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       const { surfaceShortwave, surfaceDirect, surfaceSolar } = radiation;
       for (let i = iFrom; i < iTo; i++) {
         if (land && landMask[i]) { land.update(i, state[3], radiation.surfaceFlux, radiation.evaporation[i], dt, rough ? airBefore[i] : state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i], radiation.potentialEvaporation[i]); continue; }
         if (lakeCell && lakeCell[i]) {
-          const airDensity = state[0][i] * core.diagnostics.sigmaMid[K - 1] / (core.diagnostics.R * (rough ? airBefore[i] : state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i]));
+          const airDensity = state[0][i] * core.diagnostics.sigmaMid[K - 1] / (core.diagnostics.R * (rough ? airBefore[i] : state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i]) * (virtualBefore ? virtualBefore[i] : 1));
           lake.step(i, state[3], state[6], seaIce.concentration, surfaceSolar[i], radiation.surfaceFlux[i] - surfaceSolar[i], Math.sqrt(airDensity / FLAKE.rhoWater * exchange.drag[i]) * exchange.wind[i], dt);
           lake.evaporate(i, radiation.evaporation[i], dt);
           if (seaSkin) seaSkin.clear(i);
@@ -244,7 +246,7 @@ export function createModel(gridOrMesh, {
         seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0, surfaceSolar[i]);
         if (seaSkin && (h > 0 || state[6][i] > 0)) seaSkin.clear(i);
         else if (seaSkin) {
-          const airDensity = state[0][i] * core.diagnostics.sigmaMid[K - 1] / (core.diagnostics.R * airBefore[i]);
+          const airDensity = state[0][i] * core.diagnostics.sigmaMid[K - 1] / (core.diagnostics.R * airBefore[i] * (virtualBefore ? virtualBefore[i] : 1));
           seaSkin.step(i, radiation.surfaceFlux[i] - surfaceSolar[i], surfaceSolar[i], Math.sqrt(exchange.drag[i]) * exchange.wind[i], airDensity, state[3][i], capacityOf(i), dt);
         }
       }

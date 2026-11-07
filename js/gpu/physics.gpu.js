@@ -2740,6 +2740,12 @@ export function relativeWindKernels({ physics, pblDiagnose, mixMomentum }) {
     ].reduce((body, [from, to]) => replacedOnce(body, from, to), mixMomentum),
   };
 }
+export function virtualDensityKernels(bodies) {
+  const anchor = '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);';
+  const names = Object.keys(bodies).filter((name) => typeof bodies[name] === 'string' && bodies[name].includes(anchor));
+  if (names.length === 0) throw new Error('virtualDensity: no kernel lays the surface flux\'s density');
+  return Object.fromEntries(names.map((name) => [name, replacedOnce(bodies[name], anchor, '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));')]));
+}
 export function boundaryLayerDiagnosis(body, { diagnoseFirst = false, surfaceExcess = 0 } = {}) {
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
   if (!body.includes(PBL_MAIN) || !body.includes(PBL_DEPTH)) throw new Error('pblDiagnose kernel text moved');
