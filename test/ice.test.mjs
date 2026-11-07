@@ -282,7 +282,7 @@ test('with a transmission, open water keeps the passing share of its absorbed su
   assert.equal(alone[0], water + dt * flux[0] / capacity[0], 'without a transmission all of the sunlight stays in the mixed layer');
 });
 
-for (const brineReservoir of [false, true]) test(`with iceLight${brineReservoir ? ' and brineReservoir' : ''} the surface energy${brineReservoir ? ', the brine counted,' : ''} changes by exactly the surface flux through a sunlit melt and a cold autumn${brineReservoir ? ', the brine ending each step at most half the latent heat of the ice, reaching it, and spent at the base against growth while the skin cools freely' : ''}`, () => {
+for (const brineReservoir of [false, true]) test(`with iceLight${brineReservoir ? ' and brineReservoir' : ''} the surface energy${brineReservoir ? ', the brine counted,' : ''} changes by exactly the surface flux through a sunlit melt and a cold autumn${brineReservoir ? ', the brine ending each step at most half the latent heat of the ice, reaching it, and drained in the cold' : ''}`, () => {
   const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir });
   const surfaceT = new Float64Array([FREEZING_POINT - 1]), ice = new Float64Array([1]), flux = new Float64Array(1), dt = 900;
   sea.load(ice);

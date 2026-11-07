@@ -1001,8 +1001,8 @@ to none under 20 kg/m² of snow; below the top 0.1 m it decays at
 1.5 m⁻¹, and of what reaches the base a layered ocean takes its
 transmitted share, the rest melting the ice from below. The part the
 ice absorbs on the way stays with the skin, unless `ice.brineReservoir`
-(which needs `iceLight`) holds it, while the skin is at the melting
-point, in Semtner's brine reservoir (`brine`, J/m² of ice, in the state
+(which needs `iceLight`) holds it, once the skin has reached the
+melting point and for as long as any is held, in Semtner's brine reservoir (`brine`, J/m² of ice, in the state
 file and carried by the drift): at most half the ice's latent heat at
 the end of a step, the rest melting ice. FMM97's eq. 9 (p. 12,613,
 after Semtner) spends the reservoir keeping the upper ice layer from
@@ -1016,10 +1016,17 @@ midpoint at h/4) is held at the melting point: the skin takes
 (T_m − T_skin)/(h/4k + snow's resistance) from it, the base sees
 (T_f − T_m)/(3h/4k) in place of the conduction through the whole slab,
 so the ice does not grow at its base, and the reservoir pays the
-difference, the last of it over part of a step. In idealized perennial
-columns this thickens the ice by 1.1 to 1.7 m over ten to thirty years
-against `iceLight` alone (FMM97's sign: latent storage thickens the
-ice), and seasonal ice by a few centimeters.
+difference, the last of it over part of a step. Eq. 9 stores the light
+from the start of the year; here nothing is stored in spring until the
+skin first reaches the melting point, so the gate needs no state beyond
+the brine itself. Over 30 years of idealized columns, an analytic
+seasonal forcing (F1) and a monthly Maykut–Untersteiner-like one (F2),
+with the sun scaled by 0.5 to 0.7, the seven perennial columns thicken
+against `iceLight` alone by 0.83 to 1.82 m (FMM97's sign: latent
+storage thickens the ice): F1 snow-covered 1.29, F1 bare 1.67, F2
+snow-covered 1.19 at sun 0.6 and 0.83 at 0.7 (where `iceLight` alone
+thins to 0.2 m), F2 bare 1.82 at 0.5 and 1.51 at 0.6, and F2 bare with
+a diurnal cycle 1.07. Ice that melts out every summer gains 4 to 6 cm.
 
 Ice covers a fraction A of its cell (`concentration`, a per-cell array
 beside the snow, in the state file and on the page), with the thickness
