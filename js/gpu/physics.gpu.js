@@ -2753,10 +2753,39 @@ export function virtualDensityKernels(bodies) {
   if (names.length === 0) throw new Error('virtualDensity: no kernel lays the surface flux\'s density');
   return Object.fromEntries(names.map((name) => [name, replacedOnce(bodies[name], anchor, '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));')]));
 }
-export function boundaryLayerDiagnosis(body, { diagnoseFirst = false, surfaceExcess = 0 } = {}) {
+const K_PROFILE_ANCHORS = [
+  ['fn blNonlocal(i: i32, pi: f32, zb: f32, h: f32, scale: f32, buoyancy: f32, friction: f32) {\n  if (!(buoyancy > 0.0) || !(h > 0.0)) { return; }\n',
+    'fn blNonlocal(i: i32, pi: f32, zb: f32, depthAbove: f32, scale: f32, buoyancy: f32, friction: f32, lift: f32) {\n  if (!(buoyancy > 0.0) || !(depthAbove > 0.0)) { return; }\n  let h = depthAbove + lift;\n'],
+  ['    let z = blInterface(k, i, zb);\n    if (z > 0.1 * h && z < h) { PH[PH_CG', '    let z = blInterface(k, i, zb) + lift;\n    if (z > 0.1 * h && z < h) { PH[PH_CG'],
+  ['  if (STABILITY && buoyancy > 0.0 && h > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN', '  let lift = blLift(i); let hp = h + lift;\n  if (STABILITY && buoyancy > 0.0 && h > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * hp * KARMAN'],
+  ['  if (BL_HB && STABILITY && buoyancy > 0.0 && h > 0.0) { scale = pow(friction * friction * friction + 0.6 * buoyancy * h, 1.0 / 3.0); prandtl = blPrandtl(h,', '  if (BL_HB && STABILITY && buoyancy > 0.0 && h > 0.0) { scale = pow(friction * friction * friction + 0.6 * buoyancy * hp, 1.0 / 3.0); prandtl = blPrandtl(hp,'],
+  ['    if (z < h) { diffusivity += KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h); }', '    if (z < h) { diffusivity += blProfile(z + lift, hp, scale, buoyancy, friction); }'],
+  ['  if (STABILITY && buoyancy > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN', '  let lift = blLift(i); let hp = h + lift;\n  if (STABILITY && buoyancy > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * hp * KARMAN'],
+  ['  if (BL_HB && STABILITY && buoyancy > 0.0) { scale = pow(friction * friction * friction + 0.6 * buoyancy * h, 1.0 / 3.0); prandtl = blPrandtl(h,', '  if (BL_HB && STABILITY && buoyancy > 0.0) { scale = pow(friction * friction * friction + 0.6 * buoyancy * hp, 1.0 / 3.0); prandtl = blPrandtl(hp,'],
+  ['    let diffusivity = KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h);', '    let diffusivity = blProfile(z + lift, hp, scale, buoyancy, friction);'],
+];
+function kProfile(body, { profileHeight, stableProfile, prandtlCoefficient }) {
+  const calls = body.split('blNonlocal(i, pi, zb, h, scale / prandtl, buoyancy, friction); }');
+  if (calls.length !== 3) throw new Error('pblDiagnose kernel text moved: the countergradient is not laid twice');
+  const helpers = `fn blLift(i: i32) -> f32 { ${profileHeight === 'ground' ? 'let base = (K - 1) * C + i; return CP * D[D_THV + base] * (D[D_EXL + base] - D[D_EXM + base]) / GRAV;' : 'return 0.0;'} }
+fn blProfile(z: f32, h: f32, scale: f32, buoyancy: f32, friction: f32) -> f32 {
+  let diffusivity = KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h);${stableProfile === 'holtslagBoville' ? `
+  if (!STABILITY || !(buoyancy < 0.0) || !(friction > 0.0)) { return diffusivity; }
+  let zeta = -KARMAN * z * buoyancy / (friction * friction * friction);
+  return diffusivity / select(5.0 + zeta, 1.0 + 5.0 * zeta, zeta <= 1.0);` : `
+  return diffusivity;`}
+}
+`;
+  return [...K_PROFILE_ANCHORS, ['fn blPrandtl(', `${helpers}fn blPrandtl(`], ['+ 7.2 * KARMAN * 0.1 * pow(buoyancy * h, 1.0 / 3.0) / mixed;', `+ ${Number(prandtlCoefficient).toExponential(9)} * KARMAN * 0.1 * pow(buoyancy * h, 1.0 / 3.0) / mixed;`]]
+    .reduce((text, [from, to]) => replacedOnce(text, from, to), calls.join('blNonlocal(i, pi, zb, h, scale / prandtl, buoyancy, friction, lift); }'));
+}
+export function boundaryLayerDiagnosis(body, { diagnoseFirst = false, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2 } = {}) {
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
+  if (profileHeight !== 'midpoint' && profileHeight !== 'ground') throw new Error(`profileHeight must be 'midpoint' or 'ground', not ${profileHeight}`);
+  if (stableProfile !== 'flat' && stableProfile !== 'holtslagBoville') throw new Error(`stableProfile must be 'flat' or 'holtslagBoville', not ${stableProfile}`);
+  if (!(prandtlCoefficient >= 0)) throw new Error(`prandtlCoefficient must be 0 or more, not ${prandtlCoefficient}`);
   if (!body.includes(PBL_MAIN) || !body.includes(PBL_DEPTH)) throw new Error('pblDiagnose kernel text moved');
-  let out = body;
+  let out = profileHeight !== 'midpoint' || stableProfile !== 'flat' || prandtlCoefficient !== 7.2 ? kProfile(body, { profileHeight, stableProfile, prandtlCoefficient }) : body;
   if (surfaceExcess > 0) out = out.replace(PBL_MAIN, `${pblExcess(Number(surfaceExcess).toExponential(9))}${PBL_MAIN}`).replace(PBL_DEPTH, `  depth = blExcessDepth(i, pi, depth, zb, friction, speed, bottomWind);\n${PBL_DEPTH}`);
   if (diagnoseFirst) out = out.replace(PBL_MAIN, 'fn blColumn(i: i32) {\n') + PBL_FIRST;
   return out;

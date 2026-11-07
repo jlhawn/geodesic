@@ -87,7 +87,6 @@ export async function createGpuModel(gridOrMesh, {
   const ageingOf = (options, key) => options[key] ?? (key === 'snowAgeing' ? true : SNOW_AGEING[key]);
   if (geography) for (const key of AGEING_OPTIONS) if (ageingOf(ice, key) !== ageingOf(landOptions, key)) throw new Error(`the GPU's land and sea ice share ${key}: ${ageingOf(landOptions, key)} on the land, ${ageingOf(ice, key)} on the ice`);
   if (geography && landOptions.latentHeatFusion !== undefined && landOptions.latentHeatFusion !== (ice.latentHeatFusion ?? 3.34e5)) throw new Error(`the GPU's land and sea ice share latentHeatFusion: ${landOptions.latentHeatFusion} on the land, ${ice.latentHeatFusion ?? 3.34e5} on the ice`);
-  if (surface.gustiness !== undefined && surface.gustiness !== 3) throw new Error(`surface.gustiness ${surface.gustiness} runs on the CPU only: the GPU's gust floor is 3 m/s`);
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
@@ -103,13 +102,13 @@ export async function createGpuModel(gridOrMesh, {
   const lidFriction = lidFrictionRates(levels, surface.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : surface.lidFriction);
   const oceanGeography = lakeCpu ? lakeWater(mesh, geography) : geography;
   const packing = oceanOptions === false ? null : oceanPacking(mesh, oceanGeography, { packed: oceanOptions.packed !== false });
-  const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), physics, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, spongeMeanRates: lidFriction, gravityWaves, surfaceGeopotential: phis, registerLength: packing ? oceanStateLength(packing.C, packing.E, oceanOptions) : 0, lake: !!lakeCpu });
+  const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), physics, gustiness: surface.gustiness ?? 3, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, spongeMeanRates: lidFriction, gravityWaves, surfaceGeopotential: phis, registerLength: packing ? oceanStateLength(packing.C, packing.E, oceanOptions) : 0, lake: !!lakeCpu });
   const seaIce = createSeaIce(mesh, { keepSmallIce: physics.keepSmallIce, ...ice });
-  const radiationCpu = createRadiation(mesh, core, { surfaceLayer: mode === 'roughness', ...radiation, radiationEvery: 1 });
+  const radiationCpu = createRadiation(mesh, core, { surfaceLayer: mode === 'roughness', ...(surface.gustiness !== undefined && !(exchange && exchange.gusty) ? { gustiness: surface.gustiness } : {}), ...radiation, radiationEvery: 1 });
   const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });
   const seaFlow = surface.relativeWind === true ? new Float64Array(mesh.nEdges) : null;
   const moistCpu = createMoistPhysics(mesh, core, { ...moist, stabilityLayer: radiationCpu.stabilityLayer });
-  const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography: oceanGeography, packing, registers: { T: gpu.buffers.T, K1: gpu.buffers.K1, K2: gpu.buffers.K2, K3: gpu.buffers.K3, K4: gpu.buffers.K4 } });
+  const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { iceDrift: COUPLED_ICE_DRIFT, gustiness: surface.gustiness ?? 3, ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography: oceanGeography, packing, registers: { T: gpu.buffers.T, K1: gpu.buffers.K1, K2: gpu.buffers.K2, K3: gpu.buffers.K3, K4: gpu.buffers.K4 } });
   if (gpuOcean) gpuOcean.useSeaIce(seaIce.concentration);
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;
   if (landCpu) gpu.hooks.landWeights = landCpu.weights;

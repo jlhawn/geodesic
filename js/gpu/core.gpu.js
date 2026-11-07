@@ -1040,7 +1040,7 @@ export async function createGpuCore(mesh, {
   if (phys.relativeWind && !(phys.surfaceExchange === 'roughness' && phys.implicitDrag)) throw new Error('relativeWind needs the implicit drag of the roughness exchange');
   if (phys.relativeWind) Object.assign(kernelBodies, relativeWindKernels(kernelBodies));
   if (phys.virtualDensity) Object.assign(kernelBodies, virtualDensityKernels(kernelBodies));
-  if (phys.diagnoseFirst || phys.surfaceExcess > 0) kernelBodies.pblDiagnose = boundaryLayerDiagnosis(kernelBodies.pblDiagnose, phys);
+  if (phys.diagnoseFirst || phys.surfaceExcess > 0 || (phys.profileHeight ?? 'midpoint') !== 'midpoint' || (phys.stableProfile ?? 'flat') !== 'flat' || (phys.prandtlCoefficient ?? 7.2) !== 7.2) kernelBodies.pblDiagnose = boundaryLayerDiagnosis(kernelBodies.pblDiagnose, phys);
   if (deepOn) kernelBodies.adjustRain = deepStoreRain(kernelBodies.adjustRain);
   if (lake) Object.assign(kernelBodies, lakeKernels(kernelBodies, { held: heldRadiation, skin: skinOn }));
   for (const [name, raw] of Object.entries(kernelBodies)) {
