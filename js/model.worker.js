@@ -500,7 +500,7 @@ const PROBE = { gpuN: 64, cpuN: 16, warmup: 4, steps: 12, cpuSteps: 3 };
 async function probe(message) {
   const result = { gpu: null, cpu: null }, gpuN = message.N ?? PROBE.gpuN;
   const topography = message.land === false ? null : await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href);
-  const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false, radiation: { aerosolData: await loadAerosolFile() } };
+  const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false, land: { start: 'neutral' }, radiation: { aerosolData: await loadAerosolFile() } };
   const prepare = async (test, N) => {
     for (const [a, values] of initialState(test, null, N).entries()) test.state[a].set(values);
     placeIce(test, null, N);
