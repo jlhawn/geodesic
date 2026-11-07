@@ -20,7 +20,7 @@ import { SOLAR_CONSTANT, AXIAL_TILT } from './radiation.module.js';
  * snow-free, it relaxes toward a goal set by how full the bucket is (0
  * below dryWetness of the capacity, 1 above wetWetness), over
  * growthTime when rising and declineTime when falling, and under snow it
- * decays toward 0 over snowDeclineTime. The snow-free albedo runs from
+ * decays toward 0 over snowDeclineTime, or with snowHold holds. The snow-free albedo runs from
  * the bare soil's to vegetatedAlbedo with v. With soilDarkening 'surface'
  * (the default) the bare soil darkens linearly with the surface layer's
  * fill, as Idso et al. (1975) found it darken with the water of the top
@@ -128,7 +128,8 @@ import { SOLAR_CONSTANT, AXIAL_TILT } from './radiation.module.js';
  * jump() sets its carbon and never its trees. With `coverGoal`
  * 'observed' the snow-free cover relaxes toward greenMax in place of
  * the bucket's fill, and the trees toward the lower of treeCover and the
- * cover, without the treeline and moisture factors; under snow they hold.
+ * cover, without the treeline and moisture factors; under snow the trees hold
+ * and the cover decays over snowDeclineTime unless snowHold.
  */
 export const DARKENING_WETNESS = { surface: [0, 1], rootZone: [0.2, 0.5] };
 export const TRACE_SNOW = 1e-6;
@@ -383,7 +384,7 @@ export function soilColumn({ soil = DEFAULT_SOIL, heatCapacity, soilDepths = SOI
 export function createLandSurface(mesh, geography, {
   heatCapacity: givenCapacity, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
   latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, rootZoneCapacity = 300, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
-  snowDeclineTime = 720 * 86400, iceSheetAlbedo = 0.8, iceSheetBalance = false, snowCap = 1000, bareIceAlbedo = 0.5, surfaceCapacity = 15, percolationTime = 86400, stomatalResistance = 70,
+  snowDeclineTime = 720 * 86400, snowHold = false, iceSheetAlbedo = 0.8, iceSheetBalance = false, snowCap = 1000, bareIceAlbedo = 0.5, surfaceCapacity = 15, percolationTime = 86400, stomatalResistance = 70,
   growthColdest = 278.15, growthWarmest = 288.15, soilDarkening = 'surface', wetSoilAlbedo = 0.15, darkeningWetness = null,
   snowAgeing = true, oldSnowAlbedo = 0.50, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
@@ -534,7 +535,7 @@ export function createLandSurface(mesh, geography, {
 
   function grow(i, dt, temperature) {
     if (onIceSheet(i)) { vegetation[i] = 0; canopy[i] = 0; snowFreeCover[i] = 0; return; }
-    if (snow[i] > 0) vegetation[i] *= Math.exp(-dt / snowDeclineTime);
+    if (snow[i] > 0) { if (!snowHold) vegetation[i] *= Math.exp(-dt / snowDeclineTime); }
     else {
       const cap = capacity(i);
       const goal = observedCover ? greenMax[i] : Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));

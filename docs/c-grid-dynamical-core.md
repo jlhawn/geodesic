@@ -5041,13 +5041,14 @@ The work, in order:
      holds the file, the resampling and the start, and
      `test/landStart.test.mjs` the engines' agreement at N = 16.
    - `coverGoal` ('water', the default, or 'observed'; `scripts/spinup.mjs`
-     gives 'observed' unless `LAND` says otherwise, a hold for spin-ups
+     gives 'observed' unless `LAND` says otherwise, a goal for spin-ups
      that the page never runs: a published state's cover follows the
      model's own water). 'observed'
      relaxes the snow-free cover toward `greenMax` in place of the
      bucket's fill (rising over `growthTime` at the warmth, falling over
      `declineTime`, decaying under snow over `snowDeclineTime`, all
-     unchanged) and the trees toward the lower of `treeCover` and the
+     unchanged, or holding under snow with `snowHold`, false by default)
+     and the trees toward the lower of `treeCover` and the
      cover over `treeGrowthTime` and `treeDeclineTime`, with neither the
      treeline nor the moisture factor, since the map holds both; under
      snow the trees hold. The GPU compiles the goal in and reads the

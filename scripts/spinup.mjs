@@ -85,12 +85,14 @@
 // with only the topsoil carbon held, at the neutral value;
 // '{"start":"neutral"}', '{"start":"bare"}' or '{"start":"green"}' hold
 // the trees and the carbon at those placeholders instead, see
-// START_CODES in js/physics/land.module.js; a spin-up holds the cover,
-// '{"coverGoal":"observed"}' unless LAND says otherwise, relaxing it
-// toward the observed green maximum and the trees toward the observed
-// tree cover in place of the bucket's fill and the treeline, a hold the
-// page never runs: '{"coverGoal":"water"}' lets the cover follow the
-// bucket as the page does), LAND_JUMPS (the
+// START_CODES in js/physics/land.module.js; a spin-up gives
+// '{"coverGoal":"observed"}' unless LAND says otherwise, relaxing the
+// snow-free cover toward the observed green maximum and the trees toward
+// the observed tree cover in place of the bucket's fill and the treeline,
+// a goal the page never runs; under snow the trees hold but the cover
+// decays over snowDeclineTime unless '{"snowHold":true}' is given;
+// '{"coverGoal":"water"}' lets the cover follow the bucket as the page
+// does), LAND_JUMPS (the
 // model days at whose end land.jump() sets every land cell's topsoil
 // carbon, and the trees unless the start was observed, to the
 // equilibrium of its own record and ends a fresh
