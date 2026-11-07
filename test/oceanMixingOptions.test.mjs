@@ -460,3 +460,87 @@ test('under isoneutralDiffusion the column takes the κS² diffusivity of the dy
   assert.ok(largest > 0 && miss < 1e-12 * largest, `the step's κS² parts from its stages' 1:2:2:1 mean by ${miss} of ${largest}`);
   assert.ok(apart > 1e-6 * largest, `the stages' κS² differ by only ${apart} of ${largest}`);
 });
+
+const SHELF_MINIMUM = 0.5;
+const shelfSea = (boundary) => {
+  const { lonCell, cellsOnEdge } = mesh, distance = Float64Array.from(latCell, (lat, i) => Math.acos(Math.min(1, Math.cos(lat) * Math.cos(lonCell[i]))) / DEGREE);
+  const land = Uint8Array.from(distance, (d) => (d < 7 ? 1 : 0)), elevation = Float64Array.from(distance, (d) => (d < 7 ? 100 : -Math.min(4000, 40 * 1.6 ** ((d - 7) / 4))));
+  const edgeOcean = Uint8Array.from({ length: E }, (_, e) => (land[cellsOnEdge[2 * e]] || land[cellsOnEdge[2 * e + 1]] ? 0 : 1));
+  const ocean = createOcean(mesh, { geography: { land, elevation, edgeOcean }, everySteps: 1, iceDrift: false, minimumLayer: SHELF_MINIMUM, isoneutralDiffusion: true });
+  ocean.initialize(Float64Array.from(latCell, (lat) => 271.5 + 30 * Math.cos(lat) ** 2), new Float64Array(C));
+  const { h, Q, W } = ocean;
+  ocean.u.fill(0);
+  for (let i = 0; i < C; i++) {
+    let z = 0;
+    for (let k = 0; k < ocean.layers; k++) {
+      const n = k * C + i, hv = h[n], mid = z + 0.5 * hv;
+      z += hv;
+      Q[n] = hv * (288 - 0.02 * mid + 2 * Math.cos(latCell[i]) ** 2 + 0.3 * Math.sin(5 * lonCell[i]));
+      W[n] = hv * (34.6 + 4e-3 * mid + 0.2 * Math.sin(latCell[i]));
+    }
+  }
+  ocean.boundaryDepths.fill(boundary);
+  const sea = [];
+  for (let i = 0; i < C; i++) if (!land[i]) sea.push(i);
+  return { ocean, land, sea, thin: 2 * SHELF_MINIMUM };
+};
+const movedRows = (before, after, rows) => {
+  let moved = 0;
+  for (const k of rows) for (let i = 0; i < C; i++) if (before[k * C + i] !== after[k * C + i]) moved++;
+  return moved;
+};
+const thinWater = (ocean, cells, thin) => {
+  let changed = 0;
+  for (const i of cells) for (let k = 0; k < ocean.layers; k++) { const n = k * C + i; if (ocean.h[n] <= thin) { ocean.Q[n] += 0.3 * ocean.h[n]; ocean.W[n] += 0.05 * ocean.h[n]; changed++; } }
+  return changed;
+};
+
+test('under isoneutralDiffusion no triad reads a land cell: water in the land cells\' layers leaves every sea cell\'s tracer tendencies and κS² diffusivity bit for bit, and the land cells take none', () => {
+  const { ocean, land } = shelfSea(10), L = ocean.layers, every = Array.from({ length: L }, (_, k) => k), { cellsOnEdge } = mesh;
+  const before = tracerTendency(ocean);
+  let coast = 0;
+  for (let e = 0; e < E; e++) if (land[cellsOnEdge[2 * e]] !== land[cellsOnEdge[2 * e + 1]]) coast++;
+  for (let i = 0; i < C; i++) if (land[i]) for (let k = 0; k < L; k++) { const n = k * C + i; ocean.h[n] = 3; ocean.Q[n] = 3 * (289 + 0.01 * k); ocean.W[n] = 3 * (34.7 + 0.01 * k); }
+  const after = tracerTendency(ocean);
+  let landTendency = 0;
+  for (const run of [before, after]) for (let i = 0; i < C; i++) if (land[i]) for (let k = 0; k < L; k++) landTendency = Math.max(landTendency, Math.abs(run.dQ[k * C + i]), Math.abs(run.dW[k * C + i]));
+  const moved = movedRows(before.dQ, after.dQ, every) + movedRows(before.dW, after.dW, every) + movedRows(before.k33, after.k33, every.slice(0, before.k33.length / C));
+  console.log(`${coast} coastal edges: water in the land cells moves ${moved} sea tendencies and κS² values, and the land cells' largest tendency is ${landTendency}`);
+  assert.ok(coast > 0, 'no coast');
+  assert.equal(moved, 0);
+  assert.equal(landTendency, 0);
+});
+
+test('under the boundary taper a column whose thick layers end above its boundary layer\'s base takes no κS² diffusivity, and no triad takes its slope from a base beside a thin layer, in its own cell or the other cell of its edge: the water of every thin layer moves no column\'s top six layers or their κS²', () => {
+  const { ocean, sea, thin } = shelfSea(30), F = ocean.table.fixed, { h } = ocean, top = [0, 1, 2, 3, 4, 5];
+  const before = tracerTendency(ocean);
+  let shelves = 0, shelfKappa = 0;
+  for (const i of sea) {
+    let z = 0, k = 0;
+    while (k < F && h[k * C + i] > thin) z += h[k++ * C + i];
+    if (z >= 30) continue;
+    shelves++;
+    for (let m = 0; m < F; m++) shelfKappa = Math.max(shelfKappa, before.k33[m * C + i]);
+  }
+  const changed = thinWater(ocean, sea, thin), after = tracerTendency(ocean);
+  const moved = movedRows(before.dQ, after.dQ, top) + movedRows(before.dW, after.dW, top) + movedRows(before.k33, after.k33, top);
+  console.log(`${shelves} columns thick to less than their 30 m boundary layer take κS² up to ${shelfKappa}; the water of ${changed} thin layers moves ${moved} tendencies and κS² values in the top six layers`);
+  assert.ok(shelves > 0 && changed > 0);
+  assert.equal(shelfKappa, 0);
+  assert.equal(moved, 0);
+});
+
+test('under isoneutralDiffusion a layer no thicker than twice minimumLayer sets no slope and takes no triad flux: no interface beside one takes κS² diffusivity, and the water of a shelf column\'s thin layers moves none of its layers thick in every column, nor their κS²', () => {
+  const { ocean, sea, thin } = shelfSea(10), F = ocean.table.fixed, { h } = ocean;
+  const before = tracerTendency(ocean);
+  let beside = 0, besideKappa = 0, thick = 0;
+  for (const i of sea) for (let m = 1; m <= F; m++) if (!(h[(m - 1) * C + i] > thin && h[m * C + i] > thin)) { beside++; besideKappa = Math.max(besideKappa, before.k33[(m - 1) * C + i]); }
+  while (thick < F && sea.every((i) => h[thick * C + i] > thin)) thick++;
+  const shelf = sea.filter((i) => h[thick * C + i] <= thin), changed = thinWater(ocean, shelf, thin), after = tracerTendency(ocean);
+  let moved = 0;
+  for (let k = 0; k < thick; k++) for (const i of shelf) { const n = k * C + i; if (before.dQ[n] !== after.dQ[n] || before.dW[n] !== after.dW[n] || before.k33[n] !== after.k33[n]) moved++; }
+  console.log(`${beside} interfaces beside a thin layer take κS² up to ${besideKappa}; the water of ${changed} thin layers in ${shelf.length} shelf columns moves ${moved} of the ${thick * shelf.length} values in their ${thick} layers thick everywhere`);
+  assert.ok(beside > 0 && shelf.length > 0 && thick > 0);
+  assert.equal(besideKappa, 0);
+  assert.equal(moved, 0);
+});

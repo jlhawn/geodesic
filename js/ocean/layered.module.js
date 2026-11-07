@@ -244,10 +244,11 @@ export function shearResolution(mesh, { scale, power }) {
  * base (the last fixed interface at most), in the layer above that
  * interface, times its depth over the boundary layer's, as NEMO's
  * mixed-layer slopes do. A triad needs both layers at its interface thicker
- * than twice minimumLayer; where one is missing, at the surface or a thin
- * layer, or at the base its slope would come from, its quarter of the flux
- * stays horizontal. The triads below the last fixed layer reach the first
- * isopycnal layer.
+ * than twice minimumLayer, and a triad whose slope comes from a base needs
+ * the layer above that base as thick in both cells of its edge; where one
+ * is missing, at the surface, a thin layer or a shelf, its quarter of the
+ * flux stays horizontal. The triads below the last fixed layer reach the
+ * first isopycnal layer.
  */
 export const ISONEUTRAL = { slopeCap: 0.01, slopeWidth: 0.001, boundaryTaper: true }, NEUTRAL_STRATIFICATION = 1e-9;
 export function isoneutralOptions(o) {
@@ -851,7 +852,8 @@ export function createOcean(mesh, {
       if (boundaryTaper && layer > z) {
         let base = m, below = z;
         while (base < F && below < layer) below += hIn[base++ * C + c];
-        slopeAt(c, base - 1, base, valueT(base - 1, b) - valueT(base - 1, a), valueS(base - 1, b) - valueS(base - 1, a), dc);
+        if (hIn[(base - 1) * C + a] > thin && hIn[(base - 1) * C + b] > thin) slopeAt(c, base - 1, base, valueT(base - 1, b) - valueT(base - 1, a), valueS(base - 1, b) - valueS(base - 1, a), dc);
+        else { s1 = 0; s2 = 0; }
         const r = z / layer;
         s1 *= r; s2 *= r * r;
       } else slopeAt(c, l, m, dT, dS, dc);

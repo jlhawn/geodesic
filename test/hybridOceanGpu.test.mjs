@@ -6,7 +6,7 @@ import { createOcean as createCpuOcean } from '../js/ocean/layered.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
-import { HYBRID_LAYERS, labelBoundaries } from '../js/ocean/column.module.js';
+import { HYBRID_LAYERS, labelBoundaries, H_MIN } from '../js/ocean/column.module.js';
 import { SEAWATER, seawaterDensity, salinityForDensity } from '../js/ocean/seawater.module.js';
 
 /*
@@ -232,6 +232,38 @@ test('under isoneutralDiffusion the κS² diffusivity the GPU hybrid ocean\'s co
   const fourth = Float64Array.from(cpu.isoKappa), toMean = stats(mean, kappa), apart = stats(mean, fourth);
   console.log(`κS² after a dynamics phase, rms relative to the CPU's: the GPU's from the CPU's 1:2:2:1 mean ${toMean.rmsRel.toExponential(2)}, the CPU's fourth stage's from it ${apart.rmsRel.toExponential(2)}, the GPU's from the fourth stage's ${stats(fourth, kappa).rmsRel.toExponential(2)}`);
   assert.ok(apart.rmsRel > 0 && toMean.rmsRel < 0.5 * apart.rmsRel, `the GPU's κS² parts from the CPU's stage mean by ${toMean.rmsRel}, the fourth stage's from it by ${apart.rmsRel}`);
+});
+test('under isoneutralDiffusion the GPU hybrid ocean takes the CPU\'s κS² diffusivity on a shelf sea, where no column takes a slope from a shelf\'s thin layer at its boundary layer\'s base', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const shelf = syntheticTopography(90, 180, (lat, lon) => { const d = Math.acos(Math.max(-1, Math.min(1, Math.cos(lat) * Math.cos(lon)))) * 180 / Math.PI; return d < 7 ? 100 : -Math.min(4000, 40 * 1.6 ** ((d - 7) / 4)); });
+  const options = { ...HYBRID, isoneutralDiffusion: true }, cpuModel = createModel(new Grid(N), { topography: shelf }), init = initializeState(cpuModel, {});
+  for (let a = 0; a < init.length; a++) cpuModel.state[a].set(init[a]);
+  const { mesh, geography } = cpuModel, C = mesh.nCells, surfaceT = Float64Array.from(cpuModel.state[3]), ice = new Float64Array(C), zeros = new Float64Array(C);
+  const cpu = createCpuOcean(mesh, { geography, ...options }), F = cpu.table.fixed, thin = 2 * H_MIN;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  cpu.boundaryDepths.fill(30);
+  const h = Float64Array.from(cpu.h), start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths };
+  const gpuModel = await createGpuModel(new Grid(N), { topography: shelf, ocean: options }), gpu = gpuModel.oceanEngine;
+  await gpu.upload(start, Float64Array.from(surfaceT), ice);
+  gpu.setStress(new Float64Array(mesh.nEdges), ice);
+  gpu.phases.dynamics(DT);
+  const kappa = Float64Array.from(await gpu.readSection('ISOK'));
+  gpuModel.destroy();
+  cpu.phases.dynamics(DT);
+  const all = [], beside = [];
+  for (let n = 0; n < F * C; n++) if (cpu.isoKappa[n] > 0) all.push(n);
+  for (let e = 0; e < mesh.nEdges; e++) {
+    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+    if (geography.land[a] || geography.land[b]) continue;
+    for (const [i, j] of [[a, b], [b, a]]) {
+      let base = 0, below = 0;
+      while (base < F && below < 30) below += h[base++ * C + i];
+      if (h[(base - 1) * C + i] > thin && h[(base - 1) * C + j] <= thin) for (let m = 1; m < base; m++) beside.push((m - 1) * C + i);
+    }
+  }
+  const miss = (entries) => { let d = 0, s = 0; for (const n of entries) { d += (kappa[n] - cpu.isoKappa[n]) ** 2; s += cpu.isoKappa[n] ** 2; } return Math.sqrt(d / s); };
+  console.log(`κS² on a shelf sea under 30 m boundary layers, the GPU's rms miss of the CPU's: ${miss(all).toExponential(2)} over ${all.length} interfaces, ${miss(beside).toExponential(2)} over the ${beside.length} above the base of a column beside a shelf's thin layer`);
+  assert.ok(beside.length > 0, 'no column beside a shelf');
+  assert.ok(miss(all) < 1e-2 && miss(beside) < 1e-2, `the GPU misses the CPU's κS² by ${miss(all)}, and beside the shelves by ${miss(beside)}`);
 });
 test(`${OPTION_CHANGE}: backgroundLatitude equatorial, under a strengthened background diffusivity`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionChange({ ...HYBRID, backgroundDiffusivity: 1e-3 }, { backgroundLatitude: 'equatorial' });
