@@ -66,6 +66,7 @@ export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, dynamics = {}, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
   topography = null, geography: geographyOptions = {}, land: landOptions = {}, lake: lakeOptions = {}, terrain = true, orography: orographyOptions = {}, subgrid: givenSubgrid = undefined, levels = sigmaInterfaces(), gravityWaves = {}, dragEvery = 1,
 } = {}) {
+  if (oceanOptions !== false && oceanOptions.gustiness !== undefined) throw new Error('ocean.gustiness is not an option: the ocean and the ice drift take surface.gustiness, as on the CPU');
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;

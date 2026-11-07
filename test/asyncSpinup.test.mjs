@@ -105,6 +105,7 @@ test('the hand-off takes the sea surface, ice and ocean, keeps the atmosphere, t
   const brine = withOceanOf({ ...coupled, brine: cells(5e5) }, { ...alone, brine: cells(3e5) }, land).brine;
   for (let i = 0; i < C; i++) assert.equal(brine[i], land[i] ? 0 : 3e5 + i);
   assert.throws(() => withOceanOf(coupled, { ...alone, N: 32 }, land), /N=32/);
+  assert.ok(!('seaFlow' in withOceanOf({ ...coupled, seaFlow: Float32Array.of(0.25) }, alone, land)), 'the coupled state\'s sea velocity under the air stays behind with its ocean');
 });
 
 test('the driver leaves a lock held in this boot by another live driver alone and takes over one taken in an earlier boot or carrying its own pid', () => {

@@ -571,7 +571,7 @@ export const MOIST_DEFAULTS = {
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
   'downdraftEvaporation', 'downdraftSpread', 'shallowHumidity', 'shallowCape', 'shallowInhibition', 'shallowStability', 'shallowReference', 'shallowRain', 'boundaryParcel', 'adjustFrom'];
 
-export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, boundaryCloudLayer = null, stratiform = null, deckGate = null, stabilityLayer = null, surfaceBuoyancy = null, frictionVelocity = null, land = null, iceSheet = null, surfaceDrag = null, surfaceSensible = null, surfaceEvaporation = null, buffers = null, ...options } = {}) {
+export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, boundaryCloudLayer = null, stratiform = null, deckGate = null, stabilityLayer = null, surfaceBuoyancy = null, frictionVelocity = null, land = null, iceSheet = null, surfaceDrag = null, surfaceSensible = null, surfaceEvaporation = null, virtualDensity = false, buffers = null, ...options } = {}) {
   for (const retired of RETIRED_OPTIONS) if (retired in options) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   const {
     latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, bergeronAutoconversion, stratiformLifetime, rainEvaporation, rainEvaporationLaw, rainCover, rainEvaporationCeiling, autoconversionFloor, fogDroplets, fogDeposition, fogDepositionLimit,
@@ -1222,7 +1222,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     let source = stack.source, mass = stack.mass, stackBottom = bottom, rooted = true;
     let sourceS = deepLowest ? envS[bottom] : stack.sourceS, sourceQ = deepLowest ? envQ[bottom] : stack.sourceQ;
     if (surfaceSource && surfaceSensible && surfaceEvaporation) {
-      const buoyancy = surfaceBuoyancy ? surfaceBuoyancy[i] : 0, density = p[bottom] / (R * T[bottom]), b = bottom * C + i;
+      const buoyancy = surfaceBuoyancy ? surfaceBuoyancy[i] : 0, density = p[bottom] / (R * T[bottom] * (virtualDensity && q ? 1 + VIRTUAL_FACTOR * q[bottom * C + i] : 1)), b = bottom * C + i;
       const velocity = layerExcess ? surfaceLayerVelocity(surfaceSensible[i], surfaceEvaporation[i], density, T[bottom], cp * thetaV[b] * (exnerLower[b] - exnerLayer[b]) / g, cp, g)
         : Math.max(buoyancy > 0 ? Math.cbrt(buoyancy * Math.max(0, boundaryDepth[i] - z[bottom])) : 0, frictionVelocity ? frictionVelocity[i] : 0);
       if (velocity > 0) {

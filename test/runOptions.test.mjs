@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { encodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
+import { Grid } from '../js/grid.module.js';
+import { createModel } from '../js/model.module.js';
+import { syntheticTopography } from '../js/geography.module.js';
 
 const OPTIONS = {
   radiation: { cloudColumns: true, cloudSpread: 0.75, varianceCover: 'water', buoyancyLength: 0.53 },
@@ -54,6 +57,19 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.equal((await snapshot()).arrays.seaFlow, undefined);
     assert.deepEqual((await restore(taken)).options, OPTIONS);
     assert.deepEqual(new Float64Array((await snapshot()).arrays.seaFlow), saved.seaFlow, 'the restore places it again');
+    const { placeBoundaryLayer } = await import('../js/model.worker.js');
+    const placed = createModel(new Grid(16), { topography: syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 1500 + 1000 * Math.cos(lat) : -4000)) }), { nCells: C } = placed.mesh, g = placed.core.diagnostics.g;
+    const kept = { boundaryDepth: Float64Array.from({ length: C }, (_, i) => 300 + (i % 700)), mixingTop: Float64Array.from({ length: C }, (_, i) => 200 + (i % 500)), boundaryRegime: Float64Array.from({ length: C }, (_, i) => i % 4) };
+    placeBoundaryLayer(placed, kept);
+    let highest = 0;
+    for (let i = 0; i < C; i++) {
+      const ground = placed.surfaceGeopotential[i] / g;
+      highest = Math.max(highest, ground);
+      assert.equal(placed.boundaryLayer.depth[i], kept.boundaryDepth[i] + ground, `cell ${i}: the CPU holds the depth above sea level, the save above the ground`);
+      assert.equal(placed.boundaryLayer.mixingTop[i], kept.mixingTop[i] + ground, `cell ${i}: the mixing top likewise`);
+      assert.equal(placed.boundaryLayer.regime[i], kept.boundaryRegime[i]);
+    }
+    assert.ok(highest > 500, `the highest ground stands ${highest} m`);
   } finally {
     globalThis.fetch = fetched;
     delete globalThis.self;
