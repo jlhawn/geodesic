@@ -35,7 +35,7 @@ import { edgeLayerFluxes } from './oceanEdgeFlux.mjs';
 import { readRanges, getDevice } from '../js/gpu/device.module.js';
 import { decodeForcing } from '../js/forcing.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
-import { depthFields } from '../js/ocean/layered.module.js';
+import { depthFields, HEAT_REFERENCE } from '../js/ocean/layered.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { placeCumulus } from '../js/physics/moist.module.js';
 import { PUBLISHED_RADIATION, PUBLISHED_MOIST } from '../explain/published.module.js';
@@ -100,10 +100,11 @@ if (![...testCheckpointDays].every((d) => Number.isInteger(d) && d > firstDay &&
 const keepCheckpoints = process.env.KEEP_CHECKPOINTS === 'all';
 
 const t0 = performance.now(), seconds = () => (performance.now() - t0) / 1000;
-const model = await createGpuModel(resumed ? stateGrid(resumed, null).mesh : new Grid(N), options);
+const model = await createGpuModel(resumed ? stateGrid(resumed, null).mesh : new Grid(N), { ...options, ocean: { ...options.ocean, recordEddyFluxes: true } });
 const { mesh, core, state, seaIce, gpu } = model, ocean = model.oceanEngine, { device } = gpu;
 const [pi, theta, u, surfaceT, q, qc, ice] = state;
 const C = mesh.nCells, E = mesh.nEdges, K = core.K, L = ocean.layers, PH = gpu.layout.PH, SL = gpu.layout.S;
+const eddyRecorded = (saved) => [saved.eddyVolumeFlux, saved.eddyHeatFlux].every((values) => values && values.length === L * E);
 const { cellsOnEdge, dvEdge, dcEdge, areaCell: weight } = mesh;
 const rhoCp = ocean.options.density * ocean.options.specificHeat, LATENT = model.moist.latentHeat, FUSION = seaIce.latentHeatFusion;
 const airCp = core.diagnostics.cp, gravity = core.diagnostics.g, { dSigma } = core.diagnostics;
@@ -128,7 +129,7 @@ if (resumed) {
   model.time = resumed.time;
   model.load({ ocean: false });
   model.ocean.load(resumed.ocean, surfaceT, ice);
-  if (resumed.eddyV && resumed.eddyV.length === L * E) ocean.putSection('EDDYV', resumed.eddyV);
+  if (eddyRecorded(resumed)) { ocean.putSection('EDDYVREC', resumed.eddyVolumeFlux); ocean.putSection('EDDYQREC', resumed.eddyHeatFlux); }
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOW, Float32Array.from(resumed.seaSnow));
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOWALB, Float32Array.from(resumed.seaSnowAlbedo));
   const loaded = await model.ocean.serialize({ restart: true }), differing = [];
@@ -185,13 +186,14 @@ const edgeFluxes = edgeLayerFluxes(mesh, { layers: L, fixed: FIXED, options: oce
 const edgeOut = { volume: new Float64Array(L), net: new Float64Array(L), heat: new Float64Array(L), diffusion: new Float64Array(L), donor: new Int32Array(L) };
 
 async function oceanSnapshot() {
-  const [o, eddy, [iceNow, skin], [concentration]] = await Promise.all([
+  const [o, eddyVolume, eddyHeat, [iceNow, skin], [concentration]] = await Promise.all([
     ocean.download(),
-    ocean.readSection('EDDYV'),
+    ocean.readSection('EDDYVREC'),
+    ocean.readSection('EDDYQREC'),
     readRanges(device, gpu.buffers.S, [{ offset: SL.ICE, length: C }, { offset: SL.TS, length: C }]),
     readRanges(device, gpu.buffers.PH, [{ offset: PH.CONC, length: C }]),
   ]);
-  return { ...o, eddy: ocean.options.eddyDiffusivity > 0 ? Float64Array.from(eddy) : new Float64Array(L * E), ice: Float64Array.from(iceNow), surfaceT: Float64Array.from(skin), concentration: Float64Array.from(concentration) };
+  return { ...o, eddy: { volume: Float64Array.from(eddyVolume), heat: Float64Array.from(eddyHeat) }, ice: Float64Array.from(iceNow), surfaceT: Float64Array.from(skin), concentration: Float64Array.from(concentration) };
 }
 const coverOf = (iceH, concentration) => (iceH > 0 ? (concentration > 0 ? concentration : 1) : 0);
 
@@ -292,14 +294,14 @@ function accumulateOcean(snap, m) {
   edgeFluxes.load({ h, u: velocity, T, eta });
   CAPS.forEach((_, c) => {
     for (const [e, sign] of capEdges[c]) {
-      const a = cellsOnEdge[2 * e], bb = cellsOnEdge[2 * e + 1], out = edgeFluxes.edge(e, edgeOut);
+      const out = edgeFluxes.edge(e, edgeOut);
       for (let k = 0; k < L; k++) {
         const at = c * L + k, flux = sign * out.volume[k], carried = rhoCp * sign * (out.heat[k] - CELSIUS * out.volume[k]);
         ov.net[c] += sign * out.net[k];
         ov.mass[at] += flux; ov.heat[at] += carried; ov.diffusionHeat[at] += rhoCp * sign * out.diffusion[k];
         if (flux > 0) { ov.northMass[at] += flux; ov.northHeat[at] += carried; } else { ov.southMass[at] += flux; ov.southHeat[at] += carried; }
-        const f = eddy ? eddy[k * E + e] : 0;
-        if (f !== 0) { const from = f > 0 ? a : bb; ov.eddyMass[at] += sign * f; ov.eddyHeat[at] += rhoCp * sign * f * (T[k * C + from] - CELSIUS); }
+        const f = eddy ? eddy.volume[k * E + e] : 0;
+        if (f !== 0) { ov.eddyMass[at] += sign * f; ov.eddyHeat[at] += rhoCp * sign * (eddy.heat[k * E + e] + (HEAT_REFERENCE - CELSIUS) * f); }
       }
     }
   });
@@ -338,7 +340,7 @@ const run = resumed ? JSON.parse(resumed.runJson) : { toa: 0, surface: 0, snow: 
 const initial = await model.beginFrame({ fields: ['cloud'], diagnostics: true });
 await model.sync();
 let snap = await oceanSnapshot(), [snow, oceanFlux, pending] = await readRanges(device, gpu.buffers.PH, [{ offset: PH.SNOW, length: C }, { offset: PH.OFLUX, length: C }, { offset: PH.PEN, length: C }]);
-if (resumed && !(resumed.eddyV && resumed.eddyV.length === L * E)) snap.eddy = null;
+if (resumed && !eddyRecorded(resumed)) snap.eddy = null;
 storeCells(snap, snow, oceanFlux, pending);
 let totals = totalsNow(), previous = totals, resumeCheck = null;
 if (resumed) {
@@ -348,7 +350,7 @@ if (resumed) {
   resumeCheck = {
     forced: !engineMatches || !saved, sameEngine: engineMatches, sameScript: scriptMatches,
     stores: relative && Object.fromEntries(STORES.map((name) => [name, +relative[name].toPrecision(3)])), tolerance: FLOAT32_TOLERANCE,
-    oceanArrays: `${restartNames.join(', ')} read back equal to the saved float32 values`, eddyV: !!(resumed.eddyV && resumed.eddyV.length === L * E),
+    oceanArrays: `${restartNames.join(', ')} read back equal to the saved float32 values`, eddyFluxes: eddyRecorded(resumed),
   };
   if (saved) {
     const off = STORES.filter((name) => !(relative[name] <= FLOAT32_TOLERANCE));
@@ -413,7 +415,7 @@ async function saveCheckpoint(path, cloud) {
   const bytes = encodeState({
     kind: 'explainOcean', N, ...gridHeader(mesh), K, day: Math.round((model.time - runStartTime) / DAY), time: model.time, terrain: false, levels: core.levels,
     runStartTime, optionsJson: JSON.stringify({ ocean: OCEAN, ice: ICE }), segmentsJson: JSON.stringify(segments.map((s, n) => (n === segments.length - 1 ? { ...s, toTime: model.time } : s))), runJson: JSON.stringify(run), recentCount: kept.length,
-    engineJson: JSON.stringify(engine), totalsJson: JSON.stringify(totals), countsJson: JSON.stringify({ spinup: spinup.counts }), eddyV: snap.eddy ? Float32Array.from(snap.eddy) : new Float32Array(0), cloud: Float32Array.from(cloud),
+    engineJson: JSON.stringify(engine), totalsJson: JSON.stringify(totals), countsJson: JSON.stringify({ spinup: spinup.counts }), eddyVolumeFlux: snap.eddy ? Float32Array.from(snap.eddy.volume) : new Float32Array(0), eddyHeatFlux: snap.eddy ? Float32Array.from(snap.eddy.heat) : new Float32Array(0), cloud: Float32Array.from(cloud),
     pi, theta, u, surfaceT, q, qc, ice, concentration: seaIce.concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate,
     convectiveRain: m.convectiveRain, largeScaleRain: m.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo,
     meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux,
@@ -610,7 +612,7 @@ const header = {
   section: { ...bins, labels: LABELS, index: 'bin * layers + layer, bins south to north, layer 0 the top fixed-depth layer', units: `base m (depth of the layer's base below the surface, the cumulative mean thickness), T °C, S psu, u and v cm/s east and north (thickness-weighted means; null where the layer's mean thickness in the bin is under ${SECTION_MIN_THICKNESS} m)`, ...finishSection(sumMonths(sections, sectionSums), true), months: MONTHS.map(([name], m) => ({ name, days: monthDays(m), ranges: monthDays(m), ...finishSection(sections[m], false) })) },
   overturning: {
     caps: CAPS, labels: LABELS, index: 'cap * layers + layer, caps south to north', partition: PARTITION,
-    units: `northward Sv and PW across the latitude circle, means of 6-hourly snapshots (samples): mass and heat are the resolved flow, each layer\'s edge thickness by the model\'s rule (layer 0 the mean of its two cells, every other layer the smaller, the column clipped from the top at the sill depth plus mean η, as the ocean\'s edgeColumn, and every layer donor-limited as its thickness flux, scripts/oceanEdgeFlux.mjs), heat at the face value of the ocean\'s tracer scheme in °C, so relative to 0 °C; diffusionHeat is the lateral diffusion of heat across the circle (the background κ in every layer and the shear-scaled κ in the fixed-depth layers), which moves no water; eddyMass and eddyHeat are the Gent–McWilliams transport the last ocean step applied (the engine\'s EDDYV scratch), averaged over eddySamples; net is the same transport without the donor limit; etaNet (one per cap) is the net northward volume transport the change of η south of the cap implies between the period\'s boundaries, exact because freshwater enters the sea as a salt flux and never changes its volume; imbalance (one per cap) is Σ over layers of mass + eddyMass less etaNet, the flow the snapshots miss: the free surface follows the barotropic sub-step\'s averaged transport and the rescale to it moves every layer, and end-of-step snapshots alias the flow; so a summed heat transport depends on its reference, shifting by ρc_p·imbalance per kelvin; returnFlow sums the annual means by group of layers at 10°S, 10°N, 30°S and 30°N: mass is the resolved net northward Sv and temperature its heat over its volume in °C, defined only where the group\'s flow runs mostly one way (null where |mass| is under ${100 * NET_FRACTION} % of the group\'s northward plus southward transport); northward and southward split the resolved transport by the direction it runs at each edge and snapshot, each with its own flow-weighted °C (null where there is none); eddyMass is the eddy Sv (zero summed over all layers); heat is the PW of both, and net the cap\'s net`,
+    units: `northward Sv and PW across the latitude circle, means of 6-hourly snapshots (samples): mass and heat are the resolved flow, each layer\'s edge thickness by the model\'s rule (layer 0 the mean of its two cells, every other layer the smaller, the column clipped from the top at the sill depth plus mean η, as the ocean\'s edgeColumn, and every layer donor-limited as its thickness flux, scripts/oceanEdgeFlux.mjs), heat at the face value of the ocean\'s tracer scheme in °C, so relative to 0 °C; diffusionHeat is the lateral diffusion of heat across the circle (the background κ in every layer and the shear-scaled κ in the fixed-depth layers), which moves no water; eddyMass and eddyHeat are the transport of the last ocean step\'s last eddy pass, Gent–McWilliams and, where it is on, the mixed-layer restratification (the engine\'s EDDYVREC and EDDYQREC under recordEddyFluxes), heat at the face value of the ocean\'s eddyTracers scheme relative to 0 °C, averaged over eddySamples; net is the same transport without the donor limit; etaNet (one per cap) is the net northward volume transport the change of η south of the cap implies between the period\'s boundaries, exact because freshwater enters the sea as a salt flux and never changes its volume; imbalance (one per cap) is Σ over layers of mass + eddyMass less etaNet, the flow the snapshots miss: the free surface follows the barotropic sub-step\'s averaged transport and the rescale to it moves every layer, and end-of-step snapshots alias the flow; so a summed heat transport depends on its reference, shifting by ρc_p·imbalance per kelvin; returnFlow sums the annual means by group of layers at 10°S, 10°N, 30°S and 30°N: mass is the resolved net northward Sv and temperature its heat over its volume in °C, defined only where the group\'s flow runs mostly one way (null where |mass| is under ${100 * NET_FRACTION} % of the group\'s northward plus southward transport); northward and southward split the resolved transport by the direction it runs at each edge and snapshot, each with its own flow-weighted °C (null where there is none); eddyMass is the eddy Sv (zero summed over all layers); heat is the PW of both, and net the cap\'s net`,
     ...finishOverturning(annualOverturning, etaNetOver(null)), months: MONTHS.map(([name], m) => ({ name, days: monthDays(m), ranges: monthDays(m), ...finishOverturning(overturning[m], etaNetOver(m)) })),
     returnFlow: [-10, 10, -30, 30].map((degrees) => returnAcross(annualOverturning, degrees)),
   },

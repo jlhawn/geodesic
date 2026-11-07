@@ -553,6 +553,55 @@ test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes
   gpuModel.destroy();
 });
 
+test('under recordEddyFluxes the GPU hybrid ocean keeps the volume and heat fluxes its eddy pass applies through the passes after it, and steps bit for bit as without it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, E = mesh.nEdges, L = cpu.layers, zeros = new Float64Array(C);
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+  const start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths };
+  const SECTIONS = ['EDDYVREC', 'EDDYQREC', 'EDDYV', 'EDDYQ'], runs = [];
+  for (const recordEddyFluxes of [false, true]) {
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: { ...HYBRID, recordEddyFluxes } }), gpu = gpuModel.oceanEngine;
+    await gpu.upload(start, Float64Array.from(surfaceT), ice);
+    await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
+    const run = { ...(await gpu.readStores()), eta: (await gpu.download()).eta, restart: await gpu.restartArrays() };
+    if (recordEddyFluxes) {
+      const read = () => Promise.all(SECTIONS.map((name) => gpu.readSection(name)));
+      await gpu.upload(start, Float64Array.from(surfaceT), ice);
+      gpu.setStress(stress, ice);
+      run.before = await gpu.readStores();
+      gpu.phases.eddy(DT);
+      run.after = await gpu.readStores();
+      run.eddy = await read();
+      gpu.readSurface(Float64Array.from(surfaceT), ice);
+      gpu.phases.shift(); gpu.phases.regrid(DT); gpu.phases.column(DT); gpu.phases.dynamics(DT);
+      run.later = await read();
+    }
+    runs.push(run);
+    gpuModel.destroy();
+  }
+  const [off, on] = runs, differing = {};
+  const count = (a, b) => { let n = 0; for (let m = 0; m < a.length; m++) if (!Object.is(a[m], b[m])) n++; return n; };
+  for (const f of ['h', 'u', 'q', 'w', 'eta']) differing[f] = count(off[f], on[f]);
+  for (const [name, values] of Object.entries(off.restart)) if (ArrayBuffer.isView(values)) differing[name] = count(values, on.restart[name]);
+  assert.ok(Object.values(differing).every((n) => n === 0), `recordEddyFluxes changes the step: ${JSON.stringify(differing)}`);
+  const kept = Object.fromEntries(SECTIONS.map((name, s) => [name, count(on.eddy[s], on.later[s])]));
+  console.log(`values the shift, regrid, column and dynamics passes after the eddy pass change, of ${L * E}: ${JSON.stringify(kept)}`);
+  assert.ok(kept.EDDYVREC === 0 && kept.EDDYQREC === 0, `the passes after the eddy pass write over the record: ${JSON.stringify(kept)}`);
+  const inflow = (record) => {
+    const out = new Float64Array(L * C);
+    for (let e = 0; e < E; e++) {
+      const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+      for (let k = 0; k < L; k++) { out[k * C + b] += record[k * E + e]; out[k * C + a] -= record[k * E + e]; }
+    }
+    return out;
+  };
+  const applied = (f) => Float64Array.from(on.after[f], (v, m) => (v - on.before[f][m]) * mesh.areaCell[m % C] / DT);
+  const volume = stats(applied('h'), inflow(on.later[0])), heat = stats(applied('q'), inflow(on.later[1]));
+  console.log(`the record's convergence against the eddy pass's change of the stores, per layer and cell, rms relative: volume ${volume.rmsRel.toExponential(2)}, heat ${heat.rmsRel.toExponential(2)}`);
+  assert.ok(stats(applied('h'), new Float64Array(L * C)).rms > 0, 'the eddy pass moves water');
+  assert.ok(volume.rmsRel < 0.05, `the record's volume convergence parts from the water the eddy pass moved by ${volume.rmsRel} rms relative (largest ${volume.maxDiff} m³/s at ${volume.at})`);
+  assert.ok(heat.rmsRel < 0.05, `the record's heat convergence parts from the heat the eddy pass moved by ${heat.rmsRel} rms relative (largest ${heat.maxDiff} K m³/s at ${heat.at})`);
+});
 test(`at N=${N} a thick deep layer lighter than its class boundary by less than float32 resolves at 1027 kg/m³ goes to the lighter class in the regrid on both engines`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { mesh, cpu, surfaceT, ice } = scenario(N, HYBRID), C = mesh.nCells;
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });

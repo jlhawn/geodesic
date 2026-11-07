@@ -55,7 +55,7 @@ export const OCEAN_DEFAULTS = {
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   vorticityCentring: 0.5, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917, latentHeatFusion: 3.34e5, langmuir: 2, langmuirIce: 'tanh',
   momentumDepth: 50, shearViscosity: 1e-2, interiorShear: 'pp81', lmd94Viscosity: LMD94_VISCOSITY, backgroundViscosity: 1e-4, bottomDrag: 3e-3, topDrag: 2.5e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureScale: 1, everySteps: 4,
-  eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: true, eddyTracers: 'donor',
+  eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: true, eddyTracers: 'donor', recordEddyFluxes: false,
   gustiness: 3,
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   backgroundLatitude: 'uniform', equatorialDiffusivity: 1e-6,
@@ -989,7 +989,7 @@ ${iso ? '  var carryQ = 0.0; var carryW = 0.0; var carry33 = 0.0; var heldQ = 0.
      * rounding and gains the heat and salt its edges carried.
      */
     oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${eddyShared}${restratShared}${K}  let e = ${idx}; if (e >= E) { return; }
-  for (var k = 0; k < L; k++) { OD[O_EDDYV + k * E + e] = 0.0; OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; }
+  for (var k = 0; k < L; k++) { OD[O_EDDYV + k * E + e] = 0.0; OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0;${o.recordEddyFluxes ? ' OD[O_EDDYVREC + k * E + e] = 0.0; OD[O_EDDYQREC + k * E + e] = 0.0;' : ''} }
   let kappa = min(OD[O_EDDYK + e], P[1]);
   if (OD[O_EMASK + e] < 0.5${o.restrat ? '' : ' || !(kappa > 0.0)'}) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
@@ -1085,7 +1085,7 @@ ${o.eddyTracers === 'centered' ? `      let tl = 0.5 * (te + td); let sl = 0.5 *
     }
     OD[O_EDDYQ + k * E + e] = eddyShare(qa, qb, sa, sb, moved * te) / P[0];
     OD[O_EDDYW + k * E + e] = eddyShare(wa, wb, sa, sb, moved * se) / P[0];
-`}  }
+`}${o.recordEddyFluxes ? '    OD[O_EDDYVREC + k * E + e] = OD[O_EDDYV + k * E + e]; OD[O_EDDYQREC + k * E + e] = OD[O_EDDYQ + k * E + e];\n' : ''}  }
 }`,
     oEddyApply: eddyApply(o.restrat ? 0 : 1),
     oEddyLeftover: eddyLeftover(o.restrat ? 0 : 1),
@@ -1423,6 +1423,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const eddyKappa = eddyDiffusivities(mesh, o.eddyDiffusivity), eddyLimit = o.eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0;
   const restratScale = restrat ? restratificationScale(mesh, restrat) : null;
   if (!EDDY_TRACERS.includes(o.eddyTracers)) throw new Error(`eddyTracers is one of ${EDDY_TRACERS.join(', ')}, not ${o.eddyTracers}`);
+  if (typeof o.recordEddyFluxes !== 'boolean') throw new Error(`recordEddyFluxes is true or false, not ${o.recordEddyFluxes}`);
   if (o.eddyTracers === 'third' && !third) throw new Error("eddyTracers 'third' reads the beyond cells of tracerAdvection 'third'");
   if (!INTERIOR_SHEARS.includes(o.interiorShear)) throw new Error(`interiorShear is one of ${INTERIOR_SHEARS.join(', ')}, not ${o.interiorShear}`);
   if (!(o.lmd94Viscosity >= 0 && o.lmd94Viscosity < Infinity)) throw new Error(`lmd94Viscosity is a non-negative viscosity, not ${o.lmd94Viscosity}`);
@@ -1476,7 +1477,9 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
    * their fluxes in EDDYV, EDDYQ and EDDYW over FLUX, HEDGE and QE, which
    * oEdgeThickness and every tendency recompute before reading them. UPWM,
    * the upwelling memory that oFoldUpwelling keeps between frames, shares
-   * its slot with nothing.
+   * its slot with nothing, as do EDDYVREC and EDDYQREC, the copies of the
+   * eddy volume and heat fluxes that recordEddyFluxes keeps for reading
+   * between steps.
    */
   const kinds = {}, count = { cell: nC, edge: nE, vertex: nV, drain: Math.max(1, drainCells.length) };
   const sec = (name, kind, layers = 1, least = 0) => {
@@ -1500,6 +1503,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
     ...(backgroundKappa ? [sec('BACKK', 'cell')] : []),
     ...(shearScale ? [sec('SHRES', 'edge')] : []),
     ...(iso ? [sec('ISOK', 'cell', table.fixed)] : []),
+    ...(o.recordEddyFluxes ? [sec('EDDYVREC', 'edge', L), sec('EDDYQREC', 'edge', L)] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
