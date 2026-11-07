@@ -2,7 +2,7 @@ import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReductio
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, deformationRadii, restratificationOptions, backgroundDiffusivities, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -58,6 +58,7 @@ export const OCEAN_DEFAULTS = {
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: true,
   gustiness: 3,
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
+  backgroundLatitude: 'uniform', equatorialDiffusivity: 1e-6,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
   edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 20,
 };
@@ -603,7 +604,7 @@ ${o.shelfMeltLayer > 0 ? `    var slab = 0.0; var sumT = 0.0; var sumS = 0.0;
       if (buoyancy >= 0.0) {
         let richardson = buoyancy * dz / (dot(d, d) + 1e-12);
         nu = SHEARNU / ((1.0 + 5.0 * richardson) * (1.0 + 5.0 * richardson)) + BACKNU;
-        kap = nu / (1.0 + 5.0 * richardson) + BACKKAPPA;
+        kap = nu / (1.0 + 5.0 * richardson) + ${o.backgroundLatitude === 'uniform' ? 'BACKKAPPA' : 'OD[O_BACKK + i]'};
       }
       CIK[j] = kap; CINU[j] = nu; CA[j] = 0.5 * (aPrev + ak); CB[j] = 0.5 * (bPrev + bk);
       if (kap > 0.0) { mixing = true; }
@@ -1360,6 +1361,9 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const restrat = restratificationOptions(o.mixedLayerRestratification);
   const eddyKappa = eddyDiffusivities(mesh, o.eddyDiffusivity), eddyLimit = o.eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0;
   const restratScale = restrat ? Float64Array.from(deformationRadii(mesh), (radiusE, e) => restrat.coefficient * Math.min(mesh.dcEdge[e], radiusE) / restrat.frontLength) : null;
+  if (!BACKGROUND_LATITUDES.includes(o.backgroundLatitude)) throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${o.backgroundLatitude}`);
+  if (!(o.equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${o.equatorialDiffusivity}`);
+  const backgroundKappa = o.backgroundLatitude === 'uniform' ? null : backgroundDiffusivities(mesh, o.backgroundLatitude, o.backgroundDiffusivity, o.equatorialDiffusivity);
   let minSpacing = Infinity;
   for (let e = 0; e < E; e++) minSpacing = Math.min(minSpacing, mesh.dcEdge[e]);
   const geography = o.geography || null, { water, cellOcean, shelf, cellOpen, draft } = oceanCells(C, geography);
@@ -1426,6 +1430,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
     ...(third ? [['BEY', 2 * nE], ['BED', 2 * nE]] : []),
     ...(driftOptions ? driftSections(nC, nE).map(([name]) => sec(name, name === 'TAUA' || DRIFT_EDGE_SECTIONS.includes(name) ? 'edge' : 'cell')) : []),
     ...(restrat ? [sec('MLED', 'cell'), sec('MLEH', 'cell'), sec('MLEB', 'cell'), sec('MLEU', 'cell'), sec('MLESCALE', 'edge')] : []),
+    ...(backgroundKappa ? [sec('BACKK', 'cell')] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -2053,6 +2058,7 @@ ${core.fieldConstants}
       putSection('MLED', filtered ?? new Float32Array(C));
     }
     putSection('FCELL', mesh.fCell);
+    if (backgroundKappa) putSection('BACKK', backgroundKappa);
     putSection('SILL', sillEdge);
     if (driftOptions) {
       putSection('IDYN', driftMask);

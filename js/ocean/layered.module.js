@@ -197,6 +197,38 @@ export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
 }
 
 /*
+ * The interior's background diffusivity κ_b by latitude φ, cell by cell.
+ * 'uniform' holds κ_b everywhere. 'henyey' is MOM6's HENYEY_IGW_BACKGROUND,
+ * OM4's form (Harrison and Hallberg 2008, J. Phys. Oceanogr. 38, 1894,
+ * after Henyey, Wright and Flatté 1986): κ = max(κ_eq, κ_b G(φ)/G(30°))
+ * with G(φ) = |sin φ| arccosh(n/|sin φ|) and n = N0/2Ω = 20, so κ_b is the
+ * value at 30° and the poles take 1.68 κ_b. 'equatorial' is MOM025's
+ * (Holmes, Zika and England 2019, J. Phys. Oceanogr. 49, 141): κ_b poleward
+ * of 15°, κ_eq within 5°, and between them a raised cosine in latitude
+ * where MOM025 ramps linearly.
+ */
+export const BACKGROUND_LATITUDES = ['uniform', 'henyey', 'equatorial'];
+export const HENYEY_RATIO = 20, HENYEY_SINE_FLOOR = 1e-10, EQUATORIAL_BACKGROUND = { inner: 5, outer: 15 };
+export function backgroundDiffusivities(mesh, shape, kappa, equatorial) {
+  const { nCells: C, latCell } = mesh;
+  const out = new Float64Array(C).fill(kappa);
+  if (shape === 'henyey') {
+    const atThirty = 0.5 * Math.acosh(2 * HENYEY_RATIO);
+    for (let i = 0; i < C; i++) {
+      const s = Math.max(HENYEY_SINE_FLOOR, Math.abs(Math.sin(latCell[i])));
+      out[i] = Math.max(equatorial, kappa * s * Math.acosh(HENYEY_RATIO / s) / atThirty);
+    }
+  } else if (shape === 'equatorial') {
+    const { inner, outer } = EQUATORIAL_BACKGROUND;
+    for (let i = 0; i < C; i++) {
+      const x = (Math.abs(latCell[i]) * 180 / Math.PI - inner) / (outer - inner);
+      if (x < 1) out[i] = equatorial + (kappa - equatorial) * 0.5 * (1 - Math.cos(Math.PI * Math.max(0, x)));
+    }
+  } else if (shape !== 'uniform') throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${shape}`);
+  return out;
+}
+
+/*
  * Mixed-layer eddy restratification: the overturning that submesoscale
  * eddies drive across a lateral buoyancy front in the mixed layer,
  * Fox-Kemper, Ferrari & Hallberg (2008, J. Phys. Oceanogr. 38, 1145) with
@@ -470,6 +502,7 @@ export function createOcean(mesh, {
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'rh18', langmuirScheme = 'rescale', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
+  backgroundLatitude = 'uniform', equatorialDiffusivity = 1e-6,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
   iceDrift = false, mixedLayerRestratification = true,
@@ -495,6 +528,9 @@ export function createOcean(mesh, {
   const shearDiffusion = shearDiffusivity;
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
   if (advection === 'third' && !(shearDiffusion > 0)) throw new Error('the limited third-order tracer flux admits grid-scale noise that the shear-scaled diffusion of the surface layers damps, so tracerAdvection third needs shearDiffusivity above zero');
+  if (!BACKGROUND_LATITUDES.includes(backgroundLatitude)) throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${backgroundLatitude}`);
+  if (!(equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${equatorialDiffusivity}`);
+  const backgroundKappa = backgroundLatitude === 'uniform' ? null : backgroundDiffusivities(mesh, backgroundLatitude, backgroundDiffusivity, equatorialDiffusivity);
   const lateralSpeed = lateralDiffusionSpeed;
   if (!(lateralSpeed >= 0)) throw new Error(`lateralDiffusionSpeed is a non-negative velocity scale, not ${lateralSpeed}`);
   const table = layerTable;
@@ -1147,6 +1183,7 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) cellVectorAt(k, i, vector, 3 * k);
       for (let k = 0; k < L - 1; k++) shear[k] = (vector[3 * k] - vector[3 * k + 3]) ** 2 + (vector[3 * k + 1] - vector[3 * k + 4]) ** 2 + (vector[3 * k + 2] - vector[3 * k + 5]) ** 2;
       options.guess = boundaryDepths[i]; options.langmuir = shelf[i] ? 0 : langmuir; options.waves = waves[i];
+      if (backgroundKappa) options.backgroundDiffusivity = backgroundKappa[i];
       const buoyancy = mstarScheme === 'rh18' && !shelf[i] ? surfaceBuoyancy(TCol[0], SCol[0], heatIn[i], saltIn[i], dt, g) : 0;
       let meltHeat = 0, meltSalt = 0;
       if (shelf[i] && meltOn) {

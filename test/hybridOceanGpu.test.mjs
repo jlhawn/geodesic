@@ -138,6 +138,7 @@ test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
 test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
 test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));
+test(`${TRACKING}, with backgroundLatitude equatorial`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, backgroundLatitude: 'equatorial' }));
 
 /*
  * What each phase of the GPU hybrid step changes of the stores' heat
