@@ -1760,7 +1760,7 @@ test("the Kessler rate of the stratiform rain's evaporation and its relative-hum
   assert.ok(sum(kessler.largeScale) > sum(instant.largeScale) && sum(kessler.gpuLargeScale) > sum(instant.gpuLargeScale));
 });
 
-test("with convectionRetype a column its test parcel types deep runs the shallow plume where the deep plume's own cloud is no deeper than 200 hPa, as the IFS's code re-types after the ascent, and the engines agree on random columns", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test("with convectionRetype a column its test parcel types deep runs the shallow plume where the deep plume's own cloud, from its base to the last interface it reaches with w² > 0, is no deeper than 200 hPa, as the IFS's code re-types after the ascent, and any other value than true or false is refused", () => {
   const counts = {};
   for (const retype of [false, true]) {
     const model = build({ convectionRetype: retype }), { moist, core } = model, C = model.mesh.nCells, { levels } = core.diagnostics, pi = model.state[0];
@@ -1768,15 +1768,18 @@ test("with convectionRetype a column its test parcel types deep runs the shallow
     let deep = 0, shallowCloud = 0;
     for (let i = 0; i < C; i++) {
       model.phases.adjust(i, i + 1, 900);
-      if (moist.deep.deep) { deep++; if (!(pi[i] * (levels[moist.deep.base] - levels[moist.deep.top]) > DEEP_CLOUD_DEPTH)) shallowCloud++; }
+      if (moist.deep.deep) { deep++; if (!(pi[i] * (levels[moist.deep.base] - levels[moist.deep.top + 1]) > DEEP_CLOUD_DEPTH)) shallowCloud++; }
     }
     counts[retype] = { deep, shallowCloud };
   }
   console.log(`random columns: ${counts.false.deep} run the deep plume as typed by the test parcel, ${counts.false.shallowCloud} of them with a plume cloud no deeper than 200 hPa; re-typed after the ascent ${counts.true.deep} do, ${counts.true.shallowCloud} with such a cloud`);
   assert.ok(counts.false.shallowCloud > 0 && counts.true.shallowCloud === 0, JSON.stringify(counts));
   assert.equal(counts.true.deep, counts.false.deep - counts.false.shallowCloud);
-  await parity({ convectionRetype: true });
   assert.throws(() => build({ convectionRetype: 'yes' }), /convectionRetype/);
+});
+
+test('with convectionRetype the engines agree on random columns, and the GPU refuses a value other than true or false', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  await parity({ convectionRetype: true });
   const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
   const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
   assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, convectionRetype: 1 }), /convectionRetype/);

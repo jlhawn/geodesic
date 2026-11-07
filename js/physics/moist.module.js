@@ -330,9 +330,10 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * and runs the deep plume; else, or where the deep plume is not cloudy, the
  * shallow plume alone. With `convectionRetype` (default false) a deep column
  * runs the shallow plume after all where the deep plume's own cloud, from its
- * base interface to the top of the layer where its w² vanishes, is no deeper
- * than DEEP_CLOUD_DEPTH, as the IFS's code re-types after the ascent
- * (cumastrn.F90; its documentation types by the test parcel alone). With `plumeDeparture` 'elevated' (IFS Cy41r2 Part IV
+ * base interface to the last interface it reaches with w² > 0 (cuascn.F90's
+ * KCTOP), is no deeper than DEEP_CLOUD_DEPTH, as the IFS's code re-types
+ * after the ascent (cumastrn.F90; its documentation types by the test parcel
+ * alone). With `plumeDeparture` 'elevated' (IFS Cy41r2 Part IV
  * §6.4; Bechtold et al. 2014, JAS 71, 734) a column whose surface test
  * parcel is not deep tries the layers above the 50 hPa stack one at a time,
  * bottom up, while their midpoints lie within DEPARTURE.depth (350 hPa) of
@@ -1336,7 +1337,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     }
     if (top === 0) top = 1;
     if (retyped && cloudy && top >= 1) {
-      const depth = pi[i] * (levels[base] - levels[top]);
+      const depth = pi[i] * (levels[base] - levels[top + 1]);
       deep.typeMargin = Math.min(deep.typeMargin, Math.abs(depth - DEEP_CLOUD_DEPTH) / DEEP_CLOUD_DEPTH);
       if (!(depth > DEEP_CLOUD_DEPTH)) { if (plumeExits) traceExit(i, 5, pi[i] * levels[top]); return cumulusColumn(i, pi, theta, q, qc, dt); }
     }

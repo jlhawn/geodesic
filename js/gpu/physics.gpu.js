@@ -2432,7 +2432,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     }
   }
   if (top == 0) { top = 1; flux[1] = 0.0; } else { rainAbove += rainOne; }
-  if (PL_RETYPE && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }
+  if (PL_RETYPE && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }
   if (!cloudy || top < 1 || !(PL_PARCEL || select((LV[L_SU + top] * DEEP_REFERENCE < SHALLOW_TOP), (pi * (LV[L_SU + base] - LV[L_SU + top]) > DEEP_DEPTH), PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }
   clearCumulus(i);
   let topHeight = upperInterface(i, top);
