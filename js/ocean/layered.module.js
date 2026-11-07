@@ -203,7 +203,9 @@ export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
  * radius of deformationRadii and Δ the edge's spacing, so it falls away
  * where the grid resolves the eddies the diffusion stands in for, at the
  * equator the tropical instability waves. true takes s 1 and p 2, the form
- * that scales the eddy diffusivity.
+ * that scales the eddy diffusivity. Where it falls away it also takes the
+ * damping of grid-scale noise that tracerAdvection 'third' relies on, which
+ * the guard on shearDiffusivity 0 does not see.
  */
 export const SHEAR_RESOLUTION = { scale: 1, power: 2 };
 export function shearResolutionOptions(o) {
