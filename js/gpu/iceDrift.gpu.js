@@ -33,7 +33,7 @@ export const driftSections = (C, E) => [...DRIFT_EDGE_SECTIONS.map((name) => [na
  * section of the ocean's scratch the host fills, else the surface layer's
  * as oStressFromAtmosphere computes it.
  */
-export function iceDriftHead({ options: d, waterDensity, thermo, minimumConcentration, removal, remnant, freezing, implicitStress, given }) {
+export function iceDriftHead({ options: d, waterDensity, thermo, minimumConcentration, removal, remnant, freezing, implicitStress, virtualAir = false, given }) {
   const turn = d.waterTurn * Math.PI / 180;
   return `
 ${constant('ID_STRENGTH', d.strength)} ${constant('ID_DECAY', d.strengthDecay)} ${constant('ID_DRAG', waterDensity * d.waterDrag)} ${constant('ID_COS', Math.cos(turn))} ${constant('ID_SIN', Math.sin(turn))}
@@ -53,8 +53,8 @@ fn aiOf(x: i32) -> f32 { let sn = OD[O_ISN + x]; return select(ID_FRESH, OD[O_IS
 fn rawStress(e: i32, a: i32, b: i32) -> f32 {
 ${given ? '  return OD[O_TAUA + e];' : `  let ga = gcell(a); let gb = gcell(b); let ge = gedge(e);
 ${implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { return PH[PH_STRESS + ge]; }\n' : ''}  let bottom = (K - 1) * GC;
-  let rhoA = S[S_PI + ga] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + ga] * D[D_EXM + bottom + ga]);
-  let rhoB = S[S_PI + gb] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + gb] * D[D_EXM + bottom + gb]);
+  let rhoA = S[S_PI + ga] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + ga] * D[D_EXM + bottom + ga]${virtualAir ? ' * (1.0 + VIRT * S[S_Q + bottom + ga])' : ''});
+  let rhoB = S[S_PI + gb] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + gb] * D[D_EXM + bottom + gb]${virtualAir ? ' * (1.0 + VIRT * S[S_Q + bottom + gb])' : ''});
   let fa = PH[PH_DRAG + ga] * rhoA * max(D[D_WIND + ga], GUSTO); let fb = PH[PH_DRAG + gb] * rhoB * max(D[D_WIND + gb], GUSTO);
   return 0.5 * (fa + fb) * S[S_U + (K - 1) * GE + ge];`}
 }

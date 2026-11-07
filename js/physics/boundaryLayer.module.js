@@ -225,7 +225,7 @@ export function createBoundaryLayer(mesh, core, {
   dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, seaFlow = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, openSea = null, seaHumidity = 1, deckTop = null, deckGate = null, deckLayer = null, deckShare = null, deckEntrainment = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
   countergradient = 0, surfaceHeat = null, surfaceEvaporation = null, velocityScale = 'holtslagBoville',
-  diagnoseFirst = false, depositedHeat = null, depositedWater = null, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2,
+  diagnoseFirst = false, depositedHeat = null, depositedWater = null, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2, virtualDensity = false,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
@@ -351,7 +351,7 @@ export function createBoundaryLayer(mesh, core, {
       riPrev[i] = 0;
       zPrev[i] = geopotential[bottom * C + i] / g;
       depth[i] = zPrev[i];
-      if (implicitDrag) surfaceDrag[i] = density(pi, bottom, i, theta) * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness);
+      if (implicitDrag) surfaceDrag[i] = surfaceDensity(pi, i, theta, q) * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness);
       if (formRate) {
         for (let k = kTop; k < K; k++) formRate[k * C + i] = 0;
         if (formSigma[i] > 0) formRate[bottom * C + i] = formDragCoefficient(formSigma[i], formHeight(bottom, i), formOptions, formScale) * Math.hypot(bottomVector[3 * i], bottomVector[3 * i + 1], bottomVector[3 * i + 2]);
@@ -457,7 +457,7 @@ export function createBoundaryLayer(mesh, core, {
   }
 
   function surfaceFluxes(i, pi, theta, surfaceT, q) {
-    const base = bottom * C + i, rho = density(pi, bottom, i, theta);
+    const base = bottom * C + i, rho = surfaceDensity(pi, i, theta, q);
     if (surfaceHeat) {
       kinematicHeat[i] = surfaceHeat[i] / rho;
       kinematicWater[i] = surfaceEvaporation[i] / rho;
@@ -490,6 +490,11 @@ export function createBoundaryLayer(mesh, core, {
   function formHeight(k, i) {
     const base = bottom * C + i, ground = geopotential[base] - cp * thetaV[base] * (exnerLower[base] - exnerLayer[base]);
     return (geopotential[k * C + i] - ground) / g;
+  }
+
+  function surfaceDensity(pi, i, theta, q) {
+    const rho = density(pi, bottom, i, theta);
+    return virtualDensity && q ? rho / (1 + VIRTUAL_FACTOR * q[bottom * C + i]) : rho;
   }
 
   function density(pi, k, i, theta) {

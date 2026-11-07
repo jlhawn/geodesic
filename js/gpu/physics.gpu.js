@@ -2741,11 +2741,22 @@ export function relativeWindKernels({ physics, pblDiagnose, mixMomentum }) {
     ].reduce((body, [from, to]) => replacedOnce(body, from, to), mixMomentum),
   };
 }
+const VIRTUAL_DENSITY = [
+  ['\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);', '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));'],
+  ['\n    let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);', '\n    let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));'],
+  ['PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * ', 'PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) / (1.0 + VIRT * IN[S_Q + (K - 1) * C + i]) * '],
+  ['let rho = blDensity(K - 1, i, pi); let exchange', 'let rho = blDensity(K - 1, i, pi) / (1.0 + VIRT * IN[S_Q + (K - 1) * C + i]); let exchange'],
+  ['let density = surfaceP / (RGAS * surfaceT);', 'let density = surfaceP / (RGAS * surfaceT * (1.0 + VIRT * IN[S_Q + bottom * C + i]));'],
+];
 export function virtualDensityKernels(bodies) {
-  const anchor = '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);';
-  const names = Object.keys(bodies).filter((name) => typeof bodies[name] === 'string' && bodies[name].includes(anchor));
-  if (names.length === 0) throw new Error('virtualDensity: no kernel lays the surface flux\'s density');
-  return Object.fromEntries(names.map((name) => [name, replacedOnce(bodies[name], anchor, '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));')]));
+  const out = {};
+  for (const [name, body] of Object.entries(bodies)) {
+    if (typeof body !== 'string') continue;
+    const text = VIRTUAL_DENSITY.reduce((t, [from, to]) => (t.includes(from) ? replacedOnce(t, from, to) : t), body);
+    if (text !== body) out[name] = text;
+  }
+  for (const name of ['physics', 'physicsSurface', 'pblDiagnose', 'column', 'columnLast', 'adjustPlume']) if (typeof bodies[name] === 'string' && !out[name]) throw new Error(`virtualDensity: the ${name} kernel lays no surface density`);
+  return out;
 }
 const K_PROFILE_ANCHORS = [
   ['fn blNonlocal(i: i32, pi: f32, zb: f32, h: f32, scale: f32, buoyancy: f32, friction: f32) {\n  if (!(buoyancy > 0.0) || !(h > 0.0)) { return; }\n',

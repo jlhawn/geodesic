@@ -41,11 +41,11 @@ function columnEnergy(after, C, K, held) {
   return worst;
 }
 
-async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...options } = {}) {
+async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', surface = {}, ...options } = {}) {
   const physics = { ...PREVIOUS_RADIATION, mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options }, sigma = sigmaInterfaces(levels);
-  const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence, velocityScale: 'capped' }, surface: { exchange: 'roughness', ...PREVIOUS_SURFACE } });
+  const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence, velocityScale: 'capped' }, surface: { exchange: 'roughness', ...PREVIOUS_SURFACE, ...surface } });
   const { ambiguous } = deckProfile(model), traces = radiationTraces(model);
-  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, turbulence, velocityScale: 'capped', surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
+  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, ...surface, turbulence, velocityScale: 'capped', surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   const C = model.mesh.nCells, K = model.core.K, decisions = decisionTracker(K, C), runs = new Set();
@@ -81,6 +81,7 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...optio
     share: cells(r.mlmShare, 'MLMM'), top: cells(r.mlmTop, 'MLMTOP'), height: cells(r.mlmHeight, 'MLMH'), water: cells(r.mlmWater, 'MLMWATER'), entrainment: cells(r.mlmEntrainment, 'MLMENT'),
     deck: cells(r.stratus, 'DECK'), fraction: cells(r.stratusFraction, 'DECKF'), olr: cells(r.outgoing, 'OLR'), sw: cells(r.surfaceShortwave, 'SWDN'), blEntrainment: cells(bl.entrainment, 'ENTRAIN'),
     gpuSealed: Array.from({ length: C }, (_, i) => after.MLMK[i]).filter((k) => k > 0.5).length, gpuEnergy: columnEnergy(after, C, K, (physics.radiationEvery ?? 1) > 1),
+    kept, cpuWater: Float64Array.from(r.mlmWater), gpuWater: Float64Array.from(after.MLMWATER),
     mixing: columns(bl.mixing, 'MIX'), longwave: turbulence === 'moist' ? columns(r.longwave, 'LWH') : null, theta: keptColumns(model.state[1], state[1]), q: keptColumns(model.state[4], state[4]),
   };
 }
@@ -133,4 +134,20 @@ test('on the GPU too the inversion\'s layer hands its heating down inside its co
     console.log(`${label}: ${run.gpuSealed} of ${run.C} columns sealed on the GPU, worst column off its boundary fluxes by ${run.gpuEnergy.toExponential(2)} W/m²`);
     assert.ok(run.gpuSealed > 0.5 * run.C && run.gpuEnergy < 1e-2, `${label}: ${run.gpuSealed} sealed, ${run.gpuEnergy} W/m² off`);
   }
+});
+
+test('with surface.virtualDensity the deck\'s surface fluxes take the moist density on both engines: the engines agree as closely as without it, and the option moves the deck\'s water alike', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const on = await deckPair(3, { surface: { virtualDensity: true } }), off = await deckPair(3);
+  show('virtualDensity', on);
+  agree('virtualDensity', on);
+  const both = new Set(off.kept);
+  let gap = 0, move = 0, cells = 0;
+  for (const i of on.kept) {
+    if (!both.has(i)) continue;
+    const cpuMove = on.cpuWater[i] - off.cpuWater[i], gpuMove = on.gpuWater[i] - off.gpuWater[i];
+    gap += (gpuMove - cpuMove) ** 2; move += cpuMove ** 2; cells++;
+  }
+  const rms = (x) => Math.sqrt(x / Math.max(cells, 1)), scale = Math.sqrt(on.cpuWater.reduce((sum, w) => sum + w * w, 0) / on.C);
+  console.log(`over ${cells} cells the option moves the deck's water by ${rms(move).toExponential(2)} rms (the water ${scale.toExponential(2)}); the engines' moves differ by ${rms(gap).toExponential(2)}`);
+  assert.ok(rms(move) > 1e-4 * scale && gap < 0.01 * move, `the deck water's move ${rms(move)}, its gap between the engines ${rms(gap)}`);
 });

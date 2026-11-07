@@ -1,4 +1,5 @@
 import { cellVector } from '../dynamics/operators.module.js';
+import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 
 export const SEA_DRAG = 1.2e-3;
 export const LAND_DRAG = 1.5e-3;
@@ -16,7 +17,7 @@ export const TOP_DRAG = { sigma: 0.02, days: 0 };
  * solve, the lowest layer's drag and its heat are left to it, and stress
  * gives the stress that solve applied once it has run.
  */
-export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, implicitStress = null, seaFlow = null, buffers = null } = {}) {
+export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, implicitStress = null, seaFlow = null, virtualDensity = false, buffers = null } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, cp, exnerLayer } = core.diagnostics;
   const { cellsOnEdge, nEdgesOnCell, edgesOnCell, maxEdges, dcEdge, dvEdge, areaCell } = mesh;
   const bottom = K - 1;
@@ -37,11 +38,11 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
     return windSpeed;
   }
 
-  function surfaceDragRates(pi, theta, rates) {
+  function surfaceDragRates(pi, theta, q, rates) {
     for (let i = 0; i < C; i++) {
       const idx = bottom * C + i;
       const airTemperature = theta[idx] * exnerLayer[idx];
-      const airDensity = pi[i] * sigmaMid[bottom] / (R * airTemperature);
+      const airDensity = pi[i] * sigmaMid[bottom] / (R * airTemperature * (virtualDensity && q ? 1 + VIRTUAL_FACTOR * q[idx] : 1));
       const massPerArea = pi[i] * dSigma[bottom] / g;
       rates[i] = (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * airDensity * Math.max(windSpeed[i], gustiness) / massPerArea;
     }
@@ -49,10 +50,10 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
   const topDragRate = (k) => (topDragDays > 0 && sigmaMid[k] < topSigma ? (topSigma - sigmaMid[k]) / topSigma / (topDragDays * 86400) : 0);
 
   function applyLayers(state, out, kFrom = 0, kTo = K) {
-    const [pi, theta, u] = state;
+    const [pi, theta, u, , q = null] = state;
     const [, , dU] = out;
     if (!implicitStress && kFrom <= bottom && bottom < kTo) {
-      surfaceDragRates(pi, theta, dragRate);
+      surfaceDragRates(pi, theta, q, dragRate);
       for (let e = 0; e < E; e++) {
         const rate = 0.5 * (dragRate[cellsOnEdge[2 * e]] + dragRate[cellsOnEdge[2 * e + 1]]);
         dU[bottom * E + e] -= rate * u[bottom * E + e];
@@ -71,13 +72,13 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
 
   const heatRate = new Float64Array(C);
   function heatLayers(state, out, kFrom = 0, kTo = K) {
-    const [pi, theta, u] = state;
+    const [pi, theta, u, , q = null] = state;
     const dTheta = out[1];
     for (let k = kFrom; k < kTo; k++) {
       const top = topDragRate(k);
       const surfaceLayer = k === bottom && !implicitStress;
       if (!surfaceLayer && top === 0) continue;
-      if (surfaceLayer) surfaceDragRates(pi, theta, heatRate);
+      if (surfaceLayer) surfaceDragRates(pi, theta, q, heatRate);
       for (let i = 0; i < C; i++) {
         let power = 0;
         for (let m = 0; m < nEdgesOnCell[i]; m++) {
@@ -94,10 +95,10 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
 
   function stress(state, out = new Float64Array(E)) {
     if (implicitStress && implicitStress.stressReady[0]) { out.set(implicitStress.surfaceStress); return out; }
-    const [pi, theta, u] = state;
+    const [pi, theta, u, , q = null] = state;
     for (let i = 0; i < C; i++) {
       const idx = bottom * C + i;
-      const airDensity = pi[i] * sigmaMid[bottom] / (R * theta[idx] * exnerLayer[idx]);
+      const airDensity = pi[i] * sigmaMid[bottom] / (R * theta[idx] * exnerLayer[idx] * (virtualDensity && q ? 1 + VIRTUAL_FACTOR * q[idx] : 1));
       aeroFactor[i] = (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * airDensity * Math.max(windSpeed[i], gustiness);
     }
     for (let e = 0; e < E; e++) {

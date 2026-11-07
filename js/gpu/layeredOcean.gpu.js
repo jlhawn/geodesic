@@ -1186,8 +1186,8 @@ ${o.mstarScheme === 'rh18' ? `  { let h0 = max(IN[hOff(0) + i], 1.0e-6); let s0 
   let coverB = select(0.0, select(1.0, PH[PH_CONC + gb], PH[PH_CONC + gb] > 0.0), OD[O_ICED + b] > 0.5);
   let through = (1.0 - 0.5 * (coverA + coverB) * (1.0 - TRANSMIT)) * (1.0 - 0.5 * (OD[O_SHELF + a] + OD[O_SHELF + b]));
 ${o.seaFlow ? '  PH[PH_UO + ge] = (1.0 - 0.5 * (coverA + coverB)) * (1.0 - 0.5 * (OD[O_SHELF + a] + OD[O_SHELF + b])) * IN[uOff(0) + e];\n' : ''}${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through * PH[PH_STRESS + ge]; return; }\n' : ''}  let bottom = (K - 1) * GC;
-  let rhoA = S[S_PI + ga] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + ga] * D[D_EXM + bottom + ga]);
-  let rhoB = S[S_PI + gb] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + gb] * D[D_EXM + bottom + gb]);
+  let rhoA = S[S_PI + ga] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + ga] * D[D_EXM + bottom + ga]${o.virtualAir ? ' * (1.0 + VIRT * S[S_Q + bottom + ga])' : ''});
+  let rhoB = S[S_PI + gb] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + gb] * D[D_EXM + bottom + gb]${o.virtualAir ? ' * (1.0 + VIRT * S[S_Q + bottom + gb])' : ''});
   let fa = PH[PH_DRAG + ga] * rhoA * max(D[D_WIND + ga], GUSTO); let fb = PH[PH_DRAG + gb] * rhoB * max(D[D_WIND + gb], GUSTO);
   OD[O_STRESS + e] = through * 0.5 * (fa + fb) * S[S_U + (K - 1) * GE + ge];
 }`,
@@ -1437,9 +1437,10 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const ODTOTAL = OD.total + bTotal;
 
   const implicitStress = !!core.physics && core.physics.surfaceExchange === 'roughness' && !!core.physics.implicitDrag;
+  const virtualAir = !!core.physics && core.physics.virtualDensity === true;
   const iceThermo = { skinHeatCapacity: core.physics?.skinHeatCapacity ?? 2e5, iceDensity: core.physics?.iceDensity ?? 917, latentHeatFusion: core.physics?.latentHeatFusion ?? 3.34e5, freshSnowAlbedo: core.physics?.freshSnowAlbedo ?? SNOW_AGEING.freshSnowAlbedo };
-  const driftPlan = driftOptions ? { options: driftOptions, waterDensity: o.density, thermo: iceThermo, minimumConcentration: MINIMUM_CONCENTRATION, removal: seaIceRemoval(!!core.physics?.keepSmallIce), remnant: ICE_REMNANT, freezing: FREEZING_POINT, implicitStress, given } : null;
-  const kernels = oceanKernels({ ...o, restrat, table, L, C: nC, E: nE, V: nV, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined, seaFlow: core.layout.PH.UO !== undefined });
+  const driftPlan = driftOptions ? { options: driftOptions, waterDensity: o.density, thermo: iceThermo, minimumConcentration: MINIMUM_CONCENTRATION, removal: seaIceRemoval(!!core.physics?.keepSmallIce), remnant: ICE_REMNANT, freezing: FREEZING_POINT, implicitStress, virtualAir, given } : null;
+  const kernels = oceanKernels({ ...o, restrat, table, L, C: nC, E: nE, V: nV, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, virtualAir, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined, seaFlow: core.layout.PH.UO !== undefined });
   const reduced = HYBRID_REDUCED;
   const OF = seq([['SST', nC], ['SSS', nC], ['H1', nC], ['THD', nC], ['ETA', nC], ['CUR', 3 * nC], ['CSPD', nC], ['UPW', nC], ['PART', reduced.length * reductionGroups(nC)]]);
   kernels.oFrame = `${HYBRID_THERMOCLINE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
