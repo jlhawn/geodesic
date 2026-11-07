@@ -1162,13 +1162,22 @@ export const seaSurfaceWgsl = (o) => {
     ${light ? 'var' : 'let'} iceFlux = net - (1.0 - cover) * split; let waterFlux = net + cover * split;
 ${light ? `    let passed = max(0.0, absorbed - (1.0 - cover) * contrast) * (I0_CLEAR + (I0_CLOUDY - I0_CLEAR) * diffuse) * max(0.0, 1.0 - snow / FULLSNOW_ICE);
     let through = passed * exp(-ICE_EXT * max(0.0, h - ICE_TOP));
-    iceFlux -= ${brine ? 'passed' : 'through'};
-` : ''}    let conduction = (FREEZING - T) / (max(h, HMIN) / COND + snow / (RHOSNOW * KSNOW));
+${brine ? '    let melting = T >= MELTING;\n' : ''}    iceFlux -= ${brine ? 'select(through, passed, melting)' : 'through'};
+` : ''}${brine ? `    let depth = max(h, HMIN); let insulation = snow / (RHOSNOW * KSNOW);
+    var conduction = (FREEZING - T) / (depth / COND + insulation); var base = conduction;
+    var reservoir = PH[PH_BRINE + i] + dt * select(0.0, passed - through, melting);
+    if (reservoir > 0.0 && T < MELTING) {
+      let upper = (MELTING - T) / (depth / (4.0 * COND) + insulation); let lower = (FREEZING - MELTING) / (3.0 * depth / (4.0 * COND));
+      let cost = dt * (upper - lower); let part = min(1.0, reservoir / cost);
+      conduction += part * (upper - conduction); base += part * (lower - base);
+      reservoir = select(0.0, reservoir - cost, part >= 1.0);
+    }
+    T += dt * (iceFlux + conduction) / SKINC;
+    var thickness = h + dt * (base - ocean) / LATENT_ICE;
+` : `    let conduction = (FREEZING - T) / (max(h, HMIN) / COND + snow / (RHOSNOW * KSNOW));
     T += dt * (iceFlux + conduction) / SKINC;
     var thickness = h + dt * (conduction - ocean) / LATENT_ICE;
-${brine ? `    var reservoir = PH[PH_BRINE + i] + dt * (passed - through);
-    if (reservoir > 0.0 && conduction > ocean) { let spent = min(reservoir, dt * (conduction - ocean)); reservoir -= spent; thickness -= spent / LATENT_ICE; }
-` : ''}${light ? `    var share = 0.0;
+`}${light ? `    var share = 0.0;
     if (PENETRATING) { share = PH[PH_TRANS + i]; PH[PH_PEN + i] += dt * cover * through * share; }
     thickness -= dt * through * (1.0 - share) / LATENT_ICE;
 ` : ''}    if (T > MELTING) {

@@ -76,26 +76,23 @@ test("one step of the whole model with leadClosure 'hibler': cover 0.6 under a c
   assert.ok(faster > 0, 'some leads close');
 });
 
-test('one step of the whole model with iceLight and brineReservoir: the brine of bare ice is spent at its base against the growth, the skin cooling as with no brine, as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const start = 5e5, skin = (n) => (n % 2 ? FREEZING_POINT - 3 : MELTING_POINT - 0.1);
+test('one step of the whole model with iceLight and brineReservoir: under a skin below the melting point the brine holds the upper half-layer there and warms the skin, at the melting point it keeps what light it holds, as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const start = 5e5, cold = (n) => n % 2 === 1, skin = (n) => (cold(n) ? FREEZING_POINT - 3 : MELTING_POINT);
   const prepare = (seed) => (model, cells) => cells.forEach((i, n) => { model.seaIce.snow[i] = 0; model.seaIce.brine[i] = seed; model.state[3][i] = skin(n); });
   const run = await oneStep(false, 0.9, { iceLight: true, brineReservoir: true }, prepare(start));
   const empty = await oneStep(false, 0.9, { iceLight: true, brineReservoir: true }, prepare(0));
-  let spent = 0;
+  let warmed = 0;
   for (let n = 0; n < run.cells.length; n++) {
     const i = run.cells[n], cpu = run.model.seaIce.brine[i] - start, gpu = run.brine[i] - start;
     assert.ok(Math.abs(cpu - gpu) < 1 + 2e-2 * Math.abs(cpu), `cell ${i}: brine changes by ${cpu} vs ${gpu}`);
     assert.ok(Math.abs(run.model.state[3][i] - run.surfaceT[i]) < 0.05, `cell ${i}: skin ${run.model.state[3][i]} vs ${run.surfaceT[i]}`);
     assert.ok(Math.abs(run.model.state[6][i] - run.thickness[i]) < 1e-3 * run.model.state[6][i], `cell ${i}: thickness ${run.model.state[6][i]} vs ${run.thickness[i]}`);
-    assert.equal(run.model.state[3][i], empty.model.state[3][i], `cell ${i}: the stored brine leaves the skin alone`);
-    assert.ok(Math.abs(run.surfaceT[i] - empty.surfaceT[i]) < 1e-3, `cell ${i}: device skin ${run.surfaceT[i]} vs ${empty.surfaceT[i]} with no brine`);
-    const { latent } = run.model.seaIce, a = run.model.seaIce.concentration[i], e = empty.model.seaIce.concentration[i];
-    assert.equal(a, e, `cell ${i}: cover ${a} vs ${e}`);
-    const melted = latent * a * (empty.model.state[6][i] - run.model.state[6][i]), kept = a * (run.model.seaIce.brine[i] - empty.model.seaIce.brine[i]);
-    assert.ok(Math.abs(melted + kept - 0.9 * start) < 1e-6 * start, `cell ${i}: the brine melts ${melted} J/m² of ice and keeps ${kept}`);
-    if (melted > 1e-3 * start) spent++;
+    if (!cold(n)) { assert.ok(run.model.seaIce.concentration[i] * run.model.seaIce.brine[i] >= 0.9 * start * (1 - 1e-12), `cell ${i}: at the melting point the brine keeps what it holds`); continue; }
+    assert.ok(cpu < 0 && run.model.state[3][i] > empty.model.state[3][i] && run.surfaceT[i] > empty.surfaceT[i], `cell ${i}: the brine warms the skin to ${run.model.state[3][i]} (${run.surfaceT[i]} on the device) from ${empty.model.state[3][i]}`);
+    assert.ok(run.model.state[6][i] < empty.model.state[6][i] && run.thickness[i] < empty.thickness[i], `cell ${i}: the base does not grow`);
+    warmed++;
   }
-  assert.ok(spent > 0, 'some brine is spent at the base');
+  assert.ok(warmed === run.cells.length / 2);
   console.log(`iceLight and brineReservoir on ${run.cells.length} cells: brine CPU ${run.cells.map((i) => run.model.seaIce.brine[i].toFixed(0)).join(' ')} | device ${run.cells.map((i) => run.brine[i].toFixed(0)).join(' ')}`);
 });
 
@@ -109,4 +106,9 @@ test('one step of the whole model with iceLight under the June sun: bare ice han
   }
   console.log(`iceLight under the June sun: ${lit} of ${run.cells.length} ice cells pass light to the water, CPU ${run.cells.map((i) => run.penetrated[i].toFixed(0)).join(' ')} | device ${run.cells.map((i) => run.pen[i].toFixed(0)).join(' ')} J/m²`);
   assert.ok(lit > 0, 'some ice passes light to the water');
+});
+
+test('the device refuses brineReservoir without iceLight, as the CPU does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const model = createModel(new Grid(N), { ocean: false });
+  await assert.rejects(createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { brineReservoir: true } }), /iceLight/);
 });

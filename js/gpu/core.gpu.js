@@ -872,6 +872,7 @@ export async function createGpuCore(mesh, {
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
   const hybrid = divergenceSurfaces === 'hybrid' && divergenceDamping > 0;
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
+  if (phys.brineReservoir && !phys.iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
   phys.deckResolved ??= phys.mixedLayerDeck && phys.prognosticHeight ? 'above' : 'added';
   phys.cloudColumns ??= phys.cloudCover === 'pdf' && phys.cloudOverlap === 'exponentialRandom';
   phys.cloudSpread ??= phys.cloudColumns ? 0.75 : 0;

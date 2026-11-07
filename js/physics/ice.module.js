@@ -109,12 +109,15 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * blended over iceFullSnow as the albedo is, and leaves the skin's balance.
  * Of it, exp(-1.5 (h - 0.1)) reaches the water: the share transmission[i]
  * goes to penetrated[i] and the rest melts the base. What the ice holds
- * back returns to the surface, or with `brineReservoir` fills `brine`
- * (J/m² of ice), Semtner's reservoir, which holds at most half the latent
- * heat of the ice at the end of a step, the rest melting ice. With no heat
- * capacity in the ice to keep at the melting point, the reservoir is spent
- * at the base against the growth conduction drives (FMM97 p. 12,626), and
- * the surface cools freely.
+ * back returns to the surface, or with `brineReservoir`, while the skin is
+ * at the melting point, fills `brine` (J/m² of ice), Semtner's reservoir,
+ * which holds at most half the latent heat of the ice at the end of a step,
+ * the rest melting ice. It stands in for FMM97's eq. 9: while it lasts and
+ * the skin is below the melting point, an upper half-layer of the ice (its
+ * midpoint at h/4) is held at the melting point, the skin taking
+ * (T_m - T) / (h / 4k + snow's resistance) and the base
+ * (T_f - T_m) / (3h / 4k), and the reservoir pays the difference. With no
+ * heat in the ice to hold, this only approximates eq. 9.
  */
 export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
 
@@ -273,18 +276,21 @@ export function createSeaIce(mesh, {
     if (iceLight) {
       const passed = Math.max(0, solar - (1 - A) * contrast) * (ICE_LIGHT.clear + (ICE_LIGHT.cloudy - ICE_LIGHT.clear) * diffuse) * Math.max(0, 1 - s / iceFullSnow);
       through = passed * Math.exp(-ICE_LIGHT.extinction * Math.max(0, h - ICE_LIGHT.surfaceLayer));
-      held = brine ? passed - through : 0;
+      held = brine && T >= MELTING_POINT ? passed - through : 0;
       iceFlux -= through + held;
     }
-    const conduction = (FREEZING_POINT - T) / (Math.max(h, minimumThickness) / conductivity + s / (snowDensity * snowConductivity));
-    T += dt * (iceFlux + conduction) / skinHeatCapacity;
-    let thickness = h + dt * (conduction - ocean) / latent;
+    const depth = Math.max(h, minimumThickness), insulation = s / (snowDensity * snowConductivity);
+    let conduction = (FREEZING_POINT - T) / (depth / conductivity + insulation), base = conduction;
     let Q = brine ? brine[i] + dt * held : 0;
-    if (brine && Q > 0 && conduction > ocean) {
-      const spent = Math.min(Q, dt * (conduction - ocean));
-      Q -= spent;
-      thickness -= spent / latent;
+    if (Q > 0 && T < MELTING_POINT) {
+      const upper = (MELTING_POINT - T) / (depth / (4 * conductivity) + insulation), lower = (FREEZING_POINT - MELTING_POINT) / (3 * depth / (4 * conductivity));
+      const cost = dt * (upper - lower), part = Math.min(1, Q / cost);
+      conduction += part * (upper - conduction);
+      base += part * (lower - base);
+      Q = part < 1 ? 0 : Q - cost;
     }
+    T += dt * (iceFlux + conduction) / skinHeatCapacity;
+    let thickness = h + dt * (base - ocean) / latent;
     if (iceLight) {
       const share = transmission ? transmission[i] : 0;
       thickness -= dt * through * (1 - share) / latent;
