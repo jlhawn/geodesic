@@ -9,17 +9,19 @@
  * downwind cell, or the upwind value where the scheme falls back to it), and
  * the lateral diffusion of heat, κ = lateralDiffusionSpeed·d plus, in the
  * fixed-depth layers, the shear-scaled term min(cap, coefficient·|ζ|·d²)
- * with ζ the mean of the edge's two vertex vorticities. Volumes are m³/s
+ * with ζ the mean of the edge's two vertex vorticities, scaled by
+ * shearResolution's factor under shearDiffusivityResolution. Volumes are m³/s
  * and heats K·m³/s from cell a = cellsOnEdge[2e] toward cell b, T in kelvin
  * as given.
  */
 import { curl } from '../js/dynamics/operators.module.js';
-import { beyondCells, limitedEdgeValue, EPS } from '../js/ocean/layered.module.js';
+import { beyondCells, limitedEdgeValue, EPS, shearResolutionOptions, shearResolution } from '../js/ocean/layered.module.js';
 
 export function edgeLayerFluxes(mesh, { layers: L, fixed, options, cellOcean, depth, sill = null }) {
   const { nCells: C, nEdges: E, nVertices: V, cellsOnEdge, dcEdge, dvEdge, verticesOnEdge } = mesh;
   const beyond = options.tracerAdvection === 'third' ? beyondCells(mesh) : null;
   const lateral = options.lateralDiffusionSpeed ?? 0, shear = options.shearDiffusivity ?? 0, cap = options.shearDiffusivityCap ?? Infinity;
+  const resolve = shearResolutionOptions(options.shearDiffusivityResolution), scaled = resolve ? shearResolution(mesh, resolve) : null;
   const zeta = Array.from({ length: shear > 0 ? fixed : 0 }, () => new Float64Array(V)), column = new Float64Array(L);
   let state = null;
   return {
@@ -42,7 +44,7 @@ export function edgeLayerFluxes(mesh, { layers: L, fixed, options, cellOcean, de
           const uu = beyond.cell[2 * e + side];
           if (uu >= 0 && cellOcean[uu] && h[o + uu] > 1e-6 && h[o + down] > 1e-6) face = limitedEdgeValue(T.subarray(o, o + C), up, down, uu, dcEdge[beyond.edge[2 * e + side]], dc);
         }
-        const kappa = lateral * dc + (k < zeta.length ? Math.min(cap, shear * Math.abs(0.5 * (zeta[k][verticesOnEdge[2 * e]] + zeta[k][verticesOnEdge[2 * e + 1]])) * dc * dc) : 0);
+        const kappa = lateral * dc + (k < zeta.length ? Math.min(cap, shear * Math.abs(0.5 * (zeta[k][verticesOnEdge[2 * e]] + zeta[k][verticesOnEdge[2 * e + 1]])) * dc * dc) * (scaled ? scaled[e] : 1) : 0);
         out.volume[k] = dv * flux;
         out.net[k] = dv * column[k] * ue;
         out.heat[k] = dv * flux * face;

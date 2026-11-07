@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED } from '../js/ocean/layered.module.js';
+import { createOcean, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, shearResolution } from '../js/ocean/layered.module.js';
 import { edgeLayerFluxes } from '../scripts/oceanEdgeFlux.mjs';
 
 test('the heat the edge fluxes carry across a latitude is the heat that leaves the cells south of it in a step', () => {
@@ -59,4 +59,29 @@ test('the heat the edge fluxes carry across a latitude is the heat that leaves t
     console.log(`${degrees}°: water south rises ${(filled / 1e6).toFixed(3)} Sv against ${(-sums[c].volume / 1e6).toFixed(3)} Sv through the edges; heat south rises ${(actual / 1e9).toFixed(4)}e9 K·m³/s, the model's edge fluxes ${(model / 1e9).toFixed(4)}e9, the donor rule ${(donor / 1e9).toFixed(4)}e9`);
     assert.ok(Math.abs(model - actual) < 0.01 * Math.abs(actual) + 1e7, `${degrees}°: ${model} against ${actual}`);
   });
+});
+
+test('under shearDiffusivityResolution the edge fluxes scale the shear-scaled diffusion of the fixed-depth layers by the resolution function, and nothing else', () => {
+  const mesh = buildMesh(new Grid(16)), { nCells: C, nEdges: E, latCell, latEdge } = mesh, L = 3, fixed = 2, resolve = { scale: 4, power: 2 };
+  const h = new Float64Array(L * C), u = new Float64Array(L * E), T = new Float64Array(L * C);
+  for (let i = 0; i < C; i++) for (let k = 0; k < L; k++) { h[k * C + i] = [10, 20, 3970][k]; T[k * C + i] = 300 - 20 * Math.sin(latCell[i]) ** 2 - 2 * k; }
+  for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) u[k * E + e] = 0.4 * Math.exp(-k) * Math.cos(latEdge[e]) * Math.sin(3 * e);
+  const options = { tracerAdvection: 'upwind', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: 0 };
+  const shape = { layers: L, fixed, cellOcean: new Uint8Array(C).fill(1), depth: new Float64Array(C).fill(4000) };
+  const whole = edgeLayerFluxes(mesh, { ...shape, options }), scaled = edgeLayerFluxes(mesh, { ...shape, options: { ...options, shearDiffusivityResolution: resolve } });
+  const state = { h, u, T, eta: new Float64Array(C) }, F = shearResolution(mesh, resolve);
+  whole.load(state); scaled.load(state);
+  const out = () => ({ volume: new Float64Array(L), net: new Float64Array(L), heat: new Float64Array(L), diffusion: new Float64Array(L), donor: new Int32Array(L) });
+  const a = out(), b = out();
+  let moved = 0;
+  for (let e = 0; e < E; e++) {
+    whole.edge(e, a); scaled.edge(e, b);
+    for (let k = 0; k < L; k++) {
+      assert.equal(b.volume[k], a.volume[k]); assert.equal(b.heat[k], a.heat[k]);
+      const expected = k < fixed ? F[e] * a.diffusion[k] : 0;
+      assert.ok(Math.abs(b.diffusion[k] - expected) <= 1e-12 * Math.abs(a.diffusion[k]), `edge ${e} layer ${k}: ${b.diffusion[k]} against ${expected}`);
+      if (k < fixed && F[e] < 0.9 && a.diffusion[k] !== 0) moved++;
+    }
+  }
+  assert.ok(moved > 0, 'no edge carries tapered diffusion');
 });

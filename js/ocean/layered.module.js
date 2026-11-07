@@ -197,6 +197,27 @@ export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
 }
 
 /*
+ * Under shearDiffusivityResolution { scale s, power p } the shear-scaled
+ * diffusivity is scaled edge by edge by MOM6's resolution function (Hallberg
+ * 2013, Ocean Modell. 72, 92): 1/(1 + (s R_d/Δ)^p), R_d the deformation
+ * radius of deformationRadii and Δ the edge's spacing, so it falls away
+ * where the grid resolves the eddies the diffusion stands in for, at the
+ * equator the tropical instability waves. true takes s 1 and p 2, the form
+ * that scales the eddy diffusivity.
+ */
+export const SHEAR_RESOLUTION = { scale: 1, power: 2 };
+export function shearResolutionOptions(o) {
+  if (!o) return null;
+  const out = { ...SHEAR_RESOLUTION, ...(o === true ? {} : o) };
+  if (!(out.scale > 0) || !(out.power > 0)) throw new Error(`shearDiffusivityResolution takes a positive scale and power, not ${out.scale} and ${out.power}`);
+  return out;
+}
+export function shearResolution(mesh, { scale, power }) {
+  const { dcEdge } = mesh;
+  return Float64Array.from(deformationRadii(mesh), (radius, e) => 1 / (1 + (scale * radius / dcEdge[e]) ** power));
+}
+
+/*
  * The interior's background diffusivity κ_b by latitude φ, cell by cell.
  * 'uniform' holds κ_b everywhere. 'henyey' is MOM6's HENYEY_IGW_BACKGROUND,
  * OM4's form (Harrison and Hallberg 2008, J. Phys. Oceanogr. 38, 1894,
@@ -533,7 +554,7 @@ export function createOcean(mesh, {
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'rh18', langmuirScheme = 'rescale', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   backgroundLatitude = 'uniform', equatorialDiffusivity = 1e-6,
-  tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
+  tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, shearDiffusivityResolution = false, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
   iceDrift = false, mixedLayerRestratification = true, eddyTracers = 'donor',
 } = {}) {
@@ -560,6 +581,7 @@ export function createOcean(mesh, {
   const shearDiffusion = shearDiffusivity;
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
   if (advection === 'third' && !(shearDiffusion > 0)) throw new Error('the limited third-order tracer flux admits grid-scale noise that the shear-scaled diffusion of the surface layers damps, so tracerAdvection third needs shearDiffusivity above zero');
+  const shearResolve = shearResolutionOptions(shearDiffusivityResolution), shearScale = shearResolve ? shearResolution(mesh, shearResolve) : null;
   if (!(shearCutoff > 0)) throw new Error(`shearCutoff is a positive Richardson number, or Infinity for none, not ${shearCutoff}`);
   if (!BACKGROUND_LATITUDES.includes(backgroundLatitude)) throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${backgroundLatitude}`);
   if (!(equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${equatorialDiffusivity}`);
@@ -809,7 +831,7 @@ export function createOcean(mesh, {
           if (sheared) curl(mesh, uIn.subarray(oe, oe + E), zeta);
           for (let e = 0; e < E; e++) {
             const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], dc = dcEdge[e];
-            const kappa = lateralSpeed * dc + (sheared ? Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc) : 0);
+            const kappa = lateralSpeed * dc + (sheared ? Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc) * (shearScale ? shearScale[e] : 1) : 0);
             const weight = edgeOcean[e] ? kappa * hEdge[oe + e] / dc : 0;
             tracerFlux[e] = -weight * (T[b] - T[a]); edgeS[e] = -weight * (S[b] - S[a]);
           }

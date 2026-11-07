@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND, restratificationScale, restratificationOptions, deformationRadii, limitedFaceValue, limitedEdgeValue } from '../js/ocean/layered.module.js';
+import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND, restratificationScale, restratificationOptions, deformationRadii, limitedFaceValue, limitedEdgeValue, eddyDiffusivities, shearResolution, shearResolutionOptions } from '../js/ocean/layered.module.js';
 import { interiorMixing, shearTaper } from '../js/ocean/column.module.js';
 
 /*
@@ -11,8 +11,10 @@ import { interiorMixing, shearTaper } from '../js/ocean/column.module.js';
  * latitude dependence of the background diffusivity (backgroundLatitude)
  * and the Richardson-number cutoff of the interior shear mixing
  * (shearCutoff), the restratification's equatorial taper
- * (mixedLayerRestratification.taperLatitude) and the temperature and
- * salinity the eddy phase's layer fluxes carry (eddyTracers).
+ * (mixedLayerRestratification.taperLatitude), the temperature and
+ * salinity the eddy phase's layer fluxes carry (eddyTracers) and the
+ * resolution function on the shear-scaled diffusion
+ * (shearDiffusivityResolution).
  */
 const mesh = buildMesh(new Grid(16)), { nCells: C, nEdges: E, latCell, latEdge, fEdge, dcEdge, areaCell } = mesh;
 const DT = 1350, DEGREE = Math.PI / 180;
@@ -208,4 +210,42 @@ test('under eddyTracers third and centered the eddy phase keeps water, heat and 
   }
   assert.throws(() => createOcean(mesh, { eddyTracers: 'upwind' }), /eddyTracers is one of/);
   assert.throws(() => createOcean(mesh, { eddyTracers: 'third', tracerAdvection: 'upwind' }), /beyond cells/);
+});
+
+test('shearDiffusivityResolution is MOM6\'s resolution function 1/(1 + (s R_d/Δ)^p): the eddy diffusivity\'s form under true, least near the equator, whole at high latitudes, refused without a positive scale and power', () => {
+  assert.equal(shearResolutionOptions(false), null);
+  assert.deepEqual(shearResolutionOptions(true), { scale: 1, power: 2 });
+  assert.deepEqual(shearResolutionOptions({ power: 4 }), { scale: 1, power: 4 });
+  const radius = deformationRadii(mesh), F = shearResolution(mesh, shearResolutionOptions(true)), G = shearResolution(mesh, { scale: 0.5, power: 4 }), kappa = eddyDiffusivities(mesh, 1000);
+  let least = 0;
+  for (let e = 0; e < E; e++) {
+    assert.ok(Math.abs(F[e] - kappa[e] / 1000) < 1e-15, `edge ${e}: ${F[e]} against the eddy diffusivity's ${kappa[e] / 1000}`);
+    assert.ok(Math.abs(G[e] - 1 / (1 + (0.5 * radius[e] / dcEdge[e]) ** 4)) < 1e-15, `edge ${e}: ${G[e]}`);
+    assert.ok(F[e] > 0 && F[e] <= 1);
+    if (Math.abs(latEdge[e]) > 45 * DEGREE) assert.ok(F[e] > 0.99, `edge ${e} at ${latEdge[e] / DEGREE}°: ${F[e]}`);
+    if (F[e] < F[least]) least = e;
+  }
+  assert.ok(Math.abs(latEdge[least]) < 5 * DEGREE && F[least] < 0.9, `least ${F[least]} at ${latEdge[least] / DEGREE}°`);
+  for (const bad of [{ scale: 0 }, { power: -1 }, { scale: NaN }]) assert.throws(() => createOcean(mesh, { shearDiffusivityResolution: bad }), /shearDiffusivityResolution takes a positive scale and power/);
+});
+
+test('shearDiffusivityResolution reaches the layers\' tracer tendency: a vanishing scale keeps the shear-scaled diffusion whole, a huge one takes it all away, true some of it, and the dynamics keep the sea\'s heat to rounding', () => {
+  const sum = (ocean) => { let q = 0; for (let n = 0; n < ocean.Q.length; n++) q += areaCell[n % C] * ocean.Q[n]; return q; };
+  const run = (options) => {
+    const ocean = stratified({ tracerAdvection: 'upwind', ...options }), L = ocean.layers;
+    for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = 0.4 * Math.exp(-k / 3) * Math.cos(latEdge[e]) * Math.sin(3 * e);
+    const before = sum(ocean);
+    ocean.phases.dynamics(DT);
+    assert.ok(Math.abs(sum(ocean) - before) < 1e-12 * Math.abs(before), `${JSON.stringify(options)}: heat ${before} → ${sum(ocean)}`);
+    return Float64Array.from(ocean.Q);
+  };
+  const apart = (x, y) => { let d = 0; for (let n = 0; n < x.length; n++) d += Math.abs(x[n] - y[n]); return d; };
+  const none = run({ shearDiffusivity: 0 }), whole = run({}), kept = run({ shearDiffusivityResolution: { scale: 1e-6 } }), removed = run({ shearDiffusivityResolution: { scale: 1e6 } }), tapered = run({ shearDiffusivityResolution: true });
+  const span = apart(whole, none);
+  assert.ok(span > 0, 'the shear-scaled diffusion moved no heat');
+  assert.ok(apart(kept, whole) < 1e-7 * span, `a vanishing scale: ${apart(kept, whole) / span}`);
+  assert.ok(apart(removed, none) < 1e-7 * span, `a huge scale: ${apart(removed, none) / span}`);
+  const fromWhole = apart(tapered, whole) / span, fromNone = apart(tapered, none) / span;
+  console.log(`true moves the heat ${fromWhole.toFixed(4)} of the shear-scaled diffusion's change from the whole and ${fromNone.toFixed(4)} from none`);
+  assert.ok(fromWhole > 1e-3 && fromNone > 0.5, `${fromWhole}, ${fromNone}`);
 });
