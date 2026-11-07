@@ -47,7 +47,8 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const mesh = stateGrid(saved, topography).mesh, dt = 1350 * 16 / saved.N, perDay = Math.round(86400 / dt);
 const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedLevels(saved);
-const TERRAIN = process.env.TERRAIN === undefined ? saved.terrainOptions ?? true : JSON.parse(process.env.TERRAIN);
+const SAVED_TERRAIN = saved.given?.terrain ?? saved.terrainOptions ?? true;
+const TERRAIN = process.env.TERRAIN === undefined ? SAVED_TERRAIN : JSON.parse(process.env.TERRAIN);
 const model = await createGpuModel(mesh, { topography, geography, land: { ...landOptions, ...env('LAND') }, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES'), orography: env('OROGRAPHY'), dynamics: env('DYNAMICS'), terrain: TERRAIN });
 const { state, core } = model, C = mesh.nCells;
 const carried = { ...saved, ...(process.env.LEVELS ? remapLevels(savedLevels(saved), levels, saved, mesh) : {}) };
@@ -58,10 +59,10 @@ if (PERTURB) {
   carried.theta = Float64Array.from(carried.theta, (x) => x * (1 + PERTURB * uniform()));
 }
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(carried[name]));
-if (saved.terrain && (!TERRAIN || terrainKey(saved.terrainOptions ?? true) !== terrainKey(TERRAIN))) {
+if (saved.terrain && (!TERRAIN || terrainKey(SAVED_TERRAIN) !== terrainKey(TERRAIN))) {
   core.diagnose(state[0], state[1], null, null);
-  rebalanceSurfacePressure(core, state[0], state[1], surfaceGeopotential(mesh, model.geography, terrainOptions(saved.terrainOptions ?? true)), model.surfaceGeopotential);
-  console.log(`surface pressure moved from terrain ${JSON.stringify(saved.terrainOptions ?? true)} onto ${JSON.stringify(TERRAIN)}`);
+  rebalanceSurfacePressure(core, state[0], state[1], surfaceGeopotential(mesh, model.geography, terrainOptions(SAVED_TERRAIN)), model.surfaceGeopotential);
+  console.log(`surface pressure moved from terrain ${JSON.stringify(SAVED_TERRAIN)} onto ${JSON.stringify(TERRAIN)}`);
 }
 model.seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));

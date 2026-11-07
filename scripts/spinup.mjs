@@ -207,7 +207,7 @@ import { START_CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { SEA_ICE_START_FILE, loadSeaIceStart } from '../js/physics/seaIceStart.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { withCadence } from '../js/cadence.module.js';
-import { recordedOptions, differingGroups } from './stateOptions.mjs';
+import { headerOptions, differingGroups } from './stateOptions.mjs';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
@@ -268,11 +268,12 @@ if (fromState && fromState.N !== N) throw new Error(`FROM ${process.env.FROM} is
 const base = saved ?? fromState, chosenParts = [['topography', 'TOPOGRAPHY'], ['iceSheets', 'ICE_SHEETS'], ['iceShelves', 'ICE_SHELVES'], ['mask', 'MASK']].filter(([, name]) => process.env[name]);
 const GEOGRAPHY = checkGeography({ ...(base ? savedGeography(base) : FRESH_GEOGRAPHY), ...Object.fromEntries(chosenParts.map(([key, name]) => [key, process.env[name]])) });
 if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (GEOGRAPHY[key] !== value) throw new Error(`${saved ? file : process.env.FROM} is on ${key} ${value}, not ${GEOGRAPHY[key]}`);
-const TERRAIN = GIVEN_TERRAIN ?? base?.terrainOptions;
-if (GIVEN_TERRAIN === undefined && base?.terrainOptions !== undefined) log(`terrain ${JSON.stringify(TERRAIN)}, as ${saved ? file : process.env.FROM} records`);
+const savedTerrain = (source) => source.given?.terrain ?? source.terrainOptions;
+const TERRAIN = GIVEN_TERRAIN ?? (base ? savedTerrain(base) : undefined);
+if (GIVEN_TERRAIN === undefined && TERRAIN !== undefined) log(`terrain ${JSON.stringify(TERRAIN)}, as ${saved ? file : process.env.FROM} records`);
 const GIVEN_GROUPS = [['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['ocean', 'OCEAN'], ['lake', 'LAKE'], ['dynamics', 'DYNAMICS'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY']].filter(([, name]) => process.env[name] !== undefined);
-const OPTIONS = recordedOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: LAND, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
-const otherGroups = base?.options ? differingGroups(OPTIONS, base.options) : [];
+const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
+const otherGroups = base?.given ? differingGroups(GIVEN, base.given) : [];
 if (otherGroups.length) log(`options other than ${saved ? file : process.env.FROM}'s header records: ${otherGroups.join(', ')}`);
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}`;
@@ -283,7 +284,7 @@ const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mas
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 const deepNote = (land) => (model.land.deepWater ? `deep store of ${model.land.deepCapacity} kg/m² under the trees, ${land && land.deep ? 'from the saved land.deep' : 'started at the root zone\'s fill'}` : '');
 function rebalanceTerrain(source) {
-  const from = source.terrainOptions ?? true, to = TERRAIN ?? true;
+  const from = savedTerrain(source) ?? true, to = TERRAIN ?? true;
   if (!source.terrain || !model.surfaceGeopotential || terrainKey(from) === terrainKey(to)) return;
   core.diagnose(state[0], state[1], null, null);
   rebalanceSurfacePressure(core, state[0], state[1], surfaceGeopotential(mesh, model.geography, terrainOptions(from)), model.surfaceGeopotential);
@@ -629,7 +630,7 @@ if (days > 0 && !step) {
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
 const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
-const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...(TERRAIN === undefined ? {} : { terrainOptions: TERRAIN }), ...geographyHeader(GEOGRAPHY), levels: core.levels, options: OPTIONS, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
+const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...(TERRAIN === undefined ? {} : { terrainOptions: TERRAIN }), ...geographyHeader(GEOGRAPHY), levels: core.levels, options: OPTIONS, given: GIVEN, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
 writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...meansSaved, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));
