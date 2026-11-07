@@ -27,7 +27,7 @@ const CAM_L26_HYBI = [
 
 export const DIVERGENCE_SURFACES = ['sigma', 'hybrid'];
 export const TEMPERATURE_CLOSURES = ['sigma', 'standard'];
-export const VERTICAL_ADVECTION = ['centered', 'vanLeer', 'vanLeerWater'];
+export const VERTICAL_ADVECTION = ['centered', 'vanLeerWater'];
 
 /*
  * The models' `dynamics` options with their defaults: divergenceSurfaces,
@@ -38,9 +38,10 @@ export const VERTICAL_ADVECTION = ['centered', 'vanLeer', 'vanLeerWater'];
  * 'standard' for it on T less the US Standard Atmosphere 1976 at the
  * layer's pressure πσ, which takes out T's hydrostatic slope along σ over
  * terrain; verticalAdvection, 'centered' for θ, q and q_c at the layer
- * interfaces linear in Exner, 'vanLeer' for those values limited by
- * vanLeerFace, or 'vanLeerWater' for q and q_c limited and θ centered, the
- * θ that conserves energy. The last three are returned only when given.
+ * interfaces linear in Exner, or 'vanLeerWater' for q and q_c limited by
+ * vanLeerFace and θ centered, the face whose vertical transport the
+ * hydrostatic pressure work balances. The last three are returned only
+ * when given.
  */
 export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscosity, temperatureClosure, verticalAdvection, ...rest } = {}) {
   const unknown = Object.keys(rest);
@@ -55,11 +56,15 @@ export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscos
 /*
  * A layer interface's value under van Leer's limiter: the centered value
  * blended toward the upwind layer's by φ(r) = (r + |r|)/(1 + |r|), r the
- * ratio of the difference upwind of the upwind layer to the difference
- * across the interface, and never past the downwind layer's value.
+ * ratio of the gradient upwind of the upwind layer to the gradient across
+ * the interface, each difference over its spacing (`upSpacing`,
+ * `acrossSpacing`; in the core, of the layer middles' Exner function), so
+ * that a profile straight in that coordinate keeps the centered value; and
+ * never past the downwind layer's value.
  */
-export function vanLeerFace(beyond, upwind, downwind, centered) {
-  const across = downwind - upwind, r = across !== 0 ? (upwind - beyond) / across : 0, phi = r > 0 ? 2 * r / (1 + r) : 0;
+export function vanLeerFace(beyond, upwind, downwind, centered, upSpacing = 1, acrossSpacing = 1) {
+  const rise = upwind - beyond, across = downwind - upwind, up = rise * acrossSpacing, sum = up + across * upSpacing;
+  const phi = rise * across > 0 && sum !== 0 ? 2 * up / sum : 0;
   const face = upwind + phi * (centered - upwind);
   return (face - downwind) * across > 0 ? downwind : face;
 }
@@ -237,7 +242,7 @@ export function createSigmaCore(mesh, options = {}) {
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
   if (!TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
   if (!VERTICAL_ADVECTION.includes(verticalAdvection)) throw new Error(`verticalAdvection is ${VERTICAL_ADVECTION.join(' or ')}, not ${verticalAdvection}`);
-  const standardClosure = temperatureClosure === 'standard', vanLeer = verticalAdvection !== 'centered', limitTheta = verticalAdvection === 'vanLeer';
+  const standardClosure = temperatureClosure === 'standard', vanLeer = verticalAdvection === 'vanLeerWater';
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
     cellsOnEdge, verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, areaTriangle, dcEdge, dvEdge, fVertex,
@@ -476,9 +481,10 @@ export function createSigmaCore(mesh, options = {}) {
    * ∇⁴ closure as part of the tendency unless the closure is split off.
    */
   function limitedFace(field, centered, n, above, flow) {
-    const down = flow > 0, far = down ? above - 1 : above + 2;
-    const upwind = down ? field[n] : field[n + C], downwind = down ? field[n + C] : field[n];
-    return vanLeerFace(far >= 0 && far < K ? field[n + (far - above) * C] : upwind, upwind, downwind, centered[n]);
+    const down = flow > 0, far = down ? above - 1 : above + 2, upwind = down ? n : n + C, downwind = down ? n + C : n;
+    if (far < 0 || far >= K) return vanLeerFace(field[upwind], field[upwind], field[downwind], centered[n]);
+    const beyond = n + (far - above) * C;
+    return vanLeerFace(field[beyond], field[upwind], field[downwind], centered[n], Math.abs(exnerLayer[upwind] - exnerLayer[beyond]), Math.abs(exnerLayer[downwind] - exnerLayer[upwind]));
   }
 
   function transportLayer(k, pi, field, fieldLower, edgeFlux, divField, dField, conservative = false, limited = false) {
@@ -573,7 +579,7 @@ export function createSigmaCore(mesh, options = {}) {
     const q = state[4] ?? null, dQ = out[4] ?? null, qc = state[5] ?? null, dQc = out[5] ?? null;
     if (part !== 'momentum') {
       for (let k = kFrom; k < kTo; k++) {
-        transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta, false, limitTheta);
+        transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta, false);
         if (q) virtualWork(k, pi, u, theta, q, qc, out[0], dTheta);
         if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true, vanLeer);
         if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true, vanLeer);

@@ -100,29 +100,38 @@ test(`the GPU model takes terrain { conserveVolume } and orography { constants: 
   for (const [k, v] of Object.entries(report)) assert.ok(v.scale > 0 && v.relative < 1e-3, `${k} ${v.relative} of ${v.scale}`);
 });
 
-test(`one tendency with verticalAdvection 'vanLeer' on the GPU matches the CPU at N=${N} on bl48 over a sharp step in water`, { skip }, async () => {
-  const step = model.core.sigmaMid.findIndex((s) => s > 0.85), state = start.map((a) => Float64Array.from(a));
-  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) { state[4][k * C + i] = k >= step ? 0.01 : 0; state[5][k * C + i] = k >= step ? 1e-4 : 0; }
-  const rates = {};
+test(`one tendency with verticalAdvection 'vanLeerWater' on the GPU matches the CPU at N=${N} on bl48 over a sharp step in water, and keeps the centered faces on water straight in Exner`, { skip }, async () => {
+  const step = model.core.sigmaMid.findIndex((s) => s > 0.85), sharp = start.map((a) => Float64Array.from(a)), straight = start.map((a) => Float64Array.from(a));
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) { sharp[4][k * C + i] = k >= step ? 0.01 : 0; sharp[5][k * C + i] = k >= step ? 1e-4 : 0; }
+  const look = createSigmaCore(mesh, { levels, surfaceGeopotential: model.surfaceGeopotential });
+  look.diagnose(straight[0], straight[1]);
+  for (let n = 0; n < K * C; n++) { straight[4][n] = 0.02 * look.diagnostics.exnerLayer[n] - 0.012; straight[5][n] = 1e-4 * look.diagnostics.exnerLayer[n]; }
+  const rates = { sharp: {}, straight: {} };
   for (const verticalAdvection of VERTICAL_ADVECTION) {
     const options = { levels, surfaceGeopotential: model.surfaceGeopotential, verticalAdvection };
-    const cpu = createSigmaCore(mesh, options), out = state.map((a) => new Float64Array(a.length));
-    cpu.tendency(state, out);
+    const cpu = createSigmaCore(mesh, options);
     const gpu = await createGpuCore(mesh, { ...options, dragCoefficient: 0, topDragDays: 0, spongeRates: null, spongeMeanRates: null, gravityWaves: false });
-    gpu.upload(state);
-    await gpu.tendency();
-    rates[verticalAdvection] = { cpu: out, gpu: await gpu.download(gpu.buffers.K1) };
+    for (const [name, state] of [['sharp', sharp], ['straight', straight]]) {
+      const out = state.map((a) => new Float64Array(a.length));
+      cpu.tendency(state, out);
+      gpu.upload(state);
+      await gpu.tendency();
+      rates[name][verticalAdvection] = { cpu: out, gpu: await gpu.download(gpu.buffers.K1) };
+    }
     for (const buffer of Object.values(gpu.buffers)) buffer.destroy();
   }
-  for (const [s, name] of [[1, 'θ'], [4, 'q'], [5, 'q_c']]) {
-    const limiter = apart(minus(rates.vanLeer.gpu[s], rates.centered.gpu[s]), minus(rates.vanLeer.cpu[s], rates.centered.cpu[s]));
-    const whole = apart(rates.vanLeer.gpu[s], rates.vanLeer.cpu[s]);
-    console.log(`${name}: GPU against CPU, the limiter's change ${said(limiter)}, the tendency ${said(whole)}`);
+  const { centered, vanLeerWater } = rates.sharp;
+  for (const [s, name] of [[4, 'q'], [5, 'q_c']]) {
+    const limiter = apart(minus(vanLeerWater.gpu[s], centered.gpu[s]), minus(vanLeerWater.cpu[s], centered.cpu[s]));
+    const whole = apart(vanLeerWater.gpu[s], vanLeerWater.cpu[s]);
+    const inner = (out) => out[s].subarray(2 * C, (K - 2) * C), smooth = apart(inner(rates.straight.vanLeerWater.gpu), inner(rates.straight.centered.gpu));
+    console.log(`${name}: GPU against CPU, the limiter's change ${said(limiter)}, the tendency ${said(whole)}; on the straight profile 'vanLeerWater' against 'centered' ${said(smooth)}`);
     assert.ok(limiter.scale > 0 && limiter.relative < 1e-2, `${name}: the limiter's change ${limiter.diff} against ${limiter.scale}`);
-    if (s !== 1) assert.ok(whole.relative < 1e-3, `${name}: the tendency ${whole.diff} against ${whole.scale}`);
+    assert.ok(whole.relative < 1e-3, `${name}: the tendency ${whole.diff} against ${whole.scale}`);
+    assert.ok(smooth.scale > 0 && smooth.relative < 1e-4, `${name}: on the straight profile ${smooth.diff} against ${smooth.scale}`);
   }
-  assert.equal(apart(rates.vanLeer.gpu[2], rates.centered.gpu[2]).diff, 0, 'the wind does not see it');
-  const water = apart(rates.vanLeerWater.gpu[4], rates.vanLeer.gpu[4]), theta = apart(rates.vanLeerWater.gpu[1], rates.centered.gpu[1]);
-  console.log(`vanLeerWater on the GPU: q against vanLeer's ${said(water)}, θ against centered ${said(theta)}`);
-  assert.ok(water.relative < 1e-6 && theta.relative < 1e-6);
+  assert.equal(apart(vanLeerWater.gpu[2], centered.gpu[2]).diff, 0, 'the wind does not see it');
+  const theta = apart(vanLeerWater.gpu[1], centered.gpu[1]);
+  console.log(`vanLeerWater on the GPU: θ against centered ${said(theta)}`);
+  assert.ok(theta.relative < 1e-6);
 });
