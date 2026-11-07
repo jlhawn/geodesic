@@ -1162,10 +1162,10 @@ export const seaSurfaceWgsl = (o) => {
     ${light ? 'var' : 'let'} iceFlux = net - (1.0 - cover) * split; let waterFlux = net + cover * split;
 ${light ? `    let passed = max(0.0, absorbed - (1.0 - cover) * contrast) * (I0_CLEAR + (I0_CLOUDY - I0_CLEAR) * diffuse) * max(0.0, 1.0 - snow / FULLSNOW_ICE);
     let through = passed * exp(-ICE_EXT * max(0.0, h - ICE_TOP));
-${brine ? '    let melting = T >= MELTING;\n' : ''}    iceFlux -= ${brine ? 'select(through, passed, melting)' : 'through'};
+${brine ? '    let filling = T >= MELTING || PH[PH_BRINE + i] > 0.0;\n' : ''}    iceFlux -= ${brine ? 'select(through, passed, filling)' : 'through'};
 ` : ''}${brine ? `    let depth = max(h, HMIN); let insulation = snow / (RHOSNOW * KSNOW);
     var conduction = (FREEZING - T) / (depth / COND + insulation); var base = conduction;
-    var reservoir = PH[PH_BRINE + i] + dt * select(0.0, passed - through, melting);
+    var reservoir = PH[PH_BRINE + i] + dt * select(0.0, passed - through, filling);
     if (reservoir > 0.0 && T < MELTING) {
       let upper = (MELTING - T) / (depth / (4.0 * COND) + insulation); let lower = (FREEZING - MELTING) / (3.0 * depth / (4.0 * COND));
       let cost = dt * (upper - lower); let part = min(1.0, reservoir / cost);

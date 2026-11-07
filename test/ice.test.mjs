@@ -364,3 +364,22 @@ test('over ten years a perennial column with the brine reservoir ends thicker th
   assert.ok(alone.low > 0.5 && stored.low > 0.5, 'both columns are perennial');
   assert.ok(stored.mean > alone.mean + 0.5, 'the brine thickens the perennial ice');
 });
+
+for (const melt of [20]) test(`with the ice melting at ${melt} W/m² under a steady sun the brine stores ${melt < 40 ? 'most of' : 'all'} the light the ice holds, a skin at the melting point releasing none of it, as eq. 9 stores its source term`, () => {
+  const dt = 1350, sun = 150, i0 = 0.18 + (0.35 - 0.18) * 0.5, h0 = 2;
+  const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir: true });
+  const surfaceT = new Float64Array([MELTING_POINT]), ice = new Float64Array([h0]), flux = new Float64Array(1);
+  sea.load(ice, new Float64Array([1]));
+  const base = melt + sun * i0 * Math.exp(-1.5 * (h0 - 0.1)) + 1.8 / (h0 / 2);
+  let inside = 0, atMelting = 0;
+  for (let n = 0; n < 64 * 30; n++) {
+    const T = surfaceT[0], h = ice[0], Q = sea.brine[0], passed = sun * i0, held = passed - passed * Math.exp(-1.5 * (h - 0.1));
+    flux[0] = base - 15 * (T - MELTING_POINT);
+    sea.update(surfaceT, ice, flux, 0, dt, 0, sun, 0.5);
+    inside += dt * held;
+    if (T >= MELTING_POINT) { assert.ok(Math.abs(sea.brine[0] - Q - dt * held) < 1e-9 * (Q + dt * held), `step ${n}: from a skin at the melting point the brine gains ${sea.brine[0] - Q} for ${dt * held}`); atMelting++; }
+  }
+  console.log(`melting at ${melt} W/m² for 30 days: the brine holds ${(sea.brine[0] / 1e6).toFixed(1)} MJ/m² of the ${(inside / 1e6).toFixed(1)} the ice held, the skin at the melting point in ${atMelting} of ${64 * 30} steps`);
+  if (melt < 40) assert.ok(sea.brine[0] > 0.75 * inside, 'the brine keeps most of the light the ice holds');
+  else assert.ok(atMelting === 64 * 30 && sea.brine[0] > (1 - 1e-9) * inside, 'the brine keeps all the light the ice holds');
+});
