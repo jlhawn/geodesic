@@ -457,3 +457,40 @@ test('the boundary layer\'s K-profile options, alone and with diagnoseFirst, sur
   }
   assert.deepEqual(failures, []);
 });
+
+test('both coupled engines hand the air the same sea velocity under surface.relativeWind, with the ice drift and without it, and surface.gustiness and surface.virtualDensity move the ocean alike through its and the drift\'s stress under the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const configs = [
+    ['drift', { surface: { relativeWind: true } }],
+    ['no drift', { surface: { relativeWind: true }, ocean: { iceDrift: false } }],
+    ['fixed exchange', { surface: { exchange: 'fixed' } }],
+    ['fixed exchange, gustiness 6', { surface: { exchange: 'fixed', gustiness: 6 } }],
+    ['fixed exchange, virtualDensity', { surface: { exchange: 'fixed', virtualDensity: true } }],
+  ];
+  const flows = {}, failures = [], report = [];
+  for (const [name, { surface, ocean = {} }] of configs) {
+    const options = { topography, surface, ocean: { everySteps: 2, ...ocean } };
+    const cpu = prepare(createModel(new Grid(16), options)), gpu = prepare(await createGpuModel(new Grid(16), options));
+    for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
+    await gpu.settle(); await gpu.sync();
+    if (surface.relativeWind) {
+      const [flow] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.UO, length: cpu.mesh.nEdges }]);
+      flows[name] = { cpu: Float64Array.from(cpu.seaFlow), gpu: Float64Array.from(flow) };
+    } else flows[name] = { cpu: Float64Array.from(cpu.ocean.serialize().u), gpu: Float64Array.from((await gpu.ocean.serialize()).u) };
+    gpu.destroy();
+  }
+  const rms = (a, b = null) => Math.sqrt(a.reduce((sum, v, e) => sum + (v - (b ? b[e] : 0)) ** 2, 0) / a.length);
+  for (const [name] of configs) {
+    const { cpu, gpu } = flows[name], scale = rms(cpu), apart = rms(gpu, cpu) / scale;
+    report.push(`${name}: ${scale.toExponential(1)} m/s rms, the engines ${apart.toExponential(1)} of it apart`);
+    if (!(scale > 1e-4 && apart < 2e-4)) failures.push(`${name}: the velocity is ${scale} m/s rms, the engines ${apart} of it apart`);
+  }
+  for (const [name, from, least, spread] of [['no drift', 'drift', 1e-2, 0.05], ['fixed exchange, gustiness 6', 'fixed exchange', 1e-2, 0.05], ['fixed exchange, virtualDensity', 'fixed exchange', 1e-4, 0.5]]) {
+    const cpuMove = flows[name].cpu.map((v, e) => v - flows[from].cpu[e]), gpuMove = flows[name].gpu.map((v, e) => v - flows[from].gpu[e]);
+    const move = rms(cpuMove) / rms(flows[from].cpu), gap = rms(gpuMove, cpuMove) / rms(cpuMove);
+    report.push(`${name} against ${from}: it moves ${move.toExponential(1)} of it, the engines' moves ${gap.toExponential(1)} apart`);
+    if (!(move > least && gap < spread)) failures.push(`${name} against ${from}: the velocity moves ${move} of it, the engines' moves ${gap} of the move apart`);
+  }
+  console.log(`the sea velocity under the air, then the ocean's: ${report.join('; ')}`);
+  assert.deepEqual(failures, []);
+  await assert.rejects(createGpuModel(new Grid(16), { topography, ocean: { gustiness: 5 } }), /ocean\.gustiness is not an option/);
+});

@@ -728,7 +728,7 @@ async function start(message) {
   sourceModel = null;
 }
 
-function placeBoundaryLayer(model, saved) {
+export function placeBoundaryLayer(model, saved) {
   const layer = model.boundaryLayer, ground = model.gpu ? null : model.surfaceGeopotential;
   if (!saved || !layer) return;
   for (const [name, field, height] of [['boundaryDepth', 'depth', true], ['mixingTop', 'mixingTop', true], ['boundaryRegime', 'regime', false]]) {
