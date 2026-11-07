@@ -2,7 +2,7 @@ import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReductio
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, NEUTRAL_STRATIFICATION, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare, INTERIOR_SHEARS, LMD94_RICHARDSON, LMD94_VISCOSITY } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -768,25 +768,38 @@ fn uOff(k: i32) -> i32 { return OU + k * E; }
 fn qOff(k: i32) -> i32 { return OQ + k * C; }
 fn wOff(k: i32) -> i32 { return OW + k * C; }
 ${shear ? `${constLine('SHEARDIFF', shearOn ? o.shearDiffusivity : 0)} ${constLine('SHEARCAP', o.shearDiffusivityCap)} ${constLine('LATSPEED', lateralOn ? o.lateralDiffusionSpeed : 0)} const FIXEDL: i32 = ${shearOn ? o.table.fixed : 0};
-` : ''}${iso ? `const ISOFIXED: i32 = ${o.table.fixed}; ${constLine('ISOCAP', iso.slopeCap)}
+` : ''}${iso ? `const ISOFIXED: i32 = ${o.table.fixed}; ${constLine('ISOCAP', iso.slopeCap)} ${constLine('ISOWIDTH', iso.slopeWidth)} ${constLine('ISOREACH', iso.slopeCap + 10 * iso.slopeWidth)} ${constLine('ISOSTABLE', NEUTRAL_STRATIFICATION)}
 fn isoValue(c: i32, l: i32) -> vec2<f32> {
   let hv = IN[hOff(l) + c];
   return select(vec2<f32>(LABEL_T[l] - TREF, LABEL_S[l] - SREF), vec2<f32>(IN[qOff(l) + c] / hv, IN[wOff(l) + c] / hv), hv > 1e-6);
 }
-fn isoTriad(c: i32, l: i32, m: i32, along: vec2<f32>, dc: f32) -> vec4<f32> {
-  if (m < 1 || m >= L) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+fn isoSlope(c: i32, l: i32, m: i32, along: vec2<f32>, dc: f32) -> vec2<f32> {
   let hu = IN[hOff(m - 1) + c]; let hl = IN[hOff(m) + c];
-  if (!(hu > THINEDGE && hl > THINEDGE)) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+  if (!(ISOCAP > 0.0 && hu > THINEDGE && hl > THINEDGE)) { return vec2<f32>(0.0, 0.0); }
   let up = isoValue(c, m - 1); let down = isoValue(c, m); let here = isoValue(c, l);
-  let alpha = alphaT(here.x + TREF, here.y + SREF); let beta = betaS(here.x + TREF, here.y + SREF); let dz = 0.5 * (hu + hl);
-  let rx = (beta * along.y - alpha * along.x) / dc; let rz = (beta * (up.y - down.y) - alpha * (up.x - down.x)) / dz;
-  let den = max(-rz * ISOCAP, abs(rx));
-  var slope = select(0.0, rx * ISOCAP / den, den > 0.0);${iso.boundaryTaper ? `
+  let alpha = alphaT(here.x + TREF, here.y + SREF); let beta = betaS(here.x + TREF, here.y + SREF);
+  let rx = (beta * along.y - alpha * along.x) / dc; let rz = (beta * (up.y - down.y) - alpha * (up.x - down.x)) / (0.5 * (hu + hl));
+  if (!(-rz > ISOSTABLE && -rz * ISOREACH > abs(rx))) { return vec2<f32>(0.0, 0.0); }
+  let slope = -rx / rz; let s1 = slope / (1.0 + exp(2.0 * (abs(slope) - ISOCAP) / ISOWIDTH));
+  return vec2<f32>(s1, s1 * slope);
+}
+fn isoTriad(c: i32, ca: i32, cb: i32, l: i32, m: i32, along: vec2<f32>, dc: f32) -> vec4<f32> {
+  if (m < 1 || m >= L) { return vec4<f32>(0.0); }
+  let hu = IN[hOff(m - 1) + c]; let hl = IN[hOff(m) + c];
+  if (!(hu > THINEDGE && hl > THINEDGE)) { return vec4<f32>(0.0); }
+  let dz = 0.5 * (hu + hl); let up = isoValue(c, m - 1); let down = isoValue(c, m);${iso.boundaryTaper ? `
   var z = 0.0;
   for (var j = 0; j < m; j++) { z += IN[hOff(j) + c]; }
   let layer = OD[O_BLD + c];
-  if (layer > z) { slope *= z / layer; }` : ''}
-  return vec4<f32>(slope, (up.x - down.x) / dz, (up.y - down.y) / dz, dz);
+  var s = vec2<f32>(0.0);
+  if (layer > z) {
+    var base = m; var below = z;
+    while (base < ISOFIXED && below < layer) { below += IN[hOff(base) + c]; base++; }
+    let r = z / layer;
+    s = isoSlope(c, base - 1, base, isoValue(cb, base - 1) - isoValue(ca, base - 1), dc) * vec2<f32>(r, r * r);
+  } else { s = isoSlope(c, l, m, along, dc); }` : `
+  let s = isoSlope(c, l, m, along, dc);`}
+  return vec4<f32>(s.x * (up.x - down.x) / dz, s.x * (up.y - down.y) / dz, s.x / dz, s.y / dz);
 }
 fn isoKappaAt(k: i32, i: i32) -> f32 {
   if (k >= ISOFIXED) { return 0.0; }
@@ -906,14 +919,14 @@ ${iso ? '  var carryQ = 0.0; var carryW = 0.0; var carry33 = 0.0; var heldQ = 0.
         ${iso ? `if (k < ISOFIXED) {
           let own = i == MI[COE + 2 * e]; let ca = select(j, i, own); let cb = select(i, j, own);
           let along = vec2<f32>(select(Ti, Tj, own) - select(Tj, Ti, own), select(Si, Sj, own) - select(Sj, Si, own));
-          let t1 = isoTriad(ca, k, k, along, dc); let t2 = isoTriad(ca, k, k + 1, along, dc); let t3 = isoTriad(cb, k, k, along, dc); let t4 = isoTriad(cb, k, k + 1, along, dc);
-          let turnT = 0.25 * dc * (((t1.x * t1.y + t2.x * t2.y) + t3.x * t3.y) + t4.x * t4.y);
-          let turnS = 0.25 * dc * (((t1.x * t1.z + t2.x * t2.z) + t3.x * t3.z) + t4.x * t4.z);
+          let t1 = isoTriad(ca, ca, cb, k, k, along, dc); let t2 = isoTriad(ca, ca, cb, k, k + 1, along, dc); let t3 = isoTriad(cb, ca, cb, k, k, along, dc); let t4 = isoTriad(cb, ca, cb, k, k + 1, along, dc);
+          let turnT = 0.25 * dc * (((t1.x + t2.x) + t3.x) + t4.x);
+          let turnS = 0.25 * dc * (((t1.y + t2.y) + t3.y) + t4.y);
           let sense = select(-1.0, 1.0, own);
           difQ += sense * wd * (along.x + turnT); difW += sense * wd * (along.y + turnS);
           let top = select(t3, t1, own); let bottom = select(t4, t2, own); let weight = 0.25 * kappa * OD[O_HEDGE + k * E + e] * MF[F_DV + e];
-          upQ -= weight * top.x * along.x / top.w; upW -= weight * top.x * along.y / top.w; up33 += weight * dc * top.x * top.x / top.w;
-          downQ -= weight * bottom.x * along.x / bottom.w; downW -= weight * bottom.x * along.y / bottom.w; down33 += weight * dc * bottom.x * bottom.x / bottom.w;
+          upQ -= weight * top.z * along.x; upW -= weight * top.z * along.y; up33 += weight * dc * top.w;
+          downQ -= weight * bottom.z * along.x; downW -= weight * bottom.z * along.y; down33 += weight * dc * bottom.w;
         } else { difQ += wd * (Tj - Ti); difW += wd * (Sj - Si); }` : 'difQ += wd * (Tj - Ti); difW += wd * (Sj - Si);'}
       }` : ''}
       var Te = select(Tj, Ti, f > 0.0); var Se = select(Sj, Si, f > 0.0);
@@ -933,7 +946,7 @@ ${iso ? '  var carryQ = 0.0; var carryW = 0.0; var carry33 = 0.0; var heldQ = 0.
     ${iso ? `if (k <= ISOFIXED) {
       let topQ = (carryQ + upQ) / area; let topW = (carryW + upW) / area;
       dQ -= topQ; dW -= topW;
-      if (k > 0) { OUT[qOff(k - 1) + i] = heldQ + topQ; OUT[wOff(k - 1) + i] = heldW + topW; OD[O_ISOK + (k - 1) * C + i] = (carry33 + up33) / area; }
+      if (k > 0) { OUT[qOff(k - 1) + i] = heldQ + topQ; OUT[wOff(k - 1) + i] = heldW + topW; let n33 = O_ISOK + (k - 1) * C + i; OD[n33] = select(0.0, OD[n33], P[3] > 0.5) + P[2] * ((carry33 + up33) / area); }
       carryQ = downQ; carryW = downW; carry33 = down33; heldQ = dQ; heldW = dW;
     }
     OUT[hOff(k) + i] = dh;
@@ -1698,9 +1711,9 @@ ${core.fieldConstants}
   const setParams = (values) => { params.fill(0); params.set(values); core.writeParams(params); };
   const { compute } = core;
 
-  function tendency(IN, OUT) {
+  function tendency(IN, OUT, stage) {
     const g = group(IN, OUT);
-    setParams([0, 0]);
+    setParams(iso ? [0, 0, (stage === 1 || stage === 2 ? 2 : 1) / 6, stage > 0 ? 1 : 0] : [0, 0]);
     compute((pass) => {
       dispatch(pass, 'oVertexVort', g, nV);
       dispatch(pass, 'oEdgeFluxPV', g, nE);
@@ -1742,12 +1755,12 @@ ${core.fieldConstants}
     relaxRate = Math.min(1 / 3600, 1 / dt); stepDt = dt;
     upwellingSteps++;
     compute((pass) => dispatch(pass, 'oGradEta', group(ob.S, ob.T), nE));
-    tendency(ob.S, ob.K1);
+    tendency(ob.S, ob.K1, 0);
     barotropicStep(dt, ob.K1);
     advanceState(ob.T, ob.K1, dt / 2);
-    tendency(ob.T, ob.K2); advanceState(ob.T, ob.K2, dt / 2);
-    tendency(ob.T, ob.K3); advanceState(ob.T, ob.K3, dt);
-    tendency(ob.T, ob.K4);
+    tendency(ob.T, ob.K2, 1); advanceState(ob.T, ob.K2, dt / 2);
+    tendency(ob.T, ob.K3, 2); advanceState(ob.T, ob.K3, dt);
+    tendency(ob.T, ob.K4, 3);
     setParams([dt / 6]);
     compute((pass) => dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), Math.ceil(OS.total / 2)));
   }

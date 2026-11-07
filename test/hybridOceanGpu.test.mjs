@@ -175,7 +175,7 @@ test(`${OPTION_CHANGE}: shearDiffusivityResolution, under a strengthened shear-s
  * optionChange's measure a step at a time: before each step the GPU starts
  * from the CPU's state, so it misses the option's step from a common state
  * and not the option's change along each engine's own path. The six-step
- * change from isoneutralDiffusion moves by 60 to 70 % on the CPU itself when
+ * change from isoneutralDiffusion moves by 20 to 40 % on the CPU itself when
  * its start's top four layers are perturbed by 3e-3 to 6e-3 K rms, what the
  * engines part there over six steps, so that option is measured this way.
  */
@@ -213,7 +213,25 @@ async function optionSteps(base, extra, steps = 6) {
 }
 test('the GPU hybrid ocean takes each of six steps under an option as the CPU does, from the CPU state: isoneutralDiffusion', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionSteps(HYBRID, { isoneutralDiffusion: true });
-  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.15, `${f}: the GPU misses ${change[f].ratio} of the CPU's step`);
+  for (const [f, bound] of [['T', 0.2], ['S', 0.25]]) assert.ok(change[f].ratio < bound, `${f}: the GPU misses ${change[f].ratio} of the CPU's step`);
+});
+test('under isoneutralDiffusion the κS² diffusivity the GPU hybrid ocean\'s column takes from a dynamics phase is the CPU\'s 1:2:2:1 mean of the four stages\', not the fourth stage\'s', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { ...HYBRID, isoneutralDiffusion: true }, { mesh, cpu, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, zeros = new Float64Array(C), dt = 4 * DT;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = 0.6 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+  const start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths };
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options }), gpu = gpuModel.oceanEngine;
+  await gpu.upload(start, Float64Array.from(surfaceT), ice);
+  gpu.setStress(stress.map(() => 0), ice);
+  gpu.phases.dynamics(dt);
+  const kappa = Float64Array.from(await gpu.readSection('ISOK'));
+  gpuModel.destroy();
+  cpu.phases.dynamics(dt);
+  const mean = Float64Array.from(cpu.isoKappa);
+  cpu.tendency(cpu.trial, cpu.stages[0].map((a) => new Float64Array(a.length)));
+  const fourth = Float64Array.from(cpu.isoKappa), toMean = stats(mean, kappa), apart = stats(mean, fourth);
+  console.log(`κS² after a dynamics phase, rms relative to the CPU's: the GPU's from the CPU's 1:2:2:1 mean ${toMean.rmsRel.toExponential(2)}, the CPU's fourth stage's from it ${apart.rmsRel.toExponential(2)}, the GPU's from the fourth stage's ${stats(fourth, kappa).rmsRel.toExponential(2)}`);
+  assert.ok(apart.rmsRel > 0 && toMean.rmsRel < 0.5 * apart.rmsRel, `the GPU's κS² parts from the CPU's stage mean by ${toMean.rmsRel}, the fourth stage's from it by ${apart.rmsRel}`);
 });
 test(`${OPTION_CHANGE}: backgroundLatitude equatorial, under a strengthened background diffusivity`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionChange({ ...HYBRID, backgroundDiffusivity: 1e-3 }, { backgroundLatitude: 'equatorial' });

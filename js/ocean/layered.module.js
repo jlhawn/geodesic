@@ -228,21 +228,32 @@ export function shearResolution(mesh, { scale, power }) {
  * vertical gradient at that interface, S ∂T/∂z with S = −R_x/R_z from
  * gradients of density linearized at the triad's cell and layer; the same
  * triads' cross terms move tracer across the interfaces in the dynamics,
- * and their κS² term is added to the interfaces' diffusivity in the column
- * phase's implicit solve. A slope is no steeper than slopeCap (NEMO's
- * rn_slpmax), so where the surfaces are steeper, or unstable, the flux turns
- * along that slope instead; under boundaryTaper the slope falls linearly
- * from the base of the boundary layer to zero at the surface. A triad needs
- * both layers at its interface thicker than twice minimumLayer; where one is
- * missing, at the surface or a thin layer, its quarter of the flux stays
- * horizontal. The triads below the last fixed layer reach the first
+ * and their κS² term, weighted over the dynamics' four stages 1:2:2:1 as
+ * the cross terms are, is added to the interfaces' diffusivity in the
+ * column phase's implicit solve. A triad's slope terms, though not its
+ * horizontal diffusion, take Danabasoglu and McWilliams's (1995, J. Climate
+ * 8, 2967) taper of κ, ½[1 + tanh((slopeCap − |S|)/slopeWidth)], so a
+ * triad turns nothing where its interface is unstable or neutral (density
+ * rising downward across it by less than NEUTRAL_STRATIFICATION of itself
+ * per meter, N² ≈ 1e-8 s⁻², above what float32 resolves across a 3 m
+ * layer), where its slope is steeper than slopeCap + 10 slopeWidth (the
+ * taper there is 2e-9), or anywhere under a slopeCap of 0. Under
+ * boundaryTaper a triad whose interface lies above the base of its cell's
+ * boundary layer takes, in place of its own slope, the tapered slope of its
+ * cell's triad along the same edge at the first interface at or below that
+ * base (the last fixed interface at most), in the layer above that
+ * interface, times its depth over the boundary layer's, as NEMO's
+ * mixed-layer slopes do. A triad needs both layers at its interface thicker
+ * than twice minimumLayer; where one is missing, at the surface or a thin
+ * layer, or at the base its slope would come from, its quarter of the flux
+ * stays horizontal. The triads below the last fixed layer reach the first
  * isopycnal layer.
  */
-export const ISONEUTRAL = { slopeCap: 0.01, boundaryTaper: true };
+export const ISONEUTRAL = { slopeCap: 0.01, slopeWidth: 0.001, boundaryTaper: true }, NEUTRAL_STRATIFICATION = 1e-9;
 export function isoneutralOptions(o) {
   if (!o) return null;
   const out = { ...ISONEUTRAL, ...(o === true ? {} : o) };
-  if (!(out.slopeCap >= 0 && out.slopeCap < Infinity) || typeof out.boundaryTaper !== 'boolean') throw new Error(`isoneutralDiffusion takes a non-negative slopeCap and a boolean boundaryTaper, not ${out.slopeCap} and ${out.boundaryTaper}`);
+  if (!(out.slopeCap >= 0 && out.slopeCap < Infinity) || !(out.slopeWidth > 0 && out.slopeWidth < Infinity) || typeof out.boundaryTaper !== 'boolean') throw new Error(`isoneutralDiffusion takes a non-negative slopeCap, a positive slopeWidth and a boolean boundaryTaper, not ${out.slopeCap}, ${out.slopeWidth} and ${out.boundaryTaper}`);
   return out;
 }
 
@@ -787,7 +798,8 @@ export function createOcean(mesh, {
     prepareEdges(0, E, input);
   }
 
-  function tendency(input, out) {
+  function tendency(input, out, stage = 0) {
+    if (isoneutral) params[7] = stage;
     prepare(input);
     if (layerRunner) layerRunner(input === trial ? 1 : 0, stages.indexOf(out));
     else tendencyLayers(input, out, 0, L);
@@ -813,24 +825,37 @@ export function createOcean(mesh, {
    * computed alike by the two layers it parts.
    */
   function isoneutralLayer(k, input, dQ, dW) {
-    const [hIn, uIn, QIn, WIn] = input, F = table.fixed, { slopeCap: cap, boundaryTaper } = isoneutral, thin = 2 * minimumLayer;
+    const [hIn, uIn, QIn, WIn] = input, F = table.fixed, { slopeCap: cap, slopeWidth: width, boundaryTaper } = isoneutral, thin = 2 * minimumLayer, reach = cap + 10 * width;
     const { kappa: rows, depth, triad: tri, top, bottom, k33 } = isoScratch, oc = k * C;
     const valueT = (l, c) => { const n = l * C + c, hv = hIn[n]; return hv > 1e-6 ? QIn[n] / hv : labelT[l]; };
     const valueS = (l, c) => { const n = l * C + c, hv = hIn[n]; return hv > 1e-6 ? WIn[n] / hv : labelS[l]; };
     for (let i = 0; i < C; i++) { let z = 0; for (let j = 0; j < k; j++) z += hIn[j * C + i]; depth[i] = z; depth[C + i] = z + hIn[oc + i]; }
     for (let l = Math.max(0, k - 1); l <= Math.min(k + 1, F - 1); l++) alongKappa(l, uIn, rows[l - k + 1]);
-    const triad = (c, l, m, dT, dS, dc, o) => {
-      tri[o] = 0; tri[o + 1] = 0; tri[o + 2] = 0; tri[o + 3] = 1;
+    let s1 = 0, s2 = 0;
+    const slopeAt = (c, l, m, dT, dS, dc) => {
+      s1 = 0; s2 = 0;
+      const hu = hIn[(m - 1) * C + c], hl = hIn[m * C + c];
+      if (!(cap > 0 && hu > thin && hl > thin)) return;
+      const Tc = valueT(l, c), Sc = valueS(l, c), alpha = expansionOf(Tc, Sc), beta = contractionOf(Tc, Sc);
+      const rx = (beta * dS - alpha * dT) / dc, rz = (beta * (valueS(m - 1, c) - valueS(m, c)) - alpha * (valueT(m - 1, c) - valueT(m, c))) / (0.5 * (hu + hl));
+      if (!(-rz > NEUTRAL_STRATIFICATION && -rz * reach > Math.abs(rx))) return;
+      const slope = -rx / rz;
+      s1 = slope / (1 + Math.exp(2 * (Math.abs(slope) - cap) / width)); s2 = s1 * slope;
+    };
+    const triad = (c, a, b, l, m, dT, dS, dc, o) => {
+      tri[o] = 0; tri[o + 1] = 0; tri[o + 2] = 0; tri[o + 3] = 0;
       if (m < 1 || m >= L) return;
       const hu = hIn[(m - 1) * C + c], hl = hIn[m * C + c];
       if (!(hu > thin && hl > thin)) return;
-      const Tu = valueT(m - 1, c), Tl = valueT(m, c), Su = valueS(m - 1, c), Sl = valueS(m, c), Tc = valueT(l, c), Sc = valueS(l, c);
-      const alpha = expansionOf(Tc, Sc), beta = contractionOf(Tc, Sc), dz = 0.5 * (hu + hl);
-      const rx = (beta * dS - alpha * dT) / dc, rz = (beta * (Su - Sl) - alpha * (Tu - Tl)) / dz, den = Math.max(-rz * cap, Math.abs(rx));
-      let slope = den > 0 ? rx * cap / den : 0;
-      const z = depth[(m - k) * C + c], layer = boundaryDepths[c];
-      if (boundaryTaper && layer > z) slope *= z / layer;
-      tri[o] = slope; tri[o + 1] = (Tu - Tl) / dz; tri[o + 2] = (Su - Sl) / dz; tri[o + 3] = dz;
+      const z = depth[(m - k) * C + c], layer = boundaryDepths[c], dz = 0.5 * (hu + hl);
+      if (boundaryTaper && layer > z) {
+        let base = m, below = z;
+        while (base < F && below < layer) below += hIn[base++ * C + c];
+        slopeAt(c, base - 1, base, valueT(base - 1, b) - valueT(base - 1, a), valueS(base - 1, b) - valueS(base - 1, a), dc);
+        const r = z / layer;
+        s1 *= r; s2 *= r * r;
+      } else slopeAt(c, l, m, dT, dS, dc);
+      tri[o] = s1 * (valueT(m - 1, c) - valueT(m, c)) / dz; tri[o + 1] = s1 * (valueS(m - 1, c) - valueS(m, c)) / dz; tri[o + 2] = s1 / dz; tri[o + 3] = s2 / dz;
     };
     const transport = (m, out, kappa33) => {
       out.fill(0);
@@ -843,10 +868,9 @@ export function createOcean(mesh, {
           const dT = valueT(l, b) - valueT(l, a), dS = valueS(l, b) - valueS(l, a), weight = 0.25 * rows[l - k + 1][e] * dv * hEdge[l * E + e];
           for (let side = 0; side < 2; side++) {
             const c = side ? b : a;
-            triad(c, l, m, dT, dS, dc, 0);
-            const slope = tri[0], dz = tri[3];
-            out[c] -= weight * slope * dT / dz; out[C + c] -= weight * slope * dS / dz;
-            if (kappa33) kappa33[c] += weight * dc * slope * slope / dz;
+            triad(c, a, b, l, m, dT, dS, dc, 0);
+            out[c] -= weight * tri[2] * dT; out[C + c] -= weight * tri[2] * dS;
+            if (kappa33) kappa33[c] += weight * dc * tri[3];
           }
         }
       }
@@ -860,9 +884,9 @@ export function createOcean(mesh, {
         const weight = edgeOcean[e] ? kap[e] * hEdge[oe + e] / dc : 0, dT = T[b] - T[a], dS = S[b] - S[a];
         let turnT = 0, turnS = 0;
         if (weight) {
-          triad(a, k, k, dT, dS, dc, 0); triad(a, k, k + 1, dT, dS, dc, 4); triad(b, k, k, dT, dS, dc, 8); triad(b, k, k + 1, dT, dS, dc, 12);
-          turnT = 0.25 * dc * (((tri[0] * tri[1] + tri[4] * tri[5]) + tri[8] * tri[9]) + tri[12] * tri[13]);
-          turnS = 0.25 * dc * (((tri[0] * tri[2] + tri[4] * tri[6]) + tri[8] * tri[10]) + tri[12] * tri[14]);
+          triad(a, a, b, k, k, dT, dS, dc, 0); triad(a, a, b, k, k + 1, dT, dS, dc, 4); triad(b, a, b, k, k, dT, dS, dc, 8); triad(b, a, b, k, k + 1, dT, dS, dc, 12);
+          turnT = 0.25 * dc * (((tri[0] + tri[4]) + tri[8]) + tri[12]);
+          turnS = 0.25 * dc * (((tri[1] + tri[5]) + tri[9]) + tri[13]);
         }
         tracerFlux[e] = -weight * (dT + turnT); edgeS[e] = -weight * (dS + turnS);
       }
@@ -870,7 +894,8 @@ export function createOcean(mesh, {
       for (let i = 0; i < C; i++) dQ[oc + i] -= divScratch[i];
       divergence(mesh, edgeS, divScratch);
       for (let i = 0; i < C; i++) dW[oc + i] -= divScratch[i];
-      for (let i = 0; i < C; i++) isoKappa[oc + i] = k33[i] / areaCell[i];
+      const stage = params[7], share = stage > 0 ? (stage === 2 || stage === 3 ? 2 : 1) / 6 : 1, kept = stage > 1;
+      for (let i = 0; i < C; i++) isoKappa[oc + i] = (kept ? isoKappa[oc + i] : 0) + share * (k33[i] / areaCell[i]);
     }
     for (let i = 0; i < C; i++) { dQ[oc + i] += (bottom[i] - top[i]) / areaCell[i]; dW[oc + i] += (bottom[C + i] - top[C + i]) / areaCell[i]; }
   }
@@ -1068,14 +1093,14 @@ export function createOcean(mesh, {
     params[1] = dt;
     upwellingStale = true;
     freeSurface();
-    tendency(state, k1);
+    tendency(state, k1, 1);
     barotropic(dt);
     combine(trial, state, k1, dt / 2);
-    tendency(trial, k2);
+    tendency(trial, k2, 2);
     combine(trial, state, k2, dt / 2);
-    tendency(trial, k3);
+    tendency(trial, k3, 3);
     combine(trial, state, k3, dt);
-    tendency(trial, k4);
+    tendency(trial, k4, 4);
     const w = dt / 6;
     for (let a = 0; a < state.length; a++) {
       const s = state[a], a1 = k1[a], a2 = k2[a], a3 = k3[a], a4 = k4[a];
