@@ -362,11 +362,16 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * alone). With `shallowRetype` (default false) a column the test parcel
  * leaves shallow runs the deep plume after all, from the shallow plume's
  * own source parcel, where that parcel's shallow ascent, continued past
- * `shallowTop` without tendencies, has a cloud deeper than DEEP_CLOUD_DEPTH
- * from its base interface to the last interface it passes, the other half
- * of that re-typing: cumastrn.F90 types and runs one parcel. Where the
- * deep plume's own cloud is then no deeper than DEEP_CLOUD_DEPTH, the
- * column keeps its shallow plume. With `midLevelConvection` (default
+ * `shallowTop` without tendencies, finds a cloud deeper than
+ * DEEP_CLOUD_DEPTH, the other half of that re-typing (cumastrn.F90 types
+ * and runs one parcel). As in IFS Cy41r2 Part IV §6.4.1's shallow test,
+ * w² starts at the shallow closure's velocity scale at the source and, by
+ * the kinetic-energy equation, must stay positive up to the lower
+ * interface of the first layer where the parcel holds condensate; from
+ * there it restarts at `plumeVelocity`² as the shallow plume's does, and
+ * the cloud runs to the last interface the ascent passes. Where the deep
+ * plume's own cloud is then no deeper than DEEP_CLOUD_DEPTH, the column
+ * keeps its shallow plume. With `midLevelConvection` (default
  * false) a column that no
  * test parcel types deep and whose shallow plume does not rise tries the
  * mid-level type (IFS Cy41r2 Part IV §6.4.3): the lowest layer, from the
@@ -1199,8 +1204,10 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
 
   /*
    * cumulusColumn's ascent without its ceiling at shallowTop and without
-   * tendencies: the depth of its cloud from the base interface to the last
-   * interface the plume passes, or 0 where cumulusColumn would not ascend.
+   * tendencies, below its cloud carrying w² from the closure's velocity
+   * scale: the depth of its cloud from the lower interface of its first
+   * cloudy layer to the last interface the plume passes, or 0 where
+   * cumulusColumn would not ascend or w² vanishes below that cloud.
    */
   function shallowCloudDepth(i, pi, theta, q, qc) {
     const bottom = K - 1;
@@ -1213,7 +1220,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (!lcl || !(lcl.pressure > shallowTop)) return 0;
     const virtual = virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = virtualBuoyancy ? 1 : 0;
     const surface = byHeight ? (geopotential[bottom * C + i] - cp * thetaV[bottom * C + i] * (exnerLower[bottom * C + i] - exnerLayer[bottom * C + i])) / g : 0;
-    let s = sourceS, w = sourceQ, cloudy = false, guess = 0, w2 = plumeVelocity * plumeVelocity, share = 1, reached = 1;
+    const velocity = Math.max(Math.cbrt(surfaceBuoyancy[i] * Math.max(0, boundaryDepth[i] - z[bottom])), cumulusFriction * (frictionVelocity ? frictionVelocity[i] : 0));
+    if (!(velocity > 0)) return 0;
+    let s = sourceS, w = sourceQ, base = 0, guess = 0, w2 = velocity * velocity, share = 1, reached = 1;
     for (let k = source - 1; k >= 1; k--) {
       const below = upperInterface(i, k + 1), above = upperInterface(i, k);
       const mixes = pi[i] * levels[k + 1] <= lcl.pressure, epsilon = mixes ? (byHeight ? cumulusEntrainmentHeight / Math.max(z[k] - surface, 1) : cumulusEntrainment) : 0;
@@ -1223,8 +1232,12 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       guess = plume.T;
       const air = Math.max(0, q[k * C + i]), cloud = qc ? Math.max(0, qc[k * C + i]) : 0;
       const work = R * (plume.T * (1 + virtual * (midQ - plume.liquid) - loading * plume.liquid) - T[k] * (1 + virtual * air - loading * cloud)) * dp[k] / p[k];
-      if (plume.liquid > 0) cloudy = true;
-      if (cloudy) {
+      if (!(base > 0) && plume.liquid > 0) { base = k + 1; w2 = plumeVelocity * plumeVelocity; }
+      if (!(base > 0)) {
+        w2 = plumeKinetic(w2, work, above - below, plumeDrag * epsilon);
+        deep.typeMargin = Math.min(deep.typeMargin, Math.abs(w2) / (velocity * velocity));
+        if (!(w2 > 0)) return 0;
+      } else {
         if (!(work > 0)) {
           if (kineticOvershoot) share = overshootShare(w2, work, above - below, plumeDrag * epsilon);
           if (!(carriedAscent && share >= 1)) { reached = k + 1; break; }
@@ -1239,9 +1252,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         if (excess > 0) { w -= excess; s += latentHeat * excess; if (mixedPlume) { const frozen = excess * plume.ice / plume.liquid; s += FUSION_HEAT * frozen; } }
       }
     }
-    if (!cloudy) return 0;
-    let base = source;
-    while (base > 1 && !(pi[i] * levels[base] <= lcl.pressure)) base--;
+    if (!(base > 0)) return 0;
     deep.shallowBase = base; deep.shallowReach = reached;
     return pi[i] * (levels[base] - levels[reached]);
   }

@@ -2810,7 +2810,10 @@ fn shallowCloudDepth(i: i32, pi: f32) -> f32 {
   if (!(sourceQ > 0.0)) { return 0.0; }
   let lcl = condensationLevel((sourceS - GRAV * plumeZ(i, bottom)) / CP, sourceQ, layerP(pi, bottom));
   if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
-  var s = sourceS; var w = sourceQ; var cloudy = false; var guess = 0.0; var w2 = PL_W0 * PL_W0; var share = 1.0; var reached = 1;
+  let lift = PH[PH_BUOY + i] * max(0.0, PH[PH_DEPTH + i] - plumeZ(i, bottom));
+  let velocity = max(select(0.0, pow(lift, 1.0 / 3.0), lift > 0.0), CU_FRIC * PH[PH_USTAR + i]);
+  if (!(velocity > 0.0)) { return 0.0; }
+  var s = sourceS; var w = sourceQ; var base = 0; var guess = 0.0; var w2 = velocity * velocity; var share = 1.0; var reached = 1;
   let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
   for (var k = source - 1; k >= 1; k--) {
     let pk = layerP(pi, k);
@@ -2824,8 +2827,12 @@ fn shallowCloudDepth(i: i32, pi: f32) -> f32 {
     guess = mid.x;
     let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
     let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - plumeT(i, k) * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * layerDp(pi, k) / pk;
-    if (mid.y > 0.0) { cloudy = true; }
-    if (cloudy) {
+    if (base == 0 && mid.y > 0.0) { base = k + 1; w2 = PL_W0 * PL_W0; }
+    if (base == 0) {
+      let rise = 2.0 * PL_DRAG * epsilon * (above - below);
+      w2 = w2 * exp(-rise) + 2.0 * PL_ACC * work * select(1.0, relaxedFraction(rise) / rise, rise > 0.0);
+      if (!(w2 > 0.0)) { return 0.0; }
+    } else {
       if (!(work > 0.0)) {
         if (CU_KINETIC) {
           if (!(work < 0.0)) { share = 1.0; }
@@ -2858,9 +2865,7 @@ fn shallowCloudDepth(i: i32, pi: f32) -> f32 {
       }
     }
   }
-  if (!cloudy) { return 0.0; }
-  var base = source;
-  while (base > 1 && !(pi * LV[L_SU + base] <= lcl.y)) { base--; }
+  if (base == 0) { return 0.0; }
   return pi * (LV[L_SU + base] - LV[L_SU + reached]);
 }
 `;

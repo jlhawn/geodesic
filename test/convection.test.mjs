@@ -2091,14 +2091,14 @@ test("on BOMEX's profile (Siebesma et al. 2003, Table B1) the shallow plume carr
 
 const LIGHT_CUMULUS = { cumulusEntrainmentHeight: null, cumulusEntrainment: 1e-4, cumulusRain: 0 };
 
-test("with shallowRetype a column the test parcel leaves shallow runs the deep plume where the shallow plume's own ascent, continued past the shallow top without tendencies, has a cloud deeper than 200 hPa from its base interface to the last interface it passes, as random columns under a light shallow plume do; every other column steps exactly as without the option, the trade-wind cumulus among them, and a value other than true or false is refused", () => {
+test("with shallowRetype a column the test parcel leaves shallow runs the deep plume where the shallow plume's own ascent, continued past the shallow top without tendencies, reaches its first cloudy layer with w² > 0, carried from the shallow closure's velocity scale, and has a cloud deeper than 200 hPa from that layer's lower interface to the last interface it passes, as random columns under a light shallow plume do; every other column steps exactly as without the option, the trade-wind cumulus among them, and a value other than true or false is refused", () => {
   const dt = 900, { shallowTop } = MOIST_DEFAULTS;
   const retyping = (shallow, grid = levels) => {
     const [off, on] = [false, true].map((deepen) => {
       const model = createModel(new Grid(16), { ocean: false, levels: grid, moist: { ...shallow, shallowRetype: deepen } }), C = model.mesh.nCells, { moist, core } = model, { levels, sigmaMid } = core.diagnostics;
       randomColumns(model);
       const [pi, theta, , , q, qc] = model.state, deepened = new Set();
-      let worst = 0, fired = 0, repeated = 0, continued = 0;
+      let worst = 0, fired = 0, repeated = 0, based = 0, continued = 0;
       for (let i = 0; i < C; i++) {
         core.diagnoseColumn(i, pi, theta, q, qc);
         const before = budget(model, i), rain = moist.plumeColumn(i, pi, theta, q, qc, dt), after = budget(model, i), d = moist.deep, cu = moist.cumulus;
@@ -2113,25 +2113,29 @@ test("with shallowRetype a column the test parcel leaves shallow runs the deep p
             assert.ok(pi[i] * (levels[d.base] - levels[d.top + 1]) > DEEP_CLOUD_DEPTH, `column ${i}: the re-typed deep plume's cloud is ${pi[i] * (levels[d.base] - levels[d.top + 1])} Pa deep`);
           }
         } else if (d.shallowDepth > 0 && cu.top >= 1 && pi[i] * levels[cu.top - 1] > shallowTop) {
-          let base = cu.source;
-          while (base > 1 && !(pi[i] * levels[base] <= cu.lclPressure)) base--;
-          assert.equal(d.shallowDepth, pi[i] * (levels[base] - levels[cu.top + 1]), `column ${i}: the diagnostic ascent ends where the shallow plume's does`);
+          assert.equal(d.shallowReach, cu.top + 1, `column ${i}: the diagnostic ascent ends where the shallow plume's does`);
+          if (moist.cumulusBaseFlux[i] > 0) {
+            let cloudy = cu.source - 1;
+            while (cloudy > cu.top && !(moist.cumulusWater[cloudy * C + i] > 0)) cloudy--;
+            assert.equal(d.shallowBase, cloudy + 1, `column ${i}: the diagnostic cloud starts at the lower interface of the shallow plume's first cloudy layer`);
+            based++;
+          }
           repeated++;
         }
       }
-      return { model, deepened, worst, fired, repeated, continued };
+      return { model, deepened, worst, fired, repeated, based, continued };
     });
     let moved = 0;
     for (let i = 0; i < on.model.mesh.nCells; i++) {
       const a = snapshot(off.model, i), b = snapshot(on.model, i), equal = ['theta', 'q', 'qc'].every((key) => a[key].every((v, k) => v === b[key][k]));
       if (on.deepened.has(i)) { if (!equal) moved++; } else assert.ok(equal, `column ${i} is not re-typed, yet it steps differently`);
     }
-    return { deepened: on.deepened.size, fired: on.fired, continued: on.continued, moved, repeated: on.repeated, worst: Math.max(off.worst, on.worst), offDeepened: off.deepened.size };
+    return { deepened: on.deepened.size, fired: on.fired, continued: on.continued, moved, repeated: on.repeated, based: on.based, worst: Math.max(off.worst, on.worst), offDeepened: off.deepened.size };
   };
   const plain = retyping({}), light = retyping(LIGHT_CUMULUS), fine = retyping(LIGHT_CUMULUS, sigmaInterfaces('bl48'));
   console.log(`bl48 random columns under the light shallow plume: ${fine.deepened} re-typed deep, ${fine.continued} of them by the ascent continued past shallowTop from a cloud no deeper than DEEP_CLOUD_DEPTH below it`);
-  console.log(`random columns: ${plain.deepened} re-typed deep under the default shallow plume, ${light.deepened} under one entraining 1e-4 /m that keeps no condensate (${light.fired} fire the deep plume, ${light.moved} step differently); ${plain.repeated} and ${light.repeated} shallow plumes that stop below the shallow top end the diagnostic ascent at their own top; every other column steps exactly as without the option; enthalpy and water within ${Math.max(plain.worst, light.worst).toExponential(1)}`);
-  assert.ok(light.deepened >= 20 && fine.continued > 0 && light.fired > 0 && light.moved > 0 && plain.repeated >= 20 && light.repeated >= 20, JSON.stringify({ plain, light, fine }));
+  console.log(`random columns: ${plain.deepened} re-typed deep under the default shallow plume, ${light.deepened} under one entraining 1e-4 /m that keeps no condensate (${light.fired} fire the deep plume, ${light.moved} step differently); ${plain.repeated} and ${light.repeated} shallow plumes that stop below the shallow top end the diagnostic ascent at their own top, ${plain.based} and ${light.based} of them running and starting its cloud at their own first cloudy layer; every other column steps exactly as without the option; enthalpy and water within ${Math.max(plain.worst, light.worst).toExponential(1)}`);
+  assert.ok(light.deepened >= 20 && fine.continued > 0 && light.fired > 0 && light.moved > 0 && plain.repeated >= 20 && light.repeated >= 20 && plain.based > 0 && light.based > 0, JSON.stringify({ plain, light, fine }));
   assert.ok(plain.offDeepened === 0 && light.offDeepened === 0 && fine.offDeepened === 0 && Math.max(plain.worst, light.worst, fine.worst) < 1e-15);
   const trade = [false, true].map((deepen) => {
     const model = tradeWindColumn({ shallowRetype: deepen }), [pi, theta, , , q, qc] = model.state;
@@ -2152,25 +2156,29 @@ const needsContinuation = (d, ps, levels, sigmaMid) => {
 };
 
 const PAGE_COLUMN_13676 = {"dt":337.5,"pi":101494.40113024111,"theta":[3054.8886076870785,2110.9413649520975,1820.1921609629132,1668.3065751122206,1483.0884561461764,1298.6364960778455,1163.885616732911,1013.5028676910305,874.8338179738957,765.0030420564274,669.7593927653216,593.8539532046864,530.6715428284349,479.14471254294887,443.17516557885824,417.9224745649334,399.0292911879083,388.0540775219285,374.200921511677,354.07304435921634,338.59922374210277,328.57798368631126,324.6353538958846,320.6419441498382,317.41504052946897,315.05046284636757,310.42418753003966,309.2426625953133,306.90000083542407,304.1396705843355,301.9113565318508,299.9234083059886,297.7695582225899,296.99878076720324,295.0792027868827,294.80438402875257,292.8648375547794,287.8811165042776,286.18628885345737,286.1012124480151,286.0485258051846,286.01457996996,285.99385517786254,285.98342543624153,285.9800157296597,285.98201600592904,285.99222645564043,286.04102861618844],"q":[0.000004420723201075017,0.000004379845367709267,0.00000451711231569177,0.000004641158623261906,0.0000043808327147769074,0.000004102350071107816,0.0000031171606670207203,0.0000036988160018668285,0.0000040569189342878315,0.0000029872904051668265,0.000002456148478663317,6.651212904623757e-7,0.0000013952885461895664,0.000002310178851262623,0.000003354896636465968,0.000004194903527820176,0.0000013663247194122255,0.000003963132836540237,0.000006033709453996757,0.000021907684372351807,0.000023571580366914115,0.0000612085636522033,0.00014476234528108182,0.0003354868961888411,0.0008351307543146802,0.0014669471066531825,0.0005634933873287046,0.0002764959016803373,0.00009219694890869269,-0.000001009581714749424,-2.8848519499736504e-7,-0.000001125085710560899,0.000006406012106246861,0.000010330015009707616,0.0004970793442477482,0.000220454153345012,0.0003997442045174921,0.00368551594180363,0.005673311892906608,0.005804869610221586,0.005909699594257936,0.0059993113195499406,0.006078471117161322,0.006150788910067775,0.0061942450391528755,0.006226437483185782,0.006262178789386516,0.006362772421041086],"qc":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.000009211694330450904,0.000010248246418038136,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"depth":805.877766933246,"regime":3,"mixingTop":805.877766933246,"cloudLayer":38,"buoyancy":0.0006600150690247001,"friction":0.17775174086504517,"surfaceDrag":0.006910410630024459,"mlmGate":0.04205867755834928,"stratiform":0,"sensible":17.6087223882052,"evaporation":0.00003551381754490235,"cumulusK0":29,"cumulusCover":[0,0,0,0,0,0,0,0.0001757078851368149,0,0,0,0,0,0,0,0,0,0,0],"cumulusWater":[0,0,0,0,0,0,0,0.00014711110022179344,0,0,0,0,0,0,0,0,0,0,0]};
-test('with shallowRetype the column of the N=64 page state that re-types at 30N (seventeen64 day 365, column 13676, after two steps) runs a deep plume deeper than 200 hPa or keeps its shallow plume', () => {
-  const c = PAGE_COLUMN_13676;
-  const replay = (deepen) => {
-    const model = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl48'), moist: { shallowRetype: deepen } });
-    const { moist, core, boundaryLayer: bl, radiation } = model, { K, C, levels } = core.diagnostics, [pi, theta, , , q, qc] = model.state;
-    pi[0] = c.pi;
-    for (let k = 0; k < K; k++) { theta[k * C] = c.theta[k]; q[k * C] = c.q[k]; qc[k * C] = c.qc[k]; }
-    bl.depth[0] = c.depth; bl.regime[0] = c.regime; bl.mixingTop[0] = c.mixingTop; bl.cloudLayer[0] = c.cloudLayer; bl.buoyancyFlux[0] = c.buoyancy; bl.friction[0] = c.friction; bl.surfaceDrag[0] = c.surfaceDrag;
-    radiation.mlmGate[0] = c.mlmGate; radiation.stratiform[0] = c.stratiform; radiation.sensibleHeat[0] = c.sensible; radiation.evaporation[0] = c.evaporation;
-    c.cumulusCover.forEach((v, n) => { moist.cumulusCover[(c.cumulusK0 + n) * C] = v; moist.cumulusWater[(c.cumulusK0 + n) * C] = c.cumulusWater[n]; });
-    core.diagnoseColumn(0, pi, theta, q, qc);
-    moist.plumeColumn(0, pi, theta, q, qc, c.dt);
-    const d = { ...moist.deep };
-    return { d, snap: snapshot(model, 0), depth: d.deep ? pi[0] * (levels[d.base] - levels[d.top + 1]) : 0 };
-  };
-  const [off, on] = [false, true].map(replay);
-  assert.ok(on.d.deepened && !on.d.parcelDeep && on.d.shallowDepth > DEEP_CLOUD_DEPTH, `the column re-types on a shallow cloud ${on.d.shallowDepth} Pa deep`);
-  const kept = ['theta', 'q', 'qc'].every((key) => on.snap[key].every((v, k) => v === off.snap[key][k]));
-  assert.ok(on.d.deep ? on.depth > DEEP_CLOUD_DEPTH : kept, `the re-typed column fires a deep plume ${on.depth} Pa deep (CAPE ${on.d.cape} J/kg), or keeps its shallow plume: ${on.d.deep ? 'fired' : kept ? 'kept' : 'neither'}`);
+const PAGE_COLUMN_3555 = {"dt":337.5,"pi":99033.06746108439,"theta":[3102.3002279761645,2117.5990433905467,1852.8427965266644,1705.8564912562001,1525.3006180293805,1354.5111878740731,1168.3160652922004,1018.272717508987,887.1122902854764,776.8063226312967,689.5915142349497,605.2248865183666,534.7005464646481,475.8929672806757,434.46506127266554,400.9630054023617,381.1445687182407,364.8127286495149,353.14853864267235,348.28877351690886,344.40942673553366,342.792827396337,340.6640236019349,336.65709774319816,331.12486466450264,328.7493375020934,326.0121645161613,322.0675348159161,317.889984868103,314.33388034657025,312.09108636577326,310.91877589972887,309.33915365199397,307.888893256398,306.6547822488465,305.59767104902915,304.5162680978994,303.84790276064575,303.35933160693145,302.93148945339055,302.9183612865265,302.91501682849344,302.91431122291493,302.9161616670703,302.92089863468817,302.93031276302594,302.95084518136355,303.03020751049576],"q":[0.000004425619126059593,0.000004342598056354839,0.000004423958929910972,0.000004205286229110553,0.0000041679370239080995,0.0000033430861145152167,0.000002475740934458977,0.0000016660833508865741,0.0000010888131190650675,7.392344141963997e-7,7.722073266518058e-8,9.571011600521492e-7,0.0000021287316061971877,0.0000031066628359052366,0.000002914556874113797,0.0000018191188769516828,0.000002661308234261021,0.000005920695395969138,0.00001078485746030204,0.000009394507630896911,0.000058951161863561513,0.0001165329032180707,0.00010438280867699178,0.00005136603369991584,0.00025972494655360044,0.0002304913435511416,0.00045919332298096293,0.0010976971854892328,0.0015319380612758846,0.005255817368282934,0.00926844556527987,0.010728357958316987,0.011613512728149944,0.012264463174956402,0.01297368031152491,0.013760140964062681,0.014500611222856808,0.015505838190287863,0.016113016786198878,0.01629556279053427,0.01630082886116683,0.016303165623252076,0.01630530514945669,0.016307456822123423,0.016309668375235082,0.01631229910986106,0.016316318148494623,0.01632910408734579],"qc":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0597240715426335e-7,0.0000024029565526814046,0,0,0,0,0,0,0,0,0,0,0,0.00016817669548748387,0.00013340437396978203,0.00007355482465833066,0.000025807765435322942,0.000009093681307620125,0.000004946826467257722,0.000008483349041467395,0.000020649094778766102,0.000005035842738743802,0,0,0,0,0,0,0,0,0],"depth":767.1659843495459,"regime":1,"mixingTop":767.1659843495459,"cloudLayer":-1,"buoyancy":0.0007226390468329481,"friction":0.13536864088306785,"surfaceDrag":0.012051972602621234,"mlmGate":0.5,"stratiform":0,"sensible":24.645496045631113,"evaporation":0.000004382302221062775,"cumulusK0":29,"cumulusCover":[0.002260689077812534,0.0027060352877132155,0.0033487233595176804,0.003782176657685643,0.004183040333503172,0.004620965472531737,0.00489292228236364,0.006031432779177265,0.010444214518071024,0,0,0,0,0,0,0,0,0,0],"cumulusWater":[0.0023216751193501895,0.0019576912729000326,0.00160475700107698,0.0013248772001631611,0.0010992639595943797,0.0009260106961909632,0.0007914371239626211,0.0006010073452279923,0.00021224869705916693,0,0,0,0,0,0,0,0,0,0]};
+const replayPageColumn = (c, deepen) => {
+  const model = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl48'), moist: { shallowRetype: deepen } });
+  const { moist, core, boundaryLayer: bl, radiation } = model, { K, C, levels } = core.diagnostics, [pi, theta, , , q, qc] = model.state;
+  pi[0] = c.pi;
+  for (let k = 0; k < K; k++) { theta[k * C] = c.theta[k]; q[k * C] = c.q[k]; qc[k * C] = c.qc[k]; }
+  bl.depth[0] = c.depth; bl.regime[0] = c.regime; bl.mixingTop[0] = c.mixingTop; bl.cloudLayer[0] = c.cloudLayer; bl.buoyancyFlux[0] = c.buoyancy; bl.friction[0] = c.friction; bl.surfaceDrag[0] = c.surfaceDrag;
+  radiation.mlmGate[0] = c.mlmGate; radiation.stratiform[0] = c.stratiform; radiation.sensibleHeat[0] = c.sensible; radiation.evaporation[0] = c.evaporation;
+  c.cumulusCover.forEach((v, n) => { moist.cumulusCover[(c.cumulusK0 + n) * C] = v; moist.cumulusWater[(c.cumulusK0 + n) * C] = c.cumulusWater[n]; });
+  core.diagnoseColumn(0, pi, theta, q, qc);
+  moist.plumeColumn(0, pi, theta, q, qc, c.dt);
+  const d = { ...moist.deep };
+  return { d, cu: { ...moist.cumulus }, flux: moist.cumulusBaseFlux[0], snap: snapshot(model, 0), depth: d.deep ? pi[0] * (levels[d.base] - levels[d.top + 1]) : 0, base: pi[0] * levels[d.shallowBase] };
+};
+const steppedAlike = (a, b) => ['theta', 'q', 'qc'].every((key) => a.snap[key].every((v, k) => v === b.snap[key][k]));
+test("with shallowRetype the column of the N=64 page state at 30N (seventeen64 day 365, column 13676, after two steps), whose shallow parcel first holds condensate at 539 hPa, is not re-typed: its w² from the closure's velocity scale vanishes below that layer", () => {
+  const [off, on] = [false, true].map((deepen) => replayPageColumn(PAGE_COLUMN_13676, deepen));
+  assert.ok(!on.d.deepened && on.d.shallowDepth === 0 && steppedAlike(on, off), `the column is not re-typed: shallow cloud ${on.d.shallowDepth} Pa, re-typed ${on.d.deepened}`);
+});
+test('with shallowRetype the column of the N=64 page state at 6N (seventeen64 day 365, column 3555, land 121 m up, after two steps, replayed at sea level with its boundary layer as deep above the ground), whose shallow plume holds condensate from 899 hPa, re-types on a cloud deeper than 200 hPa and runs a deep plume deeper than 200 hPa', () => {
+  const [off, on] = [false, true].map((deepen) => replayPageColumn(PAGE_COLUMN_3555, deepen));
+  assert.ok(on.d.deepened && !on.d.parcelDeep && on.d.shallowDepth > DEEP_CLOUD_DEPTH && Math.abs(on.base - 899e2) < 100, `the column re-types on a shallow cloud ${on.d.shallowDepth} Pa deep from ${on.base} Pa`);
+  assert.ok(off.flux > 0 && on.d.deep && on.depth > DEEP_CLOUD_DEPTH && !steppedAlike(on, off), `the re-typed column fires a deep plume ${on.depth} Pa deep (CAPE ${on.d.cape} J/kg) in place of a shallow plume of base flux ${off.flux} kg/m²/s`);
 });
 test('with shallowRetype under a light shallow plume the engines agree on random columns, and the GPU refuses a value other than true or false', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { deepened } = await parity({ shallowRetype: true, ...LIGHT_CUMULUS }), fine = await parity({ shallowRetype: true, ...LIGHT_CUMULUS }, { grid: sigmaInterfaces('bl48') });
