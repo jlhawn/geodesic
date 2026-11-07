@@ -603,7 +603,8 @@ test('the variance cover that holds each layer\'s cloud water, and the turbulenc
 });
 
 test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}, { deckReference: 'interpolate' }]) {
+  const gates = new Map();
+  for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}, { deckReference: 'interpolate' }, { height: 1436 }, { deckReference: 'interpolate', height: 1436 }]) {
     const run = await mixedLayerPair(4, { turbulence: 'moist', ...options });
     const { K: nK } = run.model.core, keep = [];
     let coupled = 0, open = 0, parted = 0;
@@ -624,7 +625,13 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
     assert.ok(gateFlips <= run.C / 50, `${gateFlips} gates part`);
     assert.ok(parted <= run.C / 20, `${parted} columns part`);
     assert.ok(theta.rmsRel < 1e-5 && q.rmsRel < 1e-3 && run.olr.rmsRel < 1e-2, `θ ${theta.rmsRel}, q ${q.rmsRel}, OLR ${run.olr.rmsRel}`);
+    gates.set(JSON.stringify(options), Float64Array.from(run.model.radiation.mlmGate));
   }
+  const layered = gates.get(JSON.stringify({ height: 1436 })), interpolated = gates.get(JSON.stringify({ deckReference: 'interpolate', height: 1436 }));
+  let moved = 0;
+  for (let i = 0; i < layered.length; i++) if (Math.abs(layered[i] - interpolated[i]) > 1e-3) moved++;
+  console.log(`with the deck height seeded at 1436 m, half a layer above the inversion, deckReference interpolate moves the gate on ${moved} columns`);
+  assert.ok(moved > layered.length / 50, `with the deck height seeded at 1436 m, half a layer above the inversion, deckReference interpolate moves the gate on ${moved} columns, against the engines' limit of ${layered.length / 50}, so a GPU that ignored the option would part from the CPU`);
 });
 
 for (const [label, transmission] of [['', null], [', with open water passing a share of its sunlight to the ocean below', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
