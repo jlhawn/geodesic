@@ -23,22 +23,23 @@ function meanTheta(model) {
   return Float64Array.from({ length: K }, (_, k) => { let s = 0, a = 0; for (let i = 0; i < C; i++) { s += model.mesh.areaCell[i] * theta[k * C + i]; a += model.mesh.areaCell[i]; } return s / a; });
 }
 
-async function oneStep(keepSmallIce, cover, extra = {}, prepare = null) {
-  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus: false }, surface: { exchange: 'roughness' }, ice: { keepSmallIce, ...extra } });
+async function oneStep(keepSmallIce, cover, extra = {}, prepare = null, share = 0) {
+  const grid = new Grid(N), transmission = share ? new Float64Array(grid.size).fill(share) : null, penetrated = share ? new Float64Array(grid.size) : null;
+  const model = createModel(grid, { ocean: false, radiation: { stratus: false }, surface: { exchange: 'roughness' }, ice: { keepSmallIce, ...extra, ...(share ? { transmission, penetrated } : {}) } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const C = model.mesh.nCells, cells = [];
   for (let i = 0; i < C && cells.length < 12; i++) if (Math.abs(model.mesh.latCell[i]) > 62 * DEG && i % 7 === 0) cells.push(i);
   for (const i of cells) { model.state[6][i] = 0.8; model.seaIce.concentration[i] = cover; model.seaIce.snow[i] = 6; model.state[3][i] = FREEZING_POINT - 3; model.seaIce.snowAlbedo[i] = 0.8; }
   if (prepare) prepare(model, cells);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: false, dragEvery: 1, keepSmallIce, ...extra } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: false, dragEvery: 1, keepSmallIce, ...extra, ...(share ? { penetration: 'IB' } : {}) } });
   gpu.upload(model.state);
-  gpu.uploadPhysics({ concentration: model.seaIce.concentration, snow: model.seaIce.snow, snowAlbedo: model.seaIce.snowAlbedo, brine: model.seaIce.brine });
+  gpu.uploadPhysics({ concentration: model.seaIce.concentration, snow: model.seaIce.snow, snowAlbedo: model.seaIce.snowAlbedo, brine: model.seaIce.brine, ...(share ? { transmission } : {}) });
   const time = model.time;
   model.step(DT);
   await gpu.stepModel(DT, time);
   const state = await gpu.download(), physics = await gpu.downloadPhysics();
-  return { model, cells, C, thickness: state[6], surfaceT: state[3], concentration: physics.CONC.subarray(0, C), snow: physics.SNOW.subarray(0, C), brine: physics.BRINE ? physics.BRINE.subarray(0, C) : null };
+  return { model, cells, C, thickness: state[6], surfaceT: state[3], concentration: physics.CONC.subarray(0, C), snow: physics.SNOW.subarray(0, C), brine: physics.BRINE ? physics.BRINE.subarray(0, C) : null, penetrated, pen: physics.PEN.subarray(0, C) };
 }
 
 for (const keepSmallIce of [true, false]) {
@@ -75,15 +76,37 @@ test("one step of the whole model with leadClosure 'hibler': cover 0.6 under a c
   assert.ok(faster > 0, 'some leads close');
 });
 
-test('one step of the whole model with iceLight and brineReservoir: the brine of bare ice warms its skin, cold or near melting, and takes the light it holds, as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('one step of the whole model with iceLight and brineReservoir: the brine of bare ice is spent at its base against the growth, the skin cooling as with no brine, as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const start = 5e5, skin = (n) => (n % 2 ? FREEZING_POINT - 3 : MELTING_POINT - 0.1);
-  const run = await oneStep(false, 0.9, { iceLight: true, brineReservoir: true }, (model, cells) => cells.forEach((i, n) => { model.seaIce.snow[i] = 0; model.seaIce.brine[i] = start; model.state[3][i] = skin(n); }));
+  const prepare = (seed) => (model, cells) => cells.forEach((i, n) => { model.seaIce.snow[i] = 0; model.seaIce.brine[i] = seed; model.state[3][i] = skin(n); });
+  const run = await oneStep(false, 0.9, { iceLight: true, brineReservoir: true }, prepare(start));
+  const empty = await oneStep(false, 0.9, { iceLight: true, brineReservoir: true }, prepare(0));
+  let spent = 0;
   for (let n = 0; n < run.cells.length; n++) {
     const i = run.cells[n], cpu = run.model.seaIce.brine[i] - start, gpu = run.brine[i] - start;
-    assert.ok(cpu !== 0 && Math.abs(cpu - gpu) < 1 + 2e-2 * Math.abs(cpu), `cell ${i}: brine changes by ${cpu} vs ${gpu}`);
+    assert.ok(Math.abs(cpu - gpu) < 1 + 2e-2 * Math.abs(cpu), `cell ${i}: brine changes by ${cpu} vs ${gpu}`);
     assert.ok(Math.abs(run.model.state[3][i] - run.surfaceT[i]) < 0.05, `cell ${i}: skin ${run.model.state[3][i]} vs ${run.surfaceT[i]}`);
     assert.ok(Math.abs(run.model.state[6][i] - run.thickness[i]) < 1e-3 * run.model.state[6][i], `cell ${i}: thickness ${run.model.state[6][i]} vs ${run.thickness[i]}`);
-    assert.ok(run.model.state[3][i] > skin(n), `cell ${i}: the brine warms the skin to ${run.model.state[3][i]}`);
+    assert.equal(run.model.state[3][i], empty.model.state[3][i], `cell ${i}: the stored brine leaves the skin alone`);
+    assert.ok(Math.abs(run.surfaceT[i] - empty.surfaceT[i]) < 1e-3, `cell ${i}: device skin ${run.surfaceT[i]} vs ${empty.surfaceT[i]} with no brine`);
+    const { latent } = run.model.seaIce, a = run.model.seaIce.concentration[i], e = empty.model.seaIce.concentration[i];
+    assert.equal(a, e, `cell ${i}: cover ${a} vs ${e}`);
+    const melted = latent * a * (empty.model.state[6][i] - run.model.state[6][i]), kept = a * (run.model.seaIce.brine[i] - empty.model.seaIce.brine[i]);
+    assert.ok(Math.abs(melted + kept - 0.9 * start) < 1e-6 * start, `cell ${i}: the brine melts ${melted} J/m² of ice and keeps ${kept}`);
+    if (melted > 1e-3 * start) spent++;
   }
+  assert.ok(spent > 0, 'some brine is spent at the base');
   console.log(`iceLight and brineReservoir on ${run.cells.length} cells: brine CPU ${run.cells.map((i) => run.model.seaIce.brine[i].toFixed(0)).join(' ')} | device ${run.cells.map((i) => run.brine[i].toFixed(0)).join(' ')}`);
+});
+
+test('one step of the whole model with iceLight under the June sun: bare ice hands the water the share of the light through its base that the ocean takes (PH_PEN), as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = await oneStep(false, 0.9, { iceLight: true }, (model, cells) => { model.time = 91 * 86400; cells.forEach((i) => { model.seaIce.snow[i] = 0; }); }, 0.3);
+  let lit = 0;
+  for (const i of run.cells) {
+    const cpu = run.penetrated[i], gpu = run.pen[i];
+    assert.ok(Math.abs(cpu - gpu) < 1 + 1e-3 * cpu, `cell ${i}: ${cpu} vs ${gpu} J/m² through the ice`);
+    if (cpu > 0) lit++;
+  }
+  console.log(`iceLight under the June sun: ${lit} of ${run.cells.length} ice cells pass light to the water, CPU ${run.cells.map((i) => run.penetrated[i].toFixed(0)).join(' ')} | device ${run.cells.map((i) => run.pen[i].toFixed(0)).join(' ')} J/m²`);
+  assert.ok(lit > 0, 'some ice passes light to the water');
 });

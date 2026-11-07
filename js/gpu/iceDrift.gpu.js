@@ -49,8 +49,7 @@ fn iceCover(i: i32) -> f32 {
 fn hiOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IV + x] / a, a > 0.0); }
 fn siOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_ISN + x] / a, a > 0.0); }
 fn diOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IEN + x] / a, a > 0.0); }
-fn aiOf(x: i32) -> f32 { let sn = OD[O_ISN + x]; return select(ID_FRESH, OD[O_ISA + x] / sn, sn > 0.0); }
-${brine ? 'fn biOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IBR + x] / a, a > 0.0); }\n' : ''}
+fn aiOf(x: i32) -> f32 { let sn = OD[O_ISN + x]; return select(ID_FRESH, OD[O_ISA + x] / sn, sn > 0.0); }${brine ? '\nfn biOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IBR + x] / a, a > 0.0); }' : ''}
 fn rawStress(e: i32, a: i32, b: i32) -> f32 {
 ${given ? '  return OD[O_TAUA + e];' : `  let ga = gcell(a); let gb = gcell(b); let ge = gedge(e);
 ${implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { return PH[PH_STRESS + ge]; }\n' : ''}  let bottom = (K - 1) * GC;

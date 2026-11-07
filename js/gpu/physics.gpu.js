@@ -370,8 +370,8 @@ const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThicknes
 const AGEING: bool = ${!!o.snowAgeing}; const ALB_FRESH: f32 = ${o.freshSnowAlbedo}; const SNOW_COLDAGE: f32 = ${o.coldSnowAgeing}; const SNOW_MELTAGE: f32 = ${o.meltingSnowAgeing}; const SNOW_REFRESH: f32 = ${o.refreshSnowfall}; const WETSNOW: f32 = ${o.wetSnowRange}; const AGE_ACT: f32 = ${o.ageingActivation}; const ICE_SNOWFLOOR: f32 = ${o.iceSnowFloor};
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
-const LEADC: f32 = ${o.leadClosing}; const LEAD_HIBLER: bool = ${o.leadClosure === 'hibler'}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME}; const GONE_CONC: f32 = ${seaIceRemoval(!!o.keepSmallIce).concentration}; const GONE_VOLUME: f32 = ${seaIceRemoval(!!o.keepSmallIce).volume}; const PENETRATING: bool = ${!!o.penetration};
-const ICE_LIGHT_ON: bool = ${!!o.iceLight}; const BRINE_ON: bool = ${!!o.brineReservoir}; ${o.brineReservoir ? '' : 'const PH_BRINE: i32 = 0; '}const I0_CLEAR: f32 = ${ICE_LIGHT.clear}; const I0_CLOUDY: f32 = ${ICE_LIGHT.cloudy}; const ICE_EXT: f32 = ${ICE_LIGHT.extinction}; const ICE_TOP: f32 = ${ICE_LIGHT.surfaceLayer}; const BRINE_SHARE: f32 = ${ICE_LIGHT.reservoirShare};
+const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME}; const GONE_CONC: f32 = ${seaIceRemoval(!!o.keepSmallIce).concentration}; const GONE_VOLUME: f32 = ${seaIceRemoval(!!o.keepSmallIce).volume}; const PENETRATING: bool = ${!!o.penetration};${o.iceLight ? `
+const I0_CLEAR: f32 = ${ICE_LIGHT.clear}; const I0_CLOUDY: f32 = ${ICE_LIGHT.cloudy}; const ICE_EXT: f32 = ${ICE_LIGHT.extinction}; const ICE_TOP: f32 = ${ICE_LIGHT.surfaceLayer};${o.brineReservoir ? ` const BRINE_SHARE: f32 = ${ICE_LIGHT.reservoirShare};` : ''}` : ''}
 ${o.warmLayer || o.coolSkin ? skinConstants(o) : ''}const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = ${o.boundaryCondensation === 'uniform'}; const BL_CLOUDLAYER: bool = ${o.boundaryCondensation === 'cloudLayer' && moistTurbulence}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
@@ -398,7 +398,7 @@ const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
 const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_FRACTION: bool = ${o.deckSlab === 'fraction'}; const MLM_INTERPOLATE: bool = ${o.deckReference === 'interpolate'}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling}; const MLM_SUBGRID: bool = ${deckInversion === 'subgrid'}; const DECK_TOP: bool = ${deckCloud === 'top'}; const DECK_ABOVE: bool = ${deckResolved === 'above'};
-const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const ICE_BALANCE: bool = ${!!o.iceSheetBalance}; const SNOWCAP: f32 = ${o.snowCap}; const ALB_BAREICE: f32 = ${o.bareIceAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const VEG_HOLD: bool = ${!!o.snowHold}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
+const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const ICE_BALANCE: bool = ${!!o.iceSheetBalance}; const SNOWCAP: f32 = ${o.snowCap}; const ALB_BAREICE: f32 = ${o.bareIceAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMasking && !!o.vegetation}; const ALB_FOREST: f32 = ${o.forestSnowAlbedo}; const CLOSED_CANOPY: f32 = ${o.closedCanopy}; const CANOPY_MEM: f32 = ${o.canopyMemory};
 const TREELINE: bool = ${!!o.treeline}; const SEASON_C: f32 = ${o.seasonThreshold}; const SEASON_K: f32 = ${MELTING_POINT + o.seasonThreshold}; const SEASON_SHORTEST: f32 = ${o.minimumSeason / 365}; const SEASON_MEM: f32 = ${o.seasonMemory}; const TREE_LO: f32 = ${o.treelineWarmth[0]}; const TREE_SPAN: f32 = ${o.treelineWarmth[1] - o.treelineWarmth[0]}; const TREE_GROW: f32 = ${o.treeGrowthTime}; const TREE_DECLINE: f32 = ${o.treeDeclineTime};
 const REF_RESIST: f32 = ${REFERENCE_RESISTANCE}; const GATED: bool = ${!!o.treeline && !!o.treeMoisture}; const MOIST_MEM: f32 = ${o.moistureMemory}; const ARID_LO: f32 = ${o.forestAridity[0]}; const ARID_SPAN: f32 = ${o.forestAridity[1] - o.forestAridity[0]};
@@ -1142,7 +1142,9 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
  * snow0, dt and i. With PENETRATING, open water keeps the share PH_TRANS of the
  * absorbed sunlight out of T and adds it to PH_PEN (J/m²).
  */
-export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
+export const seaSurfaceWgsl = (o) => {
+  const light = !!o.iceLight, brine = !!o.brineReservoir, hibler = o.leadClosure === 'hibler';
+  return `if (h <= 0.0) {
     if (snow0 > 0.0) { T -= LFUS * snow0 / capacity; PH[PH_SNOW + i] = 0.0; }
     var pen = 0.0;
     if (PENETRATING) { pen = absorbed * PH[PH_TRANS + i]; PH[PH_PEN + i] += dt * pen; }
@@ -1150,37 +1152,26 @@ export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
     var fresh = 0.0;
     if (T < FREEZING) {
       let volume = (FREEZING - T) * capacity / LATENT_ICE; let area = min(1.0, volume / LEADC);
-      if (area >= MIN_CONC && volume >= MIN_VOLUME) { h = volume / area; T = FREEZING; fresh = area; if (BRINE_ON) { PH[PH_BRINE + i] = 0.0; } }
+      if (area >= MIN_CONC && volume >= MIN_VOLUME) { h = volume / area; T = FREEZING; fresh = area;${brine ? ' PH[PH_BRINE + i] = 0.0;' : ''} }
     }
     PH[PH_CONC + i] = fresh;
     PH[PH_SNOWALB + i] = ALB_FRESH;
   } else {
     var snow = snow0;
     let split = contrast - LEADX * (FREEZING - T);
-    var iceFlux = net - (1.0 - cover) * split; let waterFlux = net + cover * split;
-    var through = 0.0; var held = 0.0;
-    if (ICE_LIGHT_ON) {
-      let passed = max(0.0, absorbed - (1.0 - cover) * contrast) * (I0_CLEAR + (I0_CLOUDY - I0_CLEAR) * diffuse) * max(0.0, 1.0 - snow / FULLSNOW_ICE);
-      through = passed * exp(-ICE_EXT * max(0.0, h - ICE_TOP));
-      held = select(0.0, passed - through, BRINE_ON);
-      iceFlux -= through + held;
-    }
-    let conduction = (FREEZING - T) / (max(h, HMIN) / COND + snow / (RHOSNOW * KSNOW));
+    ${light ? 'var' : 'let'} iceFlux = net - (1.0 - cover) * split; let waterFlux = net + cover * split;
+${light ? `    let passed = max(0.0, absorbed - (1.0 - cover) * contrast) * (I0_CLEAR + (I0_CLOUDY - I0_CLEAR) * diffuse) * max(0.0, 1.0 - snow / FULLSNOW_ICE);
+    let through = passed * exp(-ICE_EXT * max(0.0, h - ICE_TOP));
+    iceFlux -= ${brine ? 'passed' : 'through'};
+` : ''}    let conduction = (FREEZING - T) / (max(h, HMIN) / COND + snow / (RHOSNOW * KSNOW));
     T += dt * (iceFlux + conduction) / SKINC;
     var thickness = h + dt * (conduction - ocean) / LATENT_ICE;
-    var reservoir = 0.0;
-    if (BRINE_ON) {
-      reservoir = PH[PH_BRINE + i] + dt * held;
-      if (T < MELTING && reservoir > 0.0) { let deficit = (MELTING - T) * SKINC; if (reservoir >= deficit) { T = MELTING; reservoir -= deficit; } else { T += reservoir / SKINC; reservoir = 0.0; } }
-      let over = max(0.0, reservoir - BRINE_SHARE * LATENT_ICE * max(0.0, thickness));
-      reservoir -= over; thickness -= over / LATENT_ICE;
-    }
-    if (ICE_LIGHT_ON) {
-      var share = 0.0;
-      if (PENETRATING) { share = PH[PH_TRANS + i]; PH[PH_PEN + i] += dt * cover * through * share; }
-      thickness -= dt * through * (1.0 - share) / LATENT_ICE;
-    }
-    if (T > MELTING) {
+${brine ? `    var reservoir = PH[PH_BRINE + i] + dt * (passed - through);
+    if (reservoir > 0.0 && conduction > ocean) { let spent = min(reservoir, dt * (conduction - ocean)); reservoir -= spent; thickness -= spent / LATENT_ICE; }
+` : ''}${light ? `    var share = 0.0;
+    if (PENETRATING) { share = PH[PH_TRANS + i]; PH[PH_PEN + i] += dt * cover * through * share; }
+    thickness -= dt * through * (1.0 - share) / LATENT_ICE;
+` : ''}    if (T > MELTING) {
       var excess = (T - MELTING) * SKINC; T = MELTING;
       let fromSnow = min(snow, excess / LFUS);
       snow -= fromSnow; excess -= fromSnow * LFUS;
@@ -1189,20 +1180,21 @@ export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
     let leadHeat = (1.0 - cover) * (waterFlux + ocean) * dt;
     let melted = max(0.0, -(cover * (thickness - h))) + max(0.0, leadHeat / LATENT_ICE);
     let leadIce = max(0.0, -leadHeat / LATENT_ICE);
-    let remaining = cover * SKINC * (T - FREEZING) - LATENT_ICE * (cover * thickness - leadHeat / LATENT_ICE) - LFUS * cover * snow + cover * reservoir;
+    let remaining = cover * SKINC * (T - FREEZING) - LATENT_ICE * (cover * thickness - leadHeat / LATENT_ICE) - LFUS * cover * snow${brine ? ' + cover * reservoir' : ''};
     var volume = cover * thickness - leadHeat / LATENT_ICE;
-    let area = min(1.0, cover - melted / (2.0 * h) + select(1.0 - cover, 1.0, LEAD_HIBLER) * leadIce / LEADC);
-    if (area < cover) { volume += (cover - area) * (snow / RHOICE - (SKINC * (T - FREEZING) + reservoir) / LATENT_ICE); }
-    else if (area > cover) { T = FREEZING + cover * (T - FREEZING) / area; snow = cover * snow / area; reservoir = cover * reservoir / area; }
-    if (area < GONE_CONC || volume < GONE_VOLUME) { T = FREEZING + remaining / capacity; h = 0.0; snow = 0.0; PH[PH_CONC + i] = 0.0; reservoir = 0.0; } else {
+    let area = min(1.0, cover - melted / (2.0 * h) + ${hibler ? '' : '(1.0 - cover) * '}leadIce / LEADC);
+    if (area < cover) { volume += (cover - area) * (snow / RHOICE - ${brine ? '(SKINC * (T - FREEZING) + reservoir)' : 'SKINC * (T - FREEZING)'} / LATENT_ICE); }
+    else if (area > cover) { T = FREEZING + cover * (T - FREEZING) / area; snow = cover * snow / area;${brine ? ' reservoir = cover * reservoir / area;' : ''} }
+${brine ? `    if (area > 0.0) { let over = min(reservoir, max(0.0, reservoir - BRINE_SHARE * LATENT_ICE * max(0.0, volume) / area) / (1.0 - BRINE_SHARE)); reservoir -= over; volume -= area * over / LATENT_ICE; }
+` : ''}    if (area < GONE_CONC || volume < GONE_VOLUME) { T = FREEZING + remaining / capacity; h = 0.0; snow = 0.0; PH[PH_CONC + i] = 0.0;${brine ? ' reservoir = 0.0;' : ''} } else {
       let spread = volume / area;
       let flooded = max(0.0, snow - (RHOWATER - RHOICE) * spread) * RHOICE / RHOWATER;
       snow -= flooded; h = spread + flooded / RHOICE; PH[PH_CONC + i] = area;
     }
     PH[PH_SNOW + i] = snow;
-    if (BRINE_ON) { PH[PH_BRINE + i] = reservoir; }
-    PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ICE_SNOWFLOOR), snow > 0.0);
+${brine ? '    PH[PH_BRINE + i] = reservoir;\n' : ''}    PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ICE_SNOWFLOOR), snow > 0.0);
   }`;
+};
 
 /*
  * Snow of `amount` kg/m² falling on sea cell i, on its ice or into its water.
@@ -1870,7 +1862,7 @@ ${held ? `  PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT 
   if (CLEAR_SKY) { PH[PH_RADCLROLR + i] = clearOutgoing; PH[PH_RADTC + i] = clearEscape; }` : `  stash(20, i, back); stash(21, i, outgoing);
   if (CLEAR_SKY) { PH[PH_OLRCLRSUM + i] += clearOutgoing; }`}
 }`;
-export const physicsSurfaceKernel = (held, seaSkin = false, soil = null, cover = false, deep = false) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}
+export const physicsSurfaceKernel = (held, seaSkin = false, soil = null, cover = false, deep = false, ice = {}) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
 ${HAND_OFF(held)}  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
@@ -1900,8 +1892,7 @@ ${held ? HELD_THETA : `  for (var k = 0; k < K; k++) {
 `}  IN[S_Q + bottom] += dt * evap * GRAV / (pi * LV[L_DS + K - 1]);
 ${held ? '  let swdn = sunScale * PH[PH_RADSWDN + i];\n' : ''}  PH[PH_SWDN + i] = swdn;
 ${held ? '  let directDown = sunScale * PH[PH_RADDIR + i];\n' : ''}  let contrast = directDown * (iceDir - waterDir) + (swdn - directDown) * (iceDif - ALB_DIF_WATER);
-  let diffuse = select(0.0, 1.0 - directDown / swdn, swdn > 0.0);
-${held ? HELD_TOA : ''}  PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
+${ice.iceLight ? '  let diffuse = select(0.0, 1.0 - directDown / swdn, swdn > 0.0);\n' : ''}${held ? HELD_TOA : ''}  PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
   PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar; PH[PH_LWSFCSUM + i] += back - surfaceEmission;
 ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = skin; var h = ice;
@@ -1932,7 +1923,7 @@ ${deep ? DEEP_DRAW : ''}      let seep = surf * (1.0 - exp(-dt / PERCT));
     }
     var cap = bucket;
     if (VEGETATED) {
-      var veg = select(veg0 * exp(-dt / VEG_SNOW), veg0, VEG_HOLD);
+      var veg = ${ice.snowHold ? 'veg0' : 'veg0 * exp(-dt / VEG_SNOW)'};
       if (snow <= 0.0) {
         let goal = ${cover ? 'PH[PH_COVERG + i]' : 'clamp((min(soil, cap) / cap - VEG_DRY) / (VEG_WET - VEG_DRY), 0.0, 1.0)'};
         veg = veg0 + (goal - veg0) * (1.0 - exp(-dt * select(1.0, warmth, goal > veg0) / select(VEG_DECLINE, VEG_GROW, goal > veg0)));
@@ -1975,7 +1966,7 @@ ${deep ? DEEP_DRAW : ''}      let seep = surf * (1.0 - exp(-dt / PERCT));
     if (soil > cap) { PH[PH_RUNOFF + i] += ${deep ? 'deepSpill(i, soil - cap)' : 'soil - cap'}; soil = cap; }
     PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow; PH[PH_SURF + i] = surf;
     PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ALB_OLDSNOW), snow > 0.0);
-  } else ${SEA_SURFACE_WGSL}
+  } else ${seaSurfaceWgsl(ice)}
 ${seaSkin ? '  if (!onLand) { skinStep(i, ice, h, net - absorbed, absorbed, sqrt(PH[PH_DRAG + i]) * xWind(i, ws), rho, T, capacity, dt); }\n' : ''}  IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`;
 

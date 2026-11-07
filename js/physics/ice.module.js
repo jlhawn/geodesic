@@ -26,12 +26,13 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * E1, E3 and E4 simplifications of Fichefet and Morales Maqueda (1997, JGR
  * 102, 12609; their Table 2: no heat stored in the ice, no sunlight into
  * it, one thickness) to Semtner's (1976) three-layer model, by default with
- * no brine reservoir; iceLight lifts E3. Open water is a mixed layer of heat
- * capacity slabHeatCapacity; when it cools to the freezing point the
- * deficit freezes into ice of that latent heat. Ice has a skin of small
- * heat capacity whose temperature answers the surface flux and the
- * conduction through the ice from its base at the freezing point; the
- * conducted heat freezes water onto the base, and a skin that would
+ * no brine reservoir; iceLight lifts E3, brineReservoir the latent half of
+ * E1. Open water is a mixed layer of heat capacity slabHeatCapacity; when
+ * it cools to the freezing point the deficit freezes into ice of that
+ * latent heat. Ice has a skin of small heat capacity whose temperature
+ * answers the surface flux and the conduction through the ice from its
+ * base at the freezing point; the conducted heat freezes water onto the
+ * base, and a skin that would
  * pass the melting point melts the ice from the top instead. Ice that
  * melts away returns its leftover energy to the mixed layer. The surface
  * energy — mixed-layer heat over the freezing point, skin heat, minus
@@ -109,9 +110,11 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * Of it, exp(-1.5 (h - 0.1)) reaches the water: the share transmission[i]
  * goes to penetrated[i] and the rest melts the base. What the ice holds
  * back returns to the surface, or with `brineReservoir` fills `brine`
- * (J/m² of ice), Semtner's reservoir: it keeps the skin from cooling below
- * the melting point until spent, and holds at most half the latent heat of
- * the ice, the rest of the light melting ice.
+ * (J/m² of ice), Semtner's reservoir, which holds at most half the latent
+ * heat of the ice at the end of a step, the rest melting ice. With no heat
+ * capacity in the ice to keep at the melting point, the reservoir is spent
+ * at the base against the growth conduction drives (FMM97 p. 12,626), and
+ * the surface cools freely.
  */
 export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
 
@@ -195,6 +198,11 @@ export function createSeaIce(mesh, {
   function load(ice, saved = null, savedBrine = null) {
     for (let i = 0; i < C; i++) concentration[i] = ice[i] > 0 ? (saved && saved[i] > 0 ? Math.min(1, saved[i]) : 1) : 0;
     if (brine) for (let i = 0; i < C; i++) brine[i] = ice[i] > 0 && savedBrine ? savedBrine[i] : 0;
+    else if (savedBrine) {
+      let heat = 0, area = 0;
+      for (let i = 0; i < C; i++) { area += mesh.areaCell[i]; if (ice[i] > 0) heat += mesh.areaCell[i] * concentration[i] * savedBrine[i]; }
+      if (heat > 0) console.warn(`the saved sea ice holds ${(heat / area).toExponential(2)} J/m² of brine (a global mean), dropped: this run has no ice.brineReservoir`);
+    }
   }
 
   function energy(surfaceT, ice, snowCover = 0, area = ice > 0 ? 1 : 0, reservoir = 0) {
@@ -272,14 +280,10 @@ export function createSeaIce(mesh, {
     T += dt * (iceFlux + conduction) / skinHeatCapacity;
     let thickness = h + dt * (conduction - ocean) / latent;
     let Q = brine ? brine[i] + dt * held : 0;
-    if (brine && T < MELTING_POINT && Q > 0) {
-      const deficit = (MELTING_POINT - T) * skinHeatCapacity;
-      if (Q >= deficit) { T = MELTING_POINT; Q -= deficit; } else { T += Q / skinHeatCapacity; Q = 0; }
-    }
-    if (brine) {
-      const over = Math.max(0, Q - ICE_LIGHT.reservoirShare * latent * Math.max(0, thickness));
-      Q -= over;
-      thickness -= over / latent;
+    if (brine && Q > 0 && conduction > ocean) {
+      const spent = Math.min(Q, dt * (conduction - ocean));
+      Q -= spent;
+      thickness -= spent / latent;
     }
     if (iceLight) {
       const share = transmission ? transmission[i] : 0;
@@ -306,6 +310,11 @@ export function createSeaIce(mesh, {
     let skin = T, snowOnIce = s, kept = Q;
     if (area < A) volume += (A - area) * (s / iceDensity - (skinHeatCapacity * (T - FREEZING_POINT) + Q) / latent);
     else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; kept = A * Q / area; }
+    if (brine && area > 0) {
+      const over = Math.min(kept, Math.max(0, kept - ICE_LIGHT.reservoirShare * latent * Math.max(0, volume) / area) / (1 - ICE_LIGHT.reservoirShare));
+      kept -= over;
+      volume -= area * over / latent;
+    }
     if (area < removal.concentration || volume < removal.volume) {
       meltAway(surfaceT, ice, i, energyLeft, cellArea * A * h, cellArea * A * s);
       return;
