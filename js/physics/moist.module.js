@@ -542,8 +542,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * rainEvaporationLaw 'deficit', rainCover 0.1, no rainEvaporationCeiling,
  * cumulusClosure 0.03 (Grant 2001), cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
- * cumulusFriction 1, cumulusOvershoot 'kinetic', cumulusAscent 'buoyant', no
- * cumulusEntrainmentHeight, cumulusUpdraft 1 m/s, cumulusMemory
+ * cumulusFriction 1, cumulusOvershoot 'kinetic', cumulusAscent 'kinetic',
+ * cumulusEntrainmentHeight 1, cumulusUpdraft 1 m/s, cumulusMemory
  * 1800 s, no cumulusRain, cumulusSource 'mean' (or 'lowest': the plume leaves with
  * the lowest layer's air), plumeClosure 'separate',
  * plumeCapeParcel 'plume', plumeSource 'mean', plumeVelocity 1 m/s,
