@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, rebalanceSurfacePressure } from '../js/geography.module.js';
+import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey } from '../js/geography.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
-import { recordedOptions, givenOptions, headerOptions, differingGroups, savedTerrain, terrainMove } from '../scripts/stateOptions.mjs';
+import { recordedOptions, givenOptions, headerOptions, differingGroups, runTerrain, moveOntoTerrain } from '../scripts/stateOptions.mjs';
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 
@@ -33,17 +33,13 @@ test('differingGroups names the groups whose options differ, in any key order, a
   assert.deepEqual(differingGroups({ terrain: { conserveVolume: true } }, { terrain: { conserveVolume: false } }), ['terrain']);
 });
 
-test("a state saved over terrain of other options keeps its options, given and terrain options through the file and resumes on that terrain, with TERRAIN or without, its surface pressure unmoved; a state over the default terrain moves onto it once", async () => {
+test("a state saved over terrain of other options keeps its options, given and terrain options through the file and resumes on that terrain through spinup.mjs's runTerrain and moveOntoTerrain, with TERRAIN or without, its surface pressure unmoved; a state over the default terrain moves onto it once", async () => {
   const terrain = { conserveVolume: true }, model = createModel(new Grid(16), { topography, terrain, physics: false }), { core, mesh, geography } = model;
   const [pi, theta] = initializeState(model, {});
   const save = (pressure, records) => decodeState(encodeState({ N: 16, K: core.K, day: 0, time: 0, terrain: true, ...records, pi: pressure, theta }));
   const resume = (saved, given) => {
-    const run = given ?? savedTerrain(saved), from = terrainMove(saved, run), moved = Float64Array.from(saved.pi), air = Float64Array.from(saved.theta);
-    if (from !== null) {
-      core.diagnose(moved, air, null, null);
-      rebalanceSurfacePressure(core, moved, air, surfaceGeopotential(mesh, geography, terrainOptions(from)), model.surfaceGeopotential);
-    }
-    return { run, from, moved };
+    const run = runTerrain(given, saved) ?? true, state = [Float64Array.from(saved.pi), Float64Array.from(saved.theta)];
+    return { run, from: moveOntoTerrain(saved, run, { core, mesh, geography }, state, model.surfaceGeopotential), moved: state[0] };
   };
   const records = { terrainOptions: terrain, ...headerOptions({ radiation: {}, moist: {}, land: { soil: 'layers', coverGoal: 'observed' }, dynamics: { verticalAdvection: 'vanLeerWater' }, terrain }) };
   const kept = await save(pi, records);
