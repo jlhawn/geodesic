@@ -612,14 +612,14 @@ Proposed and not run; every GPU run needs Joshua's go:
   - Thin the high cloud's water.
   - First, on the CPU: `scripts/tropicalHeating.mjs` on the 5–12° N band
     of fixed-SST states.
-- **The throughflow (CPU).** Run the island-rule and strait-transport
-  diagnostics on the end states of the Oct 18 ocean-only ladder's 1.0×
-  and 0.6× arms.
-  - If the 0.6× arm, whose tropics match WOA, still carries 12–16 Sv
-    beyond its own winds, the excess is not what holds the warm pool
-    cold.
-  - If the excess shrinks with the stress, a 1.0× arm with the Bali
-    gaps closed measures the warm pool's change per Sv.
+- **The throughflow.** The Oct 18 ladder's arms cannot show whether the
+  excess holds the warm pool cold, since the ladder restores the
+  tropics to WOA. In the N=128 pair's coupled year (12 saves, days
+  1490–1825) the island rule gives 17.4 (ctl) and 20.4 (A) Sv and the
+  throughflow carries a steady 9.2 and 10.7 Sv beyond it. Three
+  confounded pairs, all short and unreplicated, give the throughflow 0
+  to −0.7 K of the warm pool's −1.5 to −1.75 K (Nov 7 audit). The warm
+  pool's change per Sv is still unmeasured.
 - **The Canary coast (CPU, about 10 minutes):** its alongshore stress
   against California's, from existing states.
 - **bl48:**
