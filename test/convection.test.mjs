@@ -5,7 +5,7 @@ import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { MID_LEVEL, saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, fogConstants } from '../js/physics/moist.module.js';
-import { syntheticTopography } from '../js/geography.module.js';
+import { syntheticTopography, surfaceGeopotential } from '../js/geography.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { PREVIOUS_MOIST, PREVIOUS_BERGERON, PREVIOUS_PCAPE_MINIMUM } from './helpers/previousDefaults.mjs';
@@ -1487,12 +1487,14 @@ test('the IFS updraught conversion: on Jordan\'s column each layer rains l (1 âˆ
   for (let n = 1; n < tops.length; n++) assert.ok(tops[n] >= tops[n - 1], `top ${tops[n]} under ${tops[n - 1]}`);
 });
 
-async function parity(options, { momentum = false, nocturnal = false, land = false, ascent = false, grid = levels } = {}) {
+async function parity(options, { momentum = false, nocturnal = false, land = false, ascent = false, grid = levels, ground = null, columns = null } = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const landMask = land ? Uint8Array.from({ length: 16 * 16 * 10 + 2 }, (_, i) => (i % 3 === 0 ? 1 : 0)) : null;
-  const model = createModel(new Grid(16), { ocean: false, levels: grid, moist: landMask ? { ...options, land: landMask } : options }), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
+  const model = createModel(new Grid(16), { ...(ground ? { topography: syntheticTopography(90, 180, ground) } : {}), ocean: false, levels: grid, moist: landMask ? { ...options, land: landMask } : options }), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
   const [pi, theta, , surfaceT, q, qc] = model.state;
-  const { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation } = randomColumns(model, { nocturnal });
+  const fields = randomColumns(model, { nocturnal });
+  if (columns) columns(model, fields);
+  const { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation } = fields;
   if (ascent) {
     let ascentSeed = 777;
     const ascentRandom = () => { ascentSeed = (ascentSeed * 1103515245 + 12345) % 2147483648; return ascentSeed / 2147483648; };
@@ -1503,20 +1505,22 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   const cloudRandom = () => { cloudSeed = (cloudSeed * 1103515245 + 12345) % 2147483648; return cloudSeed / 2147483648; };
   for (let x = moist.cumulusK0 * C; x < K * C; x++) if (cloudRandom() < 0.3) { moist.cumulusCover[x] = Math.fround(0.05 * cloudRandom()); moist.cumulusWater[x] = Math.fround(1e-3 * cloudRandom()); }
   const priorCover = Float64Array.from(moist.cumulusCover), priorWater = Float64Array.from(moist.cumulusWater);
-  const gpu = await createGpuCore(mesh, { levels: grid, physics: options });
+  const phis = ground ? surfaceGeopotential(mesh, model.geography) : null, above = (h, i) => h - (phis ? phis[i] / core.diagnostics.g : 0);
+  const gpu = await createGpuCore(mesh, { levels: grid, physics: options, ...(phis ? { surfaceGeopotential: phis } : {}) });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, concentration, cumulusCover: priorCover.subarray(moist.cumulusK0 * C), cumulusWater: priorWater.subarray(moist.cumulusK0 * C) });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.REGIME, Float32Array.from(regime));
-  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIXTOP, Float32Array.from(mixingTop));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIXTOP, Float32Array.from(mixingTop, above));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(stratiform));
-  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth, above));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.BUOY, Float32Array.from(buoyancy));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.USTAR, Float32Array.from(friction));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SUBTV, Float32Array.from(saved));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(sensible));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(evaporation));
-  if (landMask) device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LAND, Float32Array.from(landMask));
+  const landUsed = landMask ?? (ground ? model.geography.land : null);
+  if (landUsed) device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LAND, Float32Array.from(landUsed));
   let dragSeed = 31;
   const dragRandom = () => { dragSeed = (dragSeed * 1103515245 + 12345) % 2147483648; return dragSeed / 2147483648; };
   model.boundaryLayer.surfaceDrag.set(Float64Array.from({ length: C }, () => (momentum ? 0 : Math.fround(0.08 * dragRandom()))));
@@ -1911,6 +1915,25 @@ test('with midLevelConvection the engines agree on random columns under a random
 test('with midLevelConvection and convectionRetype the engines agree on random columns under a random large-scale ascent', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { midLevel } = await parity({ midLevelConvection: true, convectionRetype: true }, { ascent: true });
   assert.ok(midLevel >= 50, `${midLevel} columns convect at mid-level on the CPU`);
+});
+test('with midLevelConvection the engines agree on random columns with a deck that the stratocumulus cap closes in every fifth', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const deck = (z, p) => {
+    const T = (z < 900 ? 290 : 304 + 5e-3 * (z - 900)) * Math.pow(p / 1e5, 0.2857);
+    return { T, q: z < 900 ? Math.min(0.0105, saturationHumidity(T, p)) : Math.min(0.003, 0.3 * saturationHumidity(T, p)) };
+  };
+  const decks = (model, fields) => {
+    for (let i = 0; i < model.mesh.nCells; i += 5) {
+      place(model, i, 101500, deck); setDepth(model, i, 900);
+      model.boundaryLayer.depth[i] = Math.fround(model.boundaryLayer.depth[i]); model.radiation.mlmGate[i] = Math.fround(0.3);
+      fields.buoyancy[i] = model.boundaryLayer.buoyancyFlux[i] = Math.fround(2e-4);
+      fields.friction[i] = model.boundaryLayer.friction[i] = 0.25;
+      fields.sensible[i] = model.radiation.sensibleHeat[i] = 10;
+      fields.evaporation[i] = model.radiation.evaporation[i] = Math.fround(4e-5);
+    }
+  };
+  const { midLevel } = await parity({ midLevelConvection: true }, { ascent: true, columns: decks });
+  console.log('mid-level with decks: ' + midLevel + ' columns');
+  assert.ok(midLevel >= 30, `${midLevel} columns convect at mid-level on the CPU`);
 });
 
 test("a rainEvaporationLaw other than 'deficit', 'kessler' or 'cloudsc', a rainCover other than 'overlap' or a share in (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
