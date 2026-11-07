@@ -374,12 +374,12 @@ export function seasonTimes(orbit = DEFAULT_ORBIT) {
  * by the share of its height below h, so that the slab moves with h
  * continuously, and with 'midpoint' the whole of each layer whose
  * midpoint lies below h; the free troposphere with `deckReference`
- * 'interpolate' (the default) the θ_l and q_t of the first layer whose
+ * 'interpolate' the θ_l and q_t of the first layer whose
  * midpoint lies above h moved toward the next layer up's by the share of
  * the height from the midpoint below h to that first one that lies below
  * h, so that the reference moves with h continuously and is the layer's
- * own where h sits on the midpoint below, and with 'layer' that first
- * layer's alone; the
+ * own where h sits on the midpoint below, and with 'layer' (the default)
+ * that first layer's alone; the
  * subsidence w_s = −πσ̇/(ρ g) at h of the last dynamics stage, πσ̇
  * averaged with equal weights over the cell and its neighbours
  * subsidenceSmoothing times over (2; 0 to 2) at the two interfaces
