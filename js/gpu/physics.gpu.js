@@ -1565,7 +1565,9 @@ ${aerosol ? `      var deckLight = vec4<f32>(0.0, 0.0, 0.0, 0.0);
   stash(9, i, ts); stash(10, i, warmth); stash(11, i, wetness); stash(12, i, bareShare); stash(13, i, surfaceEmission);
   stash(22, i, landAlbedo); stash(23, i, stratiform); stash(24, i, ozoneColumn); stash(25, i, adir);
 }`;
-export const radiationKernel = (held, layered = false, aerosol = false) => `${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+const TRACE_CHAIN_WGSL = `    if (LW_CHAIN && TRACE_CHAIN && chainF[k] > 0.0 && water < f * TRACE_PATH) { chainF[k] *= water / (f * TRACE_PATH); }
+`;
+export const radiationKernel = (held, layered = false, aerosol = false, trace = false) => `${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -1613,8 +1615,7 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
     if (STRATUS && k == deckK && deck > 0.0) { cloudE[k] = fraction * (1.0 - transmitted(optics.y * (select(water, 0.0, k >= replaced) + deck))) + (1.0 - fraction) * cloudE[k]; }
     else if (k >= replaced) { cloudE[k] *= 1.0 - fraction; }
     if (LW_CHAIN) { chainF[k] = select(0.0, f * select(1.0, 1.0 - fraction, k >= replaced), water > 0.0 && !(STRATUS && k == deckK && deck > 0.0)); }
-    if (LW_CHAIN && TRACE_CHAIN && chainF[k] > 0.0 && water < f * TRACE_PATH) { chainF[k] *= water / (f * TRACE_PATH); }
-    let clear = 1.0 - cloudE[k];
+${trace ? TRACE_CHAIN_WGSL : ''}    let clear = 1.0 - cloudE[k];
     vaporE[k] = 1.0 - (1.0 - eps) * clear;
     mixedE[k] = 1.0 - (1.0 - LV[L_GASE + k]) * clear;
     temperature[k] = IN[S_TH + idx] * D[D_EXM + idx];
@@ -1982,8 +1983,7 @@ function thomasSolve(upper, lower, rhs) {
     for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; next = ${rhs}[j] - gain[j] * next; ${rhs}[j] = next; }
   }`;
 }
-const ADJUST_FUNCTIONS = `fn rainShareBelow(share: f32, cover: f32, above: f32) -> f32 { return max(RAIN_FLOOR, 1.0 - (1.0 - share) * (1.0 - max(cover, above)) / (1.0 - min(above, 1.0 - 1e-6))); }
-fn upperInterface(i: i32, k: i32) -> f32 {
+const ADJUST_FUNCTIONS = `fn upperInterface(i: i32, k: i32) -> f32 {
   let idx = k * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + k] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
 }
@@ -2433,7 +2433,6 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     }
   }
   if (top == 0) { top = 1; flux[1] = 0.0; } else { rainAbove += rainOne; }
-  if (PL_RETYPE && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }
   if (!cloudy || top < 1 || !(PL_PARCEL || select((LV[L_SU + top] * DEEP_REFERENCE < SHALLOW_TOP), (pi * (LV[L_SU + base] - LV[L_SU + top]) > DEEP_DEPTH), PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }
   clearCumulus(i);
   let topHeight = upperInterface(i, top);
@@ -2720,7 +2719,6 @@ const MID_LEVEL_PLUME = [
   }
 `],
   ['epsilon = IFS_EPS * (IFS_RH - rh) * ratio * ratio * ratio;', 'epsilon = IFS_EPS * select(1.0, MID_FE, middle) * (IFS_RH - rh) * ratio * ratio * ratio;'],
-  ['if (PL_RETYPE && cloudy && top >= 1', 'if (PL_RETYPE && !middle && cloudy && top >= 1'],
   ['PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }', 'PL_BY_DEPTH))) { if (middle) { return 0.0; } return cumulusColumn(i, pi, dt); }'],
   ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
   if (middle) {
@@ -2731,12 +2729,58 @@ const MID_LEVEL_PLUME = [
 `],
   ['if (PL_RELAXED) { return cumulusColumn(i, pi, dt); }', 'if (PL_RELAXED && !middle) { return cumulusColumn(i, pi, dt); }'],
 ];
+const RETYPE_TEST = 'if (PL_RETYPE && cloudy && top >= 1';
+const replaceOnce = (pairs, body, what) => pairs.reduce((text, [from, to]) => {
+  const at = text.indexOf(from);
+  if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error(`the ${what} anchor is not in the kernel exactly once`);
+  return text.slice(0, at) + to + text.slice(at + from.length);
+}, body);
+const RAIN_SHARE_WGSL = `fn rainShareBelow(share: f32, cover: f32, above: f32) -> f32 { return max(RAIN_FLOOR, 1.0 - (1.0 - share) * (1.0 - max(cover, above)) / (1.0 - min(above, 1.0 - 1e-6))); }
+`;
+const RAIN_EVAPORATION = [
+  ['var fogged = 0.0;', 'var fogged = 0.0; var rainShare = 0.0; var coverAbove = 0.0;'],
+  [`    let mass = pi * LV[L_DS + k] / GRAV;
+    if (rained > 0.0 && (EVAP_IN_CLOUD`, `    let mass = pi * LV[L_DS + k] / GRAV;
+    var layerCover = 0.0;
+    if (RAIN_OVERLAP) {
+      if (!(rained > 0.0)) { rainShare = 0.0; }
+      let condensate = IN[S_QC + idx];
+      if (condensate > 0.0) {
+        let pressure = pi * LV[L_SM + k];
+        layerCover = uniformCover(condensate, uniformWidth(cloudSat(IN[S_TH + idx] * D[D_EXM + idx], pressure), pressure, pi));
+      }
+      rainShare = rainShareBelow(rainShare, layerCover, coverAbove);
+      coverAbove = layerCover;
+    }
+    if (rained > 0.0 && (EVAP_IN_CLOUD`],
+  [`      let evaporated = min(rained, RAIN_EVAP * deficit);
+`, `      var evaporated = min(rained, RAIN_EVAP * deficit);
+      if (RAIN_CEILING || RAIN_KESSLER || RAIN_CLOUDSC) {
+        let gamma = LHEAT * slope / CP;
+        let clear = select(RAIN_COVER, max(0.0, rainShare - layerCover), RAIN_OVERLAP);
+        let rh = select(RAIN_RH, min(1.0, RAIN_RH + (1.0 - RAIN_RH) * clear / max(1e-14, 1.0 - layerCover)), RAIN_OVERLAP);
+        if (RAIN_CEILING && rh < 1.0) { evaporated = min(rained, RAIN_EVAP * max(0.0, (rh * qs - IN[S_Q + idx]) / (1.0 + rh * gamma)) * mass); }
+        if (RAIN_KESSLER || RAIN_CLOUDSC) {
+          let rate = KE_RATE * pow(sqrt(LV[L_SM + k]) * (rained / dt) / (select(RAIN_COVER, rainShare, RAIN_OVERLAP) * KE_FLUX), KE_EXP);
+          if (RAIN_KESSLER) { evaporated = min(evaporated, deficit * relaxedFraction(clear * rate * (1.0 + gamma) * dt)); }
+          else { let shaft = KE_SHAFT * rate; evaporated = min(evaporated, clear * shaft * max(0.0, qs - IN[S_Q + idx]) * dt / (1.0 + shaft * dt * (1.0 + gamma)) * mass); }
+        }
+      }
+`],
+  [`      if (evaporated > 0.0) {
+        rained = max(0.0, rained - evaporated);
+`, `      if (evaporated > 0.0) {
+        if (RAIN_OVERLAP) { rainShare = max(RAIN_FLOOR, rainShare - max(0.0, (rainShare - layerCover) * evaporated / rained)); }
+        rained = max(0.0, rained - evaporated);
+`],
+];
+export const rainEvaporationOptions = (body) => RAIN_SHARE_WGSL + replaceOnce(RAIN_EVAPORATION, body, 'rain evaporation');
+const PLUME_RETYPE = [[`  if (!cloudy || top < 1 || !(PL_PARCEL ||`, `  if (PL_RETYPE && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }
+  if (!cloudy || top < 1 || !(PL_PARCEL ||`]];
+export const plumeRetype = (body) => replaceOnce(PLUME_RETYPE, body, 'retype');
 export function midLevelPlume(body) {
-  return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)};\n` + MID_LEVEL_PLUME.reduce((text, [from, to]) => {
-    const at = text.indexOf(from);
-    if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error('a mid-level anchor is not in the plume kernel exactly once');
-    return text.slice(0, at) + to + text.slice(at + from.length);
-  }, body);
+  const text = replaceOnce(MID_LEVEL_PLUME, body, 'mid-level');
+  return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)};\n` + text.replace(RETYPE_TEST, 'if (PL_RETYPE && !middle && cloudy && top >= 1');
 }
 export function bergeronRain(body) {
   return BERGERON_RAIN.reduce((text, [from, to]) => {
@@ -3039,23 +3083,12 @@ fn blSeal(i: i32, pi: f32) {
   let pi = IN[S_PI + i]; let dt = P[0]; let bottom = K - 1;
   let produced = PH[PH_CURAIN + i]; let deep = PH[PH_CUDEEP + i] > 0.0; let plumeBase = i32(PH[PH_CUBASE + i]);
   // autoconversion, and the rain evaporating as it falls
-  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0; var rainShare = 0.0; var coverAbove = 0.0;
+  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
   let floor = select(PH[PH_DEPTH + i], PH[PH_MIXTOP + i], AUTO_MIX && MOIST_BL);
   let iceConc = PH[PH_CONC + i]; let iced = select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
-    var layerCover = 0.0;
-    if (RAIN_OVERLAP) {
-      if (!(rained > 0.0)) { rainShare = 0.0; }
-      let condensate = IN[S_QC + idx];
-      if (condensate > 0.0) {
-        let pressure = pi * LV[L_SM + k];
-        layerCover = uniformCover(condensate, uniformWidth(cloudSat(IN[S_TH + idx] * D[D_EXM + idx], pressure), pressure, pi));
-      }
-      rainShare = rainShareBelow(rainShare, layerCover, coverAbove);
-      coverAbove = layerCover;
-    }
     if (rained > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR)) && RAIN_EVAP > 0.0) {
       let ex = D[D_EXM + idx];
       let temperature = IN[S_TH + idx] * ex;
@@ -3063,20 +3096,8 @@ fn blSeal(i: i32, pi: f32) {
       let qs = saturated.x;
       let slope = saturated.y;
       let deficit = max(0.0, (qs - IN[S_Q + idx]) / (1.0 + LHEAT * slope / CP)) * mass;
-      var evaporated = min(rained, RAIN_EVAP * deficit);
-      if (RAIN_CEILING || RAIN_KESSLER || RAIN_CLOUDSC) {
-        let gamma = LHEAT * slope / CP;
-        let clear = select(RAIN_COVER, max(0.0, rainShare - layerCover), RAIN_OVERLAP);
-        let rh = select(RAIN_RH, min(1.0, RAIN_RH + (1.0 - RAIN_RH) * clear / max(1e-14, 1.0 - layerCover)), RAIN_OVERLAP);
-        if (RAIN_CEILING && rh < 1.0) { evaporated = min(rained, RAIN_EVAP * max(0.0, (rh * qs - IN[S_Q + idx]) / (1.0 + rh * gamma)) * mass); }
-        if (RAIN_KESSLER || RAIN_CLOUDSC) {
-          let rate = KE_RATE * pow(sqrt(LV[L_SM + k]) * (rained / dt) / (select(RAIN_COVER, rainShare, RAIN_OVERLAP) * KE_FLUX), KE_EXP);
-          if (RAIN_KESSLER) { evaporated = min(evaporated, deficit * relaxedFraction(clear * rate * (1.0 + gamma) * dt)); }
-          else { let shaft = KE_SHAFT * rate; evaporated = min(evaporated, clear * shaft * max(0.0, qs - IN[S_Q + idx]) * dt / (1.0 + shaft * dt * (1.0 + gamma)) * mass); }
-        }
-      }
+      let evaporated = min(rained, RAIN_EVAP * deficit);
       if (evaporated > 0.0) {
-        if (RAIN_OVERLAP) { rainShare = max(RAIN_FLOOR, rainShare - max(0.0, (rainShare - layerCover) * evaporated / rained)); }
         rained = max(0.0, rained - evaporated);
         IN[S_Q + idx] += evaporated / mass;
         IN[S_TH + idx] -= LHEAT * evaporated / (mass * CP * ex);
