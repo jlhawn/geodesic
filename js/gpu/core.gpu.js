@@ -891,7 +891,7 @@ export const PHYSICS_DEFAULTS = {
   exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false, radiationEvery: 1, dragEvery: 1,
   longwaveScheme: 'correlated', longwaveOverlap: 'exponentialRandom', longwaveLines: 'voigt', solarGases: 'clirad', nearInfrared: 'bands', ...GREENHOUSE_GASES, ozone: 'afgl', ozoneColumn: OZONE_COLUMN, ozoneProfile: null, vaporStrength: VAPOR_STRENGTH,
   rayleighBands: RAYLEIGH_BANDS, rayleighDepth: null, nearInfraredRayleigh: NEAR_INFRARED_RAYLEIGH, upwardAbsorption: true, visibleFraction: VISIBLE_FRACTION, landAerosol: LAND_AEROSOL, seaAerosol: SEA_AEROSOL, aerosolAlbedo: 0.95, aerosolAsymmetry: 0.7, aerosolHeight: 2000, aerosol: DEFAULT_AEROSOL, aerosolScale: 1,
-  slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10, keepSmallIce: false,
+  slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadClosure: 'squared', leadExchange: 10, keepSmallIce: false,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.62, meltingIceAlbedo: 0.48, iceMeltingRange: 1, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   snowAgeing: true, iceSnowFloor: 0.70, ...SNOW_AGEING,
   ...MOIST_DEFAULTS,
@@ -902,7 +902,7 @@ export const PHYSICS_DEFAULTS = {
   oldSnowAlbedo: 0.50, snowMasking: true, forestSnowAlbedo: 0.27, closedCanopy: 0.7, canopyMemory: 365 * 86400,
   treeline: true, seasonThreshold: 0.9, minimumSeason: 94, treelineWarmth: [6.4, 8.0], seasonMemory: 3 * 365 * 86400, treeGrowthTime: 10 * 365 * 86400, treeDeclineTime: 3 * 365 * 86400,
   treeMoisture: true, moistureMemory: 3 * 365 * 86400, forestAridity: FOREST_ARIDITY, grassland: true, forestAlbedo: 0.13, grassAlbedo: 0.20, grassSnowDarkening: 0.06, coverGoal: 'water', deepCapacity: null, ...SOIL_CARBON,
-  growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,
+  growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, snowHold: false, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,
   surfaceExchange: 'roughness', implicitDrag: true, exchangeOptions: {}, ...SKIN_DEFAULTS, skinLight: JERLOV.IB,
 };
 

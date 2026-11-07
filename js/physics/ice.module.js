@@ -22,8 +22,10 @@ export const NEGLIGIBLE_VOLUME = 1e-6;
 export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: NEGLIGIBLE_CONCENTRATION, volume: NEGLIGIBLE_VOLUME } : { concentration: MINIMUM_CONCENTRATION, volume: MINIMUM_VOLUME });
 
 /*
- * The slab ocean and its sea ice, a zero-layer thermodynamic model in
- * the manner of Semtner (1976). Open water is a mixed layer of heat
+ * The slab ocean and its sea ice, a zero-layer thermodynamic model: the
+ * E1 + E4 simplifications of Fichefet and Morales Maqueda (1997, JGR 102,
+ * 12609) to Semtner's (1976) three-layer model, with no brine reservoir
+ * and no sunlight through the ice. Open water is a mixed layer of heat
  * capacity slabHeatCapacity; when it cools to the freezing point the
  * deficit freezes into ice of that latent heat. Ice has a skin of small
  * heat capacity whose temperature answers the surface flux and the
@@ -59,7 +61,9 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * evolves as above; the heat the leads gain or lose, with the ocean's
  * flux under them, melts ice or freezes new ice. Melting takes area as
  * Hibler (1979) does, half the relative loss of volume from the area;
- * ice frozen in the leads closes them as new ice leadClosing thick. Open
+ * ice frozen in the leads closes them as (1 − A) of new ice leadClosing
+ * thick, so the open area closes as its square, or with leadClosure
+ * 'hibler' as all of it, Hibler's (1979) h₀ law. Open
  * water that cools below freezing forms ice leadClosing thick over the
  * area its volume covers. Ice below the floors of seaIceRemoval melts
  * away, and open water forms ice only from MINIMUM_CONCENTRATION and
@@ -96,6 +100,8 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * agedSnowAlbedo toward iceSnowFloor and refreshed by snowfall
  * (refreshedSnowAlbedo); without it the snow's albedo is iceSnowAlbedo.
  */
+export const LEAD_CLOSURES = ['squared', 'hibler'];
+
 export function openWaterAlbedo(mu) {
   return 0.026 / (Math.pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1);
 }
@@ -126,12 +132,13 @@ export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.62, meltingIceAlbedo = 0.48, iceMeltingRange = 1, fullAlbedoThickness = 0.5,
   iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10,
-  snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
+  leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
 } = {}) {
+  if (!LEAD_CLOSURES.includes(leadClosure)) throw new Error(`leadClosure is ${LEAD_CLOSURES.join(' or ')}, not ${leadClosure}`);
   const C = mesh.nCells;
-  const latent = iceDensity * latentHeatFusion;
+  const latent = iceDensity * latentHeatFusion, openShare = leadClosure === 'hibler' ? () => 1 : (A) => 1 - A;
   const removal = seaIceRemoval(keepSmallIce);
   const budget = { frozen: 0, melted: 0, snowfall: 0, snowMelted: 0, snowIce: 0, leadFrozen: 0, lateralMelted: 0 };
   const oceanFlux = new Float64Array(buffers && buffers.oceanFlux ? buffers.oceanFlux : new SharedArrayBuffer(8 * C));
@@ -251,7 +258,7 @@ export function createSeaIce(mesh, {
     budget.lateralMelted += cellArea * leadMelt;
     const energyLeft = A * skinHeatCapacity * (T - FREEZING_POINT) - latent * (A * thickness - leadHeat / latent) - latentHeatFusion * A * s;
     let volume = A * thickness - leadHeat / latent;
-    const area = Math.min(1, A - melted / (2 * h) + (1 - A) * leadIce / leadClosing);
+    const area = Math.min(1, A - melted / (2 * h) + openShare(A) * leadIce / leadClosing);
     let skin = T, snowOnIce = s;
     if (area < A) volume += (A - area) * (s / iceDensity - skinHeatCapacity * (T - FREEZING_POINT) / latent);
     else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; }

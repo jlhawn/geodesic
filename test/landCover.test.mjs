@@ -173,3 +173,16 @@ test("coverGoal 'observed' relaxes the cover toward the green maximum and the tr
   assert.equal(land.canopy[cell], trees, 'the trees hold under snow');
   assert.ok(land.vegetation[cell] < 0.9 * geo16.greenMax[cell], 'the cover decays under snow');
 });
+
+test("with snowHold the cover holds under snow where it would decay over snowDeclineTime, and runs as before off the snow", () => {
+  const make = (snowHold) => { const land = createLandSurface(mesh16, geo16, { ...FAST, start: 'neutral', coverGoal: 'observed', snowHold }); land.initialize(); land.jump(); run(land, 120); return land; };
+  const held = make(true), free = make(false);
+  const open = Array.from({ length: mesh16.nCells }, (_, i) => i).filter(vegetated);
+  for (const i of open) assert.equal(held.vegetation[i], free.vegetation[i], `snow-free cover of cell ${i}`);
+  const cell = open.find((i) => geo16.treeCover[i] > 0.3), cover = held.vegetation[cell], trees = held.canopy[cell];
+  const flux = new Float64Array(mesh16.nCells), surfaceT = new Float64Array(mesh16.nCells).fill(260);
+  for (const land of [held, free]) { land.snow[cell] = 5; for (let n = 0; n < 8; n++) land.update(cell, surfaceT, flux, 0, 900, 260, 1e-5); }
+  assert.equal(held.vegetation[cell], cover, 'the cover holds under snow');
+  assert.equal(held.canopy[cell], trees, 'the trees hold under snow');
+  assert.ok(free.vegetation[cell] < 0.9 * cover, 'without snowHold the cover decays under snow');
+});

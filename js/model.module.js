@@ -154,7 +154,6 @@ export function createModel(gridOrMesh, {
   const totals = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), stressScratch = new Float64Array(E);
   const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C), callAlbedo = radiation.callCosZenith && (radiationOptions.radiationEvery ?? 1) > 1 ? new Float64Array(C) : null;
-  const lakeSeen = lake ? new Float64Array(C) : null;
   const runoffSeen = land ? new Float64Array(C) : null, runoffStep = land || lake ? new Float64Array(C) : null, dischargeSeen = land ? new Float64Array(C) : null, dischargeStep = land ? new Float64Array(C) : null, airBefore = new Float64Array(C);
   const dragBuffer = buffers && buffers.drags ? buffers.drags : new SharedArrayBuffer(8 * C), dragStep = new Float64Array(dragBuffer);
   if (!(buffers && buffers.drags)) dragStep.fill(-1);
@@ -185,7 +184,7 @@ export function createModel(gridOrMesh, {
         const total = land.runoff[i]; runoffStep[i] = total >= runoffSeen[i] ? total - runoffSeen[i] : total; runoffSeen[i] = total;
         const shed = land.discharge[i]; dischargeStep[i] = shed >= dischargeSeen[i] ? shed - dischargeSeen[i] : shed; dischargeSeen[i] = shed;
       }
-      if (lake) for (const i of lake.cells) { runoffStep[i] = lake.passed[i] - lakeSeen[i]; lakeSeen[i] = lake.passed[i]; }
+      if (lake) for (const i of lake.cells) { runoffStep[i] = lake.passed[i] - lake.seen[i]; lake.seen[i] = lake.passed[i]; }
       ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoffStep, dischargeStep);
       ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt, seaIce.concentration, model.time + dt);
     },

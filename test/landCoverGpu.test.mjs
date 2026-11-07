@@ -33,9 +33,9 @@ function prepare(model) {
 
 const apart = (a, b, keep) => { let worst = 0; for (let i = 0; i < a.length; i++) if (keep(i)) worst = Math.max(worst, Math.abs(a[i] - b[i])); return worst; };
 
-for (const coverGoal of ['water', 'observed']) {
-  test(`from an observed start both engines relax the cover and the trees alike under coverGoal '${coverGoal}', hold the carbon at the placeholder, and a jump leaves the trees`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-    const land = { ...FAST, coverGoal };
+for (const [coverGoal, snowHold] of [['water', false], ['observed', false], ['observed', true]]) {
+  test(`from an observed start both engines relax the cover and the trees alike under coverGoal '${coverGoal}'${snowHold ? ' with snowHold' : ''}, hold the carbon at the placeholder, and a jump leaves the trees`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+    const land = { ...FAST, coverGoal, snowHold };
     const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { velocityScale: 'capped' } })), gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { velocityScale: 'capped' } }));
     const C = cpu.mesh.nCells, grown = (i) => cpu.geography.land[i] && !cpu.geography.iceSheet[i], count = Array.from({ length: C }, (_, i) => i).filter(grown).length;
     assert.deepEqual([...cpu.land.record], [0, 4, 4]);
@@ -49,6 +49,10 @@ for (const coverGoal of ['water', 'observed']) {
     assert.ok(moved > 0.2 * count && grew > 0.2 * count, `${moved} cells with moving cover and ${grew} with moving trees of ${count}`);
     assert.ok(vegetation < 1e-4 && trees < 1e-4 && free < 1e-4, `cover ${vegetation}, trees ${trees}, snow-free cover ${free}`);
     assert.ok(carbon < 1e-6 && held < 1e-6, `carbon ${carbon}, held to ${held}`);
+    const snowy = Array.from({ length: C }, (_, i) => i).filter((i) => grown(i) && cpu.land.snow[i] > 0 && saved.snow[i] > 0);
+    const kept = snowy.filter((i) => Math.abs(cpu.land.vegetation[i] - 0.5) < 1e-6 && Math.abs(saved.vegetation[i] - 0.5) < 1e-6).length;
+    if (snowHold) assert.ok(snowy.length > 0.05 * count && kept > 0.5 * snowy.length, `${kept} of ${snowy.length} snowy cells keep their cover`);
+    else assert.ok(kept < 0.1 * snowy.length, `under snow the cover decays: ${kept} of ${snowy.length} snowy cells keep it`);
     const before = Float64Array.from(saved.canopy);
     await gpu.land.jump();
     cpu.land.jump(Math.fround);

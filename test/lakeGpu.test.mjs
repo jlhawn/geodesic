@@ -25,10 +25,11 @@ function prepare(model) {
 
 const spread = (a, b, cells) => { let s = 0, r = 0; for (const i of cells) { s += (a[i] - b[i]) ** 2; r += a[i] ** 2; } return Math.sqrt(s / Math.max(r, 1e-300)); };
 
-test(`FLake at N=${N} on the n1024 mask: both engines carry the lakes' columns, surface temperature and ice in step over ${STEPS} steps, as closely as the sea's surface`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = prepare(createModel(new Grid(N), setup({ model: 'flake' }))), gpu = prepare(await createGpuModel(new Grid(N), setup({ model: 'flake' })));
+for (const lake of [{ model: 'flake' }, { model: 'flake', missingBed: 'hydrolakes' }]) test(`FLake at N=${N} on the n1024 mask${lake.missingBed ? ' with the HydroLAKES depths' : ''}: both engines carry the lakes' columns, surface temperature and ice in step over ${STEPS} steps, as closely as the sea's surface`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const cpu = prepare(createModel(new Grid(N), setup(lake))), gpu = prepare(await createGpuModel(new Grid(N), setup(lake)));
   assert.ok(cpu.lake.cells.length > 0, `lake cells at N=${N}`);
   assert.deepEqual(gpu.lake.cells, cpu.lake.cells);
+  assert.deepEqual(Array.from(gpu.lake.depth), Array.from(cpu.lake.depth));
   for (let n = 0; n < STEPS; n++) { cpu.step(DT); await gpu.step(DT); }
   await gpu.sync();
   await gpu.lake.read();
