@@ -300,7 +300,7 @@ for (const brineReservoir of [false, true]) test(`with iceLight${brineReservoir 
     const Q = sea.brine[0], cap = 0.5 * sea.latent * ice[0];
     assert.ok(Q >= 0 && Q <= cap * (1 + 1e-12), `step ${n}: brine ${Q} over ${cap} for ${ice[0]} m`);
     if (Q >= cap * (1 - 1e-9)) capped = true;
-    if (T0 < MELTING_POINT && Q0 === 0) assert.equal(Q, 0, `step ${n}: the brine fills only while the skin is at the melting point`);
+    if (T0 < Math.fround(MELTING_POINT) && Q0 === 0) assert.equal(Q, 0, `step ${n}: an empty brine stays empty under a skin below the melting point`);
     if (!sunny) {
       assert.ok(Q <= Q0, `step ${n}: the brine only drains in the cold`);
       if (Q > 0) cold++;
