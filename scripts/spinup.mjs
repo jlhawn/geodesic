@@ -78,6 +78,9 @@
 // heat and vapour exchange share, and the model top's sponge and Rayleigh
 // drag), GRAVITY_WAVES (JSON options for the gravity-wave drag of
 // js/physics/gravityWaves.module.js, e.g. '{"flux":3e-3}', or false),
+// OROGRAPHY (JSON options for the subgrid orography's drag of
+// js/physics/orography.module.js, e.g. '{"constants":"cy41r2"}' for the
+// IFS's operational G, GKDRAG 0.3, or false),
 // LAND (JSON options for the land surface, e.g. '{"treeMoisture":false}';
 // a fresh start's land is 'observed' by default: its cover is the observed
 // annual maximum of the green fraction and its trees the observed tree
@@ -220,6 +223,7 @@ const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, LAKE = JSON.parse(process.env.LAKE ?? '{}');
 const GIVEN_RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), RADIATION = withCadence({ radiation: { clearSkyPass: true, ...GIVEN_RADIATION } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
+const OROGRAPHY = process.env.OROGRAPHY === undefined ? {} : { orography: JSON.parse(process.env.OROGRAPHY) };
 const DRAG_EVERY = withCadence({ dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, 1350 * 16 / N, N).dragEvery;
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
 const SST_DAYS = Number(process.env.SST_WINDOW ?? SST_WINDOW);
@@ -261,7 +265,7 @@ if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (G
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}`;
 const found = base ? stateGrid(base, topography) : null;
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));

@@ -18,7 +18,7 @@ import { createLandSurface } from './physics/land.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, visibleCloudHeights } from './frames.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from './physics/exchange.module.js';
 import { createGravityWaveDrag } from './physics/gravityWaves.module.js';
-import { createOrographicDrag, LOTT_MILLER } from './physics/orography.module.js';
+import { createOrographicDrag, LOTT_MILLER, namedConstants } from './physics/orography.module.js';
 
 export const SIDEREAL_DAY = 86164.0905;
 export const STATE_NAMES = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
@@ -88,7 +88,7 @@ export function orographyFields(mesh, topography, geography, phis, subgrid, g) {
   return { ...subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / g) : null, geography.land), raster: true };
 }
 
-export const dragConstants = (fields, options) => (fields.raster ? { ...LOTT_MILLER, ...options } : options);
+export const dragConstants = (fields, options) => (fields.raster ? { ...LOTT_MILLER, ...namedConstants(options) } : namedConstants(options));
 
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},

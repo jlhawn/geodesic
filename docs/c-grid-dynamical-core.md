@@ -10059,8 +10059,10 @@ in ln p between midpoints while the interfaces sit at the midpoints' mean
 height (up to 80 m apart in the lowest 2 km of bl34); the stress left at
 the top goes into the top layer (σ < 0.0022; the IFS spreads what is
 left above 9.9 Pa between there and its top, Cy33r1 eq. 4.39).
-B = 1 − 0.18γ − 0.04γ², C = 0.48γ + 0.3γ² (Phillips 1984). Constants,
-LM97's: C_d 1, G 1, H_n,crit 0.5, Ri_crit 0.25. The IFS documents
+B = 1 − 0.18γ − 0.04γ², C = 0.48γ + 0.3γ² (Phillips 1984). Constants
+C_d 1, G 1, H_n,crit 0.5, Ri_crit 0.25, which are not LM97's: theirs are
+C_d 1, G 0.5, H_n,crit 0.5, Ri_c 1 (p. 110) with H = 2μ and no cut-off
+(eq. 18), half this stress at Z_b = 0 (0.5 against 1.0 ρUNμσD). The IFS documents
 H_n,crit 0.5 and Ri_crit 0.25 too, but C_d 2 (eq. 4.17) and H_eff doubled
 since Cy32r2 (eq. 4.8), with its own G that the chapter does not state
 (G ≈ 1.23 for the elliptical mountain of eq. 4.2); those are not taken.
@@ -10509,9 +10511,9 @@ states no operational value), H_n,crit 0.5, Ri_crit 0.25
 (`OROGRAPHY_DEFAULTS`; `LOTT_MILLER` keeps C_d 1, G 1, factor 1). The
 doubled H_eff enters the wave's launch amplitude δz as well as its stress.
 Eq. 4.37's remark that its /9 equals eq. 4.19's /4 at Z_blk = 0 holds only
-without the factor; taken as eq. 4.8 states it. Against Lott and Miller's
-set the launched stress is 4 × 1.23 = 4.9 times larger for one column, the
-blocking twice; by hand for μ 200 m, σ 0.02, γ 0, 10 m/s and N 0.01/s,
+without the factor; taken as eq. 4.8 states it. Against `LOTT_MILLER`'s
+set the launched stress is 4 × 1.23 = 4.9 times larger for one column (9.8
+times Lott and Miller's own G 0.5 with H = 2μ), the blocking twice; by hand for μ 200 m, σ 0.02, γ 0, 10 m/s and N 0.01/s,
 τ₀ = 4 × 1.23/3 = 1.64 N/m² (ρ 1.2) against 1/3, and the waves, launched at
 α = N δz/U = 1.0 against the critical 0.83, break just above the blocked
 layer.
@@ -10727,8 +10729,10 @@ a8105bd's fields. Full suite 55 files, six at a time under the shared lock:
 all pass but parallel.test (its speedup, 1.0× under the load of other
 jobs), which passes alone (3.7×).
 
-What still misses: the IFS's G for its operational fields is not stated
-in the documentation read, so G 1.23 is the textbook mountain's and the
+What still misses: the IFS's G for its operational fields is GKDRAG 0.3
+(Cy41r2 Part II §3.5, set in SUGWD; Part IV gives no value), so G 1.23,
+the textbook mountain's, launches 4.1 times the IFS's stress (orography
+`constants` 'cy41r2' takes 0.3), and the
 doubled H_eff rests on eq. 4.8 against eq. 4.37's remark; with them the
 December land westerlies at 45–55N fall to 0.6–1.3 m/s, below ERA5's 3–5,
 while the polar SLP rises toward the reanalysis: the two references now
