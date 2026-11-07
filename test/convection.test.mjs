@@ -1822,10 +1822,12 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
     model.radiation.sensibleHeat[0] = sensible; model.radiation.evaporation[0] = evaporation;
     for (let k = 1; k < K; k++) piSigmaDot[k * C] = ascent;
     if (core.diagnostics.omega) for (let k = 0; k < K; k++) core.diagnostics.omega[k * C] = profile ? profile(k) : ascent;
+    const { cp, exnerLayer, exnerLower } = core.diagnostics, thetaV = core.arrays.thetaV, b = (K - 1) * C;
+    const interfaces = Float64Array.from({ length: K }, (_, k) => (k > 0 ? (geopotential[k * C] + cp * thetaV[k * C] * (exnerLayer[k * C] - exnerLower[(k - 1) * C])) / g : Infinity)), groundHeight = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
     const before = budget(model, 0);
     moist.adjust(model.state, 0, 1, dt);
     const after = budget(model, 0), source = Array.from({ length: K }, (_, k) => k).find((k) => Math.abs(pi[0] * dSigma[k] - moist.deep.sourceMass) < 1e-12 * moist.deep.sourceMass);
-    return { deep: { ...moist.deep }, rain: moist.rain[0], entrained: Float64Array.from(moist.plumeEntrained), detrained: Float64Array.from(moist.plumeDetrained), humidity: Float64Array.from(moist.envHumidity), flux: Float64Array.from(moist.cumulusFlux), before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, source, z: Float64Array.from({ length: K }, (_, k) => geopotential[k * C] / g), g };
+    return { deep: { ...moist.deep }, rain: moist.rain[0], entrained: Float64Array.from(moist.plumeEntrained), detrained: Float64Array.from(moist.plumeDetrained), humidity: Float64Array.from(moist.envHumidity), flux: Float64Array.from(moist.cumulusFlux), before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, source, interfaces, groundHeight, z: Float64Array.from({ length: K }, (_, k) => geopotential[k * C] / g), g };
   };
   const same = (a, b) => a.state.every((x, n) => x.every((v, j) => v === b.state[n][j]));
   const off = run({}), on = run({ midLevelConvection: true }), g = on.g;
@@ -1910,6 +1912,8 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   console.log(`mid-level under 1e-4 Pa/s of ascent: base flux ${surface[0].deep.baseFlux.toExponential(6)} at H + L E = ${(10 + 1e-5 * LATENT_HEAT).toFixed(0)} W/m², ${surface[1].deep.baseFlux.toExponential(6)} at twice that`);
   assert.ok(surface[0].deep.midLevel && surface[0].deep.baseFlux > 100 * 1e-4 / g, `base flux ${surface[0].deep.baseFlux}`);
   assert.ok(Math.abs(surface[1].deep.baseFlux / surface[0].deep.baseFlux - 2) < 1e-12, `${surface[1].deep.baseFlux} against twice ${surface[0].deep.baseFlux}`);
+  const zBase = surface[0].interfaces[surface[0].source] - surface[0].groundHeight;
+  assert.ok(Math.abs(surface[0].deep.baseFlux * g * zBase / (10 + 1e-5 * LATENT_HEAT) - 1) < 1e-12, `the surface closure divides H + L E by g times the height of the source layer's upper interface, ${zBase} m: base flux ${surface[0].deep.baseFlux}`);
   assert.throws(() => build({ midLevelConvection: 'yes' }), /midLevelConvection/);
 });
 

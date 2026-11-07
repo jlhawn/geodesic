@@ -2730,7 +2730,7 @@ const MID_LEVEL_PLUME = [
   ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
   if (middle) {
     let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
-    drive = max(0.0, max(-D[D_OMG + source * C + i] / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, base) - ground))));
+    drive = max(0.0, max(-D[D_OMG + source * C + i] / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, source) - ground))));
   }
   var baseFlux = min(open * drive, CU_LOSS * mass / (GRAV * dt));
 `],

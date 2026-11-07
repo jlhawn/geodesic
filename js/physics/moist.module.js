@@ -385,7 +385,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * there (CUININ's half-level PTENH and PQENH: the higher dry static energy
  * of the two layers at the interface's height, saturated at constant
  * c_p T + L q from the upper layer's q_s, less the upper layer's saturation
- * deficit) (a layer that fails any of these gives way to the next one up,
+ * deficit, all over liquid where CUININ takes FOEEWM's mixed phase) (a
+ * layer that fails any of these gives way to the next one up,
  * as a type-3 cloud that cuascn.F90 cancels at its first level does),
  * departs with its own s_l and q_t
  * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
@@ -393,9 +394,12 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * keeping its whole base flux through its first cloud layer, where
  * cuascn.F90's cloud block (KLAB(JK+1) = 2) and its organized detrainment
  * do not run,
- * with eq. 6.31's base flux max(−ω/g in its source layer, (H + L E)/(g
- * z_base)), z_base the cloud base's height above the ground (a closure at
- * or below CUMULUS_FLOOR gives no plume and ends the search), and does not
+ * with eq. 6.31's base flux as printed, max(−ω/g in its source layer,
+ * (H + L E)/(g z_base)), z_base the height of the source layer's upper
+ * interface above the ground (cumastrn.F90's PGEOH(IKB)), without the IFS
+ * code's factor 5 on the surface term or its ZMFMAX/(1.05 RMFCFL) cap on
+ * bases below 1.5 km (a closure at or below CUMULUS_FLOOR gives no plume
+ * and ends the search), and does not
  * depart where the stratocumulus cap closes the shallow plume. With
  * `plumeDeparture` 'elevated' (IFS Cy41r2 Part IV
  * §6.4; Bechtold et al. 2014, JAS 71, 734) a column whose surface test
@@ -1352,7 +1356,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (mixedPlume) { convectiveFrozen.fill(0); convectiveMelted.fill(0); }
     deep.deep = false; deep.top = -1; deep.cape = 0; deep.consumption = 0; deep.start = -1; deep.downdraft = 0; deep.baseFlux = 0; deep.inhibition = 0; deep.shallowRain = 0; deep.shallowSnow = 0;
     deep.pcape = 0; deep.pcapeBoundary = 0; deep.consumptionP = 0; deep.tau = 0; deep.speed = 0; deep.depth = 0; deep.boundaryWind = 0; deep.boundaryTime = 0; deep.excessT = 0; deep.excessQ = 0; deep.rooted = true; deep.departure = -1;
-    deep.parcelDeep = false; deep.midLevel = false; deep.deepened = false; deep.shallowDepth = 0; deep.parcelBase = 0; deep.parcelTop = 0; deep.conversionMargin = Infinity; deep.typeMargin = Infinity; cumulus.snow = 0; parcelStop = 0; lclPressure = 0;
+    deep.parcelDeep = false; deep.midLevel = false; deep.deepened = false; deep.shallowDepth = 0; deep.shallowBase = 0; deep.shallowReach = 0; deep.parcelBase = 0; deep.parcelTop = 0; deep.conversionMargin = Infinity; deep.typeMargin = Infinity; cumulus.snow = 0; parcelStop = 0; lclPressure = 0;
     if (plumeExits) plumeExits.capped[i] = 0;
     if (momentumLayers) {
       momentumSource[i] = K;
@@ -1655,7 +1659,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (middle) {
       const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
       const enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
-      drive = Math.max(0, -layerOmega[source * C + i] / g, enthalpy / (g * (upperInterface(i, base) - ground)));
+      drive = Math.max(0, -layerOmega[source * C + i] / g, enthalpy / (g * (upperInterface(i, source) - ground)));
     }
     let baseFlux = Math.min(open * drive, cumulusBoundaryLoss * mass / (g * dt));
     for (let k = top; k <= bottom; k++) {

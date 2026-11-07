@@ -219,14 +219,14 @@ test("under rainCover 'overlap' a cloud beneath a clear layer in which all the r
   }
 });
 
-test('under evaporationInCloud rain over a partly cloudy layer evaporates from the clear-sky humidity q_e = (q - a q_s)/(1 - a), floored at 0, over the clear share, with 1/(1 - a) in the Kessler exponent', () => {
+test('under evaporationInCloud rain over a partly cloudy layer evaporates from the clear-sky humidity q_e = (q - a q_s)/(1 - a), floored at 0 and capped at q_s, over the clear share, with 1/(1 - a) in the Kessler exponent', () => {
   const law = (rainEvaporationLaw) => ({ rainEvaporation: 1, rainEvaporationLaw, rainEvaporationCeiling: null, rainCover: 'overlap' });
   const rain = 0.05, dt = 900, mass = 300, qs = 0.01, gamma = 1.5, sigma = 0.8, share = 0.7, cover = 0.5, clear = share - cover;
   const rate = KESSLER_EVAPORATION.rate * Math.pow(Math.sqrt(sigma) * (rain / dt) / (share * KESSLER_EVAPORATION.flux), KESSLER_EVAPORATION.exponent), shaft = KESSLER_EVAPORATION.cloudsc * rate;
-  for (const [q, clearQ] of [[0.008, 0.006], [0.004, 0]]) {
+  for (const [q, clearQ] of [[0.008, 0.006], [0.004, 0], [0.012, qs]]) {
     const kessler = stratiformRainEvaporation(law('kessler'), rain, dt, mass, qs, q, gamma, sigma, share, cover), cloudsc = stratiformRainEvaporation(law('cloudsc'), rain, dt, mass, qs, q, gamma, sigma, share, cover);
     const kesslerExpected = (qs - clearQ) * (1 - cover) / (1 + gamma) * mass * -Math.expm1(-clear * rate * (1 + gamma) * dt / (1 - cover)), cloudscExpected = clear * shaft * (qs - clearQ) * dt / (1 + shaft * dt * (1 + gamma)) * mass;
-    assert.ok(kesslerExpected < rain && Math.abs(kessler / kesslerExpected - 1) < 1e-12 && Math.abs(cloudsc / cloudscExpected - 1) < 1e-12, `q ${q} under cover ${cover} (q_e ${clearQ}): 'kessler' ${kessler} against ${kesslerExpected}, 'cloudsc' ${cloudsc} against ${cloudscExpected}`);
+    assert.ok(clearQ < qs ? kesslerExpected < rain && Math.abs(kessler / kesslerExpected - 1) < 1e-12 && Math.abs(cloudsc / cloudscExpected - 1) < 1e-12 : kessler === 0 && cloudsc === 0, `q ${q} under cover ${cover} (q_e ${clearQ}): 'kessler' ${kessler} against ${kesslerExpected}, 'cloudsc' ${cloudsc} against ${cloudscExpected}`);
   }
 });
 
