@@ -225,6 +225,10 @@ test(`${OPTION_CHANGE}: closureScale`, { skip: !gpuAvailable && 'webgpu not inst
 });
 test(`${OPTION_CHANGE}: interiorShear lmd94`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionChange({ ...HYBRID, shearViscosity: 5e-3 }, { interiorShear: 'lmd94' }, 6, 4);
+  for (const f of ['T', 'S', 'u']) assert.ok(change[f].ratio < 0.1, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+});
+test(`${OPTION_CHANGE}: interiorShear lmd94 with no shear term, whose change is PP81's ν_b/(1 + 5Ri) share of κ`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, shearViscosity: 0, backgroundViscosity: 1e-3 }, { interiorShear: 'lmd94' }, 6, 4);
   for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.1, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
 });
 for (const eddyTracers of ['third', 'centered']) test(`${OPTION_CHANGE}: eddyTracers ${eddyTracers}, under a strengthened restratification`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
