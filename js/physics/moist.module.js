@@ -771,7 +771,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const deep = { deep: false, midLevel: false, deepened: false, shallowDepth: 0, shallowBase: 0, shallowReach: 0, rooted: true, departure: -1, shallowRain: 0, shallowSnow: 0, top: -1, base: K, cape: 0, consumption: 0, inhibition: 0, start: -1, baseFlux: 0, downdraft: 0, pcape: 0, pcapeBoundary: 0, consumptionP: 0, tau: 0, speed: 0, depth: 0, boundaryWind: 0, boundaryTime: 0, excessT: 0, excessQ: 0, sourceS: 0, sourceQ: 0, sourceMass: 0, parcelDeep: false, parcelBase: 0, parcelTop: 0, conversionMargin: Infinity, typeMargin: Infinity };
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > shallowTop) cumulusK0--;
-  const cumulus = { top: -1, source: K - 1, inhibition: 0, lclPressure: 0, velocity: 0, baseFlux: 0, snow: 0 };
+  const cumulus = { top: -1, source: K - 1, sourceS: 0, sourceQ: 0, mass: 0, inhibition: 0, lclPressure: 0, velocity: 0, baseFlux: 0, snow: 0 };
   const rememberedCover = new Float64Array(K), rememberedPath = new Float64Array(K);
   const falling = { evaporated: 0, convective: 0, frozen: 0, ice: 0, fog: 0, moved: false };
   const budget = { condensation: 0, convection: 0, fog: 0, lost: 0 };
@@ -1098,7 +1098,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
    */
   function cumulusColumn(i, pi, theta, q, qc, dt) {
     const bottom = K - 1;
-    cumulus.top = -1; cumulus.inhibition = 0; cumulus.baseFlux = 0; cumulus.velocity = 0; cumulus.snow = 0; cumulus.overshoot = 1;
+    cumulus.top = -1; cumulus.mass = 0; cumulus.inhibition = 0; cumulus.baseFlux = 0; cumulus.velocity = 0; cumulus.snow = 0; cumulus.overshoot = 1;
     clearCumulus(i);
     const topped = capped && cloudBaseFound(i, pi, theta, q) && stratocumulusTopped(i, pi, theta, q);
     if (topped && plumeExits) plumeExits.capped[i] = 1;
@@ -1110,7 +1110,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     const depth = boundaryDepth[i], lowest = cumulusSource === 'lowest';
     const lcl = liftingCondensationLevel((sourceS - g * z[bottom]) / cp, sourceQ, p[bottom], kappa);
     if (!lcl || !(lcl.pressure > shallowTop)) return 0;
-    cumulus.source = source; cumulus.lclPressure = lcl.pressure;
+    cumulus.source = source; cumulus.sourceS = sourceS; cumulus.sourceQ = sourceQ; cumulus.mass = mass; cumulus.lclPressure = lcl.pressure;
     const virtual = virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = virtualBuoyancy ? 1 : 0;
     let s = sourceS, w = sourceQ, inhibition = 0, cloudy = false, top = -1, guess = 0, w2 = plumeVelocity * plumeVelocity, share = 1;
     const surface = byHeight ? (geopotential[bottom * C + i] - cp * thetaV[bottom * C + i] * (exnerLower[bottom * C + i] - exnerLayer[bottom * C + i])) / g : 0;

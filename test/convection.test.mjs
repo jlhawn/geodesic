@@ -2094,6 +2094,7 @@ const LIGHT_CUMULUS = { cumulusEntrainmentHeight: null, cumulusEntrainment: 1e-4
 test("with shallowRetype a column the test parcel leaves shallow runs the deep plume where the shallow plume's own ascent, continued past the shallow top without tendencies, reaches its first cloudy layer with w² > 0, carried from the shallow closure's velocity scale, and has a cloud deeper than 200 hPa from that layer's lower interface to the last interface it passes, as random columns under a light shallow plume do; every other column steps exactly as without the option, the trade-wind cumulus among them, and a value other than true or false is refused", () => {
   const dt = 900, { shallowTop } = MOIST_DEFAULTS;
   const retyping = (shallow, grid = levels) => {
+    const stacks = [];
     const [off, on] = [false, true].map((deepen) => {
       const model = createModel(new Grid(16), { ocean: false, levels: grid, moist: { ...shallow, shallowRetype: deepen } }), C = model.mesh.nCells, { moist, core } = model, { levels, sigmaMid } = core.diagnostics;
       randomColumns(model);
@@ -2102,14 +2103,20 @@ test("with shallowRetype a column the test parcel leaves shallow runs the deep p
       for (let i = 0; i < C; i++) {
         core.diagnoseColumn(i, pi, theta, q, qc);
         const before = budget(model, i), rain = moist.plumeColumn(i, pi, theta, q, qc, dt), after = budget(model, i), d = moist.deep, cu = moist.cumulus;
+        if (!deepen) stacks[i] = { S: cu.sourceS, Q: cu.sourceQ, mass: cu.mass, source: cu.source, lcl: cu.lclPressure };
         worst = Math.max(worst, Math.abs(after.enthalpy - before.enthalpy) / before.enthalpy, Math.abs(after.water + rain - before.water) / before.water);
         if (d.deepened) {
           deepened.add(i);
           assert.ok(deepen && !d.parcelDeep && d.rooted && d.shallowDepth > DEEP_CLOUD_DEPTH, `column ${i}: re-typed with a shallow cloud of ${d.shallowDepth} Pa`);
+          const stack = stacks[i];
+          assert.ok(d.sourceS === stack.S && d.sourceQ === stack.Q && d.sourceMass === stack.mass && d.excessT === 0 && d.excessQ === 0, `column ${i}: the re-typed deep plume departs from the shallow plume's own stack: s_l ${d.sourceS} and ${stack.S} J/kg, q_t ${d.sourceQ} and ${stack.Q}, ${d.sourceMass} and ${stack.mass} Pa, excess ${d.excessT} K and ${d.excessQ}`);
           if (needsContinuation(d, pi[i], levels, sigmaMid)) continued++;
           if (d.deep) {
             fired++;
             assert.equal(moist.cumulusBaseFlux[i], d.baseFlux, `column ${i}: the deep plume runs alone`);
+            let base = stack.source;
+            while (base > 1 && !(pi[i] * levels[base] <= stack.lcl)) base--;
+            assert.equal(d.base, base, `column ${i}: the re-typed deep plume's cloud base is the interface at the shallow plume's condensation level`);
             assert.ok(pi[i] * (levels[d.base] - levels[d.top + 1]) > DEEP_CLOUD_DEPTH, `column ${i}: the re-typed deep plume's cloud is ${pi[i] * (levels[d.base] - levels[d.top + 1])} Pa deep`);
           }
         } else if (d.shallowDepth > 0 && cu.top >= 1 && pi[i] * levels[cu.top - 1] > shallowTop) {
@@ -2135,7 +2142,7 @@ test("with shallowRetype a column the test parcel leaves shallow runs the deep p
   const plain = retyping({}), light = retyping(LIGHT_CUMULUS), fine = retyping(LIGHT_CUMULUS, sigmaInterfaces('bl48'));
   console.log(`bl48 random columns under the light shallow plume: ${fine.deepened} re-typed deep, ${fine.continued} of them by the ascent continued past shallowTop from a cloud no deeper than DEEP_CLOUD_DEPTH below it`);
   console.log(`random columns: ${plain.deepened} re-typed deep under the default shallow plume, ${light.deepened} under one entraining 1e-4 /m that keeps no condensate (${light.fired} fire the deep plume, ${light.moved} step differently); ${plain.repeated} and ${light.repeated} shallow plumes that stop below the shallow top end the diagnostic ascent at their own top, ${plain.based} and ${light.based} of them running and starting its cloud at their own first cloudy layer; every other column steps exactly as without the option; enthalpy and water within ${Math.max(plain.worst, light.worst).toExponential(1)}`);
-  assert.ok(light.deepened >= 20 && fine.continued > 0 && light.fired > 0 && light.moved > 0 && plain.repeated >= 20 && light.repeated >= 20 && plain.based > 0 && light.based > 0, JSON.stringify({ plain, light, fine }));
+  assert.ok(light.deepened >= 20 && fine.continued > 0 && light.fired > 0 && light.moved > 0 && plain.repeated >= 20 && light.repeated >= 20 && plain.based > 0 && light.based > 0 && [plain, light, fine].every((r) => r.moved === r.fired), JSON.stringify({ plain, light, fine }));
   assert.ok(plain.offDeepened === 0 && light.offDeepened === 0 && fine.offDeepened === 0 && Math.max(plain.worst, light.worst, fine.worst) < 1e-15);
   const trade = [false, true].map((deepen) => {
     const model = tradeWindColumn({ shallowRetype: deepen }), [pi, theta, , , q, qc] = model.state;
@@ -2168,7 +2175,7 @@ const replayPageColumn = (c, deepen) => {
   core.diagnoseColumn(0, pi, theta, q, qc);
   moist.plumeColumn(0, pi, theta, q, qc, c.dt);
   const d = { ...moist.deep };
-  return { d, cu: { ...moist.cumulus }, flux: moist.cumulusBaseFlux[0], snap: snapshot(model, 0), depth: d.deep ? pi[0] * (levels[d.base] - levels[d.top + 1]) : 0, base: pi[0] * levels[d.shallowBase] };
+  return { d, cu: { ...moist.cumulus }, flux: moist.cumulusBaseFlux[0], snap: snapshot(model, 0), depth: d.deep ? pi[0] * (levels[d.base] - levels[d.top + 1]) : 0, base: pi[0] * levels[d.shallowBase], ps: pi[0], levels };
 };
 const steppedAlike = (a, b) => ['theta', 'q', 'qc'].every((key) => a.snap[key].every((v, k) => v === b.snap[key][k]));
 test("with shallowRetype the column of the N=64 page state at 30N (seventeen64 day 365, column 13676, after two steps), whose shallow parcel first holds condensate at 539 hPa, is not re-typed: its w² from the closure's velocity scale vanishes below that layer", () => {
@@ -2179,6 +2186,10 @@ test('with shallowRetype the column of the N=64 page state at 6N (seventeen64 da
   const [off, on] = [false, true].map((deepen) => replayPageColumn(PAGE_COLUMN_3555, deepen));
   assert.ok(on.d.deepened && !on.d.parcelDeep && on.d.shallowDepth > DEEP_CLOUD_DEPTH && Math.abs(on.base - 899e2) < 100, `the column re-types on a shallow cloud ${on.d.shallowDepth} Pa deep from ${on.base} Pa`);
   assert.ok(off.flux > 0 && on.d.deep && on.depth > DEEP_CLOUD_DEPTH && !steppedAlike(on, off), `the re-typed column fires a deep plume ${on.depth} Pa deep (CAPE ${on.d.cape} J/kg) in place of a shallow plume of base flux ${off.flux} kg/m²/s`);
+  assert.ok(on.d.sourceS === off.cu.sourceS && on.d.sourceQ === off.cu.sourceQ && on.d.sourceMass === off.cu.mass && on.d.excessT === 0 && on.d.excessQ === 0, `the deep plume departs from the shallow plume's own stack: s_l ${on.d.sourceS} and ${off.cu.sourceS} J/kg, q_t ${on.d.sourceQ} and ${off.cu.sourceQ}, ${on.d.sourceMass} and ${off.cu.mass} Pa, excess ${on.d.excessT} K and ${on.d.excessQ}`);
+  let base = off.cu.source;
+  while (base > 1 && !(off.ps * off.levels[base] <= off.cu.lclPressure)) base--;
+  assert.equal(on.d.base, base, `the deep plume's cloud base is the interface at the shallow plume's condensation level, ${off.cu.lclPressure} Pa`);
 });
 test('with shallowRetype under a light shallow plume the engines agree on random columns, and the GPU refuses a value other than true or false', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { deepened } = await parity({ shallowRetype: true, ...LIGHT_CUMULUS }), fine = await parity({ shallowRetype: true, ...LIGHT_CUMULUS }, { grid: sigmaInterfaces('bl48') });
