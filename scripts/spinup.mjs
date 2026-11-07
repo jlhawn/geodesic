@@ -83,11 +83,13 @@
 // IFS's operational G, GKDRAG 0.3, or false),
 // TERRAIN (JSON options for the surface geopotential, see terrainOptions in
 // js/geography.module.js, e.g. '{"conserveVolume":true}' to smooth by
-// trading volume between land neighbors only, so each land mass keeps its
-// own and the coasts keep their step to the sea; without it a run keeps
-// the terrain its state records, and a state saved over other terrain has
-// its surface pressure moved onto this one; the bundled sub-grid files,
-// whose μ, σ and γ lie below the default terrain's surface, are kept),
+// trading volume between land neighbors only, so the sea never enters a
+// land cell's smoothing and each land mass keeps its own; without it a run
+// keeps the terrain its state records, and a state saved over other
+// terrain has its surface pressure moved onto this one; over terrain other
+// than the default the sub-grid orography's drag needs the fine grids of a
+// geodesic-terrain-cache to rebuild its fields below the surface, and the
+// run refuses to start without them),
 // LAND (JSON options for the land surface, e.g. '{"treeMoisture":false}';
 // a fresh start's land is 'observed' by default: its cover is the observed
 // annual maximum of the green fraction and its trees the observed tree

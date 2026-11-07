@@ -702,9 +702,10 @@ export function terrainKey(terrain = true) {
  * `conserveVolume` a pass instead moves k (h_i − h_j) of volume across
  * each edge between land cells, k the larger of its two cells' `weight` ×
  * area / edge count, so a cell among land relaxes no more slowly than
- * without it. Water never enters a land cell's mean: each land mass keeps
- * its area-weighted volume to rounding, a coast keeps its step to the
- * water, and a cell with no land neighbor keeps its height.
+ * without it. Water never enters a land cell's smoothing: each land mass
+ * keeps its area-weighted volume to rounding and a cell with no land
+ * neighbor its height, while a coastal cell relaxes toward its land
+ * neighbors alone, so steep coasts sharpen.
  */
 export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = TERRAIN_DEFAULTS.passes, weight = 0.5, conserveVolume = TERRAIN_DEFAULTS.conserveVolume } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;

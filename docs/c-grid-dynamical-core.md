@@ -10463,13 +10463,18 @@ the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
   removed, so the height reaches neither the resolved surface nor the
   sub-grid fields: 42 m of the Maritime Continent's mean land height at
   N=128, 96 m at N=64 (Nov 7 audit). Terrain `conserveVolume` makes the
-  passes trade volume between land neighbors only, so each land mass
-  keeps its volume and each coast its step to the sea: 30 of those 42 m
-  come back at N=128 and 54 of the 96 m at N=64. Steep coasts come out
-  sharper than the default's; 1097 cells at N=128 stand over 50 m above
-  both their unsmoothed and their default heights, up to 531 m. The rest,
-  lost where a coastal cell's mean takes in the seabed at its depth,
-  stays lost. The bundled files' μ, σ and γ lie below the default
+  passes trade volume between land neighbors only, and the sea never
+  enters a land cell's smoothing: each land mass keeps its volume and a
+  one-cell island its unsmoothed height. 30 of those 42 m come back at
+  N=128 and 54 of the 96 m at N=64; the rest, lost where a coastal cell's
+  unsmoothed mean takes in the seabed at its depth, stays lost. A coastal
+  cell still relaxes toward its land neighbors, so its step to the sea
+  changes and steep coasts sharpen: of the 5134 land cells beside the sea
+  at N=128 the step grows by over 50 m in 1872 and shrinks by over 50 m
+  in 436, against 1015 and 1216 under the default (889 and 252 of 2083
+  at N=64, against 499 and 652); the largest rise is 885 m, on the coast
+  of Peru, the largest drop 842 m, on Taiwan.
+  The bundled files' μ, σ and γ lie below the default
   surface. A run over terrain of other options takes them rebuilt below
   its own surface: the files' pipeline run in memory (`rebuiltSubgrid`)
   on the fine grids of a `geodesic-terrain-cache` beside the repository
