@@ -759,7 +759,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     t.fastStart[i] = parcelDeep(i, pi, q, qc, source, s, w, reference, start * start) ? 1 : 0;
     [deep.typeMargin, deep.parcelBase, deep.parcelTop, deep.parcelDeep] = kept; parcelStop = stop;
   }
-  const deep = { deep: false, midLevel: false, deepened: false, shallowDepth: 0, rooted: true, departure: -1, shallowRain: 0, shallowSnow: 0, top: -1, base: K, cape: 0, consumption: 0, inhibition: 0, start: -1, baseFlux: 0, downdraft: 0, pcape: 0, pcapeBoundary: 0, consumptionP: 0, tau: 0, speed: 0, depth: 0, boundaryWind: 0, boundaryTime: 0, excessT: 0, excessQ: 0, sourceS: 0, sourceQ: 0, sourceMass: 0, parcelDeep: false, parcelBase: 0, parcelTop: 0, conversionMargin: Infinity, typeMargin: Infinity };
+  const deep = { deep: false, midLevel: false, deepened: false, shallowDepth: 0, shallowBase: 0, shallowReach: 0, rooted: true, departure: -1, shallowRain: 0, shallowSnow: 0, top: -1, base: K, cape: 0, consumption: 0, inhibition: 0, start: -1, baseFlux: 0, downdraft: 0, pcape: 0, pcapeBoundary: 0, consumptionP: 0, tau: 0, speed: 0, depth: 0, boundaryWind: 0, boundaryTime: 0, excessT: 0, excessQ: 0, sourceS: 0, sourceQ: 0, sourceMass: 0, parcelDeep: false, parcelBase: 0, parcelTop: 0, conversionMargin: Infinity, typeMargin: Infinity };
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > shallowTop) cumulusK0--;
   const cumulus = { top: -1, source: K - 1, inhibition: 0, lclPressure: 0, velocity: 0, baseFlux: 0, snow: 0 };
@@ -1238,6 +1238,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (!cloudy) return 0;
     let base = source;
     while (base > 1 && !(pi[i] * levels[base] <= lcl.pressure)) base--;
+    deep.shallowBase = base; deep.shallowReach = reached;
     return pi[i] * (levels[base] - levels[reached]);
   }
 
