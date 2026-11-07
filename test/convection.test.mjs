@@ -1797,11 +1797,11 @@ test('with convectionRetype the engines agree on random columns, and the GPU ref
   assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, convectionRetype: 1 }), /convectionRetype/);
 });
 
-test('with midLevelConvection a column that no test parcel types deep and whose shallow plume does not rise lifts its lowest layer below 10 km in large-scale ascent with q above 0.8 q_s, at a base flux of −π σ̇/g or (H + L E)/(g z_base), with enthalpy and water exact; sinking, drier air or the option off leave the column as without it', () => {
-  const dt = 600, band = (z) => z > 3500 && z < 4500;
-  const run = (options, { ascent = -0.2, humid = 0.95, sensible = 0, evaporation = 0 } = {}) => {
+test('with midLevelConvection a column that no test parcel types deep and whose shallow plume does not rise lifts the lowest layer above the lowest below 10 km in large-scale ascent with q above 0.8 q_s whose parcel condenses at the next layer and is less than 0.5 K colder there, at a base flux of −π σ̇/g or (H + L E)/(g z_base), with enthalpy and water exact; sinking, drier air or the option off leave the column as without it', () => {
+  const dt = 600;
+  const run = (options, { ascent = -0.2, humid = 0.95, sensible = 0, evaporation = 0, lapse = 6.5e-3, low = 1000, high = 3000 } = {}) => {
     const model = build(options), { moist, core } = model, { K, C, dSigma, geopotential, g, piSigmaDot } = core.diagnostics, [pi] = model.state;
-    place(model, 0, 101500, (z, p) => { const T = z < 11000 ? 290 - 4.5e-3 * z : 240.5; return { T, q: (band(z) ? humid : 0.3) * saturationHumidity(T, p) }; });
+    place(model, 0, 101500, (z, p) => { const T = 290 - lapse * Math.min(z, 11000); return { T, q: (z > low && z < high ? humid : 0.3) * saturationHumidity(T, p) }; });
     setDepth(model, 0, 500);
     model.boundaryLayer.buoyancyFlux[0] = -1e-4; model.boundaryLayer.friction[0] = 0.25; model.radiation.mlmGate[0] = 0.3;
     model.radiation.sensibleHeat[0] = sensible; model.radiation.evaporation[0] = evaporation;
@@ -1816,15 +1816,19 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   console.log(`mid-level: base flux ${on.deep.baseFlux.toExponential(6)} kg/m²/s against 0.2/g ${(0.2 / g).toExponential(6)}, from the layer ${on.height.toFixed(0)} m above the lowest, top ${on.deep.top}, base ${on.deep.base}, rain ${on.rain.toExponential(3)} kg/m²`);
   assert.ok(!off.deep.deep && !off.deep.midLevel && off.deep.baseFlux === 0, 'nothing convects without the option');
   assert.ok(on.deep.deep && on.deep.midLevel && Math.abs(on.deep.baseFlux * g / 0.2 - 1) < 1e-14, `base flux ${on.deep.baseFlux}`);
-  assert.ok(on.height > 3000 && on.height < 4500, `the plume departs ${on.height} m above the lowest layer`);
+  assert.ok(on.height > 800 && on.height < 3000 && on.deep.cape > 0 && on.rain > 0, `the plume departs ${on.height} m above the lowest layer with CAPE ${on.deep.cape} J/kg and rain ${on.rain} kg/m²`);
   assert.ok(!same(on, off), 'the mid-level plume moves the column');
   assert.ok(Math.abs(on.after.enthalpy - on.before.enthalpy) < 1e-12 * on.before.enthalpy, `enthalpy ${on.before.enthalpy} → ${on.after.enthalpy}`);
   assert.ok(Math.abs(on.after.water + on.rain - on.before.water) < 1e-12 * on.before.water, `water ${on.before.water} → ${on.after.water} + ${on.rain}`);
   const sinking = run({ midLevelConvection: true }, { ascent: 0.2 }), drier = run({ midLevelConvection: true }, { humid: 0.75 }), drierOff = run({}, { humid: 0.75 });
   assert.ok(!sinking.deep.midLevel && same(sinking, off), 'no mid-level plume under large-scale sinking');
   assert.ok(!drier.deep.midLevel && same(drier, drierOff), 'no mid-level plume where q stays below 0.8 q_s');
-  const surface = [1, 2].map((n) => run({ midLevelConvection: true }, { ascent: -1e-4, sensible: 40 * n, evaporation: 4e-5 * n }));
-  console.log(`mid-level under 1e-4 Pa/s of ascent: base flux ${surface[0].deep.baseFlux.toExponential(6)} at H + L E = ${(40 + 4e-5 * LATENT_HEAT).toFixed(0)} W/m², ${surface[1].deep.baseFlux.toExponential(6)} at twice that`);
+  for (const [name, column] of [['a moist layer at 3.5-4.5 km under 4.5 K/km', { lapse: 4.5e-3, low: 3500, high: 4500 }], ['a moist layer below 300 m under 4.5 K/km', { lapse: 4.5e-3, low: -Infinity, high: 300 }]]) {
+    const cold = run({ midLevelConvection: true }, column), coldOff = run({}, column);
+    assert.ok(!cold.deep.midLevel && same(cold, coldOff), `${name}: no layer's parcel both condenses at the next layer and is less than 0.5 K colder there`);
+  }
+  const surface = [1, 2].map((n) => run({ midLevelConvection: true }, { ascent: -1e-4, sensible: 10 * n, evaporation: 1e-5 * n }));
+  console.log(`mid-level under 1e-4 Pa/s of ascent: base flux ${surface[0].deep.baseFlux.toExponential(6)} at H + L E = ${(10 + 1e-5 * LATENT_HEAT).toFixed(0)} W/m², ${surface[1].deep.baseFlux.toExponential(6)} at twice that`);
   assert.ok(surface[0].deep.midLevel && surface[0].deep.baseFlux > 100 * 1e-4 / g, `base flux ${surface[0].deep.baseFlux}`);
   assert.ok(Math.abs(surface[1].deep.baseFlux / surface[0].deep.baseFlux - 2) < 1e-12, `${surface[1].deep.baseFlux} against twice ${surface[0].deep.baseFlux}`);
   assert.throws(() => build({ midLevelConvection: 'yes' }), /midLevelConvection/);

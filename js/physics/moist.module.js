@@ -19,7 +19,7 @@ export const PLUME_EXITS = ['none', 'veto', 'lcl', 'dry', 'shallow', 'plume', 'f
 export const IFS_ENTRAINMENT = { entrainment: 1.75e-3, humidity: 1.3, detrainment: 0.75e-4, detrainmentHumidity: 1.6, scaleExponent: 3, drag: 1 + 1.875 * 0.506 };
 export const TEST_PARCEL = { entrainment: 0.4, removal: 0.5 };
 export const DEPARTURE = { depth: 350e2, temperature: 0.2, humidity: 1e-4, reference: 'lowest' };
-export const MID_LEVEL = { humidity: 0.8, height: 1e4, entrainment: 2 };
+export const MID_LEVEL = { humidity: 0.8, height: 1e4, entrainment: 2, buoyancy: 0.5 };
 export const IFS_PRECIPITATION = { conversion: 1.4e-3, liquidFactor: 1.3, critical: 5e-4, seaThreshold: 3e-4, landThreshold: 5e-4, bergeron: 268.16, ice: 250.16, speed: 10, velocityScale: 0.75 };
 export const SOURCE_EXCESS = { coefficient: 1.5, temperature: 3, humidity: 2e-3, scale: 1.2, layer: 1.5, karman: 0.4, friction: 0.1, virtual: 0.61 };
 export const KESSLER_EVAPORATION = { rate: 5.44e-4, flux: 5.09e-3, exponent: 0.5777, cloudsc: 0.5 };
@@ -367,10 +367,13 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * does not re-type such a column back. With `midLevelConvection` (default
  * false) a column that no
  * test parcel types deep and whose shallow plume does not rise tries the
- * mid-level type (IFS Cy41r2 Part IV §6.4.3): the lowest layer whose
- * midpoint lies within MID_LEVEL.height (10 km) of the ground, in
- * large-scale ascent (π σ̇ summed over its two interfaces below 0), with q
- * above MID_LEVEL.humidity (0.8) of q_s, departs with its own s_l and q_t
+ * mid-level type (IFS Cy41r2 Part IV §6.4.3): the lowest layer, from the
+ * second lowest up, whose midpoint lies within MID_LEVEL.height (10 km) of
+ * the ground, in large-scale ascent (π σ̇ summed over its two interfaces
+ * below 0), with q above MID_LEVEL.humidity (0.8) of q_s, and whose parcel
+ * lifted to the next layer's midpoint holds condensate there and is less
+ * than MID_LEVEL.buoyancy (0.5 K) colder in virtual temperature than the
+ * air (cuascn.F90's type-3 cancellations), departs with its own s_l and q_t
  * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
  * with eq. 6.31's base flux max(−π σ̇/g at its cloud base, (H + L E)/(g
  * z_base)), z_base the cloud base's height above the ground. With
@@ -1384,13 +1387,16 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const shallowRain = cumulusColumn(i, pi, theta, q, qc, dt);
       if (cumulus.baseFlux > 0) return shallowRain;
       const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
+      const tv = virtualBuoyancy ? VIRTUAL_FACTOR : 0;
       let kb = -1;
-      for (let k = bottom; k > 0 && z[k] - ground < MID_LEVEL.height; k--) {
-        if (piSigmaDot[k * C + i] + piSigmaDot[(k + 1) * C + i] < 0 && Math.max(0, q[k * C + i]) > MID_LEVEL.humidity * saturation(T[k], p[k]).qs) { kb = k; break; }
+      for (let k = bottom - 1; k > 1 && z[k] - ground < MID_LEVEL.height; k--) {
+        if (!(piSigmaDot[k * C + i] + piSigmaDot[(k + 1) * C + i] < 0 && Math.max(0, q[k * C + i]) > MID_LEVEL.humidity * saturation(T[k], p[k]).qs)) continue;
+        lcl = liftingCondensationLevel((envS[k] - g * z[k]) / cp, envQ[k], p[k], kappa);
+        if (!lcl || !(lcl.pressure > pi[i] * levels[1])) continue;
+        plumeState(envS[k], envQ[k], z[k - 1], p[k - 1], 0);
+        if (plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - T[k - 1] * (1 + tv * Math.max(0, q[(k - 1) * C + i])) > -MID_LEVEL.buoyancy) { kb = k; break; }
       }
       if (kb < 0) return shallowRain;
-      lcl = liftingCondensationLevel((envS[kb] - g * z[kb]) / cp, envQ[kb], p[kb], kappa);
-      if (!lcl || !(lcl.pressure > pi[i] * levels[1])) return shallowRain;
       source = kb; stackBottom = kb; mass = dp[kb]; sourceS = envS[kb]; sourceQ = envQ[kb]; rooted = false; middle = true;
       deep.excessT = 0; deep.excessQ = 0; deep.rooted = false; deep.sourceS = sourceS; deep.sourceQ = sourceQ; deep.sourceMass = mass;
     }
