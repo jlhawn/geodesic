@@ -286,14 +286,14 @@ for (const brine of [false, true]) test(`the surface energy${brine ? ', the brin
     r.drift.transport(r.env());
     for (let i = 0; i < r.C; i++) {
       if (had[i] && !(r.thickness[i] > 0)) cleared++;
-      if (brine && r.seaIce.brine[i] > 0) carried++;
+      if (brine && r.drift.arrived[i] && r.thickness[i] > 0 && r.seaIce.brine[i] > 0) carried++;
       if (r.drift.arrived[i]) held += m.areaCell[i] * r.seaIce.slabHeatCapacity * (r.drift.waterT[i] - FREEZING_POINT);
     }
     worst = Math.max(worst, Math.abs(energy() + held - expected) / scale);
   }
   console.log(`60 steps with ${cleared} cells emptied by transport: the energy follows the flux to ${worst.toExponential(2)} of the patch's latent heat`);
   assert.ok(cleared >= 2 && worst < 1e-11, `${cleared} ${worst}`);
-  if (brine) assert.ok(carried > 0, 'the drift carries brine');
+  if (brine) assert.ok(carried > 0, 'the drift brings brine with the ice it carries into open water');
 });
 
 function history(iceDrift) {

@@ -243,6 +243,24 @@ test('ice that drifts into open water at a Courant number of 0.005 persists on t
   s.gpuModel.destroy();
 });
 
+test('ice that drifts into open water brings its brine on the GPU as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh, toward = northwardOn(pm, (lat) => lat < -40 * DEG);
+  probe.destroy();
+  const velocity = Float64Array.from(toward, (d, e) => d * 0.005 * pm.dcEdge[e] / DT);
+  const s = await scenario({ rheology: 'frozen' }, { velocity, keep: true, brine: true }), bare = Float64Array.from(s.ice, (h) => (h > 0 ? 0 : 1));
+  for (let n = 0; n < 5; n++) { s.stepCpu(); await s.stepGpu(); }
+  const g = await s.readIce();
+  let reached = 0;
+  for (let i = 0; i < s.C; i++) {
+    if (!bare[i] || !(s.ice[i] > 0) || !(g.h[i] > 0)) continue;
+    assert.ok(s.seaIce.brine[i] > 0 && g.held[i] > 0 && Math.abs(g.held[i] - s.seaIce.brine[i]) < 1e-3 * s.seaIce.brine[i], `cell ${i}: the arrived ice holds ${s.seaIce.brine[i]} J/m² of brine on the CPU, ${g.held[i]} on the device`);
+    reached++;
+  }
+  console.log(`${reached} cells of open water reached by ice carrying its brine`);
+  assert.ok(reached >= 10, `${reached} cells reached`);
+  s.gpuModel.destroy();
+});
+
 test('over a hundred calls the GPU conserves the ice volume and snow mass to single precision, and stored ice volume follows the transport', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh;
   const whole = streamOn(pm, 40 / pm.radius), velocity = Float64Array.from(whole, (u, e) => (pm.latCell[pm.cellsOnEdge[2 * e]] < -71 * DEG && pm.latCell[pm.cellsOnEdge[2 * e + 1]] < -71 * DEG ? u : 0));
