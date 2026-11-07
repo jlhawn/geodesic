@@ -44,9 +44,10 @@ export function stratiformRainEvaporation(o, rain, dt, mass, qs, q, gamma, sigma
   if (ceiling < 1) evaporated = Math.min(rain, o.rainEvaporation * Math.max(0, (ceiling * qs - q) / (1 + ceiling * gamma)) * mass);
   if (o.rainEvaporationLaw === 'deficit') return evaporated;
   const rate = KESSLER_EVAPORATION.rate * Math.pow(Math.sqrt(sigma) * (rain / dt) / ((overlap ? share : o.rainCover) * KESSLER_EVAPORATION.flux), KESSLER_EVAPORATION.exponent);
-  if (o.rainEvaporationLaw === 'kessler') return Math.min(evaporated, -deficit * Math.expm1(-clear * rate * (1 + gamma) * dt));
+  const a = overlap ? cover : 0, outside = Math.max(1e-14, 1 - a), clearQ = Math.max(0, Math.min(qs, (q - a * qs) / outside));
+  if (o.rainEvaporationLaw === 'kessler') return Math.min(evaporated, -(qs - clearQ) * outside / (1 + gamma) * mass * Math.expm1(-clear * rate * (1 + gamma) * dt / outside));
   const shaft = KESSLER_EVAPORATION.cloudsc * rate;
-  return Math.min(evaporated, clear * shaft * Math.max(0, qs - q) * dt / (1 + shaft * dt * (1 + gamma)) * mass);
+  return Math.min(evaporated, clear * shaft * (qs - clearQ) * dt / (1 + shaft * dt * (1 + gamma)) * mass);
 }
 
 /*
@@ -555,17 +556,20 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * it (with `iceSaturation`, of cloudSaturation's mix), latent cooling
  * included. With `rainEvaporationLaw` 'kessler' (default 'deficit', the
  * above) it takes at most what the IFS's Kessler rate evaporates over the
- * step (IFS Documentation Cy41r2 Part IV eq. 7.70), a_clr β (q_s − q) with
+ * step (IFS Documentation Cy41r2 Part IV eq. 7.70), a_clr β (q_s − q_e) with
  * β = α1 (√(p/p_s) P / (a_P α2))^α3, α1 5.44e-4 /s, α2 5.09e-3 kg m⁻² s⁻¹,
  * α3 0.5777, P the flux of rain into the layer, a_P the share of the cell
- * it falls in and a_clr = a_P − a the part of it outside the layer's cloud
- * cover a, integrated exactly as the deficit decays under the rate and its
- * latent cooling. 'cloudsc' takes at most the IFS code's semi-implicit
- * step instead (cloudsc.F90, IEVAPRAIN 1), a_clr β' (q_s − q) Δt /
- * (1 + β' Δt (1 + γ)) with β' = β/2. Under `rainCover` 'overlap' a_P is
- * the maximum-random overlap of the cloud cover from the rain's top down
- * (eq. 7.65), at least 0.1, reset where no rain falls and reduced in
- * proportion to what evaporates; a number sets a_P and a_clr to it and a to
+ * it falls in, a_clr = a_P − a the part of it outside the layer's cloud
+ * cover a and q_e = (q − a q_s)/(1 − a), within [0, q_s], the humidity
+ * outside the cloud (cloudsc.F90's ZQE), integrated exactly as the deficit
+ * decays under the rate and its latent cooling. 'cloudsc' takes at most the
+ * IFS code's semi-implicit step instead (cloudsc.F90, IEVAPRAIN 1),
+ * a_clr β' (q_s − q_e) Δt / (1 + β' Δt (1 + γ)) with β' = β/2. Under
+ * `rainCover` 'overlap' a_P is the maximum-random overlap of the cloud
+ * cover from the rain's top down (eq. 7.65), at least 0.1, reduced in
+ * proportion to what evaporates and reset only where nothing precipitates
+ * into a layer: no rain or ice falls into it and the layer above holds no
+ * ice (cloudsc.F90's ZQPRETOT). A number sets a_P and a_clr to it and a to
  * 0. With `rainEvaporationCeiling` c (null: none) no law takes a layer past
  * the relative humidity c + (1 − c) a_clr / (1 − a), the IFS's eq. 7.77 (c
  * 0.7 there). A filler removes negative humidity by borrowing from the
@@ -826,7 +830,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0, frozenStream = null) {
-    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0, rainShare = 0, coverAbove = 0;
+    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0, rainShare = 0, coverAbove = 0, iceAbove = false;
     falling.moved = false;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : autoconversionFloor === 'mixingTop' && (boundaryTop ?? boundaryDepth) ? (boundaryTop ?? boundaryDepth)[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
@@ -834,7 +838,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const idx = k * C + i;
       let layerCover = 0;
       if (rainShares) {
-        if (!(rain > 0)) rainShare = 0;
+        if (!(rain > 0) && !(descending > 0) && !iceAbove) rainShare = 0;
         if (qc[idx] > 0) {
           const pressure = pi[i] * sigmaMid[k];
           saturation(theta[idx] * exnerLayer[idx], pressure);
@@ -842,6 +846,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         }
         rainShare = rainShareBelow(rainShare, layerCover, coverAbove);
         coverAbove = layerCover;
+        iceAbove = qc[idx] > 0 && theta[idx] * exnerLayer[idx] < liquidTemperature;
       }
       if (rain > 0 && (evaporationInCloud || !(qc[idx] > CLEAR_AIR)) && rainEvaporation > 0) {
         const ex = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;

@@ -139,6 +139,41 @@ test('the rain\'s precipitating share is the maximum-random overlap of the cloud
   assert.ok(Math.abs(rainShareBelow(0.6, 0, 0) - 0.6) < 1e-15 && Math.abs(rainShareBelow(1, 0, 1) - 1) < 1e-15);
 });
 
+test("under rainCover 'overlap' rain that forms beneath an ice-only layer carries the share of the cloud above it, as cloudsc, which counts the layer's ice in ZQPRETOT, does", () => {
+  const saturated = { qs: 0, slope: 0, liquid: 1 }, D = MOIST_DEFAULTS, dt = 900;
+  let mesh = null;
+  const firstClear = (options, iceCover, mixCover) => {
+    const m = createModel(mesh ?? new Grid(16), { ocean: false, moist: { rainEvaporationLaw: 'kessler', ...options } });
+    mesh = m.mesh;
+    const { K, C, sigmaMid, exnerLayer, cp } = m.core.diagnostics;
+    const pi = new Float64Array(C).fill(101325), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
+    m.core.diagnose(pi, theta);
+    const T = Array.from(sigmaMid, (s) => Math.max(200, 300 + 6.5e-3 * 7000 * Math.log(s)));
+    const mix = T.findIndex((t) => t > 278), ice = mix - 1;
+    T[ice] = 230;
+    for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
+      theta[k * C + i] = T[k] / exnerLayer[k * C + i];
+      q[k * C + i] = 0.9 * saturationHumidity(T[k], pi[i] * sigmaMid[k]);
+    }
+    const width = (k) => {
+      const p = pi[0] * sigmaMid[k];
+      cloudSaturation(T[k], p, D.iceSaturation, D.liquidTemperature, D.iceTemperature, saturated);
+      return (1 - criticalHumidityAt(p, pi[0], D.surfaceCriticalHumidity, D.topCriticalHumidity, D.criticalExponent)) * saturated.qs / (1 + LATENT_HEAT * saturated.slope / cp);
+    };
+    qc[ice * C] = iceCover * iceCover * width(ice);
+    qc[mix * C] = mixCover * mixCover * width(mix);
+    m.core.diagnoseColumn(0, pi, theta, q, qc);
+    const before = q[(mix + 1) * C];
+    m.moist.autoconvertColumn(0, pi, theta, q, qc, dt);
+    return q[(mix + 1) * C] - before;
+  };
+  for (const [iceCover, mixCover] of [[0.5, 0.5], [0.3, 0.6], [0.8, 0.4]]) {
+    const carried = rainShareBelow(rainShareBelow(0, iceCover, 0), mixCover, iceCover);
+    const overlap = firstClear({}, iceCover, mixCover), shared = firstClear({ rainCover: carried }, iceCover, mixCover);
+    assert.ok(shared > 0 && Math.abs(overlap - shared) <= 1e-9 * shared, `ice cover ${iceCover} over liquid cover ${mixCover}: the first clear layer below gains ${overlap} kg/kg, and ${shared} under rainCover ${carried}`);
+  }
+});
+
 test("under rainEvaporationLaw 'kessler' each cloud-free layer takes the IFS's Kessler rate of the rain falling into it, integrated exactly over the step, and under 'cloudsc' the IFS code's semi-implicit step at half the rate, both at the surface pressure's fall speed and over the precipitating share rainCover holds or the maximum-random overlap gives, conserving water and moist enthalpy: rain the instant law evaporates whole reaches the ground, in nearly the same share at half the step, and rainEvaporationCeiling holds every layer it reaches below c + (1 − c) a_P under every law, taking a layer that starts just under it to it", () => {
   const cloudAt = K - 12, cover = 0.3, D = MOIST_DEFAULTS;
   const saturated = { qs: 0, slope: 0, liquid: 1 };

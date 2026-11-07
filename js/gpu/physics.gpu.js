@@ -2739,12 +2739,12 @@ const replaceOnce = (pairs, body, what) => pairs.reduce((text, [from, to]) => {
 const RAIN_SHARE_WGSL = `fn rainShareBelow(share: f32, cover: f32, above: f32) -> f32 { return max(RAIN_FLOOR, 1.0 - (1.0 - share) * (1.0 - max(cover, above)) / (1.0 - min(above, 1.0 - 1e-6))); }
 `;
 const RAIN_EVAPORATION = [
-  ['var fogged = 0.0;', 'var fogged = 0.0; var rainShare = 0.0; var coverAbove = 0.0;'],
+  ['var fogged = 0.0;', 'var fogged = 0.0; var rainShare = 0.0; var coverAbove = 0.0; var iceAbove = false;'],
   [`    let mass = pi * LV[L_DS + k] / GRAV;
     if (rained > 0.0 && (EVAP_IN_CLOUD`, `    let mass = pi * LV[L_DS + k] / GRAV;
     var layerCover = 0.0;
     if (RAIN_OVERLAP) {
-      if (!(rained > 0.0)) { rainShare = 0.0; }
+      if (!(rained > 0.0) && !(descending > 0.0) && !iceAbove) { rainShare = 0.0; }
       let condensate = IN[S_QC + idx];
       if (condensate > 0.0) {
         let pressure = pi * LV[L_SM + k];
@@ -2752,6 +2752,7 @@ const RAIN_EVAPORATION = [
       }
       rainShare = rainShareBelow(rainShare, layerCover, coverAbove);
       coverAbove = layerCover;
+      iceAbove = condensate > 0.0 && IN[S_TH + idx] * D[D_EXM + idx] < LIQUID_T;
     }
     if (rained > 0.0 && (EVAP_IN_CLOUD`],
   [`      let evaporated = min(rained, RAIN_EVAP * deficit);
@@ -2763,8 +2764,9 @@ const RAIN_EVAPORATION = [
         if (RAIN_CEILING && rh < 1.0) { evaporated = min(rained, RAIN_EVAP * max(0.0, (rh * qs - IN[S_Q + idx]) / (1.0 + rh * gamma)) * mass); }
         if (RAIN_KESSLER || RAIN_CLOUDSC) {
           let rate = KE_RATE * pow(sqrt(LV[L_SM + k]) * (rained / dt) / (select(RAIN_COVER, rainShare, RAIN_OVERLAP) * KE_FLUX), KE_EXP);
-          if (RAIN_KESSLER) { evaporated = min(evaporated, deficit * relaxedFraction(clear * rate * (1.0 + gamma) * dt)); }
-          else { let shaft = KE_SHAFT * rate; evaporated = min(evaporated, clear * shaft * max(0.0, qs - IN[S_Q + idx]) * dt / (1.0 + shaft * dt * (1.0 + gamma)) * mass); }
+          let outside = max(1e-14, 1.0 - layerCover); let clearQ = clamp((IN[S_Q + idx] - layerCover * qs) / outside, 0.0, qs);
+          if (RAIN_KESSLER) { evaporated = min(evaporated, (qs - clearQ) * outside / (1.0 + gamma) * mass * relaxedFraction(clear * rate * (1.0 + gamma) * dt / outside)); }
+          else { let shaft = KE_SHAFT * rate; evaporated = min(evaporated, clear * shaft * (qs - clearQ) * dt / (1.0 + shaft * dt * (1.0 + gamma)) * mass); }
         }
       }
 `],
