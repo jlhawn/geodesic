@@ -167,6 +167,10 @@ test(`${OPTION_CHANGE}: shearDiffusivityResolution, under a strengthened shear-s
   const change = await optionChange({ ...HYBRID, shearDiffusivity: 10, shearDiffusivityCap: 1e6 }, { shearDiffusivityResolution: { scale: 4, power: 2 } });
   for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.1, `${f}: the GPU misses ${change[f].ratio} of the option's change`);
 });
+test(`${OPTION_CHANGE}: backgroundLatitude equatorial, under a strengthened background diffusivity`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, backgroundDiffusivity: 1e-3 }, { backgroundLatitude: 'equatorial' });
+  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.2, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+});
 test(`${OPTION_CHANGE}: closureScale`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionChange(HYBRID, { closureScale: 0.25 });
   assert.ok(change.u.ratio < 0.1, `u: the GPU misses ${change.u.ratio} of the option's change`);
