@@ -13,7 +13,7 @@ import { COUPLED_ICE_DRIFT, iceDriftMoves } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createLake, lakeWater, lakeModelOf, FLAKE } from './physics/lake.module.js';
-import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
+import { createGeography, surfaceGeopotential, terrainOptions, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, visibleCloudHeights } from './frames.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from './physics/exchange.module.js';
@@ -98,7 +98,7 @@ export function createModel(gridOrMesh, {
   if (!(Number.isInteger(dragEvery) && dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${dragEvery}`);
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
-  const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
+  const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;
   const mode = exchangeMode(surfaceOptions, landOptions), rough = mode === 'roughness';
   const { seaHumidity } = exchangeOptions(surfaceOptions);
   const skinSet = skinOptions(surfaceOptions);

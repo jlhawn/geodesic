@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel, dragConstants } from '../js/model.module.js';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { topographyFromInt16, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
 import { orographicColumn, namedConstants, OROGRAPHY_DEFAULTS, OROGRAPHY_CONSTANTS, LOTT_MILLER } from '../js/physics/orography.module.js';
 import { orographyConstants } from '../js/gpu/orography.gpu.js';
 
@@ -34,4 +34,35 @@ test('with \'cy41r2\' an unblocked ridge launches 0.3/1.23 of the default\'s wav
   assert.ok(Math.abs(ifs.launch / base.launch - 0.3 / 1.23) < 1e-12, `launch ratio ${ifs.launch / base.launch}`);
   assert.equal(ifs.blocking, base.blocking);
   assert.deepEqual(Array.from(ifs.beta), Array.from(base.beta));
+});
+
+test('the terrain options take conserveVolume and passes; true keeps the defaults', () => {
+  assert.deepEqual(terrainOptions(true), {});
+  assert.deepEqual(terrainOptions({ conserveVolume: true }), { conserveVolume: true });
+  assert.deepEqual(terrainOptions({ passes: 0 }), { passes: 0 });
+  assert.throws(() => terrainOptions({ smoothing: 'volume' }), /smoothing/);
+  assert.throws(() => terrainOptions({ conserveVolume: 1 }), /conserveVolume/);
+  assert.throws(() => terrainOptions({ passes: 1.5 }), /passes/);
+});
+
+for (const N of [16, 24]) test(`with conserveVolume each land mass at N=${N} keeps the volume the smoothing takes from it, the sea stays at 0 and the models take it`, () => {
+  const model = createModel(new Grid(N), { topography, physics: false, terrain: { conserveVolume: true } });
+  const { mesh, geography } = model, { land } = geography, { areaCell, cellsOnCell, nEdgesOnCell, maxEdges, nCells: C } = mesh;
+  const raw = surfaceGeopotential(mesh, geography, { passes: 0 }), smoothed = surfaceGeopotential(mesh, geography), kept = surfaceGeopotential(mesh, geography, { conserveVolume: true });
+  assert.deepEqual(Array.from(createModel(new Grid(N), { topography, physics: false }).surfaceGeopotential), Array.from(smoothed), 'terrain true is the default smoothing');
+  assert.deepEqual(Array.from(model.surfaceGeopotential), Array.from(kept), 'the model takes the option');
+  const mass = new Int32Array(C).fill(-1);
+  let masses = 0, lost = 0, total = 0;
+  for (let seed = 0; seed < C; seed++) {
+    if (!land[seed] || mass[seed] >= 0) continue;
+    const queue = [seed]; mass[seed] = masses;
+    for (let n = 0; n < queue.length; n++) for (let m = 0; m < nEdgesOnCell[queue[n]]; m++) { const j = cellsOnCell[maxEdges * queue[n] + m]; if (land[j] && mass[j] < 0) { mass[j] = masses; queue.push(j); } }
+    const volume = (phi) => queue.reduce((s, i) => s + areaCell[i] * phi[i], 0);
+    if (queue.some((i) => smoothed[i] > 0)) assert.ok(Math.abs(volume(kept) - volume(raw)) <= 1e-9 * Math.max(1, Math.abs(volume(raw))), `land mass ${masses} of ${queue.length} cells: ${volume(kept)} against ${volume(raw)}`);
+    lost += volume(raw) - volume(smoothed); total += volume(raw);
+    masses++;
+  }
+  for (let i = 0; i < C; i++) if (!land[i]) assert.equal(kept[i], smoothed[i], `cell ${i} off the land`);
+  console.log(`N=${N}: ${masses} land masses; the default smoothing loses ${(100 * lost / total).toFixed(2)} % of the land's volume`);
+  assert.ok(lost > 0, 'the default smoothing loses volume');
 });
