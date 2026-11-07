@@ -602,8 +602,8 @@ test('the variance cover that holds each layer\'s cloud water, and the turbulenc
   console.log(report.join('; '));
 });
 
-test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const gates = new Map();
+test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines, the gates of both engines answering deckReference interpolate alike', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const gates = new Map(), gpuGates = new Map();
   for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}, { deckReference: 'interpolate' }, { height: 1436 }, { deckReference: 'interpolate', height: 1436 }]) {
     const run = await mixedLayerPair(4, { turbulence: 'moist', ...options });
     const { K: nK } = run.model.core, keep = [];
@@ -626,12 +626,23 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
     assert.ok(parted <= run.C / 20, `${parted} columns part`);
     assert.ok(theta.rmsRel < 1e-5 && q.rmsRel < 1e-3 && run.olr.rmsRel < 1e-2, `θ ${theta.rmsRel}, q ${q.rmsRel}, OLR ${run.olr.rmsRel}`);
     gates.set(JSON.stringify(options), Float64Array.from(run.model.radiation.mlmGate));
+    gpuGates.set(JSON.stringify(options), Float64Array.from(run.gpuGate));
   }
   const layered = gates.get(JSON.stringify({ height: 1436 })), interpolated = gates.get(JSON.stringify({ deckReference: 'interpolate', height: 1436 }));
   let moved = 0;
   for (let i = 0; i < layered.length; i++) if (Math.abs(layered[i] - interpolated[i]) > 1e-3) moved++;
   console.log(`with the deck height seeded at 1436 m, half a layer above the inversion, deckReference interpolate moves the gate on ${moved} columns`);
   assert.ok(moved > layered.length / 50, `with the deck height seeded at 1436 m, half a layer above the inversion, deckReference interpolate moves the gate on ${moved} columns, against the engines' limit of ${layered.length / 50}, so a GPU that ignored the option would part from the CPU`);
+  const gpuLayered = gpuGates.get(JSON.stringify({ height: 1436 })), gpuInterpolated = gpuGates.get(JSON.stringify({ deckReference: 'interpolate', height: 1436 }));
+  let gpuMoved = 0, oneEngine = 0, unequal = 0;
+  for (let i = 0; i < layered.length; i++) {
+    const cpuShift = interpolated[i] - layered[i], gpuShift = gpuInterpolated[i] - gpuLayered[i];
+    if (Math.abs(gpuShift) > 1e-3) gpuMoved++;
+    if ((Math.abs(cpuShift) > 1e-3) !== (Math.abs(gpuShift) > 1e-3)) oneEngine++;
+    else if (Math.abs(cpuShift) > 1e-3 && Math.abs(gpuShift - cpuShift) > 0.1 * Math.abs(cpuShift)) unequal++;
+  }
+  console.log(`the GPU's own gate moves under deckReference interpolate on ${gpuMoved} columns; ${oneEngine} move on one engine only and ${unequal} on both by shifts more than 10 percent apart`);
+  assert.ok(gpuMoved > layered.length / 50 && oneEngine + unequal <= layered.length / 100, `the GPU's gate moves on ${gpuMoved} columns, ${oneEngine} on one engine only, ${unequal} by shifts more than 10 percent apart`);
 });
 
 for (const [label, transmission] of [['', null], [', with open water passing a share of its sunlight to the ocean below', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
