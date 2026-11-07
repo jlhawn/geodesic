@@ -1822,7 +1822,9 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   assert.ok(on.deep.deep && on.deep.midLevel && Math.abs(on.deep.baseFlux * g / 0.2 - 1) < 1e-14, `base flux ${on.deep.baseFlux}`);
   assert.ok(on.height > 800 && on.height < 3000 && on.deep.cape > 0 && on.rain > 0, `the plume departs ${on.height} m above the lowest layer with CAPE ${on.deep.cape} J/kg and rain ${on.rain} kg/m²`);
   const lifted = run({ midLevelConvection: true }, { profile: (k) => (k === on.deep.base - 1 ? 0.45 : -0.2) });
-  assert.ok(lifted.deep.midLevel && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14 && lifted.height > on.height, `with no ascent at its cloud base the lowest candidate gives way to the next one up: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
+  assert.ok(lifted.deep.midLevel && lifted.source === on.source && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14, `descent at 0.45 Pa/s in the layer above the cloud base leaves the plume in its source layer at -omega/g of that layer: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
+  const faint = { profile: (k) => (k === on.source ? -1e-7 : -0.2) }, weak = run({ midLevelConvection: true }, faint), weakOff = run({}, faint);
+  assert.ok(!weak.deep.midLevel && same(weak, weakOff), `a source layer ascending at 1e-7 Pa/s, which closes the plume below CUMULUS_FLOOR, gets no plume and ends the search, though the layer above ascends at 0.2 Pa/s: base flux ${weak.deep.baseFlux}, from ${weak.height} m`);
   const lee = run({ midLevelConvection: true }, { profile: () => 0.2 }), windward = run({ midLevelConvection: true }, { ascent: 0.2, profile: () => -0.2 });
   assert.ok(!lee.deep.midLevel && same(lee, off), 'no mid-level plume where omega > 0 though pi sigma-dot < 0');
   const single = (rh, lapse = 8e-3) => ({ column: (z, p, memo) => { const T = 290 - lapse * Math.min(z, 11000), picked = !memo.picked && z > 2800; if (picked) memo.picked = true; return { T, q: (picked ? rh : 0.3) * saturationHumidity(T, p) }; }, grid: sigmaInterfaces('bl48') });
@@ -1859,7 +1861,7 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   const lidDepth = lid.state[0][0] * (levels[lid.deep.base] - levels[lid.deep.top + 1]);
   assert.ok(lid.deep.midLevel && lidDepth < DEEP_CLOUD_DEPTH && lidRetyped.deep.midLevel && same(lidRetyped, lid), `convectionRetype leaves a mid-level plume ${lidDepth} Pa deep under an inversion as it is`);
   const gradedOmega = run({ midLevelConvection: true }, { profile: (k) => -0.05 - 0.005 * k });
-  assert.ok(gradedOmega.deep.midLevel && Math.abs(gradedOmega.deep.baseFlux * g / (0.05 + 0.005 * (gradedOmega.deep.base - 0.5)) - 1) < 1e-14, `under omega graded in the vertical the plume departs at -omega/g of the two layers that meet at its cloud base ${gradedOmega.deep.base}: ${gradedOmega.deep.baseFlux * g} Pa/s`);
+  assert.ok(gradedOmega.deep.midLevel && Math.abs(gradedOmega.deep.baseFlux * g / (0.05 + 0.005 * gradedOmega.source) - 1) < 1e-14, `under omega graded in the vertical the plume departs at -omega/g of its source layer ${gradedOmega.source}: ${gradedOmega.deep.baseFlux * g} Pa/s`);
   const rateFactor = MID_LEVEL.entrainment;
   let singleRate;
   try { MID_LEVEL.entrainment = 1; singleRate = run({ midLevelConvection: true }); } finally { MID_LEVEL.entrainment = rateFactor; }

@@ -2717,11 +2717,7 @@ const MID_LEVEL_PLUME = [
       let midZh = upperInterface(i, k); let midPh = pi * LV[L_SU + k]; let midQsAbove = qsat(plumeT(i, k - 1), layerP(pi, k - 1));
       let midTh = saturatedTemperature(max(CP * plumeT(i, k - 1) + GRAV * plumeZ(i, k - 1), CP * plumeT(i, k) + GRAV * plumeZ(i, k)) - GRAV * midZh + LHEAT * midQsAbove, midPh, plumeT(i, k - 1));
       let midFirst = plumeState(midEnv.x, midEnv.y, midZh, midPh, 0.0);
-      if (!(midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - midTh * (1.0 + PARCEL_VIRT * max(0.0, min(max(0.0, IN[S_Q + (k - 1) * C + i]), midQsAbove) + qsat(midTh, midPh) - midQsAbove)) > -MID_BUOYANCY)) { continue; }
-      var midBase = k;
-      while (midBase > 1 && pi * LV[L_SU + midBase] > midLcl.y) { midBase -= 1; }
-      let midDrive = max(0.0, max(-0.5 * (D[D_OMG + (midBase - 1) * C + i] + D[D_OMG + midBase * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, midBase) - ground))));
-      if (min(open * midDrive, CU_LOSS * layerDp(pi, k) / (GRAV * dt)) > CU_FLOOR) { kb = k; lcl = midLcl; break; }
+      if (midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - midTh * (1.0 + PARCEL_VIRT * max(0.0, min(max(0.0, IN[S_Q + (k - 1) * C + i]), midQsAbove) + qsat(midTh, midPh) - midQsAbove)) > -MID_BUOYANCY) { kb = k; lcl = midLcl; break; }
     }
     if (kb < 0) { return shallowRain; }
     let env = plumeEnv(i, kb);
@@ -2733,7 +2729,7 @@ const MID_LEVEL_PLUME = [
   ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
   if (middle) {
     let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
-    drive = max(0.0, max(-0.5 * (D[D_OMG + (base - 1) * C + i] + D[D_OMG + base * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, base) - ground))));
+    drive = max(0.0, max(-D[D_OMG + source * C + i] / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, base) - ground))));
   }
   var baseFlux = min(open * drive, CU_LOSS * mass / (GRAV * dt));
 `],

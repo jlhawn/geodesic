@@ -378,15 +378,14 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * there (CUININ's half-level PTENH and PQENH: the higher dry static energy
  * of the two layers at the interface's height, saturated at constant
  * c_p T + L q from the upper layer's q_s, less the upper layer's saturation
- * deficit), and whose closure below would give it a base flux above
- * CUMULUS_FLOOR (a layer that fails any of these gives way to the next one
- * up, as cuascn.F90's type-3 cancellations do), departs with its own s_l
- * and q_t
+ * deficit) (a layer that fails any of these gives way to the next one up,
+ * as a type-3 cloud that cuascn.F90 cancels at its first level does),
+ * departs with its own s_l and q_t
  * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
  * detraining that rate times (1.6 − RH) as the IFS code's types 2 and 3 do,
- * with eq. 6.31's base flux max(−ω/g at its cloud base (the mean of the
- * two layers that meet there), (H + L E)/(g
- * z_base)), z_base the cloud base's height above the ground, and does not
+ * with eq. 6.31's base flux max(−ω/g in its source layer, (H + L E)/(g
+ * z_base)), z_base the cloud base's height above the ground (a closure at
+ * or below CUMULUS_FLOOR gives no plume and ends the search), and does not
  * depart where the stratocumulus cap closes the shallow plume. With
  * `plumeDeparture` 'elevated' (IFS Cy41r2 Part IV
  * §6.4; Bechtold et al. 2014, JAS 71, 734) a column whose surface test
@@ -1408,7 +1407,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const shallowRain = cumulusColumn(i, pi, theta, q, qc, dt);
       if (cumulus.baseFlux > 0 || (capped && cloudBaseFound(i, pi, theta, q) && stratocumulusTopped(i, pi, theta, q))) return shallowRain;
       const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
-      const tv = virtualBuoyancy ? VIRTUAL_FACTOR : 0, enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
+      const tv = virtualBuoyancy ? VIRTUAL_FACTOR : 0;
       let kb = -1;
       for (let k = bottom - 1; k > 1 && z[k] - ground < MID_LEVEL.height; k--) {
         if (!(layerOmega[k * C + i] < 0 && Math.max(0, q[k * C + i]) > MID_LEVEL.humidity * saturation(T[k], p[k]).qs)) continue;
@@ -1417,10 +1416,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         const zh = upperInterface(i, k), ph = pi[i] * levels[k], qsAbove = saturationHumidity(T[k - 1], p[k - 1]);
         const th = saturatedTemperature(Math.max(cp * T[k - 1] + g * z[k - 1], cp * T[k] + g * z[k]) - g * zh + latentHeat * qsAbove, ph, T[k - 1]);
         plumeState(envS[k], envQ[k], zh, ph, 0);
-        if (!(plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - th * (1 + tv * Math.max(0, Math.min(Math.max(0, q[(k - 1) * C + i]), qsAbove) + saturationHumidity(th, ph) - qsAbove)) > -MID_LEVEL.buoyancy)) continue;
-        let j = k;
-        while (j > 1 && pi[i] * levels[j] > lcl.pressure) j--;
-        if (Math.min(open * Math.max(0, -0.5 * (layerOmega[(j - 1) * C + i] + layerOmega[j * C + i]) / g, enthalpy / (g * (upperInterface(i, j) - ground))), cumulusBoundaryLoss * dp[k] / (g * dt)) > CUMULUS_FLOOR) { kb = k; break; }
+        if (plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - th * (1 + tv * Math.max(0, Math.min(Math.max(0, q[(k - 1) * C + i]), qsAbove) + saturationHumidity(th, ph) - qsAbove)) > -MID_LEVEL.buoyancy) { kb = k; break; }
       }
       if (kb < 0) return shallowRain;
       source = kb; stackBottom = kb; mass = dp[kb]; sourceS = envS[kb]; sourceQ = envQ[kb]; rooted = false; middle = true;
@@ -1642,7 +1638,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (middle) {
       const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
       const enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
-      drive = Math.max(0, -0.5 * (layerOmega[(base - 1) * C + i] + layerOmega[base * C + i]) / g, enthalpy / (g * (upperInterface(i, base) - ground)));
+      drive = Math.max(0, -layerOmega[source * C + i] / g, enthalpy / (g * (upperInterface(i, base) - ground)));
     }
     let baseFlux = Math.min(open * drive, cumulusBoundaryLoss * mass / (g * dt));
     for (let k = top; k <= bottom; k++) {
