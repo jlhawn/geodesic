@@ -956,11 +956,7 @@ coupling (albedo and longwave emissivity of cloud) is the next step.
 `js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model,
 Fichefet and Morales Maqueda's (1997) E1, E3 and E4 simplifications of
 Semtner's (1976) three-layer model (no heat stored in the ice, no
-sunlight into it, one thickness; by default also no brine reservoir: `ice.iceLight` passes FMM97's share
-i0 = 0.18 (1 − c) + 0.35 c of the ice's absorbed sunlight, with c the
-diffuse share at the surface, none under snow, and `ice.brineReservoir`
-holds what the ice absorbs of it in Semtner's reservoir, lifting E3), on the slab
-ocean, with ice thickness
+sunlight into it, one thickness), on the slab ocean, with ice thickness
 as the seventh state array. Open water is the mixed layer (2.1×10⁷
 J/m²/K); when it cools to the seawater freezing point (271.35 K) the
 deficit freezes into ice of latent heat ρ_i L_f. Ice has a skin of
@@ -997,6 +993,21 @@ mixed layer — zero in the global mean, cooling the tropics, warming
 the poles by up to 2 Q₀ — and melts ice from below where it is
 covered. It stands in for the poleward heat carried by ocean currents,
 without which the ice–albedo feedback runs the ice edge to ~45°.
+
+Two options lift E3 and the latent half of E1. `ice.iceLight` passes
+FMM97's share i0 = 0.18 (1 − c) + 0.35 c of the sunlight the ice absorbs
+at its surface, with c the diffuse share of the beam, fading linearly
+to none under 20 kg/m² of snow; below the top 0.1 m it decays at
+1.5 m⁻¹, and of what reaches the base a layered ocean takes its
+transmitted share, the rest melting the ice from below. The part the
+ice absorbs on the way stays with the skin, unless `ice.brineReservoir`
+(which needs `iceLight`) holds it in Semtner's brine reservoir
+(`brine`, J/m² of ice, in the state file and carried by the drift):
+at most half the ice's latent heat at the end of a step, the rest
+melting ice. With no heat capacity in the ice to keep at its melting
+point, the reservoir is spent at the base against the growth the
+conduction drives, as FMM97 (p. 12,626) apply it, so the surface cools
+freely while it drains.
 
 Ice covers a fraction A of its cell (`concentration`, a per-cell array
 beside the snow, in the state file and on the page), with the thickness
