@@ -74,7 +74,7 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * The subgrid orography of a mesh: data/subgrid_N<N>.bin's fields from
  * GMTED2010 (`subgrid`, or under node the bundled file), else the 0.25°
  * raster's (`raster` true), which carry no σ_flt and so no form drag and
- * take Lott and Miller's constants, not the IFS's for 5 km fields. The
+ * take LOTT_MILLER's C_d 1 and G 1, not the IFS's for 5 km fields. The
  * files' fields hold the scales below the resolved terrain on the bundled
  * land mask of the mesh whose Lloyd passes they record, below the
  * terrain of the default options unless `fields.terrain` names others, so

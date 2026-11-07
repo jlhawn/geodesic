@@ -10229,8 +10229,9 @@ buffer (52 MB at N=128).
 
 What still misses: σ from the 0.25° raster is ×0.30–0.35 of the 5 km
 data's, so both stresses, each ∝ σ, are low by about that factor; the
-TOFD (above); C_d and G are LM97's, not the IFS's calibration; the gust
-has no deep-convective (mesoscale downdraft) part (Redelsperger et al.
+TOFD (above); C_d 1 and G 1 are neither LM97's (G 0.5) nor the IFS's
+calibration; the gust has no deep-convective (mesoscale downdraft)
+part (Redelsperger et al.
 2000), so the calm tropical sea's evaporation fell by 26 % where
 convection would gust it; z_i is the step before's diagnosed depth, so a
 column that switches its boundary-layer regime switches its gust; the
@@ -10311,7 +10312,7 @@ The review of the mountains' drag (Oct 2), on 3066df7 and the fixes after it:
   Cy32r2 (eq. 4.8), G ≈ 1.23 for the mountain of eq. 4.2, the /9 of eq.
   4.37 with H = 3μ, eqs. 4.26–4.41 as used, and gives C_d only as close to
   1 by free-streamline theory and nearer 2 with suction behind the
-  obstacle; C_d 2 as Cy47r3's value and LM97's C_d 1 and G 1 were not
+  obstacle; C_d 2 as Cy47r3's value and LM97's C_d 1 and G 0.5 were not
   checked against those texts. Its gust is |U|² = u² + v² + w*² with
   z_i 1000 m (Cy33r1 eqs. 3.17–3.18) and its Ri_b takes q_surf (eqs.
   3.24–3.25). COARE's gust from coare35vn.m and coare36vn as above.
@@ -10481,7 +10482,8 @@ without a file (or whose fetched file does not decode), a run without
 terrain (the files hold only the scales below the resolved terrain) and a
 land mask on which more than 0.5 % of the land cells would hold nothing
 compute the fields from the topography's raster, say why once in the log,
-take Lott and Miller's constants with them and have no form drag.
+take the C_d 1, G 1 set (LOTT_MILLER, not LM97's own) with them and
+have no form drag.
 
 | land | N=16 | N=32 | N=64 | N=128 |
 |---|---|---|---|---|
@@ -10614,8 +10616,8 @@ Runs, N=64 GPU, OCEAN `{"everySteps":8}`, ten days from copies of the
 states with 8-step samples, as the diagnosis above (stresses as
 magnitudes of each sample's cell vector, the wave stress the launched
 τ₀ along its direction, the blocking the orographic stress less it):
-bd42fa5 (0.25° fields, Lott and Miller's constants) → the GMTED fields
-with Lott and Miller's constants and no form drag → the IFS's constants →
+bd42fa5 (0.25° fields, the C_d 1, G 1 set) → the GMTED fields with the
+C_d 1, G 1 set and no form drag → the IFS's constants →
 with the form drag (these commits). The twin is the last with θ perturbed
 by 10⁻⁷ (relative, random per value).
 
@@ -10814,7 +10816,7 @@ relative, heat against the sinks 7.8·10⁻⁴. With `subgrid` false the CPU
 gives 9ba8c38's state, land and ocean digests after each of nine steps
 from eight64_day0183; N=8 (no file) and N=16 and N=64 with the terrain
 off take the raster with its note and give 9ba8c38's six-step digests,
-the GPU the raster, Lott and Miller's constants and no form layers.
+the GPU the raster, the C_d 1, G 1 set and no form layers.
 Parity after 1, 4, 16 steps, lowest layer u rms (9ba8c38; fe5de7f): from
 nine64_day0091 4.8·10⁻⁵, 1.4·10⁻³, 2.7·10⁻³ m/s (4.9·10⁻⁵, 2.5·10⁻⁴,
 1.5·10⁻²; 1.9·10⁻³, 2.0·10⁻³, 3.7·10⁻³), launched stress 2.4·10⁻⁴,

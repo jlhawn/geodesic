@@ -929,7 +929,7 @@ export function subgridFallbackNote(mesh, reason = 'missing', fields = null, top
   const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10)), file = `data/${subgridUrl(N, topography, mask).pathname.split('/').pop()}`;
   if (fallbackSaid.has(`${file} ${reason}`)) return;
   fallbackSaid.add(`${file} ${reason}`);
-  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](file, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
+  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](file, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with C_d 1 and G 1, and no form drag`);
 }
 
 /*
