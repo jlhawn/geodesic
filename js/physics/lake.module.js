@@ -331,7 +331,8 @@ export const LAKE_FIELDS = ['mixed', 'mean', 'bottom', 'shape', 'mixedDepth', 'i
  * a lake gains (rain and snow and inflowing runoff, less evaporation) it
  * passes on whole to the sea cell its outlet reaches, so its depth stays
  * fixed and a closed basin's loss is drawn from that sea; `passed` holds
- * the running total per lake cell (kg/m², negative for a net loss). Snow
+ * the running total per lake cell (kg/m², negative for a net loss), and
+ * `seen` the part of it already handed to the sea, set to it on load. Snow
  * on a lake joins its water and takes its heat of fusion from it. FLake's
  * equations set the water; the ice holds what remains of the heat the
  * fluxes give (lakeSettle), so enthalpy() changes by exactly those.
@@ -342,7 +343,7 @@ export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, fresh
   if (!geography || !geography.lake) throw new Error('the lake model needs a geography with lakes (mask n1024)');
   const C = mesh.nCells, cells = [];
   for (let i = 0; i < C; i++) if (geography.lake[i]) cells.push(i);
-  const depth = new Float64Array(C), coriolis = new Float64Array(C), passed = new Float64Array(C);
+  const depth = new Float64Array(C), coriolis = new Float64Array(C), passed = new Float64Array(C), seen = new Float64Array(C);
   const fields = Object.fromEntries(LAKE_FIELDS.map((name) => [name, new Float64Array(C)]));
   const sourced = missingBed === 'hydrolakes' ? sourceLakeDepths(mesh, geography.lake, lakeDepths ?? readLakeDepths()) : null;
   for (const i of cells) {
@@ -354,7 +355,7 @@ export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, fresh
   const read = (i) => { for (const name of LAKE_FIELDS) column[name] = fields[name][i]; return column; };
   const write = (i) => { for (const name of LAKE_FIELDS) fields[name][i] = column[name]; };
   return {
-    cells, depth, coriolis, ...fields, passed,
+    cells, depth, coriolis, ...fields, passed, seen,
     isLake: geography.lake,
     initialize(surfaceT) {
       for (const i of cells) { Object.assign(column, lakeColumn(surfaceT[i], depth[i])); write(i); surfaceT[i] = column.mixed; }
@@ -377,6 +378,7 @@ export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, fresh
     serialize() { return { ...Object.fromEntries(LAKE_FIELDS.map((name) => [name, Float64Array.from(fields[name])])), passed: Float64Array.from(passed) }; },
     load(saved) {
       for (const name of [...LAKE_FIELDS, 'passed']) if (saved[name]) (name === 'passed' ? passed : fields[name]).set(saved[name]);
+      seen.set(passed);
     },
   };
 }
