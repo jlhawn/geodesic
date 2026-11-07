@@ -296,19 +296,20 @@ for (const brine of [false, true]) test(`the surface energy${brine ? ', the brin
   if (brine) assert.ok(carried > 0, 'the drift brings brine with the ice it carries into open water');
 });
 
-test('the drift carries the brine with the ice volume: brine seeded at a constant times the thickness stays at that constant times the thickness in every cell, its total kept', () => {
+for (const speed of [6, 120]) test(`the drift carries the brine with the ice volume ${speed > 60 ? 'over several substeps' : 'in one step'}: brine seeded at a constant times the thickness stays at that constant times the thickness in every cell, its total kept`, () => {
   const m = meshOf(16), r = rig(m, { rheology: 'frozen' }, null, {}, { iceLight: true, brineReservoir: true, keepSmallIce: true }), patch = withinCap(m, -65, 40, 20), c = 1e7;
   for (const i of patch) { const x = 3 * m.lonCell[i] + 5 * m.latCell[i]; r.thickness[i] = 0.4 + 1.2 * Math.sin(x) ** 2; r.concentration[i] = 0.3 + 0.6 * Math.cos(x) ** 2; r.seaIce.brine[i] = c * r.thickness[i]; r.surfaceT[i] = FREEZING_POINT - 5; }
-  r.drift.velocity.set(rotationOn(m, 6 / m.radius));
+  r.drift.velocity.set(rotationOn(m, speed / m.radius));
   r.dt = 3600;
   const total = () => { let s = 0; for (let i = 0; i < r.C; i++) if (r.thickness[i] > 0) s += m.areaCell[i] * r.concentration[i] * r.seaIce.brine[i]; return s; };
   const before = total(), iced = patch.length;
-  let handed = 0;
-  for (let n = 0; n < 20; n++) { r.drift.arrived.fill(0); r.drift.transport(r.env()); handed += c * r.drift.count.removed; }
+  let handed = 0, courant = 0;
+  for (let n = 0; n < 20; n++) { r.drift.arrived.fill(0); r.drift.transport(r.env()); handed += c * r.drift.count.removed; courant = Math.max(courant, r.drift.count.courant); }
   let cells = 0, worst = 0;
   for (let i = 0; i < r.C; i++) if (r.thickness[i] > 0) { cells++; worst = Math.max(worst, Math.abs(r.seaIce.brine[i] / r.thickness[i] - c) / c); }
-  console.log(`twenty transports: ${cells} iced cells (${iced} to start), brine over thickness off by at most ${worst.toExponential(2)}, the total by ${((total() + handed) / before - 1).toExponential(2)} with ${(handed / before).toExponential(2)} handed to the water by removed ice`);
+  console.log(`twenty transports at Courant ${courant.toFixed(3)}: ${cells} iced cells (${iced} to start), brine over thickness off by at most ${worst.toExponential(2)}, the total by ${((total() + handed) / before - 1).toExponential(2)} with ${(handed / before).toExponential(2)} handed to the water by removed ice`);
   assert.ok(cells > iced, 'the ice spreads');
+  assert.ok(speed > 60 ? courant > 0.4 : courant < 0.2, `Courant ${courant}`);
   assert.ok(worst < 1e-12, `brine over thickness off by ${worst}`);
   assert.ok(Math.abs((total() + handed) / before - 1) < 1e-12, 'the drift keeps the brine but for what removed ice hands the water');
 });
