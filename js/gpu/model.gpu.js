@@ -90,7 +90,7 @@ export async function createGpuModel(gridOrMesh, {
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
-    orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
+    orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, relativeWind: surface.relativeWind === true, exchangeOptions: exchangeOptions(surface),
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
     keepSmallIce: ice.keepSmallIce ?? (oceanOptions !== false && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift)),
     ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],

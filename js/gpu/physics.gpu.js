@@ -2717,6 +2717,29 @@ const PBL_FIRST = `
   IN[S_TH + base] = theta; IN[S_Q + base] = water;
   diagnoseColumnMid(i);
 }`;
+const seaFlowAt = (name) => `var ${name} = vec3<f32>(0.0, 0.0, 0.0);
+  for (var m = 0; m < MAXE; m++) {
+    let f = MI[EOC + MAXE * i + m];
+    ${name} += abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + f] * MF[F_DV + f] * PH[PH_UO + f] * vec3<f32>(MF[F_NEDGE + 3 * f], MF[F_NEDGE + 3 * f + 1], MF[F_NEDGE + 3 * f + 2]);
+  }
+  ${name} = ${name} / MF[F_AREA + i];
+`;
+const replacedOnce = (body, from, to) => {
+  const parts = body.split(from);
+  if (parts.length !== 2) throw new Error(`relativeWind: ${parts.length - 1} places in the kernel read ${from}`);
+  return parts.join(to);
+};
+export function relativeWindKernels({ physics, pblDiagnose, mixMomentum }) {
+  return {
+    physics: replacedOnce(physics, 'let ws = length(wind);', `${seaFlowAt('seaFlow')}  let ws = length(wind - seaFlow);`),
+    pblDiagnose: replacedOnce(pblDiagnose, 'let speed = length(bottomWind);', `${seaFlowAt('seaFlow')}  let speed = length(bottomWind - seaFlow);`),
+    mixMomentum: [
+      ['let u = IN[S_U + k * E + e];', 'let u = IN[S_U + k * E + e] + select(0.0, lower * PH[PH_UO + e], k == K - 1);'],
+      ['share += dt * surfaceDrag * here * here;', 'share += dt * surfaceDrag * (here - PH[PH_UO + e]) * (here - PH[PH_UO + e]);'],
+      ['PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1];', 'PH[PH_STRESS + e] = surfaceDrag * (rhs[n - 1] - PH[PH_UO + e]);'],
+    ].reduce((body, [from, to]) => replacedOnce(body, from, to), mixMomentum),
+  };
+}
 export function boundaryLayerDiagnosis(body, { diagnoseFirst = false, surfaceExcess = 0 } = {}) {
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
   if (!body.includes(PBL_MAIN) || !body.includes(PBL_DEPTH)) throw new Error('pblDiagnose kernel text moved');

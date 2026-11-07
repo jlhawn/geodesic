@@ -770,3 +770,98 @@ test('the countergradient and velocityScale \'holtslagBoville\' match between th
     if (turbulence === 'dry') assert.ok(theta < 1e-3 && q < 1e-6 && qc < 1e-7 && wind < 1e-3, `${label}: θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
   }
 });
+
+function relativeWindPair() {
+  const pair = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl34'), boundaryLayer: { turbulence: 'dry' }, surface: { relativeWind: true } });
+  const { core: c, boundaryLayer: layer, state } = pair;
+  const { K: nK, C: nC, E: nE } = c.diagnostics;
+  const init = initializeState(pair, {});
+  for (let a = 0; a < init.length; a++) state[a].set(init[a]);
+  let seed = 7919;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) state[2][k * nE + e] = k === nK - 1 ? 10 * (random() - 0.5) : 24 * (random() - 0.5);
+  for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  layer.mixing.fill(0);
+  for (let k = layer.kTop; k < nK - 1; k++) for (let i = 0; i < nC; i++) layer.mixing[k * nC + i] = Math.fround(1.5 * random());
+  for (let i = 0; i < nC; i++) layer.surfaceDrag[i] = Math.fround(0.004 + 0.02 * random());
+  for (let e = 0; e < nE; e++) layer.seaFlow[e] = Math.fround(random() - 0.5);
+  return { pair, layer, nK, nE };
+}
+
+test('with surface.relativeWind the implicit drag pulls the lowest wind toward the sea\'s: a column moving with the sea stays as it is and takes no stress, and each edge column\'s momentum changes by the stress the sea takes', () => {
+  const { pair, layer, nK, nE } = relativeWindPair();
+  const [pi, , u] = pair.state, { dSigma: dS, g: grav } = pair.core.diagnostics, dt = 900;
+  const uniform = new Float64Array(u.length);
+  for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) uniform[k * nE + e] = layer.seaFlow[e];
+  layer.mixEdges(pi, uniform, 0, nE, dt);
+  let moved = 0, held = 0;
+  for (let e = 0; e < nE; e++) {
+    held = Math.max(held, Math.abs(layer.surfaceStress[e]));
+    for (let k = 0; k < nK; k++) moved = Math.max(moved, Math.abs(uniform[k * nE + e] - layer.seaFlow[e]));
+  }
+  assert.ok(moved < 1e-12 && held < 1e-12, `the column moved by ${moved} m/s and took ${held} N/m²`);
+  const before = Float64Array.from(u);
+  layer.mixEdges(pi, u, 0, nE, dt);
+  let worst = 0, scale = 0;
+  for (let e = 0; e < nE; e++) {
+    const a = pair.mesh.cellsOnEdge[2 * e], b = pair.mesh.cellsOnEdge[2 * e + 1];
+    let change = 0;
+    for (let k = 0; k < nK; k++) change += 0.5 * (pi[a] + pi[b]) * dS[k] / grav * (u[k * nE + e] - before[k * nE + e]);
+    worst = Math.max(worst, Math.abs(change + dt * layer.surfaceStress[e]));
+    scale = Math.max(scale, Math.abs(dt * layer.surfaceStress[e]));
+  }
+  assert.ok(scale > 1 && worst < 1e-9 * scale, `momentum change against the stress the sea took: ${worst} of ${scale} kg/m/s`);
+});
+
+test('with relativeWind both engines mix the edge winds toward the sea\'s and hand it the same stress', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js');
+  const { pair, layer, nE } = relativeWindPair();
+  const gpu = await createGpuCore(pair.mesh, { levels: sigmaInterfaces('bl34'), physics: { turbulence: 'dry', relativeWind: true } });
+  const { device, buffers, kernels, layout } = gpu, dt = 900, [pi, , u] = pair.state, start = Float64Array.from(u), flow = Float64Array.from(layer.seaFlow);
+  const run = async (seaFlow) => {
+    u.set(start);
+    layer.seaFlow.set(seaFlow);
+    gpu.upload(pair.state);
+    gpu.uploadPhysics();
+    device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIX, Float32Array.from(layer.mixing));
+    device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SDRAG, Float32Array.from(layer.surfaceDrag));
+    device.queue.writeBuffer(buffers.PH, 4 * layout.PH.UO, Float32Array.from(seaFlow));
+    device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
+    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+    pass.setPipeline(kernels.mixMomentum);
+    pass.setBindGroup(0, device.createBindGroup({ layout: kernels.mixMomentum.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
+    pass.dispatchWorkgroups(Math.ceil(nE / 64));
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const ph = await gpu.downloadPhysics();
+    layer.mixEdges(pi, u, 0, nE, dt);
+    return { cpu: Float64Array.from(layer.surfaceStress), gpu: Float64Array.from(ph.STRESS.subarray(0, nE)) };
+  };
+  const moving = await run(flow), still = await run(new Float64Array(nE));
+  let worst = 0, scale = 0, effect = 0;
+  for (let e = 0; e < nE; e++) {
+    worst = Math.max(worst, Math.abs(moving.gpu[e] - moving.cpu[e]), Math.abs(still.gpu[e] - still.cpu[e]));
+    scale = Math.max(scale, Math.abs(moving.cpu[e]));
+    effect = Math.max(effect, Math.abs(moving.cpu[e] - still.cpu[e]));
+  }
+  console.log(`relative wind on ${nE} edges: the sea's motion changes the stress by up to ${effect.toExponential(2)} of ${scale.toExponential(2)} N/m²; the engines differ by up to ${worst.toExponential(2)} N/m²`);
+  assert.ok(effect > 0.05 * scale, `effect ${effect} of ${scale}`);
+  assert.ok(worst < 1e-4 * scale, `engines apart by ${worst} of ${scale}`);
+});
+
+test('with surface.relativeWind the coupled GPU model hands its atmosphere a finite, moving sea surface velocity', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  const { readRanges } = await import('../js/gpu/device.module.js');
+  const model = await createGpuModel(new Grid(16), { surface: { relativeWind: true }, ocean: { everySteps: 2 } });
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  model.load();
+  model.ocean.initialize(model.state[3], model.state[6]);
+  for (let n = 0; n < 8; n++) await model.step(900);
+  if (model.settle) await model.settle();
+  const [flow] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: model.gpu.layout.PH.UO, length: model.mesh.nEdges }]);
+  let largest = 0;
+  for (const v of flow) { assert.ok(Number.isFinite(v)); largest = Math.max(largest, Math.abs(v)); }
+  console.log(`after 8 steps the sea's surface velocity under the air reaches ${largest.toExponential(2)} m/s`);
+  assert.ok(largest > 1e-4 && largest < 2, `${largest} m/s`);
+});

@@ -66,7 +66,7 @@ ${implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { return PH[PH_STRESS + ge]; }\
  * the solver covered this call, the transmission formula elsewhere, times
  * the cavity factor.
  */
-export const driftStressKernel = (K, idx) => `${K}  let e = ${idx}; if (e >= E) { return; }
+export const driftStressKernel = (K, idx, seaFlow = false) => `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   if (OD[O_EMASK + e] < 0.5) { OD[O_STRESS + e] = 0.0; OD[O_TAUA + e] = 0.0; return; }
   let ga = gcell(a); let gb = gcell(b);
@@ -76,7 +76,7 @@ export const driftStressKernel = (K, idx) => `${K}  let e = ${idx}; if (e >= E) 
   let raw = rawStress(e, a, b);
   OD[O_TAUA + e] = raw;
   let open = 1.0 - 0.5 * (OD[O_SHELF + a] + OD[O_SHELF + b]);
-  OD[O_STRESS + e] = select(raw * (1.0 - area * (1.0 - TRANSMIT)), (1.0 - area) * raw + area * OD[O_ICESTRESS + e], OD[O_VALID + e] > 0.5) * open;
+${seaFlow ? '  PH[PH_UO + gedge(e)] = open * ((1.0 - area) * IN[uOff(0) + e] + select(0.0, area * OD[O_UICE + e], OD[O_VALID + e] > 0.5));\n' : ''}  OD[O_STRESS + e] = select(raw * (1.0 - area * (1.0 - TRANSMIT)), (1.0 - area) * raw + area * OD[O_ICESTRESS + e], OD[O_VALID + e] > 0.5) * open;
 }`;
 
 export function iceDriftKernels({ K, idx, options: d, third }) {
