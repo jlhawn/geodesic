@@ -27,6 +27,7 @@ const CAM_L26_HYBI = [
 
 export const DIVERGENCE_SURFACES = ['sigma', 'hybrid'];
 export const TEMPERATURE_CLOSURES = ['sigma', 'standard'];
+export const VERTICAL_ADVECTION = ['centered', 'vanLeer', 'vanLeerWater'];
 
 /*
  * The models' `dynamics` options with their defaults: divergenceSurfaces,
@@ -36,15 +37,31 @@ export const TEMPERATURE_CLOSURES = ['sigma', 'standard'];
  * temperatureClosure, 'sigma' for the ∇⁴ closure on T along σ, or
  * 'standard' for it on T less the US Standard Atmosphere 1976 at the
  * layer's pressure πσ, which takes out T's hydrostatic slope along σ over
- * terrain. The last two are returned only when given.
+ * terrain; verticalAdvection, 'centered' for θ, q and q_c at the layer
+ * interfaces linear in Exner, 'vanLeer' for those values limited by
+ * vanLeerFace, or 'vanLeerWater' for q and q_c limited and θ centered, the
+ * θ that conserves energy. The last three are returned only when given.
  */
-export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscosity, temperatureClosure, ...rest } = {}) {
+export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscosity, temperatureClosure, verticalAdvection, ...rest } = {}) {
   const unknown = Object.keys(rest);
-  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, divergenceViscosity and temperatureClosure, not ${unknown.join(', ')}`);
+  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, divergenceViscosity, temperatureClosure and verticalAdvection, not ${unknown.join(', ')}`);
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
   if (divergenceViscosity !== undefined && !(typeof divergenceViscosity === 'number' && divergenceViscosity >= 0 && Number.isFinite(divergenceViscosity))) throw new Error(`divergenceViscosity is ν_d in m²/s, 0 or more, not ${divergenceViscosity}`);
   if (temperatureClosure !== undefined && !TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
-  return { divergenceSurfaces, ...(divergenceViscosity !== undefined ? { divergenceViscosity } : {}), ...(temperatureClosure !== undefined ? { temperatureClosure } : {}) };
+  if (verticalAdvection !== undefined && !VERTICAL_ADVECTION.includes(verticalAdvection)) throw new Error(`verticalAdvection is ${VERTICAL_ADVECTION.join(' or ')}, not ${verticalAdvection}`);
+  return { divergenceSurfaces, ...(divergenceViscosity !== undefined ? { divergenceViscosity } : {}), ...(temperatureClosure !== undefined ? { temperatureClosure } : {}), ...(verticalAdvection !== undefined ? { verticalAdvection } : {}) };
+}
+
+/*
+ * A layer interface's value under van Leer's limiter: the centered value
+ * blended toward the upwind layer's by φ(r) = (r + |r|)/(1 + |r|), r the
+ * ratio of the difference upwind of the upwind layer to the difference
+ * across the interface, and never past the downwind layer's value.
+ */
+export function vanLeerFace(beyond, upwind, downwind, centered) {
+  const across = downwind - upwind, r = across !== 0 ? (upwind - beyond) / across : 0, phi = r > 0 ? 2 * r / (1 + r) : 0;
+  const face = upwind + phi * (centered - upwind);
+  return (face - downwind) * across > 0 ? downwind : face;
 }
 
 /*
@@ -215,11 +232,12 @@ export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
     nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma', surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null, spongeMeanRates = null,
-    divergenceViscosity = 0, temperatureClosure = 'sigma',
+    divergenceViscosity = 0, temperatureClosure = 'sigma', verticalAdvection = 'centered',
   } = options;
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
   if (!TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
-  const standardClosure = temperatureClosure === 'standard';
+  if (!VERTICAL_ADVECTION.includes(verticalAdvection)) throw new Error(`verticalAdvection is ${VERTICAL_ADVECTION.join(' or ')}, not ${verticalAdvection}`);
+  const standardClosure = temperatureClosure === 'standard', vanLeer = verticalAdvection !== 'centered', limitTheta = verticalAdvection === 'vanLeer';
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
     cellsOnEdge, verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, areaTriangle, dcEdge, dvEdge, fVertex,
@@ -457,7 +475,13 @@ export function createSigmaCore(mesh, options = {}) {
    * Flux-form transport of a layer scalar by the mass fluxes, with the
    * ∇⁴ closure as part of the tendency unless the closure is split off.
    */
-  function transportLayer(k, pi, field, fieldLower, edgeFlux, divField, dField, conservative = false) {
+  function limitedFace(field, centered, n, above, flow) {
+    const down = flow > 0, far = down ? above - 1 : above + 2;
+    const upwind = down ? field[n] : field[n + C], downwind = down ? field[n + C] : field[n];
+    return vanLeerFace(far >= 0 && far < K ? field[n + (far - above) * C] : upwind, upwind, downwind, centered[n]);
+  }
+
+  function transportLayer(k, pi, field, fieldLower, edgeFlux, divField, dField, conservative = false, limited = false) {
     const off = k * C;
     const fk = flux.subarray(k * E, (k + 1) * E);
     for (let e = 0; e < E; e++) {
@@ -468,8 +492,8 @@ export function createSigmaCore(mesh, options = {}) {
       const idx = off + i;
       const lowerFlow = piSigmaDot[(k + 1) * C + i];
       const upperFlow = piSigmaDot[k * C + i];
-      const lower = k === K - 1 ? 0 : fieldLower[idx];
-      const upper = k === 0 ? 0 : fieldLower[idx - C];
+      const lower = k === K - 1 ? 0 : limited ? limitedFace(field, fieldLower, idx, k, lowerFlow) : fieldLower[idx];
+      const upper = k === 0 ? 0 : limited ? limitedFace(field, fieldLower, idx - C, k - 1, upperFlow) : fieldLower[idx - C];
       const vertical = (lowerFlow * lower - upperFlow * upper - field[idx] * (lowerFlow - upperFlow)) / (pi[i] * dSigma[k]);
       dField[idx] = -(divField[i] - field[idx] * divFlux[idx]) / pi[i] - vertical;
     }
@@ -549,10 +573,10 @@ export function createSigmaCore(mesh, options = {}) {
     const q = state[4] ?? null, dQ = out[4] ?? null, qc = state[5] ?? null, dQc = out[5] ?? null;
     if (part !== 'momentum') {
       for (let k = kFrom; k < kTo; k++) {
-        transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta);
+        transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta, false, limitTheta);
         if (q) virtualWork(k, pi, u, theta, q, qc, out[0], dTheta);
-        if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true);
-        if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true);
+        if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true, vanLeer);
+        if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true, vanLeer);
       }
     }
     if (part === 'tracers') return;
@@ -605,5 +629,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, divergenceViscosity, temperatureClosure, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, divergenceViscosity, temperatureClosure, verticalAdvection, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }

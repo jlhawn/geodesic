@@ -5,7 +5,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
-import { createSigmaCore, sigmaInterfaces, dynamicsOptions, standardTemperature, standardSigma, DIVERGENCE_DAMPING, DIVERGENCE_SURFACES, P0 } from '../js/dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, dynamicsOptions, standardTemperature, standardSigma, vanLeerFace, DIVERGENCE_DAMPING, DIVERGENCE_SURFACES, VERTICAL_ADVECTION, P0 } from '../js/dynamics/sigmaCore.module.js';
 
 const N = 16, dt = 1350 * 16 / N, levels = sigmaInterfaces('bl48'), K = levels.length - 1;
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
@@ -95,4 +95,48 @@ test(`temperatureClosure 'standard' keeps c_p T on a disturbed state at N=${N} a
   const gap = largest(standard[1].map((x, n) => x - sigma[1][n])), moved = largest(sigma[1].map((x, n) => x - state[1][n]));
   assert.ok(gap > 0 && gap < moved, `the reference changes the step by ${gap} K of ${moved}`);
   assert.deepEqual(Array.from(closed({ nu4, nu4Theta: nu4, temperatureClosure: 'standard' }, state)[4]), Array.from(sigma[4]), 'q takes the same closure');
+});
+
+test('verticalAdvection takes \'centered\', \'vanLeer\' or \'vanLeerWater\'; van Leer\'s face is the centered value on a straight profile, the upwind value at an extremum or a step, and never past the downwind value', () => {
+  assert.deepEqual(dynamicsOptions({ verticalAdvection: 'vanLeer' }), { divergenceSurfaces: 'sigma', verticalAdvection: 'vanLeer' });
+  assert.throws(() => dynamicsOptions({ verticalAdvection: 'upwind' }), /upwind/);
+  assert.throws(() => core({ verticalAdvection: 'ppm' }), /ppm/);
+  assert.equal(vanLeerFace(1, 2, 3, 2.5), 2.5);
+  assert.equal(vanLeerFace(3, 2, 1, 1.5), 1.5);
+  assert.equal(vanLeerFace(3, 2, 3, 2.5), 2, 'an extremum takes the upwind value');
+  assert.equal(vanLeerFace(2, 2, 3, 2.5), 2, 'a step takes the upwind value');
+  assert.equal(vanLeerFace(0, 2, 3, 2.5), 2 + (4 / 3) * 0.5, 'r = 2 gives φ = 4/3');
+  assert.equal(vanLeerFace(-10, 2, 3, 2.9), 3, 'never past the downwind value');
+  const noise = (n) => { const x = Math.sin(12.9898 * n + 78.233) * 43758.5453; return x - Math.floor(x) - 0.5; };
+  for (let n = 0; n < 4000; n += 4) {
+    const upwind = noise(n), downwind = noise(n + 1), face = vanLeerFace(noise(n + 2), upwind, downwind, upwind + (noise(n + 3) + 0.5) * (downwind - upwind));
+    assert.ok((face - upwind) * (face - downwind) <= 0, `${face} outside ${upwind} to ${downwind}`);
+  }
+});
+
+test(`over a sharp step in water at N=${N} over the terrain the centered faces dry the dry layer above it and moisten the moist layer below it past its value; 'vanLeer' does neither, and both keep the water`, () => {
+  const step = sigmaMid.findIndex((s) => s > 0.85), q0 = 0.01, dSigma = Float64Array.from({ length: K }, (_, k) => levels[k + 1] - levels[k]);
+  const state = start.map((a) => Float64Array.from(a));
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) { state[4][k * C + i] = k >= step ? q0 : 0; state[5][k * C + i] = k >= step ? 1e-4 : 0; }
+  const rates = Object.fromEntries(VERTICAL_ADVECTION.map((verticalAdvection) => {
+    const out = state.map((a) => new Float64Array(a.length));
+    core({ verticalAdvection }).tendency(state, out);
+    return [verticalAdvection, out];
+  }));
+  const layer = (out, k) => Array.from(out[4].subarray(k * C, (k + 1) * C));
+  const scale = largest(layer(rates.centered, step)), count = (a, keep) => a.filter(keep).length;
+  const dried = (v) => count(layer(rates[v], step - 1), (x) => x < 0), moistened = (v) => count(layer(rates[v], step), (x) => x > 1e-9 * scale);
+  console.log(`σ ${sigmaMid[step - 1].toFixed(3)} over ${sigmaMid[step].toFixed(3)}: the dry layer dried in ${dried('centered')} of ${C} columns centered, ${dried('vanLeer')} van Leer; the moist layer moistened past q0 in ${moistened('centered')} centered, ${moistened('vanLeer')} van Leer`);
+  assert.ok(dried('centered') > 0 && moistened('centered') > 0, 'the centered faces overshoot on both sides of the step');
+  assert.equal(dried('vanLeer'), 0);
+  assert.equal(moistened('vanLeer'), 0);
+  for (const v of VERTICAL_ADVECTION) for (const s of [4, 5]) {
+    let total = 0, size = 0;
+    for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) { const w = mesh.areaCell[i] * state[0][i] * dSigma[k] * rates[v][s][k * C + i]; total += w; size += Math.abs(w); }
+    assert.ok(Math.abs(total) < 1e-13 * size, `${v} field ${s}: ${total} against ${size}`);
+  }
+  assert.deepEqual(Array.from(rates.vanLeer[2]), Array.from(rates.centered[2]), 'the wind does not see it');
+  assert.deepEqual(Array.from(rates.vanLeerWater[4]), Array.from(rates.vanLeer[4]), 'vanLeerWater limits q as vanLeer does');
+  assert.deepEqual(Array.from(rates.vanLeerWater[1]), Array.from(rates.centered[1]), 'vanLeerWater leaves θ centered');
+  assert.notDeepEqual(Array.from(rates.vanLeer[1]), Array.from(rates.centered[1]), 'vanLeer limits θ');
 });

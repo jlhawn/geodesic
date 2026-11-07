@@ -57,6 +57,16 @@ function spunUpStandard() {
   return model;
 }
 
+const spunVerticalAdvection = {};
+function spunUpVerticalAdvection(verticalAdvection) {
+  if (spunVerticalAdvection[verticalAdvection]) return spunVerticalAdvection[verticalAdvection];
+  const model = createModel(new Grid(N), { ...OPTIONS, dynamics: { verticalAdvection } });
+  initializeState(model).forEach((values, s) => model.state[s].set(values));
+  for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
+  spunVerticalAdvection[verticalAdvection] = model;
+  return model;
+}
+
 const CAPPED = { ...OPTIONS, boundaryLayer: { velocityScale: 'capped', countergradient: 7.2 } };
 let spunCapped = null;
 function spunUpCapped() {
@@ -130,7 +140,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
+for (const [label, build, dynamicsBound = 0.02] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ["over a slab with dynamics.verticalAdvection 'vanLeer'", () => spunUpVerticalAdvection('vanLeer'), 0.2], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within ${dynamicsBound === 0.02 ? 'its truncation' : `${dynamicsBound} W/m²`}`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
@@ -177,7 +187,7 @@ for (const [label, build] of [['over a slab', spunUp], ['over a slab with berger
   }
   for (const [name, rows] of Object.entries(record)) console.log(`CPU ${label} ${name}: ${show(mean(rows))} W/m² on average, ${show(largest(rows))} at most`);
   for (const name of ['closure', 'boundaryLayer', 'adjust', 'momentum']) assert.ok(largest(record[name]) < 1e-6, `${name}: ${largest(record[name])} W/m²`);
-  assert.ok(Math.abs(mean(record.dynamics)) < 0.02, `dynamics: ${mean(record.dynamics)} W/m²`);
+  assert.ok(Math.abs(mean(record.dynamics)) < dynamicsBound, `dynamics: ${mean(record.dynamics)} W/m²`);
 });
 
 test("in double precision the CPU's adjustment keeps the energy of the air and its water while plumes root above the 50 hPa stack under plumeDeparture 'elevated', over a spun-up slab with its lowest 60 hPa cooled by 6 K in two columns of five", () => {
