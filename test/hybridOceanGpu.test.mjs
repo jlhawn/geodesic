@@ -167,6 +167,10 @@ test(`${OPTION_CHANGE}: shearDiffusivityResolution, under a strengthened shear-s
   const change = await optionChange({ ...HYBRID, shearDiffusivity: 10, shearDiffusivityCap: 1e6 }, { shearDiffusivityResolution: { scale: 4, power: 2 } });
   for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.1, `${f}: the GPU misses ${change[f].ratio} of the option's change`);
 });
+test(`${OPTION_CHANGE}: closureScale`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange(HYBRID, { closureScale: 0.25 });
+  assert.ok(change.u.ratio < 0.1, `u: the GPU misses ${change.u.ratio} of the option's change`);
+});
 
 const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
 test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
@@ -178,6 +182,7 @@ test(`${TRACKING}, with shearViscosity 5e-3 and shearCutoff 0.7`, { skip: !gpuAv
 test(`${TRACKING}, with eddyTracers third and mixedLayerRestratification taperLatitude 5`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, eddyTracers: 'third', mixedLayerRestratification: { coefficient: 50, taperLatitude: 5 } }));
 test(`${TRACKING}, with eddyTracers centered and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...RESTRAT, eddyTracers: 'centered' }));
 test(`${TRACKING}, with shearDiffusivityResolution`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, shearDiffusivityResolution: { scale: 4, power: 2 } }));
+test(`${TRACKING}, with closureScale 0.5`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, closureScale: 0.5 }));
 
 /*
  * What each phase of the GPU hybrid step changes of the stores' heat

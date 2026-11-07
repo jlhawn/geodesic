@@ -14,7 +14,8 @@ import { interiorMixing, shearTaper } from '../js/ocean/column.module.js';
  * (mixedLayerRestratification.taperLatitude), the temperature and
  * salinity the eddy phase's layer fluxes carry (eddyTracers) and the
  * resolution function on the shear-scaled diffusion
- * (shearDiffusivityResolution).
+ * (shearDiffusivityResolution), and the factor on the ∇⁴ closure
+ * (closureScale).
  */
 const mesh = buildMesh(new Grid(16)), { nCells: C, nEdges: E, latCell, latEdge, fEdge, dcEdge, areaCell } = mesh;
 const DT = 1350, DEGREE = Math.PI / 180;
@@ -248,4 +249,21 @@ test('shearDiffusivityResolution reaches the layers\' tracer tendency: a vanishi
   const fromWhole = apart(tapered, whole) / span, fromNone = apart(tapered, none) / span;
   console.log(`true moves the heat ${fromWhole.toFixed(4)} of the shear-scaled diffusion's change from the whole and ${fromNone.toFixed(4)} from none`);
   assert.ok(fromWhole > 1e-3 && fromNone > 0.5, `${fromWhole}, ${fromNone}`);
+});
+
+test('closureScale scales the ∇⁴ closure: 1 is the default and 0 no closure, bit for bit, and a half takes about half the closure\'s change to a sheared current', () => {
+  const run = (options) => {
+    const ocean = stratified(options), L = ocean.layers;
+    for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = 0.4 * Math.exp(-k / 3) * Math.cos(latEdge[e]) * Math.sin(3 * e);
+    ocean.phases.dynamics(DT);
+    return Float64Array.from(ocean.u);
+  };
+  const apart = (x, y) => { let d = 0; for (let n = 0; n < x.length; n++) d += Math.abs(x[n] - y[n]); return d; };
+  const whole = run({}), none = run({ closureHours: 0 });
+  assert.deepEqual(run({ closureScale: 1 }), whole);
+  assert.deepEqual(run({ closureScale: 0 }), none);
+  const half = apart(run({ closureScale: 0.5 }), none) / apart(whole, none);
+  console.log(`closureScale 0.5 makes ${half.toFixed(4)} of the closure's change`);
+  assert.ok(half > 0.45 && half < 0.55, `${half}`);
+  for (const bad of [-1, NaN, Infinity]) assert.throws(() => createOcean(mesh, { closureScale: bad }), /closureScale is a non-negative factor/);
 });
