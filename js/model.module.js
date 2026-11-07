@@ -13,7 +13,7 @@ import { COUPLED_ICE_DRIFT, iceDriftMoves } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createLake, lakeWater, lakeModelOf, FLAKE } from './physics/lake.module.js';
-import { createGeography, surfaceGeopotential, terrainOptions, terrainKey, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
+import { createGeography, surfaceGeopotential, terrainOptions, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, visibleCloudHeights } from './frames.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from './physics/exchange.module.js';
@@ -75,20 +75,18 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * GMTED2010 (`subgrid`, or under node the bundled file), else the 0.25°
  * raster's (`raster` true), which carry no σ_flt and so no form drag and
  * take LOTT_MILLER's C_d 1 and G 1, not the IFS's for 5 km fields. The
- * files' fields hold the scales below the resolved terrain on the bundled
- * land mask of the mesh whose Lloyd passes they record, below the
- * terrain of the default options unless `fields.terrain` names others, so
- * a run without terrain, on another mask, on a mesh of other passes or
- * over terrain of other options (`terrain`, see terrainOptions) takes the
- * raster's.
+ * files' fields hold the scales below the default terrain's resolved
+ * surface on the bundled land mask of the mesh whose Lloyd passes they
+ * record, so a run without terrain, on another mask or on a mesh of other
+ * passes takes the raster's; a run over terrain of other options (see
+ * terrainOptions) keeps them.
  */
-export function orographyFields(mesh, topography, geography, phis, subgrid, g, terrain = true) {
+export function orographyFields(mesh, topography, geography, phis, subgrid, g) {
   const mask = geography.mask ?? 'raster', fields = phis ? meshSubgrid(mesh, subgrid, topography?.name, mask) : null;
   const otherMesh = fields && Number.isInteger(fields.relax) && Number.isInteger(mesh.relax) && fields.relax !== mesh.relax;
-  const otherSurface = fields && !otherMesh && terrainKey(fields.terrain ?? true) !== terrainKey(terrain);
-  const fitted = fields && !otherMesh && !otherSurface ? landSubgrid(fields, geography.land) : null;
+  const fitted = fields && !otherMesh ? landSubgrid(fields, geography.land) : null;
   if (fitted) return fitted;
-  subgridFallbackNote(mesh, !phis ? 'terrain' : otherMesh ? 'relax' : otherSurface ? 'surface' : fields ? 'land' : subgrid === false ? 'off' : 'missing', fields, topography?.name, mask);
+  subgridFallbackNote(mesh, !phis ? 'terrain' : otherMesh ? 'relax' : fields ? 'land' : subgrid === false ? 'off' : 'missing', fields, topography?.name, mask);
   return { ...subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / g) : null, geography.land), raster: true };
 }
 
@@ -118,7 +116,7 @@ export function createModel(gridOrMesh, {
   const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, spongeMeanRates: lidFriction, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const openSea = new Float64Array(C);
-  const subgridFields = physics && geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, subgrid, core.diagnostics.g, terrain) : null;
+  const subgridFields = physics && geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, subgrid, core.diagnostics.g) : null;
   const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};
   const formDrag = subgridFields && subgridFields.filtered && formDragOptions !== false ? { ...formDragOptions, sigma: Float64Array.from(subgridFields.filtered, (value, i) => (geography.land[i] ? value : 0)) } : null;
   const exchange = geography || rough ? createSurfaceExchange(mesh, core, { ...surfaceOptions, geography, vegetated: landOptions.vegetation !== false, mode, seaDrag: surfaceOptions.dragCoefficient ?? SEA_DRAG, landDrag: landOptions.dragCoefficient ?? LAND_DRAG, gustiness: surfaceOptions.gustiness ?? 3, buffers: buffers ? buffers.exchange : null }) : null;

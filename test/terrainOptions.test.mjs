@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
-import { createModel, dragConstants, orographyFields } from '../js/model.module.js';
-import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, SUBGRID_FIELDS } from '../js/geography.module.js';
+import { createModel, dragConstants } from '../js/model.module.js';
+import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey } from '../js/geography.module.js';
 import { orographicColumn, namedConstants, OROGRAPHY_DEFAULTS, OROGRAPHY_CONSTANTS, LOTT_MILLER } from '../js/physics/orography.module.js';
 import { orographyConstants } from '../js/gpu/orography.gpu.js';
 
@@ -75,15 +75,13 @@ test('terrain options that make the same surface share a key', () => {
   assert.notEqual(terrainKey({ passes: 1 }), terrainKey(true));
 });
 
-test('a subgrid file is refused over terrain of other options than its own, and the raster\'s fields are computed against the run\'s surface', () => {
-  const model = createModel(new Grid(16), { topography, physics: false }), { mesh, geography } = model, g = 9.80616;
-  const file = Object.fromEntries(SUBGRID_FIELDS.map(([name]) => [name, new Float64Array(mesh.nCells).fill(0.5)]));
-  const kept = surfaceGeopotential(mesh, geography, { conserveVolume: true });
-  assert.equal(orographyFields(mesh, topography, geography, model.surfaceGeopotential, file, g).raster, undefined);
-  assert.equal(orographyFields(mesh, topography, geography, model.surfaceGeopotential, file, g, { conserveVolume: false, passes: 2 }).raster, undefined);
-  const refused = orographyFields(mesh, topography, geography, kept, file, g, { conserveVolume: true });
-  assert.equal(refused.raster, true);
-  const computed = orographyFields(mesh, topography, geography, kept, false, g, { conserveVolume: true });
-  assert.deepEqual(Array.from(refused.deviation), Array.from(computed.deviation));
-  assert.equal(orographyFields(mesh, topography, geography, kept, { ...file, terrain: { conserveVolume: true } }, g, { conserveVolume: true }).raster, undefined);
+test('a run over terrain of other options keeps the bundled subgrid file, its σ_flt and the named drag constants', () => {
+  const plain = createModel(new Grid(16), { topography }), kept = createModel(new Grid(16), { topography, terrain: { conserveVolume: true } });
+  assert.notDeepEqual(Array.from(kept.surfaceGeopotential), Array.from(plain.surfaceGeopotential));
+  for (const model of [plain, kept]) {
+    assert.equal(model.orography.fields.raster, undefined);
+    assert.ok(model.orography.fields.filtered.some((value) => value > 0));
+    assert.deepEqual(model.orography.options, OROGRAPHY_DEFAULTS);
+  }
+  assert.deepEqual(Array.from(kept.orography.fields.deviation), Array.from(plain.orography.fields.deviation));
 });

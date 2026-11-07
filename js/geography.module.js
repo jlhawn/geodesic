@@ -670,7 +670,9 @@ function maskedGeography(mesh, file, iceShelves, cavityDepth) {
 
 /*
  * surfaceGeopotential's options from the models' `terrain`: true for its
- * defaults, or an object of `conserveVolume` and `passes`.
+ * defaults, or an object of `conserveVolume` and `passes`. The bundled
+ * sub-grid files (scripts/subgridTerrain.mjs) hold μ, σ and γ below the
+ * default options' surface, and a run over other options keeps them.
  */
 export function terrainOptions(terrain = true) {
   if (terrain === true) return {};
@@ -922,7 +924,6 @@ const SUBGRID_FALLBACK = {
   terrain: () => 'the terrain is off, and the files hold only the scales below the resolved terrain',
   land: (file) => `${file} was made for another land mask`,
   relax: (file, mesh, fields) => `${file} was made for the mesh of ${fields.relax} Lloyd passes, not this one of ${mesh.relax}`,
-  surface: (file) => `${file} holds the scales below the default terrain's surface, and this run's terrain options make another`,
 };
 const fallbackSaid = new Set();
 export function subgridFallbackNote(mesh, reason = 'missing', fields = null, topography = 'etopo1', mask = 'raster') {
