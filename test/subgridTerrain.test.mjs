@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { topographyFromInt16, syntheticTopography, decodeSubgrid, encodeSubgrid, meshSubgrid, subgridUrl, SUBGRID_FIELDS } from '../js/geography.module.js';
+import { topographyFromInt16, syntheticTopography, decodeSubgrid, encodeSubgrid, meshSubgrid, landSubgrid, subgridUrl, SUBGRID_FIELDS, readTopography, geographyOptions, FRESH_GEOGRAPHY, terrainCache, readFine, fineSubgrid, rebuiltSubgrid } from '../js/geography.module.js';
 import { createModel, orographyFields } from '../js/model.module.js';
 import { meshFields } from '../scripts/subgridTerrain.mjs';
 
@@ -158,4 +158,41 @@ test('the files record the Lloyd passes of their meshes, and a mesh of other pas
   console.log = log;
   assert.ok(fields.raster, 'the 8-pass mesh takes the raster’s fields');
   assert.ok(said.some((line) => line.includes(`mesh of ${file.relax} Lloyd passes, not this one of 8`)), said.join(' | '));
+});
+
+const cache = terrainCache(), noGrids = !cache && 'no fine grids: no geodesic-terrain-cache beside the repository or above it, and no TERRAIN_CACHE';
+const fileFields = (N, name, mask) => decodeSubgrid(readFileSync(subgridUrl(N, name, mask)));
+const pageGeography = (name) => geographyOptions({ ...FRESH_GEOGRAPHY, topography: name, mask: 'n1024' }).geography;
+
+test("the bundled pipeline run in memory below the default terrain's surface reproduces the bundled files bit for bit: etopo1 and etopo2022 on the raster's mask at N=16, etopo2022 on the n1024 mask at N=16 and N=64", { skip: noGrids }, () => {
+  const h5 = readFine(cache, 'h5'), flt2 = readFine(cache, 'flt2');
+  for (const [name, mask, N] of [['etopo1', 'raster', 16], ['etopo2022', 'raster', 16], ['etopo2022', 'n1024', 16], ['etopo2022', 'n1024', 64]]) {
+    const model = createModel(new Grid(N), { physics: false, topography: readTopography(name), geography: mask === 'raster' ? {} : pageGeography(name) });
+    const built = new Uint8Array(encodeSubgrid({ ...meshFields(model, h5, flt2), relax: model.mesh.relax })), file = new Uint8Array(readFileSync(subgridUrl(N, name, mask)));
+    assert.equal(built.length, file.length, `${name} ${mask} N=${N}`);
+    assert.equal(built.filter((b, j) => b !== file[j]).length, 0, `${name} ${mask} N=${N}: bytes differing`);
+    if (mask === 'n1024' && N === 16) assert.deepEqual(rebuiltSubgrid(model.mesh, model.geography.land, model.surfaceGeopotential, model.core.diagnostics.g), fileFields(N, name, mask));
+  }
+});
+
+test('a run over terrain of other options takes the bundled pipeline\'s fields below its own surface, built once a process, and the default terrain the bundled file as it is; with the fine grids out of reach it keeps the file and says so', { skip: noGrids }, () => {
+  const topography = readTopography('etopo2022'), geography = pageGeography('etopo2022'), terrain = { conserveVolume: true };
+  const plain = createModel(new Grid(16), { physics: false, topography, geography }), own = createModel(new Grid(16), { physics: false, topography, geography, terrain });
+  const { mesh } = own, { land } = own.geography, g = own.core.diagnostics.g, file = landSubgrid(fileFields(16, 'etopo2022', 'n1024'), land);
+  const fields = (model, options) => orographyFields(model.mesh, topography, model.geography, model.surfaceGeopotential, undefined, g, options);
+  assert.deepEqual(fields(plain, true), file);
+  const rebuilt = fields(own, terrain), resolved = Float64Array.from(own.surfaceGeopotential, (p) => p / g);
+  assert.deepEqual(rebuilt, landSubgrid(decodeSubgrid(encodeSubgrid({ ...fineSubgrid(mesh, land, resolved, readFine(cache, 'h5'), readFine(cache, 'flt2')), relax: mesh.relax })), land));
+  assert.ok(rebuilt.deviation.some((mu, i) => mu !== file.deviation[i]), 'the rebuilt μ is the file\'s');
+  assert.equal(rebuiltSubgrid(mesh, land, own.surfaceGeopotential, g), rebuiltSubgrid(mesh, land, own.surfaceGeopotential, g));
+  const said = [], log = console.log, before = process.env.TERRAIN_CACHE;
+  process.env.TERRAIN_CACHE = 'none';
+  console.log = (line) => said.push(String(line));
+  try {
+    assert.deepEqual(fields(own, terrain), file);
+  } finally {
+    console.log = log;
+    if (before === undefined) delete process.env.TERRAIN_CACHE; else process.env.TERRAIN_CACHE = before;
+  }
+  assert.ok(said.some((line) => line.includes('keeps data/subgrid_etopo2022_n1024_N16.bin')), said.join(' | '));
 });

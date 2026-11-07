@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { topographyFromInt16, decodeSubgrid, landSubgrid, subgridUrl, terrainCache, SUBGRID_FIELDS } from '../js/geography.module.js';
 import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING, DIVERGENCE_SURFACES, TEMPERATURE_CLOSURES, VERTICAL_ADVECTION } from '../js/dynamics/sigmaCore.module.js';
 
 let gpuAvailable = true;
@@ -83,7 +83,7 @@ test(`one closure step with temperatureClosure 'standard' on the GPU matches the
   assert.equal(apart(runs.standard.gpu[2], runs.sigma.gpu[2]).diff, 0, 'the wind does not see the temperature closure');
 });
 
-test(`the GPU model takes terrain { conserveVolume } and orography { constants: 'cy41r2' }: the CPU model's surface geopotential on the device, and after a step the blocking, wave drag and stress the CPU lays from the same start or from that start rounded to f32, the GPU's own, which part only in the few columns whose blocking integral ends at H_n,crit`, { skip }, async () => {
+test(`the GPU model takes terrain { conserveVolume } and orography { constants: 'cy41r2' }: the CPU model's surface geopotential on the device, its sub-grid fields, rebuilt below that surface where the fine grids are in reach, and after a step the blocking, wave drag and stress the CPU lays from the same start or from that start rounded to f32, the GPU's own, which part only in the few columns whose blocking integral ends at H_n,crit`, { skip }, async () => {
   const options = { topography, levels: sigmaInterfaces('bl34'), terrain: { conserveVolume: true }, orography: { constants: 'cy41r2' } };
   const cpu = prepare(createModel(new Grid(N), options)), rounded = prepare(createModel(new Grid(N), options), true);
   const gpu = prepare(await createGpuModel(new Grid(N), options));
@@ -92,6 +92,9 @@ test(`the GPU model takes terrain { conserveVolume } and orography { constants: 
   assert.deepEqual(Array.from(gpu.surfaceGeopotential), Array.from(cpu.surfaceGeopotential));
   const [phis] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.MF, [{ offset: gpu.gpu.layout.MF.PHIS, length: C }]);
   assert.deepEqual(Array.from(phis), Array.from(cpu.surfaceGeopotential, Math.fround));
+  for (const [name] of SUBGRID_FIELDS) assert.deepEqual(Array.from(gpu.subgridOrography[name]), Array.from(cpu.orography.fields[name]), name);
+  const bundled = landSubgrid(decodeSubgrid(readFileSync(subgridUrl(N))), cpu.geography.land);
+  if (terrainCache()) assert.ok(cpu.orography.fields.deviation.some((mu, i) => mu !== bundled.deviation[i]), 'the fields are the bundled file\'s');
   cpu.step(dt); rounded.step(dt); await gpu.step(dt); await gpu.settle();
   const PH = gpu.gpu.layout.PH, Kc = cpu.core.K, o = cpu.orography, r = rounded.orography;
   const [beta, wave, stress, launch] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [['OBETA', Kc * C], ['OWAVE', Kc * C], ['OSTRESS', E], ['OLAUNCH', C]].map(([name, length]) => ({ offset: PH[name], length })));
