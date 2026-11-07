@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND, restratificationScale, restratificationOptions, deformationRadii, limitedFaceValue, limitedEdgeValue, eddyDiffusivities, shearResolution, shearResolutionOptions } from '../js/ocean/layered.module.js';
+import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND, restratificationScale, restratificationOptions, deformationRadii, limitedFaceValue, limitedEdgeValue, eddyDiffusivities, shearResolution, shearResolutionOptions, isoneutralOptions, ISONEUTRAL } from '../js/ocean/layered.module.js';
 import { interiorMixing, lmd94Shape } from '../js/ocean/column.module.js';
 
 /*
@@ -14,8 +14,9 @@ import { interiorMixing, lmd94Shape } from '../js/ocean/column.module.js';
  * (mixedLayerRestratification.taperLatitude), the temperature and
  * salinity the eddy phase's layer fluxes carry (eddyTracers) and the
  * resolution function on the shear-scaled diffusion
- * (shearDiffusivityResolution), and the factor on the ∇⁴ closure
- * (closureScale).
+ * (shearDiffusivityResolution), the factor on the ∇⁴ closure
+ * (closureScale), and the isoneutral diffusion of the fixed-depth layers
+ * (isoneutralDiffusion).
  */
 const mesh = buildMesh(new Grid(16)), { nCells: C, nEdges: E, latCell, latEdge, fEdge, dcEdge, areaCell } = mesh;
 const DT = 1350, DEGREE = Math.PI / 180;
@@ -259,4 +260,138 @@ test('closureScale scales the ∇⁴ closure: 1 is the default and 0 no closure,
   console.log(`closureScale 0.5 makes ${half.toFixed(4)} of the closure's change`);
   assert.ok(half > 0.45 && half < 0.55, `${half}`);
   for (const bad of [-1, NaN, Infinity]) assert.throws(() => createOcean(mesh, { closureScale: bad }), /closureScale is a non-negative factor/);
+});
+
+const FULL_STEP = ['dynamics', 'rescale', 'eddy', 'shift', 'regrid', 'column'];
+const profiled = (options, profile) => {
+  const ocean = stratified(options), L = ocean.layers, { h, Q, W } = ocean;
+  ocean.u.fill(0);
+  for (let i = 0; i < C; i++) {
+    let z = 0;
+    for (let k = 0; k < L; k++) { const n = k * C + i, hv = h[n], [t, s] = profile(z + 0.5 * hv, latCell[i], i); z += hv; Q[n] = hv * t; W[n] = hv * s; }
+  }
+  return ocean;
+};
+const tracerTendency = (ocean) => {
+  ocean.tendency(ocean.state, ocean.stages[0]);
+  return { dQ: Float64Array.from(ocean.stages[0][2]), dW: Float64Array.from(ocean.stages[0][3]), k33: ocean.isoKappa ? Float64Array.from(ocean.isoKappa) : null };
+};
+const tracerValues = (ocean, store) => Float64Array.from(store, (q, n) => {
+  if (ocean.cellOcean[n % C]) assert.ok(ocean.h[n] > 1e-6, `layer ${Math.floor(n / C)} of cell ${n % C} has vanished`);
+  return ocean.h[n] > 1e-6 ? q / ocean.h[n] : 0;
+});
+const explicitKappa33 = (ocean, k33, values) => {
+  const { h } = ocean, F = ocean.table.fixed, out = new Float64Array(ocean.layers * C);
+  for (let i = 0; i < C; i++) for (let m = 1; m <= F; m++) {
+    const up = (m - 1) * C + i, down = m * C + i, flux = -k33[up] * (values[up] - values[down]) / Math.max(0.5 * (h[up] + h[down]), 1e-3);
+    out[up] += flux; out[down] -= flux;
+  }
+  return out;
+};
+
+test('isoneutralDiffusion takes true for a slope cap of 0.01 under the boundary taper, refuses a negative or infinite cap and a non-boolean taper, and under slopeCap 0 is the horizontal diffusion, a step of the ocean bit for bit', () => {
+  assert.equal(isoneutralOptions(false), null);
+  assert.deepEqual(isoneutralOptions(true), { slopeCap: 0.01, boundaryTaper: true });
+  assert.deepEqual(ISONEUTRAL, { slopeCap: 0.01, boundaryTaper: true });
+  assert.deepEqual(isoneutralOptions({ slopeCap: 0.02 }), { slopeCap: 0.02, boundaryTaper: true });
+  for (const bad of [{ slopeCap: -1 }, { slopeCap: Infinity }, { slopeCap: NaN }, { boundaryTaper: 1 }]) assert.throws(() => createOcean(mesh, { isoneutralDiffusion: bad }), /isoneutralDiffusion takes a non-negative slopeCap/);
+  assert.equal(createOcean(mesh, {}).isoKappa, null);
+  const run = (options) => {
+    const ocean = stratified(options), L = ocean.layers;
+    for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = 0.4 * Math.exp(-k / 3) * Math.cos(latEdge[e]) * Math.sin(3 * e);
+    for (let n = 0; n < 2; n++) for (const phase of FULL_STEP) ocean.phases[phase](DT);
+    return ocean;
+  };
+  const off = run({}), flat = run({ isoneutralDiffusion: { slopeCap: 0 } }), on = run({ isoneutralDiffusion: true });
+  for (const field of ['h', 'u', 'Q', 'W', 'eta']) {
+    let differ = 0;
+    for (let n = 0; n < off[field].length; n++) if (off[field][n] !== flat[field][n]) differ++;
+    assert.equal(differ, 0, `${field}: ${differ} values differ`);
+  }
+  let moved = 0;
+  for (let n = 0; n < off.Q.length; n++) moved += Math.abs(on.Q[n] - off.Q[n]);
+  assert.ok(moved > 0, 'the rotation moved no heat');
+});
+
+test('under isoneutralDiffusion the triads move no heat or salt through the interior of a stratification whose temperature and salinity are linear in one tilted coordinate, which the horizontal diffusion crosses', () => {
+  const tilt = 1e-5, radius = 6.371e6, profile = (depth, lat) => { const x = depth + tilt * radius * lat; return [288 - 0.003 * x, 34.5 + 2e-4 * x]; };
+  const off = profiled({}, profile), on = profiled({ isoneutralDiffusion: { boundaryTaper: false } }, profile), F = on.table.fixed;
+  const flat = tracerTendency(off), turned = tracerTendency(on), { cellsOnCell, nEdgesOnCell, maxEdges } = mesh;
+  const thick = (k, i) => k >= 0 && on.h[k * C + i] > 1;
+  const interior = (k, i) => {
+    for (let m = -1; m < nEdgesOnCell[i]; m++) { const j = m < 0 ? i : cellsOnCell[maxEdges * i + m]; if (!(thick(k - 1, j) && thick(k, j) && thick(k + 1, j))) return false; }
+    return true;
+  };
+  let inside = 0;
+  for (let k = 1; k < F; k++) for (let i = 0; i < C; i++) if (on.cellOcean[i] && interior(k, i)) inside++;
+  assert.ok(inside > 0.5 * (F - 1) * C * 0.6, `${inside} interior cells`);
+  for (const [store, change, label] of [['Q', 'dQ', 'T'], ['W', 'dW', 'S']]) {
+    const values = tracerValues(on, on[store]);
+    const kappa33 = explicitKappa33(on, turned.k33, values);
+    let scale = 0, residual = 0;
+    for (let k = 1; k <= F; k++) for (let i = 0; i < C; i++) {
+      const n = k * C + i, rest = turned[change][n] + kappa33[n] - (k === F ? flat[change][n] : 0);
+      if (k < F) scale = Math.max(scale, Math.abs(flat[change][n]));
+      if (k === F || interior(k, i)) residual = Math.max(residual, Math.abs(rest));
+    }
+    for (let n = (F + 1) * C; n < on.layers * C; n++) assert.equal(turned[change][n], flat[change][n]);
+    console.log(`${label}: the horizontal diffusion's largest tendency ${scale.toExponential(3)}, the triads' with κS² ${residual.toExponential(3)}`);
+    assert.ok(scale > 0 && residual < 1e-9 * scale, `${label}: ${residual} against ${scale}`);
+  }
+});
+
+test('the triads with their κS² diffusivity applied explicitly never raise the variance of temperature or salinity, and under isoneutralDiffusion the dynamics, eddy, regrid and column phases keep the sea\'s heat and salt to rounding', () => {
+  const { lonCell } = mesh, profile = (depth, lat, i) => [288 - 0.01 * depth + 3 * Math.cos(lat) ** 2 + 0.5 * Math.sin(7 * lonCell[i]) * Math.exp(-depth / 150), 34.6 + 2e-4 * depth + 0.3 * Math.sin(lat)];
+  const off = profiled({}, profile), on = profiled({ isoneutralDiffusion: true }, profile);
+  on.boundaryDepths.fill(60);
+  const flat = tracerTendency(off), turned = tracerTendency(on);
+  for (const [store, change, mean] of [['Q', 'dQ', 288], ['W', 'dW', 35]]) {
+    const values = tracerValues(on, on[store]), kappa33 = explicitKappa33(on, turned.k33, values);
+    let rotated = 0, horizontal = 0, scale = 0;
+    for (let n = 0; n < values.length; n++) {
+      const a = areaCell[n % C] * (values[n] - mean);
+      rotated += a * (turned[change][n] + kappa33[n]); horizontal += a * flat[change][n]; scale += Math.abs(a * flat[change][n]);
+    }
+    console.log(`${store}: variance tendency ${(rotated / scale).toExponential(3)} rotated and ${(horizontal / scale).toExponential(3)} horizontal, of the horizontal's magnitude`);
+    assert.ok(rotated <= 1e-12 * scale && horizontal <= 1e-12 * scale, `${store}: ${rotated}, ${horizontal} against ${scale}`);
+  }
+  const sheared = stratified({ isoneutralDiffusion: true }), L = sheared.layers;
+  for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) sheared.u[k * E + e] = 0.4 * Math.exp(-k / 3) * Math.cos(latEdge[e]) * Math.sin(3 * e);
+  const total = (field) => { let q = 0; for (let n = 0; n < field.length; n++) q += areaCell[n % C] * field[n]; return q; };
+  for (let n = 0; n < 2; n++) for (const phase of FULL_STEP) {
+    const heat = total(sheared.Q), salt = total(sheared.W);
+    sheared.phases[phase](DT);
+    if (phase === 'rescale' || phase === 'shift') continue;
+    assert.ok(Math.abs(total(sheared.Q) - heat) < 1e-12 * Math.abs(heat), `${phase}: heat ${heat} → ${total(sheared.Q)}`);
+    assert.ok(Math.abs(total(sheared.W) - salt) < 1e-12 * Math.abs(salt), `${phase}: salt ${salt} → ${total(sheared.W)}`);
+  }
+  let largest = 0;
+  for (const v of sheared.isoKappa) largest = Math.max(largest, v);
+  assert.ok(largest > 0, 'no interface took a κS² diffusivity');
+});
+
+test('under isoneutralDiffusion an unstable stratification takes every slope at the cap, so the κS² diffusivity goes as the cap squared and the triads\' change to the tendency as the cap; the boundary taper scales an interface\'s diffusivity by the square of its depth over the boundary layer\'s', () => {
+  const unstable = (depth, lat) => [280 + 0.01 * depth + 5 * Math.cos(lat) ** 2, 35];
+  const flat = tracerTendency(profiled({}, unstable));
+  const capped = [0.01, 0.02].map((slopeCap) => tracerTendency(profiled({ isoneutralDiffusion: { slopeCap, boundaryTaper: false } }, unstable)));
+  let largest = 0, missQ = 0, miss33 = 0;
+  for (let n = 0; n < flat.dQ.length; n++) { const change = capped[0].dQ[n] - flat.dQ[n]; largest = Math.max(largest, Math.abs(change)); missQ = Math.max(missQ, Math.abs(capped[1].dQ[n] - flat.dQ[n] - 2 * change)); }
+  for (let n = 0; n < capped[0].k33.length; n++) miss33 = Math.max(miss33, Math.abs(capped[1].k33[n] - 4 * capped[0].k33[n]) / Math.max(capped[1].k33[n], 1e-300));
+  console.log(`doubling the cap: the triads' change ${largest.toExponential(3)}, its miss of twice ${missQ.toExponential(3)}; the κS² diffusivity's relative miss of four times ${miss33.toExponential(3)}`);
+  assert.ok(largest > 0 && missQ < 1e-9 * largest && miss33 < 1e-12, `${largest}, ${missQ}, ${miss33}`);
+  const stable = (depth, lat, i) => [288 - 0.01 * depth + 3 * Math.cos(lat) ** 2 + 0.5 * Math.sin(7 * mesh.lonCell[i]) * Math.exp(-depth / 150), 34.6 + 2e-4 * depth];
+  const depthOf = (ocean, m, i) => { let z = 0; for (let j = 0; j < m; j++) z += ocean.h[j * C + i]; return z; };
+  const untapered = profiled({ isoneutralDiffusion: { boundaryTaper: false } }, stable), F = untapered.table.fixed, base = tracerTendency(untapered).k33;
+  for (const layer of [0, 5000]) {
+    const tapered = profiled({ isoneutralDiffusion: true }, stable);
+    tapered.boundaryDepths.fill(layer);
+    const k33 = tracerTendency(tapered).k33;
+    let miss = 0, positive = 0;
+    for (let m = 1; m <= F; m++) for (let i = 0; i < C; i++) {
+      const n = (m - 1) * C + i, share = layer > 0 ? (depthOf(tapered, m, i) / layer) ** 2 : 1;
+      if (base[n] > 0) positive++;
+      miss = Math.max(miss, Math.abs(k33[n] - base[n] * share) / Math.max(base[n] * share, 1e-300));
+    }
+    assert.ok(positive > 0.5 * F * C && miss < 1e-12, `boundary layer ${layer} m: ${positive} interfaces, miss ${miss}`);
+  }
 });

@@ -637,7 +637,7 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
   nu[K - 1] = 0;
 }
 
-export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, buoyancy = null, type = 'IB', ustar, f, dt, capped = false, options = {} }, { kappa, nu }, scratch) {
+export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, buoyancy = null, type = 'IB', ustar, f, dt, capped = false, isoneutral = null, options = {} }, { kappa, nu }, scratch) {
   const { interfaces, shares, boundaryKappa, interiorKappa, interiorNu } = scratch;
   interfacesOf(h, K, interfaces);
   const flux = buoyancy ?? (options.mstarScheme === 'rh18' ? surfaceBuoyancy(T[0], S[0], heat + light, salt, dt, options.gravity) : 0);
@@ -651,6 +651,7 @@ export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat =
   const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: capped ? 0 : convection.released, buoyancy: flux, ...options }, boundaryKappa, scratch);
   interiorMixing({ h, T, S, u, v, shear, K, ...options }, interiorKappa, interiorNu, scratch);
   for (let k = 0; k < K; k++) { kappa[k] = boundaryKappa[k] + interiorKappa[k]; nu[k] = boundaryKappa[k] + interiorNu[k]; }
+  if (isoneutral) for (let k = 0; k < isoneutral.length; k++) kappa[k] += isoneutral[k];
   if (anyMixing(kappa, K)) solveLayers(h, K, kappa, dt, scratch.gain, T, T, S, S);
   return { depth: layer.depth, energy: layer.energy, work: layer.work, released: convection.released, convectiveDepth: convection.depth };
 }

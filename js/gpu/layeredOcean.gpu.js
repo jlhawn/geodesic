@@ -2,7 +2,7 @@ import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReductio
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare, INTERIOR_SHEARS, LMD94_RICHARDSON } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -59,7 +59,7 @@ export const OCEAN_DEFAULTS = {
   gustiness: 3,
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   backgroundLatitude: 'uniform', equatorialDiffusivity: 1e-6,
-  tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, shearDiffusivityResolution: false, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
+  tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, shearDiffusivityResolution: false, isoneutralDiffusion: false, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
   edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 20,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
@@ -647,8 +647,8 @@ ${blWork}      if (phase == 0 || phase == 5) { if (excess <= 0.0) { break; } fb 
   {
     var wPrev = 0.0; var gPrev = 0.0; var rT = 0.0; var rS = 0.0;
     for (var k = 0; k < L; k++) {
-      let hk = CH[k]; let boundary = select(0.0, CK[k], k < NL); let kap = CIK[k] + boundary;
-      CIK[k] = kap; OD[O_VISC + k * C + i] = CINU[k] + boundary;
+      let hk = CH[k]; let boundary = select(0.0, CK[k], k < NL); let kap = CIK[k] + boundary${o.iso ? ' + isoKappaAt(k, i)' : ''};
+      CIK[k] = kap;${o.iso ? ' if (kap > 0.0) { mixing = true; }' : ''} OD[O_VISC + k * C + i] = CINU[k] + boundary;
       let w = select(0.0, dt * kap / max(0.5 * (hk + CH[min(k + 1, L - 1)]), DZFLOOR), k < L - 1);
       let m = hk + wPrev + w + wPrev * gPrev; let g = -w / m;
       rT = (hk * CT[k] + wPrev * rT) / m; rS = (hk * CS[k] + wPrev * rS) / m;
@@ -706,7 +706,7 @@ ${kept ? keepFlow(stateThickness, 'keptBefore') : ''}  }
 }
 
 function oceanKernels(o) {
-  const { L, C, E, V, OS, OD, B } = o, third = o.tracerAdvection === 'third', shearOn = o.shearDiffusivity > 0, lateralOn = o.lateralDiffusionSpeed > 0, shear = shearOn || lateralOn;
+  const { L, C, E, V, OS, OD, B } = o, third = o.tracerAdvection === 'third', shearOn = o.shearDiffusivity > 0, lateralOn = o.lateralDiffusionSpeed > 0, shear = shearOn || lateralOn, iso = shear ? o.iso : null;
   if (L > 64) throw new Error(`oMomentum marks an edge's thick classes in 64 bits, and the ocean has ${L} classes`);
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const jerlov = JERLOV[o.penetration ?? 'IB'];
@@ -768,6 +768,30 @@ fn uOff(k: i32) -> i32 { return OU + k * E; }
 fn qOff(k: i32) -> i32 { return OQ + k * C; }
 fn wOff(k: i32) -> i32 { return OW + k * C; }
 ${shear ? `${constLine('SHEARDIFF', shearOn ? o.shearDiffusivity : 0)} ${constLine('SHEARCAP', o.shearDiffusivityCap)} ${constLine('LATSPEED', lateralOn ? o.lateralDiffusionSpeed : 0)} const FIXEDL: i32 = ${shearOn ? o.table.fixed : 0};
+` : ''}${iso ? `const ISOFIXED: i32 = ${o.table.fixed}; ${constLine('ISOCAP', iso.slopeCap)}
+fn isoValue(c: i32, l: i32) -> vec2<f32> {
+  let hv = IN[hOff(l) + c];
+  return select(vec2<f32>(LABEL_T[l] - TREF, LABEL_S[l] - SREF), vec2<f32>(IN[qOff(l) + c] / hv, IN[wOff(l) + c] / hv), hv > 1e-6);
+}
+fn isoTriad(c: i32, l: i32, m: i32, along: vec2<f32>, dc: f32) -> vec4<f32> {
+  if (m < 1 || m >= L) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+  let hu = IN[hOff(m - 1) + c]; let hl = IN[hOff(m) + c];
+  if (!(hu > THINEDGE && hl > THINEDGE)) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+  let up = isoValue(c, m - 1); let down = isoValue(c, m); let here = isoValue(c, l);
+  let alpha = alphaT(here.x + TREF, here.y + SREF); let beta = betaS(here.x + TREF, here.y + SREF); let dz = 0.5 * (hu + hl);
+  let rx = (beta * along.y - alpha * along.x) / dc; let rz = (beta * (up.y - down.y) - alpha * (up.x - down.x)) / dz;
+  let den = max(-rz * ISOCAP, abs(rx));
+  var slope = select(0.0, rx * ISOCAP / den, den > 0.0);${iso.boundaryTaper ? `
+  var z = 0.0;
+  for (var j = 0; j < m; j++) { z += IN[hOff(j) + c]; }
+  let layer = OD[O_BLD + c];
+  if (layer > z) { slope *= z / layer; }` : ''}
+  return vec4<f32>(slope, (up.x - down.x) / dz, (up.y - down.y) / dz, dz);
+}
+fn isoKappaAt(k: i32, i: i32) -> f32 {
+  if (k >= ISOFIXED) { return 0.0; }
+  return OD[O_ISOK + k * C + i];
+}
 ` : ''}${third ? `fn limitedValue(u: f32, d: f32, uu: f32, ratio: f32) -> f32 {
   let central = d - u;
   if (central == 0.0) { return u; }
@@ -861,11 +885,11 @@ fn restratShape(s: f32) -> f32 { let x = 2.0 * s + 1.0; let x2 = x * x; return m
   var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
   for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
   var weighted = OD[O_LOAD + i] + OD[O_DRAFT + i] * eosA(OD[O_LOADT + i], OD[O_LOADS + i]);
-  for (var k = 0; k < L; k++) {
+${iso ? '  var carryQ = 0.0; var carryW = 0.0; var carry33 = 0.0; var heldQ = 0.0; var heldW = 0.0;\n' : ''}  for (var k = 0; k < L; k++) {
     let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k] - SREF, IN[wOff(k) + i] / hv, hv > 1e-6);
     let r = select(RHOA[k], eosA(IN[qOff(k) + i] / hv, IN[wOff(k) + i] / hv), hv > 1e-6);
     let n = k * C + i; OD[O_PR + 2 * n] = weighted; OD[O_PR + 2 * n + 1] = r; weighted += r * hv;
-    var divH = 0.0; var divQ = 0.0; var divW = 0.0; var difQ = 0.0; var difW = 0.0;
+    var divH = 0.0; var divQ = 0.0; var divW = 0.0; var difQ = 0.0; var difW = 0.0;${iso ? ' var upQ = 0.0; var upW = 0.0; var up33 = 0.0; var downQ = 0.0; var downW = 0.0; var down33 = 0.0;' : ''}
     for (var m = 0; m < MAXE; m++) {
       let e = edges[m]; let j = nbrs[m];
       let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
@@ -879,7 +903,18 @@ fn restratShape(s: f32) -> f32 { let x = 2.0 * s + 1.0; let x2 = x * x; return m
           kappa += min(SHEARCAP, SHEARDIFF * abs(zeta) * dc * dc)${o.shearDiffusivityResolution ? ' * OD[O_SHRES + e]' : ''};
         }
         let wd = kappa * OD[O_HEDGE + k * E + e] / dc * MF[F_DV + e];
-        difQ += wd * (Tj - Ti); difW += wd * (Sj - Si);
+        ${iso ? `if (k < ISOFIXED) {
+          let own = i == MI[COE + 2 * e]; let ca = select(j, i, own); let cb = select(i, j, own);
+          let along = vec2<f32>(select(Ti, Tj, own) - select(Tj, Ti, own), select(Si, Sj, own) - select(Sj, Si, own));
+          let t1 = isoTriad(ca, k, k, along, dc); let t2 = isoTriad(ca, k, k + 1, along, dc); let t3 = isoTriad(cb, k, k, along, dc); let t4 = isoTriad(cb, k, k + 1, along, dc);
+          let turnT = 0.25 * dc * (((t1.x * t1.y + t2.x * t2.y) + t3.x * t3.y) + t4.x * t4.y);
+          let turnS = 0.25 * dc * (((t1.x * t1.z + t2.x * t2.z) + t3.x * t3.z) + t4.x * t4.z);
+          let sense = select(-1.0, 1.0, own);
+          difQ += sense * wd * (along.x + turnT); difW += sense * wd * (along.y + turnS);
+          let top = select(t3, t1, own); let bottom = select(t4, t2, own); let weight = 0.25 * kappa * OD[O_HEDGE + k * E + e] * MF[F_DV + e];
+          upQ -= weight * top.x * along.x / top.w; upW -= weight * top.x * along.y / top.w; up33 += weight * dc * top.x * top.x / top.w;
+          downQ -= weight * bottom.x * along.x / bottom.w; downW -= weight * bottom.x * along.y / bottom.w; down33 += weight * dc * bottom.x * bottom.x / bottom.w;
+        } else { difQ += wd * (Tj - Ti); difW += wd * (Sj - Si); }` : 'difQ += wd * (Tj - Ti); difW += wd * (Sj - Si);'}
       }` : ''}
       var Te = select(Tj, Ti, f > 0.0); var Se = select(Sj, Si, f > 0.0);
       ${third ? `if (f != 0.0) {
@@ -895,7 +930,14 @@ fn restratShape(s: f32) -> f32 { let x = 2.0 * s + 1.0; let x2 = x * x; return m
     var dh = -divH / area; var dQ = -divQ / area; var dW = -divW / area;
     ${shear ? 'dQ += difQ / area; dW += difW / area;' : ''}
     if (OD[O_CMASK + i] < 0.5) { dh = 0.0; dQ = 0.0; dW = 0.0; }
-    OUT[hOff(k) + i] = dh; OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW;
+    ${iso ? `if (k <= ISOFIXED) {
+      let topQ = (carryQ + upQ) / area; let topW = (carryW + upW) / area;
+      dQ -= topQ; dW -= topW;
+      if (k > 0) { OUT[qOff(k - 1) + i] = heldQ + topQ; OUT[wOff(k - 1) + i] = heldW + topW; OD[O_ISOK + (k - 1) * C + i] = (carry33 + up33) / area; }
+      carryQ = downQ; carryW = downW; carry33 = down33; heldQ = dQ; heldW = dW;
+    }
+    OUT[hOff(k) + i] = dh;
+    if (k >= ISOFIXED) { OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW; }` : 'OUT[hOff(k) + i] = dh; OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW;'}
   }
 }`,
     oVertexVort: `${K}  let v = ${idx}; if (v >= V) { return; }
@@ -1294,7 +1336,7 @@ ${o.lakes ? LAKE_DRAIN_WGSL : ''}    }
   }
   OD[O_RAINSEEN + i] = rain;
 }`,
-    ...hybridKernels(o, K, idx),
+    ...hybridKernels({ ...o, iso }, K, idx),
     ...(o.drift ? iceDriftKernels({ K, idx, options: o.drift.options, third }) : {}),
   };
 }
@@ -1387,6 +1429,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   if (!(o.equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${o.equatorialDiffusivity}`);
   const backgroundKappa = o.backgroundLatitude === 'uniform' ? null : backgroundDiffusivities(mesh, o.backgroundLatitude, o.backgroundDiffusivity, o.equatorialDiffusivity);
   const shearResolve = shearResolutionOptions(o.shearDiffusivityResolution), shearScale = shearResolve ? shearResolution(mesh, shearResolve) : null;
+  const iso = isoneutralOptions(o.isoneutralDiffusion);
   let minSpacing = Infinity;
   for (let e = 0; e < E; e++) minSpacing = Math.min(minSpacing, mesh.dcEdge[e]);
   const geography = o.geography || null, { water, cellOcean, shelf, cellOpen, draft } = oceanCells(C, geography);
@@ -1455,6 +1498,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
     ...(restrat ? [sec('MLED', 'cell'), sec('MLEH', 'cell'), sec('MLEB', 'cell'), sec('MLEU', 'cell'), sec('MLESCALE', 'edge')] : []),
     ...(backgroundKappa ? [sec('BACKK', 'cell')] : []),
     ...(shearScale ? [sec('SHRES', 'edge')] : []),
+    ...(iso ? [sec('ISOK', 'cell', table.fixed)] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1468,7 +1512,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const implicitStress = !!core.physics && core.physics.surfaceExchange === 'roughness' && !!core.physics.implicitDrag;
   const iceThermo = { skinHeatCapacity: core.physics?.skinHeatCapacity ?? 2e5, iceDensity: core.physics?.iceDensity ?? 917, latentHeatFusion: core.physics?.latentHeatFusion ?? 3.34e5, freshSnowAlbedo: core.physics?.freshSnowAlbedo ?? SNOW_AGEING.freshSnowAlbedo };
   const driftPlan = driftOptions ? { options: driftOptions, waterDensity: o.density, thermo: iceThermo, minimumConcentration: MINIMUM_CONCENTRATION, removal: seaIceRemoval(!!core.physics?.keepSmallIce), remnant: ICE_REMNANT, freezing: FREEZING_POINT, implicitStress, given } : null;
-  const kernels = oceanKernels({ ...o, restrat, table, L, C: nC, E: nE, V: nV, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined });
+  const kernels = oceanKernels({ ...o, restrat, iso, table, L, C: nC, E: nE, V: nV, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined });
   const reduced = HYBRID_REDUCED;
   const OF = seq([['SST', nC], ['SSS', nC], ['H1', nC], ['THD', nC], ['ETA', nC], ['CUR', 3 * nC], ['CSPD', nC], ['UPW', nC], ['PART', reduced.length * reductionGroups(nC)]]);
   kernels.oFrame = `${HYBRID_THERMOCLINE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {

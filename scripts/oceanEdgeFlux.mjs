@@ -12,12 +12,14 @@
  * with ζ the mean of the edge's two vertex vorticities, scaled by
  * shearResolution's factor under shearDiffusivityResolution. Volumes are m³/s
  * and heats K·m³/s from cell a = cellsOnEdge[2e] toward cell b, T in kelvin
- * as given.
+ * as given. It refuses isoneutralDiffusion, whose triads need the salinity
+ * and the boundary-layer depths a state here does not carry.
  */
 import { curl } from '../js/dynamics/operators.module.js';
 import { beyondCells, limitedEdgeValue, EPS, shearResolutionOptions, shearResolution } from '../js/ocean/layered.module.js';
 
 export function edgeLayerFluxes(mesh, { layers: L, fixed, options, cellOcean, depth, sill = null }) {
+  if (options.isoneutralDiffusion) throw new Error('edgeLayerFluxes splits the horizontal diffusion only; isoneutralDiffusion needs the salinity and boundary-layer depths it does not read');
   const { nCells: C, nEdges: E, nVertices: V, cellsOnEdge, dcEdge, dvEdge, verticesOnEdge } = mesh;
   const beyond = options.tracerAdvection === 'third' ? beyondCells(mesh) : null;
   const lateral = options.lateralDiffusionSpeed ?? 0, shear = options.shearDiffusivity ?? 0, cap = options.shearDiffusivityCap ?? Infinity;
