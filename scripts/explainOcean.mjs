@@ -129,7 +129,6 @@ if (resumed) {
   model.load({ ocean: false });
   model.ocean.load(resumed.ocean, surfaceT, ice);
   if (resumed.eddyV && resumed.eddyV.length === L * E) ocean.putSection('EDDYV', resumed.eddyV);
-  if (resumed.eddyQ && resumed.eddyQ.length === L * E) ocean.putSection('EDDYQ', resumed.eddyQ);
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOW, Float32Array.from(resumed.seaSnow));
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOWALB, Float32Array.from(resumed.seaSnowAlbedo));
   const loaded = await model.ocean.serialize({ restart: true }), differing = [];
@@ -186,15 +185,13 @@ const edgeFluxes = edgeLayerFluxes(mesh, { layers: L, fixed: FIXED, options: oce
 const edgeOut = { volume: new Float64Array(L), net: new Float64Array(L), heat: new Float64Array(L), diffusion: new Float64Array(L), donor: new Int32Array(L) };
 
 async function oceanSnapshot() {
-  const [o, eddy, eddyHeat, [iceNow, skin], [concentration]] = await Promise.all([
+  const [o, eddy, [iceNow, skin], [concentration]] = await Promise.all([
     ocean.download(),
     ocean.readSection('EDDYV'),
-    ocean.readSection('EDDYQ'),
     readRanges(device, gpu.buffers.S, [{ offset: SL.ICE, length: C }, { offset: SL.TS, length: C }]),
     readRanges(device, gpu.buffers.PH, [{ offset: PH.CONC, length: C }]),
   ]);
-  const eddies = ocean.options.eddyDiffusivity > 0;
-  return { ...o, eddy: eddies ? Float64Array.from(eddy) : new Float64Array(L * E), eddyHeat: eddies ? Float64Array.from(eddyHeat) : new Float64Array(L * E), ice: Float64Array.from(iceNow), surfaceT: Float64Array.from(skin), concentration: Float64Array.from(concentration) };
+  return { ...o, eddy: ocean.options.eddyDiffusivity > 0 ? Float64Array.from(eddy) : new Float64Array(L * E), ice: Float64Array.from(iceNow), surfaceT: Float64Array.from(skin), concentration: Float64Array.from(concentration) };
 }
 const coverOf = (iceH, concentration) => (iceH > 0 ? (concentration > 0 ? concentration : 1) : 0);
 
@@ -272,7 +269,7 @@ const overturningSums = () => ({ ...Object.fromEntries(['mass', 'heat', 'northMa
 const zonalOcean = MONTHS.map(zonalSums), sections = MONTHS.map(sectionSums), overturning = MONTHS.map(overturningSums);
 const layerEast = new Float64Array(L * C), layerNorth = new Float64Array(L * C), vec = new Float64Array(3 * C);
 function accumulateOcean(snap, m) {
-  const { h, u: velocity, T, S, eta, eddy, eddyHeat } = snap, z = zonalOcean[m], sec = sections[m], ov = overturning[m];
+  const { h, u: velocity, T, S, eta, eddy } = snap, z = zonalOcean[m], sec = sections[m], ov = overturning[m];
   for (let k = 0; k < L; k++) {
     cellVector(mesh, velocity.subarray(k * E, (k + 1) * E), vec);
     for (let i = 0; i < C; i++) { layerEast[k * C + i] = project(vec, i, eastUnit); layerNorth[k * C + i] = project(vec, i, northUnit); }
@@ -295,14 +292,14 @@ function accumulateOcean(snap, m) {
   edgeFluxes.load({ h, u: velocity, T, eta });
   CAPS.forEach((_, c) => {
     for (const [e, sign] of capEdges[c]) {
-      const out = edgeFluxes.edge(e, edgeOut);
+      const a = cellsOnEdge[2 * e], bb = cellsOnEdge[2 * e + 1], out = edgeFluxes.edge(e, edgeOut);
       for (let k = 0; k < L; k++) {
         const at = c * L + k, flux = sign * out.volume[k], carried = rhoCp * sign * (out.heat[k] - CELSIUS * out.volume[k]);
         ov.net[c] += sign * out.net[k];
         ov.mass[at] += flux; ov.heat[at] += carried; ov.diffusionHeat[at] += rhoCp * sign * out.diffusion[k];
         if (flux > 0) { ov.northMass[at] += flux; ov.northHeat[at] += carried; } else { ov.southMass[at] += flux; ov.southHeat[at] += carried; }
         const f = eddy ? eddy[k * E + e] : 0;
-        if (f !== 0) { ov.eddyMass[at] += sign * f; ov.eddyHeat[at] += rhoCp * sign * (eddyHeat[k * E + e] - CELSIUS * f); }
+        if (f !== 0) { const from = f > 0 ? a : bb; ov.eddyMass[at] += sign * f; ov.eddyHeat[at] += rhoCp * sign * f * (T[k * C + from] - CELSIUS); }
       }
     }
   });
@@ -341,7 +338,7 @@ const run = resumed ? JSON.parse(resumed.runJson) : { toa: 0, surface: 0, snow: 
 const initial = await model.beginFrame({ fields: ['cloud'], diagnostics: true });
 await model.sync();
 let snap = await oceanSnapshot(), [snow, oceanFlux, pending] = await readRanges(device, gpu.buffers.PH, [{ offset: PH.SNOW, length: C }, { offset: PH.OFLUX, length: C }, { offset: PH.PEN, length: C }]);
-if (resumed && !(resumed.eddyV && resumed.eddyV.length === L * E && resumed.eddyQ && resumed.eddyQ.length === L * E)) snap.eddy = null;
+if (resumed && !(resumed.eddyV && resumed.eddyV.length === L * E)) snap.eddy = null;
 storeCells(snap, snow, oceanFlux, pending);
 let totals = totalsNow(), previous = totals, resumeCheck = null;
 if (resumed) {
@@ -351,7 +348,7 @@ if (resumed) {
   resumeCheck = {
     forced: !engineMatches || !saved, sameEngine: engineMatches, sameScript: scriptMatches,
     stores: relative && Object.fromEntries(STORES.map((name) => [name, +relative[name].toPrecision(3)])), tolerance: FLOAT32_TOLERANCE,
-    oceanArrays: `${restartNames.join(', ')} read back equal to the saved float32 values`, eddyV: !!(resumed.eddyV && resumed.eddyV.length === L * E), eddyQ: !!(resumed.eddyQ && resumed.eddyQ.length === L * E),
+    oceanArrays: `${restartNames.join(', ')} read back equal to the saved float32 values`, eddyV: !!(resumed.eddyV && resumed.eddyV.length === L * E),
   };
   if (saved) {
     const off = STORES.filter((name) => !(relative[name] <= FLOAT32_TOLERANCE));
@@ -416,7 +413,7 @@ async function saveCheckpoint(path, cloud) {
   const bytes = encodeState({
     kind: 'explainOcean', N, ...gridHeader(mesh), K, day: Math.round((model.time - runStartTime) / DAY), time: model.time, terrain: false, levels: core.levels,
     runStartTime, optionsJson: JSON.stringify({ ocean: OCEAN, ice: ICE }), segmentsJson: JSON.stringify(segments.map((s, n) => (n === segments.length - 1 ? { ...s, toTime: model.time } : s))), runJson: JSON.stringify(run), recentCount: kept.length,
-    engineJson: JSON.stringify(engine), totalsJson: JSON.stringify(totals), countsJson: JSON.stringify({ spinup: spinup.counts }), eddyV: snap.eddy ? Float32Array.from(snap.eddy) : new Float32Array(0), eddyQ: snap.eddy ? Float32Array.from(snap.eddyHeat) : new Float32Array(0), cloud: Float32Array.from(cloud),
+    engineJson: JSON.stringify(engine), totalsJson: JSON.stringify(totals), countsJson: JSON.stringify({ spinup: spinup.counts }), eddyV: snap.eddy ? Float32Array.from(snap.eddy) : new Float32Array(0), cloud: Float32Array.from(cloud),
     pi, theta, u, surfaceT, q, qc, ice, concentration: seaIce.concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate,
     convectiveRain: m.convectiveRain, largeScaleRain: m.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo,
     meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux,
