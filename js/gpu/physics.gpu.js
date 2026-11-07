@@ -235,6 +235,7 @@ export function physicsConstants(o) {
   if (o.convectionType !== 'testParcel' && o.convectionType !== 'cloudDepth' && o.convectionType !== 'top') throw new Error(`convectionType must be 'testParcel', 'cloudDepth' or 'top', not ${o.convectionType}`);
   if (typeof o.convectionRetype !== 'boolean') throw new Error(`convectionRetype must be true or false, not ${o.convectionRetype}`);
   if (typeof o.midLevelConvection !== 'boolean') throw new Error(`midLevelConvection must be true or false, not ${o.midLevelConvection}`);
+  if (typeof o.shallowRetype !== 'boolean') throw new Error(`shallowRetype must be true or false, not ${o.shallowRetype}`);
   if (o.stratusIndex !== 'eis' && o.stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${o.stratusIndex}`);
   if (!((o.countergradient ?? 0) >= 0)) throw new Error(`countergradient must be 0 or more, not ${o.countergradient}`);
   if (!['capped', 'holtslagBoville'].includes(o.velocityScale ?? 'holtslagBoville')) throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${o.velocityScale}`);
@@ -2778,6 +2779,82 @@ export const rainEvaporationOptions = (body) => RAIN_SHARE_WGSL + replaceOnce(RA
 const PLUME_RETYPE = [[`  if (!cloudy || top < 1 || !(PL_PARCEL ||`, `  if (PL_RETYPE && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }
   if (!cloudy || top < 1 || !(PL_PARCEL ||`]];
 export const plumeRetype = (body) => replaceOnce(PLUME_RETYPE, body, 'retype');
+const SHALLOW_DEPTH_WGSL = `fn shallowCloudDepth(i: i32, pi: f32) -> f32 {
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0) * select(1.0, 0.0, SC_SWITCH && cloudBaseFound(i, pi) && stratocumulusTopped(i, pi));
+  if (!(open > 0.0) || !(PH[PH_BUOY + i] > 0.0)) { return 0.0; }
+  let bottom = K - 1;
+  let depth = PH[PH_DEPTH + i];
+  var mass = 0.0; var energy = 0.0; var water = 0.0; var source = bottom;
+  for (var k = bottom; k >= 0; k--) {
+    let pk = layerP(pi, k);
+    if (k < bottom && ((!(upperInterface(i, k + 1) < depth) && !(pk >= pi - CU_SOURCE)) || !(pk > SHALLOW_TOP))) { break; }
+    let dpk = layerDp(pi, k); let env = plumeEnv(i, k);
+    mass += dpk; energy += dpk * env.x; water += dpk * env.y; source = k;
+  }
+  var sourceS = energy / mass; var sourceQ = water / mass;
+  if (CU_LOWEST) { let env = plumeEnv(i, bottom); sourceS = env.x; sourceQ = env.y; }
+  if (!(sourceQ > 0.0)) { return 0.0; }
+  let lcl = condensationLevel((sourceS - GRAV * plumeZ(i, bottom)) / CP, sourceQ, layerP(pi, bottom));
+  if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
+  var s = sourceS; var w = sourceQ; var cloudy = false; var guess = 0.0; var w2 = PL_W0 * PL_W0; var share = 1.0; var reached = 1;
+  let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
+  for (var k = source - 1; k >= 1; k--) {
+    let pk = layerP(pi, k);
+    let below = upperInterface(i, k + 1); let above = upperInterface(i, k);
+    let mixes = pi * LV[L_SL + k] <= lcl.y;
+    let zk = plumeZ(i, k); let env = plumeEnv(i, k);
+    let epsilon = select(0.0, select(CU_EPS, CU_EPS_Z / max(zk - ground, 1.0), CU_BY_Z), mixes);
+    let half = exp(-epsilon * (zk - below));
+    let midS = env.x + (s - env.x) * half; let midQ = env.y + (w - env.y) * half;
+    let mid = plumeState(midS, midQ, zk, pk, guess);
+    guess = mid.x;
+    let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
+    let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - plumeT(i, k) * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * layerDp(pi, k) / pk;
+    if (mid.y > 0.0) { cloudy = true; }
+    if (cloudy) {
+      if (!(work > 0.0)) {
+        if (CU_KINETIC) {
+          if (!(work < 0.0)) { share = 1.0; }
+          else if (!(w2 > 0.0)) { share = 0.0; }
+          else {
+            let layer = above - below; let mixing = PL_DRAG * epsilon;
+            let lift = -PL_ACC * work / layer; let y = mixing * w2 / lift;
+            let reach = select(w2 / (2.0 * lift), select(y * (1.0 - 0.5 * y), log(1.0 + y), y > 1e-3) / (2.0 * mixing), mixing > 0.0);
+            share = min(1.0, reach / layer);
+          }
+        }
+        if (!(CU_CARRY && share >= 1.0)) { reached = k + 1; break; }
+      }
+      if (CU_KINETIC) {
+        let x = 2.0 * PL_DRAG * epsilon * (above - below);
+        w2 = w2 * exp(-x) + 2.0 * PL_ACC * work * select(1.0, relaxedFraction(x) / x, x > 0.0);
+      }
+    }
+    let full = exp(-epsilon * (above - below));
+    s = env.x + (s - env.x) * full; w = env.y + (w - env.y) * full;
+    if (CU_RAIN) {
+      if (PL_MIXED) {
+        let at = frozenState(s, w, above, pi * LV[L_SU + k], guess);
+        let excess = at.y - CU_RAIN_Q;
+        if (excess > 0.0) { w -= excess; s += LHEAT * excess; s += LFUSION * (excess * at.z / at.y); }
+      } else {
+        let liquidAt = plumeState(s, w, above, pi * LV[L_SU + k], guess);
+        let liquidExcess = liquidAt.y - CU_RAIN_Q;
+        if (liquidExcess > 0.0) { w -= liquidExcess; s += LHEAT * liquidExcess; }
+      }
+    }
+  }
+  if (!cloudy) { return 0.0; }
+  var base = source;
+  while (base > 1 && !(pi * LV[L_SU + base] <= lcl.y)) { base--; }
+  return pi * (LV[L_SU + base] - LV[L_SU + reached]);
+}
+`;
+const SHALLOW_RETYPE = [['  if (!typed) { return cumulusColumn(i, pi, dt); }\n', `  var deepened = false;
+  if (!typed && lcl.y > pi * LV[L_SL + 0] && shallowCloudDepth(i, pi) > DEEP_DEPTH) { typed = true; deepened = true; }
+  if (!typed) { return cumulusColumn(i, pi, dt); }
+`]];
+export const shallowPlumeRetype = (body) => SHALLOW_DEPTH_WGSL + replaceOnce(SHALLOW_RETYPE, body, 'shallow re-typing').replace('top >= 1 && !(pi * (LV[L_SU + base]', 'top >= 1 && !deepened && !(pi * (LV[L_SU + base]');
 export function midLevelPlume(body) {
   const text = replaceOnce(MID_LEVEL_PLUME, body, 'mid-level');
   return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)};\n` + text.replace(RETYPE_TEST, 'if (PL_RETYPE && !middle && cloudy && top >= 1');

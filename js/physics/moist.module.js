@@ -358,7 +358,13 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * base interface to the last interface it reaches with w² > 0 (cuascn.F90's
  * KCTOP), is no deeper than DEEP_CLOUD_DEPTH, as the IFS's code re-types
  * after the ascent (cumastrn.F90; its documentation types by the test parcel
- * alone). With `midLevelConvection` (default false) a column that no
+ * alone). With `shallowRetype` (default false) a column the test parcel
+ * leaves shallow runs the deep plume after all where the shallow plume's
+ * own ascent, continued past `shallowTop` without tendencies, has a cloud
+ * deeper than DEEP_CLOUD_DEPTH from its base interface to the last
+ * interface it passes, the other half of that re-typing; `convectionRetype`
+ * does not re-type such a column back. With `midLevelConvection` (default
+ * false) a column that no
  * test parcel types deep and whose shallow plume does not rise tries the
  * mid-level type (IFS Cy41r2 Part IV §6.4.3): the lowest layer whose
  * midpoint lies within MID_LEVEL.height (10 km) of the ground, in
@@ -605,7 +611,7 @@ export const MOIST_DEFAULTS = {
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
-  plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', plumeDeparture: 'surface', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', pcapeMinimum: 0.05, pcapeMinimumOver: 'all', pcapeTimescale: 'surface', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: true, plumeConsumption: 'all', convectionRetype: false, midLevelConvection: false,
+  plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', plumeDeparture: 'surface', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', pcapeMinimum: 0.05, pcapeMinimumOver: 'all', pcapeTimescale: 'surface', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: true, plumeConsumption: 'all', convectionRetype: false, midLevelConvection: false, shallowRetype: false,
   condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
   liquidTemperature: LIQUID_TEMPERATURE, iceTemperature: ICE_TEMPERATURE, plumeTrace: false,
 };
@@ -619,7 +625,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     deckVeto, coupledVeto, stratocumulusInversion, evaporationInCloud, virtualBuoyancy,
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusAscent, cumulusEntrainmentHeight, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeDeparture, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
-    downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, pcapeMinimum, pcapeMinimumOver, pcapeTimescale, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption, convectionRetype, midLevelConvection,
+    downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, pcapeMinimum, pcapeMinimumOver, pcapeTimescale, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption, convectionRetype, midLevelConvection, shallowRetype,
     condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature, plumeTrace,
   } = { ...MOIST_DEFAULTS, ...options };
   if (condensation !== 'uniform' && condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${condensation}`);
@@ -651,6 +657,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const retyped = convectionRetype && byParcel;
   if (typeof midLevelConvection !== 'boolean') throw new Error(`midLevelConvection must be true or false, not ${midLevelConvection}`);
   const midLevel = midLevelConvection && byParcel;
+  if (typeof shallowRetype !== 'boolean') throw new Error(`shallowRetype must be true or false, not ${shallowRetype}`);
+  const deepening = shallowRetype && byParcel;
   if (plumeDeparture !== 'surface' && plumeDeparture !== 'elevated' && plumeDeparture !== 'elevatedStable') throw new Error(`plumeDeparture must be 'surface', 'elevated' or 'elevatedStable', not ${plumeDeparture}`);
   if (plumeDeparture !== 'surface' && !(byParcel && bechtold)) throw new Error(`plumeDeparture '${plumeDeparture}' needs convectionType 'testParcel' and capeClosure 'bechtold'`);
   const elevatedDeparture = plumeDeparture !== 'surface', stableDeparture = plumeDeparture === 'elevatedStable';
@@ -733,7 +741,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     t.fastStart[i] = parcelDeep(i, pi, q, qc, source, s, w, reference, start * start) ? 1 : 0;
     [deep.typeMargin, deep.parcelBase, deep.parcelTop, deep.parcelDeep] = kept; parcelStop = stop;
   }
-  const deep = { deep: false, midLevel: false, rooted: true, departure: -1, shallowRain: 0, shallowSnow: 0, top: -1, base: K, cape: 0, consumption: 0, inhibition: 0, start: -1, baseFlux: 0, downdraft: 0, pcape: 0, pcapeBoundary: 0, consumptionP: 0, tau: 0, speed: 0, depth: 0, boundaryWind: 0, boundaryTime: 0, excessT: 0, excessQ: 0, sourceS: 0, sourceQ: 0, sourceMass: 0, parcelDeep: false, parcelBase: 0, parcelTop: 0, conversionMargin: Infinity, typeMargin: Infinity };
+  const deep = { deep: false, midLevel: false, deepened: false, shallowDepth: 0, rooted: true, departure: -1, shallowRain: 0, shallowSnow: 0, top: -1, base: K, cape: 0, consumption: 0, inhibition: 0, start: -1, baseFlux: 0, downdraft: 0, pcape: 0, pcapeBoundary: 0, consumptionP: 0, tau: 0, speed: 0, depth: 0, boundaryWind: 0, boundaryTime: 0, excessT: 0, excessQ: 0, sourceS: 0, sourceQ: 0, sourceMass: 0, parcelDeep: false, parcelBase: 0, parcelTop: 0, conversionMargin: Infinity, typeMargin: Infinity };
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > shallowTop) cumulusK0--;
   const cumulus = { top: -1, source: K - 1, inhibition: 0, lclPressure: 0, velocity: 0, baseFlux: 0, snow: 0 };
@@ -1167,6 +1175,54 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   /*
+   * cumulusColumn's ascent without its ceiling at shallowTop and without
+   * tendencies: the depth of its cloud from the base interface to the last
+   * interface the plume passes, or 0 where cumulusColumn would not ascend.
+   */
+  function shallowCloudDepth(i, pi, theta, q, qc) {
+    const bottom = K - 1;
+    const topped = capped && cloudBaseFound(i, pi, theta, q) && stratocumulusTopped(i, pi, theta, q);
+    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1) * (topped ? 0 : 1);
+    if (!(open > 0) || !(surfaceBuoyancy && surfaceBuoyancy[i] > 0) || !boundaryDepth) return 0;
+    fillEnvironment(i, pi, theta, q, qc);
+    const { source, sourceS, sourceQ } = sourceLayers(i, pi, cumulusSource === 'lowest');
+    const lcl = liftingCondensationLevel((sourceS - g * z[bottom]) / cp, sourceQ, p[bottom], kappa);
+    if (!lcl || !(lcl.pressure > shallowTop)) return 0;
+    const virtual = virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = virtualBuoyancy ? 1 : 0;
+    const surface = byHeight ? (geopotential[bottom * C + i] - cp * thetaV[bottom * C + i] * (exnerLower[bottom * C + i] - exnerLayer[bottom * C + i])) / g : 0;
+    let s = sourceS, w = sourceQ, cloudy = false, guess = 0, w2 = plumeVelocity * plumeVelocity, share = 1, reached = 1;
+    for (let k = source - 1; k >= 1; k--) {
+      const below = upperInterface(i, k + 1), above = upperInterface(i, k);
+      const mixes = pi[i] * levels[k + 1] <= lcl.pressure, epsilon = mixes ? (byHeight ? cumulusEntrainmentHeight / Math.max(z[k] - surface, 1) : cumulusEntrainment) : 0;
+      const half = Math.exp(-epsilon * (z[k] - below));
+      const midS = envS[k] + (s - envS[k]) * half, midQ = envQ[k] + (w - envQ[k]) * half;
+      plumeState(midS, midQ, z[k], p[k], guess);
+      guess = plume.T;
+      const air = Math.max(0, q[k * C + i]), cloud = qc ? Math.max(0, qc[k * C + i]) : 0;
+      const work = R * (plume.T * (1 + virtual * (midQ - plume.liquid) - loading * plume.liquid) - T[k] * (1 + virtual * air - loading * cloud)) * dp[k] / p[k];
+      if (plume.liquid > 0) cloudy = true;
+      if (cloudy) {
+        if (!(work > 0)) {
+          if (kineticOvershoot) share = overshootShare(w2, work, above - below, plumeDrag * epsilon);
+          if (!(carriedAscent && share >= 1)) { reached = k + 1; break; }
+        }
+        if (kineticOvershoot) w2 = plumeKinetic(w2, work, above - below, plumeDrag * epsilon);
+      }
+      const full = Math.exp(-epsilon * (above - below));
+      s = envS[k] + (s - envS[k]) * full; w = envQ[k] + (w - envQ[k]) * full;
+      if (cumulusRain !== null) {
+        plumeState(s, w, above, pi[i] * levels[k], guess);
+        const excess = plume.liquid - cumulusRain;
+        if (excess > 0) { w -= excess; s += latentHeat * excess; if (mixedPlume) { const frozen = excess * plume.ice / plume.liquid; s += FUSION_HEAT * frozen; } }
+      }
+    }
+    if (!cloudy) return 0;
+    let base = source;
+    while (base > 1 && !(pi[i] * levels[base] <= lcl.pressure)) base--;
+    return pi[i] * (levels[base] - levels[reached]);
+  }
+
+  /*
    * plumeColumn with the cumulus cloud's memory over cumulusMemory (see the
    * header): the cover and the path cover × water relax toward the plume's.
    */
@@ -1259,7 +1315,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (mixedPlume) { convectiveFrozen.fill(0); convectiveMelted.fill(0); }
     deep.deep = false; deep.top = -1; deep.cape = 0; deep.consumption = 0; deep.start = -1; deep.downdraft = 0; deep.baseFlux = 0; deep.inhibition = 0; deep.shallowRain = 0; deep.shallowSnow = 0;
     deep.pcape = 0; deep.pcapeBoundary = 0; deep.consumptionP = 0; deep.tau = 0; deep.speed = 0; deep.depth = 0; deep.boundaryWind = 0; deep.boundaryTime = 0; deep.excessT = 0; deep.excessQ = 0; deep.rooted = true; deep.departure = -1;
-    deep.parcelDeep = false; deep.midLevel = false; deep.parcelBase = 0; deep.parcelTop = 0; deep.conversionMargin = Infinity; deep.typeMargin = Infinity; cumulus.snow = 0; parcelStop = 0; lclPressure = 0;
+    deep.parcelDeep = false; deep.midLevel = false; deep.deepened = false; deep.shallowDepth = 0; deep.parcelBase = 0; deep.parcelTop = 0; deep.conversionMargin = Infinity; deep.typeMargin = Infinity; cumulus.snow = 0; parcelStop = 0; lclPressure = 0;
     if (plumeExits) plumeExits.capped[i] = 0;
     if (momentumLayers) {
       momentumSource[i] = K;
@@ -1307,8 +1363,13 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       deep.typeMargin = margin;
     }
-    let middle = false;
-    if (!typed) {
+    let middle = false, deepened = false;
+    if (!typed && deepening && lcl && lcl.pressure > pi[i] * levels[1]) {
+      deep.shallowDepth = shallowCloudDepth(i, pi, theta, q, qc);
+      if (deep.shallowDepth > 0) deep.typeMargin = Math.min(deep.typeMargin, Math.abs(deep.shallowDepth - DEEP_CLOUD_DEPTH) / DEEP_CLOUD_DEPTH);
+      deepened = deep.deepened = deep.shallowDepth > DEEP_CLOUD_DEPTH;
+    }
+    if (!typed && !deepened) {
       if (plumeExits) {
         traceExit(i, failure);
         const buoyancy = surfaceBuoyancy ? surfaceBuoyancy[i] : 0, convective = buoyancy > 0 ? Math.cbrt(buoyancy * Math.max(0, boundaryDepth[i] - z[bottom])) : 0;
@@ -1400,7 +1461,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       plumeS[k] = s; plumeQ[k] = w;
     }
     if (top === 0) top = 1;
-    if (retyped && !middle && cloudy && top >= 1) {
+    if (retyped && !middle && !deepened && cloudy && top >= 1) {
       const depth = pi[i] * (levels[base] - levels[top + 1]);
       deep.typeMargin = Math.min(deep.typeMargin, Math.abs(depth - DEEP_CLOUD_DEPTH) / DEEP_CLOUD_DEPTH);
       if (!(depth > DEEP_CLOUD_DEPTH)) { if (plumeExits) traceExit(i, 5, pi[i] * levels[top]); return cumulusColumn(i, pi, theta, q, qc, dt); }
