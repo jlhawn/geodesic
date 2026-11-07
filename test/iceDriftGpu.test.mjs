@@ -46,11 +46,12 @@ function windStress(mesh) {
  * the ocean initialized on the CPU and uploaded to the device with the ice in
  * the atmosphere's buffers.
  */
-async function scenario(drift, { global = false, velocity = null, stress = null, keep = iceDriftMoves(drift), ocean: options = {} } = {}) {
-  const gpuModel = await createGpuModel(new Grid(N), { topography, ice: { keepSmallIce: keep }, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false, ...options } });
+async function scenario(drift, { global = false, velocity = null, stress = null, keep = iceDriftMoves(drift), ocean: options = {}, brine = false } = {}) {
+  const light = brine ? { iceLight: true, brineReservoir: true } : {};
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ice: { keepSmallIce: keep, ...light }, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false, ...options } });
   const mesh = gpuModel.mesh, geography = gpuModel.geography, C = mesh.nCells, E = mesh.nEdges, gpu = gpuModel.gpu, ocean = gpuModel.oceanEngine;
   const cpu = createOcean(mesh, { geography, vertical: 'hybrid', everySteps: 1, iceDrift: drift, ...options });
-  const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity, keepSmallIce: keep });
+  const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity, keepSmallIce: keep, ...light });
   cpu.useSeaIce(seaIce.concentration, seaIce);
   const surfaceT = new Float64Array(C).fill(280), ice = new Float64Array(C);
   const centre = [Math.cos(-78 * DEG) * Math.cos(40 * DEG), Math.cos(-78 * DEG) * Math.sin(40 * DEG), Math.sin(-78 * DEG)];
@@ -64,6 +65,7 @@ async function scenario(drift, { global = false, velocity = null, stress = null,
   cpu.initialize(surfaceT, ice, { concentration: seaIce.concentration });
   for (let i = 0; i < C; i++) if (cpu.cellOcean[i] && !(ice[i] > 0)) surfaceT[i] = cpu.T0[i];
   seaIce.snowAlbedo.fill(0.85);
+  if (brine) for (let i = 0; i < C; i++) seaIce.brine[i] = ice[i] > 0 ? 4e6 * (1 + Math.sin(3 * mesh.lonCell[i])) : 0;
   if (velocity) cpu.iceDrift.velocity.set(velocity);
   const wind = stress ?? new Float64Array(E);
   const volume = Float64Array.from(ice, (h, i) => h * seaIce.concentration[i]);
@@ -72,6 +74,7 @@ async function scenario(drift, { global = false, velocity = null, stress = null,
   const write = (buffer, offset, values) => gpu.device.queue.writeBuffer(buffer, 4 * offset, Float32Array.from(values));
   write(gpu.buffers.S, gpu.layout.S.ICE, ice);
   write(gpu.buffers.PH, gpu.layout.PH.CONC, seaIce.concentration); write(gpu.buffers.PH, gpu.layout.PH.SNOW, seaIce.snow); write(gpu.buffers.PH, gpu.layout.PH.SNOWALB, seaIce.snowAlbedo);
+  if (brine) write(gpu.buffers.PH, gpu.layout.PH.BRINE, seaIce.brine);
   if (drift) ocean.setAirStress(wind);
   const s = { gpuModel, mesh, C, E, gpu, ocean, cpu, seaIce, surfaceT, ice, wind, flux: new Float64Array(C) };
   s.stepCpu = () => cpu.advance(surfaceT, ice, seaIce.oceanFlux, wind, DT, seaIce.concentration);
@@ -79,7 +82,8 @@ async function scenario(drift, { global = false, velocity = null, stress = null,
   s.readIce = async () => {
     const [h, ts] = await readRanges(gpu.device, gpu.buffers.S, [{ offset: gpu.layout.S.ICE, length: C }, { offset: gpu.layout.S.TS, length: C }]);
     const [conc, snow, albedo] = await readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'SNOW', 'SNOWALB'].map((name) => ({ offset: gpu.layout.PH[name], length: C })));
-    return { h, ts, conc, snow, albedo };
+    const [held] = brine ? await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.BRINE, length: C }]) : [null];
+    return { h, ts, conc, snow, albedo, held };
   };
   return s;
 }
@@ -127,6 +131,22 @@ for (const [rheology, limit] of [['free', 2e-3], ['cavitating', 1e-2]]) {
     s.gpuModel.destroy();
   });
 }
+
+test('the GPU carries the brine of a prescribed ice velocity like the CPU after twenty calls, its total kept but for what the removed ice hands the water', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), velocity = streamOn(probe.mesh, 20 / probe.mesh.radius);
+  probe.destroy();
+  const s = await scenario({ rheology: 'frozen' }, { velocity, brine: true });
+  const held = (h, conc, brine) => Float64Array.from(brine, (q, i) => (h[i] > 0 ? q * conc[i] : 0));
+  const sum = (x) => x.reduce((t, q, i) => t + s.mesh.areaCell[i] * q, 0), before = sum(held(s.ice, s.seaIce.concentration, s.seaIce.brine));
+  let removed = 0;
+  for (let n = 0; n < 20; n++) { s.stepCpu(); removed += s.cpu.iceDrift.count.removed; await s.stepGpu(); }
+  const g = await s.readIce(), a = held(s.ice, s.seaIce.concentration, s.seaIce.brine), b = held(g.h, g.conc, g.held), r = stats(a, b);
+  console.log(`brine carried by a prescribed velocity: rms ${r.rmsRel.toExponential(2)} max ${r.maxDiff.toExponential(2)}, totals ${(sum(a) / before - 1).toExponential(2)} and ${(sum(b) / before - 1).toExponential(2)} from the start, ${removed.toExponential(2)} m³ of ice removed`);
+  assert.ok(r.rmsRel < 1e-4, `brine rms relative ${r.rmsRel}`);
+  assert.ok(Math.abs(sum(b) / sum(a) - 1) < 1e-4, 'the engines keep the same brine');
+  if (removed === 0) assert.ok(Math.abs(sum(a) / before - 1) < 1e-9, 'the drift keeps the brine');
+  s.gpuModel.destroy();
+});
 
 test('the hemisphere switch keeps the other hemisphere\'s ice still on the device', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), stress = windStress(probe.mesh);

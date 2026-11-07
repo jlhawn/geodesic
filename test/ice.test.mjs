@@ -281,3 +281,26 @@ test('with a transmission, open water keeps the passing share of its absorbed su
   plain.update(alone, new Float64Array(1), flux, 0, dt, 0, solar);
   assert.equal(alone[0], water + dt * flux[0] / capacity[0], 'without a transmission all of the sunlight stays in the mixed layer');
 });
+
+for (const brineReservoir of [false, true]) test(`with iceLight${brineReservoir ? ' and brineReservoir' : ''} the surface energy${brineReservoir ? ', the brine counted,' : ''} still changes by exactly the surface flux through a sunlit melt and a cold autumn${brineReservoir ? ', the brine holding at most half the latent heat of the ice and keeping the cooling skin at the melting point, but for what the freezing leads dilute, until spent' : ''}`, () => {
+  const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir });
+  const surfaceT = new Float64Array([FREEZING_POINT - 1]), ice = new Float64Array([1.5]), flux = new Float64Array(1), dt = 900;
+  sea.load(ice);
+  const total = () => sea.energy(surfaceT[0], ice[0], sea.snow[0], sea.cover(0, ice[0]), brineReservoir ? sea.brine[0] : 0);
+  let energy = total(), filled = 0, held = false, spent = false;
+  for (let n = 0; n < 96 * 90; n++) {
+    const sunny = n < 96 * 60, solar = sunny ? 150 : 0;
+    flux[0] = sunny ? solar - 100 : -120;
+    sea.update(surfaceT, ice, flux, 0, dt, 0, solar, 0.5);
+    energy += dt * flux[0];
+    assert.ok(Math.abs(total() - energy) < 1e-9 * sea.latent * 2, `step ${n}: energy ${total()} vs ${energy}`);
+    assert.ok(ice[0] > 0, `step ${n}: the ice is still there`);
+    if (!brineReservoir) continue;
+    const Q = sea.brine[0];
+    assert.ok(Q >= 0 && Q <= 0.5 * sea.latent * ice[0] * (1 + 1e-12), `step ${n}: brine ${Q} for ${ice[0]} m`);
+    filled = Math.max(filled, Q);
+    if (!sunny && Q > 0) { held = true; assert.ok(MELTING_POINT - surfaceT[0] < 1e-3, `step ${n}: the brine keeps the skin at ${surfaceT[0]}`); }
+    if (!sunny && held && Q === 0) spent = true;
+  }
+  if (brineReservoir) assert.ok(filled > 0 && held && spent, `the brine filled to ${filled} J/m², held the skin and was spent`);
+});

@@ -1276,7 +1276,7 @@ ${o.lakes ? LAKE_DRAIN_WGSL : ''}    }
   OD[O_RAINSEEN + i] = rain;
 }`,
     ...hybridKernels(o, K, idx),
-    ...(o.drift ? iceDriftKernels({ K, idx, options: o.drift.options, third }) : {}),
+    ...(o.drift ? iceDriftKernels({ K, idx, options: o.drift.options, third, brine: o.drift.brine }) : {}),
   };
 }
 
@@ -1424,7 +1424,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
     sec('EDDYK', 'edge'),
     ['PR', 2 * L * nC], sec('MIXED', 'cell'), sec('BLD', 'cell'), sec('DRIED', 'cell'), sec('FCELL', 'cell'), sec('SILL', 'edge'), sec('SHELF', 'cell'), sec('DRAFT', 'cell'), sec('LOAD', 'cell'), sec('LOADT', 'cell'), sec('LOADS', 'cell'), sec('LIQUIDUS', 'cell'), sec('MELT', 'cell'), sec('MELTSUM', 'cell'), sec('DRAW', 'cell'), ['POOLS', 12], sec('UPWM', 'cell', L),
     ...(third ? [['BEY', 2 * nE], ['BED', 2 * nE]] : []),
-    ...(driftOptions ? driftSections(nC, nE).map(([name]) => sec(name, name === 'TAUA' || DRIFT_EDGE_SECTIONS.includes(name) ? 'edge' : 'cell')) : []),
+    ...(driftOptions ? driftSections(nC, nE, core.layout.PH.BRINE !== undefined).map(([name]) => sec(name, name === 'TAUA' || name === 'IFB' || DRIFT_EDGE_SECTIONS.includes(name) ? 'edge' : 'cell')) : []),
     ...(restrat ? [sec('MLED', 'cell'), sec('MLEH', 'cell'), sec('MLEB', 'cell'), sec('MLEU', 'cell'), sec('MLESCALE', 'edge')] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
@@ -1438,7 +1438,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
 
   const implicitStress = !!core.physics && core.physics.surfaceExchange === 'roughness' && !!core.physics.implicitDrag;
   const iceThermo = { skinHeatCapacity: core.physics?.skinHeatCapacity ?? 2e5, iceDensity: core.physics?.iceDensity ?? 917, latentHeatFusion: core.physics?.latentHeatFusion ?? 3.34e5, freshSnowAlbedo: core.physics?.freshSnowAlbedo ?? SNOW_AGEING.freshSnowAlbedo };
-  const driftPlan = driftOptions ? { options: driftOptions, waterDensity: o.density, thermo: iceThermo, minimumConcentration: MINIMUM_CONCENTRATION, removal: seaIceRemoval(!!core.physics?.keepSmallIce), remnant: ICE_REMNANT, freezing: FREEZING_POINT, implicitStress, given } : null;
+  const driftPlan = driftOptions ? { options: driftOptions, waterDensity: o.density, thermo: iceThermo, minimumConcentration: MINIMUM_CONCENTRATION, removal: seaIceRemoval(!!core.physics?.keepSmallIce), remnant: ICE_REMNANT, freezing: FREEZING_POINT, implicitStress, given, brine: core.layout.PH.BRINE !== undefined } : null;
   const kernels = oceanKernels({ ...o, restrat, table, L, C: nC, E: nE, V: nV, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined });
   const reduced = HYBRID_REDUCED;
   const OF = seq([['SST', nC], ['SSS', nC], ['H1', nC], ['THD', nC], ['ETA', nC], ['CUR', 3 * nC], ['CSPD', nC], ['UPW', nC], ['PART', reduced.length * reductionGroups(nC)]]);

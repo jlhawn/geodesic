@@ -230,7 +230,7 @@ export function createModel(gridOrMesh, {
           continue;
         }
         const h = state[6][i], partial = h > 0 && seaIce.cover(i, h) < 1;
-        seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0, surfaceSolar[i]);
+        seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0, surfaceSolar[i], surfaceShortwave[i] > 0 ? 1 - surfaceDirect[i] / surfaceShortwave[i] : 0);
         if (seaSkin && (h > 0 || state[6][i] > 0)) seaSkin.clear(i);
         else if (seaSkin) {
           const airDensity = state[0][i] * core.diagnostics.sigmaMid[K - 1] / (core.diagnostics.R * airBefore[i]);

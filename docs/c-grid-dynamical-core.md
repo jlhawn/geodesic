@@ -955,8 +955,12 @@ coupling (albedo and longwave emissivity of cloud) is the next step.
 
 `js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model,
 Fichefet and Morales Maqueda's (1997) E1 + E4 simplifications of
-Semtner's (1976) three-layer model (no brine reservoir, no sunlight
-through the ice), on the slab ocean, with ice thickness
+Semtner's (1976) three-layer model (by default no brine reservoir and
+no sunlight through the ice: `ice.iceLight` passes FMM97's share
+i0 = 0.18 (1 − c) + 0.35 c of the ice's absorbed sunlight, with c the
+diffuse share at the surface, none under snow, and `ice.brineReservoir`
+holds what the ice absorbs of it in Semtner's reservoir), on the slab
+ocean, with ice thickness
 as the seventh state array. Open water is the mixed layer (2.1×10⁷
 J/m²/K); when it cools to the seawater freezing point (271.35 K) the
 deficit freezes into ice of latent heat ρ_i L_f. Ice has a skin of

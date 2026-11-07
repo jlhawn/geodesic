@@ -267,7 +267,7 @@ function initialState(model, saved, N) {
  */
 function placeIce(model, saved, N) {
   const kept = !saved ? model.seaIce.concentration : !saved.concentration ? null : saved.N === N ? saved.concentration : regridConcentration(sourceFor(saved), model, saved.concentration, { land: saved.land ?? null, surfaceT: saved.surfaceT });
-  model.seaIce.load(model.state[6], kept);
+  model.seaIce.load(model.state[6], kept, !saved ? model.seaIce.brine : saved.N === N ? saved.brine ?? null : null);
 }
 
 /*
@@ -593,6 +593,7 @@ async function snapshot() {
   const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
   const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
   arrays.concentration = Float64Array.from(model.seaIce.concentration).buffer;
+  if (model.seaIce.brine) arrays.brine = Float64Array.from(model.seaIce.brine).buffer;
   for (const name of Object.keys(DECK_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   for (const name of Object.keys(MOIST_FIELDS)) arrays[name] = Float64Array.from(model.moist[name]).buffer;
   Object.assign(arrays, savedCumulus(model));

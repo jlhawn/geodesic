@@ -24,8 +24,8 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
 /*
  * The slab ocean and its sea ice, a zero-layer thermodynamic model: the
  * E1 + E4 simplifications of Fichefet and Morales Maqueda (1997, JGR 102,
- * 12609) to Semtner's (1976) three-layer model, with no brine reservoir
- * and no sunlight through the ice. Open water is a mixed layer of heat
+ * 12609) to Semtner's (1976) three-layer model, by default with no brine
+ * reservoir and no sunlight through the ice. Open water is a mixed layer of heat
  * capacity slabHeatCapacity; when it cools to the freezing point the
  * deficit freezes into ice of that latent heat. Ice has a skin of small
  * heat capacity whose temperature answers the surface flux and the
@@ -99,7 +99,20 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * ocean cells of the land's array when its buffer is shared), aged by
  * agedSnowAlbedo toward iceSnowFloor and refreshed by snowfall
  * (refreshedSnowAlbedo); without it the snow's albedo is iceSnowAlbedo.
+ *
+ * With `iceLight` the share i0 = 0.18 (1 - c) + 0.35 c (FMM97, with c the
+ * diffuse share of the sunlight reaching the surface, `diffuse` in update)
+ * of the sunlight the ice absorbs passes its surface, none under snow and
+ * blended over iceFullSnow as the albedo is, and leaves the skin's balance.
+ * Of it, exp(-1.5 (h - 0.1)) reaches the water: the share transmission[i]
+ * goes to penetrated[i] and the rest melts the base. What the ice holds
+ * back returns to the surface, or with `brineReservoir` fills `brine`
+ * (J/m² of ice), Semtner's reservoir: it keeps the skin from cooling below
+ * the melting point until spent, and holds at most half the latent heat of
+ * the ice, the rest of the light melting ice.
  */
+export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
+
 export const LEAD_CLOSURES = ['squared', 'hibler'];
 
 export function openWaterAlbedo(mu) {
@@ -135,7 +148,9 @@ export function createSeaIce(mesh, {
   leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
+  iceLight = false, brineReservoir = false,
 } = {}) {
+  if (brineReservoir && !iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
   if (!LEAD_CLOSURES.includes(leadClosure)) throw new Error(`leadClosure is ${LEAD_CLOSURES.join(' or ')}, not ${leadClosure}`);
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion, openShare = leadClosure === 'hibler' ? () => 1 : (A) => 1 - A;
@@ -146,6 +161,7 @@ export function createSeaIce(mesh, {
   const concentration = new Float64Array(buffers && buffers.concentration ? buffers.concentration : new SharedArrayBuffer(8 * C));
   const snowAlbedo = new Float64Array(buffers && buffers.snowAlbedo ? buffers.snowAlbedo : new SharedArrayBuffer(8 * C));
   if (!(buffers && buffers.snowAlbedo)) snowAlbedo.fill(freshSnowAlbedo);
+  const brine = brineReservoir ? new Float64Array(buffers && buffers.brine ? buffers.brine : new SharedArrayBuffer(8 * C)) : null;
   const ageing = { freshSnowAlbedo, coldSnowAgeing, meltingSnowAgeing, refreshSnowfall, wetSnowRange, ageingActivation };
 
   const waterAlbedo = (mu) => oceanAlbedo ?? (mu === null ? diffuseWaterAlbedo : openWaterAlbedo(mu));
@@ -174,19 +190,20 @@ export function createSeaIce(mesh, {
     return thickness > 0 ? (concentration[i] > 0 ? concentration[i] : 1) : 0;
   }
 
-  function load(ice, saved = null) {
+  function load(ice, saved = null, savedBrine = null) {
     for (let i = 0; i < C; i++) concentration[i] = ice[i] > 0 ? (saved && saved[i] > 0 ? Math.min(1, saved[i]) : 1) : 0;
+    if (brine) for (let i = 0; i < C; i++) brine[i] = ice[i] > 0 && savedBrine ? savedBrine[i] : 0;
   }
 
-  function energy(surfaceT, ice, snowCover = 0, area = ice > 0 ? 1 : 0) {
-    return ice > 0 ? area * (skinHeatCapacity * (surfaceT - FREEZING_POINT) - latent * ice - latentHeatFusion * snowCover) : slabHeatCapacity * (surfaceT - FREEZING_POINT);
+  function energy(surfaceT, ice, snowCover = 0, area = ice > 0 ? 1 : 0, reservoir = 0) {
+    return ice > 0 ? area * (skinHeatCapacity * (surfaceT - FREEZING_POINT) - latent * ice - latentHeatFusion * snowCover + reservoir) : slabHeatCapacity * (surfaceT - FREEZING_POINT);
   }
 
   /*
    * Ice that melts away, whether by the thermodynamics or because transport
    * left too little of it: the cell is open water again, its temperature
    * `base` (freezing for a cell that held ice) plus `energyLeft`, the skin
-   * heat less the latent heat of the ice and snow, over the water's heat
+   * heat and brine less the latent heat of the ice and snow, over the water's heat
    * capacity; `volume` and `snowMass` (m³ and kg) go to the budget.
    */
   function meltAway(surfaceT, ice, i, energyLeft, volume, snowMass, base = FREEZING_POINT) {
@@ -197,6 +214,7 @@ export function createSeaIce(mesh, {
     snow[i] = 0;
     snowAlbedo[i] = freshSnowAlbedo;
     concentration[i] = 0;
+    if (brine) brine[i] = 0;
   }
 
   function deposit(i, amount, airTemperature, ice, surfaceT) {
@@ -213,7 +231,7 @@ export function createSeaIce(mesh, {
     return true;
   }
 
-  function update(surfaceT, ice, flux, i, dt, contrast = 0, solar = 0) {
+  function update(surfaceT, ice, flux, i, dt, contrast = 0, solar = 0, diffuse = 0) {
     const ocean = oceanFlux[i];
     const capacity = heatCapacity ? heatCapacity[i] : slabHeatCapacity;
     const cellArea = mesh.areaCell[i];
@@ -230,6 +248,7 @@ export function createSeaIce(mesh, {
           ice[i] = volume / area;
           concentration[i] = area;
           surfaceT[i] = FREEZING_POINT;
+          if (brine) brine[i] = 0;
           budget.frozen += cellArea * volume;
         }
       }
@@ -238,10 +257,33 @@ export function createSeaIce(mesh, {
     const h = ice[i], A = cover(i, h);
     let T = surfaceT[i], s = snow[i];
     const split = contrast - leadExchange * (FREEZING_POINT - T);
-    const iceFlux = flux[i] - (1 - A) * split, waterFlux = flux[i] + A * split;
+    let iceFlux = flux[i] - (1 - A) * split;
+    const waterFlux = flux[i] + A * split;
+    let through = 0, held = 0;
+    if (iceLight) {
+      const passed = Math.max(0, solar - (1 - A) * contrast) * (ICE_LIGHT.clear + (ICE_LIGHT.cloudy - ICE_LIGHT.clear) * diffuse) * Math.max(0, 1 - s / iceFullSnow);
+      through = passed * Math.exp(-ICE_LIGHT.extinction * Math.max(0, h - ICE_LIGHT.surfaceLayer));
+      held = brine ? passed - through : 0;
+      iceFlux -= through + held;
+    }
     const conduction = (FREEZING_POINT - T) / (Math.max(h, minimumThickness) / conductivity + s / (snowDensity * snowConductivity));
     T += dt * (iceFlux + conduction) / skinHeatCapacity;
     let thickness = h + dt * (conduction - ocean) / latent;
+    let Q = brine ? brine[i] + dt * held : 0;
+    if (brine && T < MELTING_POINT && Q > 0) {
+      const deficit = (MELTING_POINT - T) * skinHeatCapacity;
+      if (Q >= deficit) { T = MELTING_POINT; Q -= deficit; } else { T += Q / skinHeatCapacity; Q = 0; }
+    }
+    if (brine) {
+      const over = Math.max(0, Q - ICE_LIGHT.reservoirShare * latent * Math.max(0, thickness));
+      Q -= over;
+      thickness -= over / latent;
+    }
+    if (iceLight) {
+      const share = transmission ? transmission[i] : 0;
+      thickness -= dt * through * (1 - share) / latent;
+      if (transmission) penetrated[i] += dt * A * through * share;
+    }
     if (T > MELTING_POINT) {
       let excess = (T - MELTING_POINT) * skinHeatCapacity;
       T = MELTING_POINT;
@@ -256,12 +298,12 @@ export function createSeaIce(mesh, {
     const melted = Math.max(0, -grown) + leadMelt;
     budget.leadFrozen += cellArea * leadIce;
     budget.lateralMelted += cellArea * leadMelt;
-    const energyLeft = A * skinHeatCapacity * (T - FREEZING_POINT) - latent * (A * thickness - leadHeat / latent) - latentHeatFusion * A * s;
+    const energyLeft = A * skinHeatCapacity * (T - FREEZING_POINT) - latent * (A * thickness - leadHeat / latent) - latentHeatFusion * A * s + A * Q;
     let volume = A * thickness - leadHeat / latent;
     const area = Math.min(1, A - melted / (2 * h) + openShare(A) * leadIce / leadClosing);
-    let skin = T, snowOnIce = s;
-    if (area < A) volume += (A - area) * (s / iceDensity - skinHeatCapacity * (T - FREEZING_POINT) / latent);
-    else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; }
+    let skin = T, snowOnIce = s, kept = Q;
+    if (area < A) volume += (A - area) * (s / iceDensity - (skinHeatCapacity * (T - FREEZING_POINT) + Q) / latent);
+    else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; kept = A * Q / area; }
     if (area < removal.concentration || volume < removal.volume) {
       meltAway(surfaceT, ice, i, energyLeft, cellArea * A * h, cellArea * A * s);
       return;
@@ -276,10 +318,11 @@ export function createSeaIce(mesh, {
     budget.snowIce += cellArea * area * flooded;
     ice[i] = newThickness + flooded / iceDensity;
     concentration[i] = area;
+    if (brine) brine[i] = kept;
   }
 
   return {
-    albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, removal, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration,
-    shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, snowAlbedo: snowAlbedo.buffer, concentration: concentration.buffer },
+    albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, removal, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration, brine, iceLight,
+    shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, snowAlbedo: snowAlbedo.buffer, concentration: concentration.buffer, ...(brine ? { brine: brine.buffer } : {}) },
   };
 }

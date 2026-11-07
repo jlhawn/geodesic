@@ -24,7 +24,7 @@ const constant = (name, value) => `const ${name}: f32 = ${lit(value)};`;
 
 export const DRIFT_EDGE_SECTIONS = ['UICE', 'UALT', 'ICESTRESS', 'VALID', 'IDYN', 'IACT', 'IUPD', 'IAE', 'IMU', 'IUW', 'IUWT', 'ITILT', 'ITAU', 'IUN', 'IFLX', 'IFA', 'IFV', 'IFS', 'IFE', 'IFSA'];
 export const DRIFT_CELL_SECTIONS = ['SIGMA', 'WATERT', 'ARRIVED', 'IA', 'IV', 'ISN', 'IEN', 'ISA', 'IMASS', 'IPRESS', 'IA0', 'IV0', 'ITOUCH'];
-export const driftSections = (C, E) => [...DRIFT_EDGE_SECTIONS.map((name) => [name, E]), ['TAUA', E], ...DRIFT_CELL_SECTIONS.map((name) => [name, C])];
+export const driftSections = (C, E, brine = false) => [...DRIFT_EDGE_SECTIONS.map((name) => [name, E]), ['TAUA', E], ...(brine ? [['IFB', E]] : []), ...DRIFT_CELL_SECTIONS.map((name) => [name, C]), ...(brine ? [['IBR', C]] : [])];
 
 /*
  * The thermodynamics' constants and the atmosphere stress the drift reads:
@@ -33,7 +33,7 @@ export const driftSections = (C, E) => [...DRIFT_EDGE_SECTIONS.map((name) => [na
  * section of the ocean's scratch the host fills, else the surface layer's
  * as oStressFromAtmosphere computes it.
  */
-export function iceDriftHead({ options: d, waterDensity, thermo, minimumConcentration, removal, remnant, freezing, implicitStress, given }) {
+export function iceDriftHead({ options: d, waterDensity, thermo, minimumConcentration, removal, remnant, freezing, implicitStress, given, brine }) {
   const turn = d.waterTurn * Math.PI / 180;
   return `
 ${constant('ID_STRENGTH', d.strength)} ${constant('ID_DECAY', d.strengthDecay)} ${constant('ID_DRAG', waterDensity * d.waterDrag)} ${constant('ID_COS', Math.cos(turn))} ${constant('ID_SIN', Math.sin(turn))}
@@ -50,6 +50,7 @@ fn hiOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IV + x] /
 fn siOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_ISN + x] / a, a > 0.0); }
 fn diOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IEN + x] / a, a > 0.0); }
 fn aiOf(x: i32) -> f32 { let sn = OD[O_ISN + x]; return select(ID_FRESH, OD[O_ISA + x] / sn, sn > 0.0); }
+${brine ? 'fn biOf(x: i32) -> f32 { let a = OD[O_IA + x]; return select(0.0, OD[O_IBR + x] / a, a > 0.0); }\n' : ''}
 fn rawStress(e: i32, a: i32, b: i32) -> f32 {
 ${given ? '  return OD[O_TAUA + e];' : `  let ga = gcell(a); let gb = gcell(b); let ge = gedge(e);
 ${implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { return PH[PH_STRESS + ge]; }\n' : ''}  let bottom = (K - 1) * GC;
@@ -79,7 +80,7 @@ export const driftStressKernel = (K, idx) => `${K}  let e = ${idx}; if (e >= E) 
   OD[O_STRESS + e] = select(raw * (1.0 - area * (1.0 - TRANSMIT)), (1.0 - area) * raw + area * OD[O_ICESTRESS + e], OD[O_VALID + e] > 0.5) * open;
 }`;
 
-export function iceDriftKernels({ K, idx, options: d, third }) {
+export function iceDriftKernels({ K, idx, options: d, third, brine = false }) {
   const moving = d.rheology !== 'frozen', cavitating = d.rheology === 'cavitating';
   const sinTurn = 'select(select(0.0, -ID_SIN, fe < 0.0), ID_SIN, fe > 0.0)';
   const tangential = (field) => `  var tang = 0.0;
@@ -98,9 +99,9 @@ export function iceDriftKernels({ K, idx, options: d, third }) {
     OD[O_IA + i] = a; OD[O_IV + i] = v; OD[O_ISN + i] = sn; OD[O_IA0 + i] = a; OD[O_IV0 + i] = v;
     OD[O_IEN + i] = a * ID_SKINC * (S[S_TS + gi] - ID_FREEZE); OD[O_ISA + i] = sn * PH[PH_SNOWALB + gi];
     OD[O_IMASS + i] = ICEDENS * v + sn;
-${cavitating ? '    OD[O_IPRESS + i] = ID_STRENGTH * v * exp(-ID_DECAY * (1.0 - a));\n' : ''}  } else {
+${brine ? '    OD[O_IBR + i] = a * PH[PH_BRINE + gi];\n' : ''}${cavitating ? '    OD[O_IPRESS + i] = ID_STRENGTH * v * exp(-ID_DECAY * (1.0 - a));\n' : ''}  } else {
     OD[O_IA + i] = 0.0; OD[O_IV + i] = 0.0; OD[O_ISN + i] = 0.0; OD[O_IEN + i] = 0.0; OD[O_ISA + i] = 0.0; OD[O_IMASS + i] = 0.0; OD[O_IA0 + i] = 0.0; OD[O_IV0 + i] = 0.0;
-    OD[O_SIGMA + i] = 0.0;
+    OD[O_SIGMA + i] = 0.0;${brine ? ' OD[O_IBR + i] = 0.0;' : ''}
   }
 }`,
     iPrepareEdges: `${K}  let e = ${idx}; if (e >= E) { return; }
@@ -172,7 +173,7 @@ ${tangential((other) => `OD[O_UICE + ${other}]`)}
     kernels.iStressB = stress('UALT');
   }
   kernels.iFlux = `${K}  let e = ${idx}; if (e >= E) { return; }
-  OD[O_IFLX + e] = 0.0; OD[O_IFA + e] = 0.0; OD[O_IFV + e] = 0.0; OD[O_IFS + e] = 0.0; OD[O_IFE + e] = 0.0; OD[O_IFSA + e] = 0.0;
+  OD[O_IFLX + e] = 0.0; OD[O_IFA + e] = 0.0; OD[O_IFV + e] = 0.0; OD[O_IFS + e] = 0.0; OD[O_IFE + e] = 0.0; OD[O_IFSA + e] = 0.0;${brine ? ' OD[O_IFB + e] = 0.0;' : ''}
   if (OD[O_IACT + e] < 0.5) { return; }
   let u = OD[O_UICE + e];
   if (u == 0.0) { return; }
@@ -182,49 +183,49 @@ ${tangential((other) => `OD[O_UICE + ${other}]`)}
   let wet = OD[O_IA + up];
   if (!(wet > 0.0)) { return; }
   var cover = wet; var thick = hiOf(up); var snowy = siOf(up); var skin = diOf(up); var albedo = aiOf(up);
-${third ? `  let beyond = i32(OD[O_BEY + 2 * e + select(1, 0, forward)]);
+${brine ? '  var held = biOf(up);\n' : ''}${third ? `  let beyond = i32(OD[O_BEY + 2 * e + select(1, 0, forward)]);
   if (openCell(beyond)) {
     let ratio = MF[F_DC + e] / MF[F_DC + i32(OD[O_BED + 2 * e + select(1, 0, forward)])];
     cover = max(0.0, limitedValue(wet, OD[O_IA + down], OD[O_IA + beyond], ratio));
     if (OD[O_IA + down] > 0.0 && OD[O_IA + beyond] > 0.0) {
       thick = limitedValue(thick, hiOf(down), hiOf(beyond), ratio); snowy = limitedValue(snowy, siOf(down), siOf(beyond), ratio);
       skin = limitedValue(skin, diOf(down), diOf(beyond), ratio); albedo = limitedValue(albedo, aiOf(down), aiOf(beyond), ratio);
-    }
+${brine ? '      held = limitedValue(held, biOf(down), biOf(beyond), ratio);\n' : ''}    }
   }
 ` : ''}  let fA = u * cover;
-  OD[O_IFLX + e] = 1.0; OD[O_IFA + e] = fA; OD[O_IFV + e] = fA * thick; OD[O_IFS + e] = fA * snowy; OD[O_IFE + e] = fA * skin; OD[O_IFSA + e] = fA * snowy * albedo;
+  OD[O_IFLX + e] = 1.0; OD[O_IFA + e] = fA; OD[O_IFV + e] = fA * thick; OD[O_IFS + e] = fA * snowy; OD[O_IFE + e] = fA * skin; OD[O_IFSA + e] = fA * snowy * albedo;${brine ? ' OD[O_IFB + e] = fA * held;' : ''}
 }`;
   const update = (last) => `${K}  let i = ${idx}; if (i >= C) { return; }
   var moved = false;
-  var dA = 0.0; var dV = 0.0; var dS = 0.0; var dE = 0.0; var dSa = 0.0;
+  var dA = 0.0; var dV = 0.0; var dS = 0.0; var dE = 0.0; var dSa = 0.0;${brine ? ' var dB = 0.0;' : ''}
   for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m]; let sg = f32(MI[ESC + MAXE * i + m]);
     if (sg != 0.0 && OD[O_IFLX + e] > 0.5) {
       moved = true;
       let scale = sg * P[3] * MF[F_DV + e];
-      dA -= scale * OD[O_IFA + e]; dV -= scale * OD[O_IFV + e]; dS -= scale * OD[O_IFS + e]; dE -= scale * OD[O_IFE + e]; dSa -= scale * OD[O_IFSA + e];
+      dA -= scale * OD[O_IFA + e]; dV -= scale * OD[O_IFV + e]; dS -= scale * OD[O_IFS + e]; dE -= scale * OD[O_IFE + e]; dSa -= scale * OD[O_IFSA + e];${brine ? ' dB -= scale * OD[O_IFB + e];' : ''}
     }
   }
   if (!(moved${last ? ' || OD[O_ITOUCH + i] > 0.5' : ''})) { return; }
   let omega = MF[F_AREA + i];
   let A1 = max(0.0, OD[O_IA + i] + dA / omega); let V1 = max(0.0, OD[O_IV + i] + dV / omega); let S1 = max(0.0, OD[O_ISN + i] + dS / omega);
   let E1 = OD[O_IEN + i] + dE / omega; let Sa1 = max(0.0, OD[O_ISA + i] + dSa / omega);
-${last ? `  let gi = gcell(i);
+${brine ? '  let B1 = max(0.0, OD[O_IBR + i] + dB / omega);\n' : ''}${last ? `  let gi = gcell(i);
   OD[O_PREVVOL + i] += V1 - OD[O_IV0 + i];
   let started = OD[O_IA0 + i];
   let full = min(A1, ID_MAXCONC);
   let tidy = full >= ID_MINCONC || (V1 <= ID_MAXH * full && S1 <= ID_MAXSNOW * full && E1 >= ID_EMIN * full && E1 <= ID_EMAX * full);
   if (full < ID_GONECONC || V1 < ID_GONEVOL || !tidy) {
     let base = select(S[S_TS + gi], ID_FREEZE, started > 0.0);
-    S[S_TS + gi] = base + (E1 - ID_LATENT * V1 - ID_LFUS * S1) / PH[PH_CAP + gi];
-    S[S_ICE + gi] = 0.0; PH[PH_SNOW + gi] = 0.0; PH[PH_SNOWALB + gi] = ID_FRESH; PH[PH_CONC + gi] = 0.0;
+    S[S_TS + gi] = base + (E1${brine ? ' + B1' : ''} - ID_LATENT * V1 - ID_LFUS * S1) / PH[PH_CAP + gi];
+    S[S_ICE + gi] = 0.0; PH[PH_SNOW + gi] = 0.0; PH[PH_SNOWALB + gi] = ID_FRESH; PH[PH_CONC + gi] = 0.0;${brine ? ' PH[PH_BRINE + gi] = 0.0;' : ''}
     return;
   }
   if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + gi]; OD[O_ARRIVED + i] = 1.0; }
   S[S_ICE + gi] = V1 / full; PH[PH_CONC + gi] = full; PH[PH_SNOW + gi] = S1 / full;
   S[S_TS + gi] = ID_FREEZE + E1 / (full * ID_SKINC);
-  PH[PH_SNOWALB + gi] = select(ID_FRESH, min(1.0, Sa1 / S1), S1 > 0.0);
-}` : `  OD[O_IA + i] = A1; OD[O_IV + i] = V1; OD[O_ISN + i] = S1; OD[O_IEN + i] = E1; OD[O_ISA + i] = Sa1; OD[O_ITOUCH + i] = 1.0;
+${brine ? '  PH[PH_BRINE + gi] = B1 / full;\n' : ''}  PH[PH_SNOWALB + gi] = select(ID_FRESH, min(1.0, Sa1 / S1), S1 > 0.0);
+}` : `  OD[O_IA + i] = A1; OD[O_IV + i] = V1; OD[O_ISN + i] = S1; OD[O_IEN + i] = E1; OD[O_ISA + i] = Sa1; OD[O_ITOUCH + i] = 1.0;${brine ? ' OD[O_IBR + i] = B1;' : ''}
 }`}`;
   kernels.iUpdateMid = update(false);
   kernels.iUpdateLast = update(true);
