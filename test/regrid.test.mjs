@@ -254,8 +254,8 @@ test('a state saved with the convection\'s activity loads its moist fields as sa
   assert.ok(model.state.every((a) => a.every(Number.isFinite)), 'the model steps');
 });
 
-test('the brine regridded with its ice comes from the same source tile, so no cell holds more than its own ice allows', async () => {
-  const { regridIceField } = await import('../js/physics/regrid.module.js');
+test('the brine regridded with its ice comes from the same source tile, so each cell keeps the brine of its own ice and none is lost', async () => {
+  const { regridIceField, sampleTiles } = await import('../js/physics/regrid.module.js');
   const { syntheticTopography } = await import('../js/geography.module.js');
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
   const source = createModel(new Grid(16), { topography }), target = createModel(new Grid(24), { topography });
@@ -263,11 +263,13 @@ test('the brine regridded with its ice comes from the same source tile, so no ce
   const ice = Float64Array.from({ length: C }, (_, i) => (sea(source, i) ? (i % 2 ? 2 : 0.2) : 0)), brine = Float64Array.from(ice, (h) => 0.9 * 0.5 * 3.06e8 * h);
   const state = [new Float64Array(C).fill(P0), new Float64Array(K * C).fill(280), new Float64Array(K * source.mesh.nEdges), new Float64Array(C).fill(270), null, null, ice];
   const moved = regridState(source, target, state).at(-1), held = regridIceField(source, target, brine);
-  let iced = 0;
+  const tiles = sampleTiles(source, target, Float64Array.from({ length: C }, (_, i) => i), Uint8Array.from(source.geography.land, (l) => 1 - l), interpolationWeights(source.mesh, target.mesh.xCell), () => -1);
+  let iced = 0, inferred = 0;
   for (let n = 0; n < target.mesh.nCells; n++) {
     if (!sea(target, n) || !(moved[n] > 0)) continue;
+    if (tiles[n] < 0) { assert.equal(held[n], 0, `cell ${n}: ice inferred from the land holds no brine`); inferred++; continue; }
+    assert.ok(moved[n] === ice[tiles[n]] && held[n] === brine[tiles[n]], `cell ${n}: brine ${held[n]} on ${moved[n]} m of ice, its tile ${tiles[n]} holding ${brine[tiles[n]]} on ${ice[tiles[n]]} m`);
     iced++;
-    assert.ok(held[n] <= 0.9 * 0.5 * 3.06e8 * moved[n] * (1 + 1e-12), `cell ${n}: brine ${held[n]} on ${moved[n]} m of ice`);
   }
-  assert.ok(iced > 100, `${iced} iced cells`);
+  assert.ok(iced > 100, `${iced} iced cells (${inferred} inferred from the land)`);
 });
