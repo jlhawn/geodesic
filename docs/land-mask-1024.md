@@ -284,7 +284,7 @@ The seawater lakes:
 - no snow layer and no bottom sediments;
 - one shortwave band at 3 m⁻¹, with the ice opaque.
 
-Where ETOPO holds no bed below a lake's level (Victoria, Tanganyika, Malawi, Great Bear), the depth is GLDB v3's default: 10 m fresh, 5 m saline.
+Where ETOPO holds no bed below a lake's level (Victoria, Tanganyika, Malawi, Great Bear: 106 of the 197 lake cells at N = 128), the depth is the default GLDB v3 gives lakes without data, 10 m fresh and 5 m saline, though these lakes have measured depths.
 
 Coupling:
 - The atmosphere sees open sea water; the ice has FLake's albedo.
