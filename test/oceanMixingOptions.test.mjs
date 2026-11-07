@@ -139,15 +139,13 @@ test('shearCutoff reaches the ocean\'s column phase: under a sheared surface cur
   assert.ok(less > 0, 'the cutoff changed no viscosity');
 });
 
-test('taperLatitude scales the restratification by |f|/√(f² + f_t²): none without it, half at the equator\'s first edges of a wide taper, 1/√2 at the taper latitude', () => {
+test('taperLatitude scales the restratification by |f|/√(f² + f_t²): none without it, 1/√2 at the taper latitude, above 0.98 at 30° and below 0.2 at 1°', () => {
   const plain = restratificationScale(mesh, restratificationOptions(true)), radii = deformationRadii(mesh);
   for (let e = 0; e < E; e++) assert.equal(plain[e], 1 * Math.min(dcEdge[e], radii[e]) / 500);
   const tapered = restratificationScale(mesh, restratificationOptions({ taperLatitude: 5 })), ft = 2 * mesh.omega * Math.sin(5 * DEGREE);
-  let equator = Infinity;
   for (let e = 0; e < E; e++) {
     const expected = Math.abs(fEdge[e]) / Math.sqrt(fEdge[e] ** 2 + ft ** 2);
     assert.ok(Math.abs(tapered[e] / plain[e] - expected) < 1e-12, `edge ${e}: ${tapered[e] / plain[e]} against ${expected}`);
-    equator = Math.min(equator, Math.abs(latEdge[e]));
   }
   const at = (degrees) => { const f = 2 * mesh.omega * Math.sin(degrees * DEGREE); return Math.abs(f) / Math.hypot(f, ft); };
   assert.ok(Math.abs(at(5) - Math.SQRT1_2) < 1e-12 && at(30) > 0.98 && at(1) < 0.2);
