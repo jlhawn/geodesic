@@ -10025,8 +10025,8 @@ magnitude, N/m²; lowest-layer speed, m/s): the Rockies (30–60N,
 at 45–50S; the northern summer 200 hPa maximum 22.0 at 55–60N. References:
 ERA5 (Hersbach et al. 2020) northern-winter zonal means, the westerlies
 over land at 45–55N 0.95 m/s at 10 m, 1.84 at 100 m and 5.11 at 850 hPa
-(December–February 2010–2019, 60 dates through 0, 6, 12 and 18 UTC in
-turn; Nov 7 audit), and the subtropical jet near 40 m/s at 200 hPa and
+(December–February, sampled at four hours of the day; Nov 7 audit), and
+the subtropical jet near 40 m/s at 200 hPa and
 30N; the NCEP–NCAR reanalysis's DJF means (Kalnay
 et al. 1996), the Aleutian low near 1000 hPa, the Icelandic low near
 997 hPa, the Siberian high near 1035 hPa at 50N 100E and the zonal-mean
@@ -10462,8 +10462,11 @@ the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
   (rms 117 m), mostly the mesh's two smoothing passes. μ has that mean
   removed, so the height reaches neither the resolved surface nor the
   sub-grid fields: 42 m of the Maritime Continent's mean land height at
-  N=128, 96 m at N=64 (Nov 7 audit); terrain `conserveVolume` gives each
-  land mass that volume back on the resolved surface. At
+  N=128, 96 m at N=64 (Nov 7 audit). Terrain `conserveVolume` gives each
+  land mass back the volume the two passes take from it, 29 of those
+  42 m at N=128 and 52 of the 96 m at N=64; the rest, lost where a
+  coastal cell's mean takes in the seabed, stays lost, and the bundled
+  files' μ, σ and γ stay those below the default surface. At
   0.25° GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
   over land outside Antarctica, 6.5 m (rms 76 m) over Antarctica.
 - σ_flt (§11.3.3): the 30″ orography smoothed at Δ 2 km and at Δ 20 km; the
@@ -10776,8 +10779,9 @@ What still misses: the IFS's G for its operational fields is GKDRAG 0.3
 the textbook mountain's, launches 4.1 times the IFS's stress (orography
 `constants` 'cy41r2' takes 0.3), and the doubled H_eff rests on eq. 4.8
 against eq. 4.37's remark; with them the December land westerlies at
-45–55N fall to 0.6–1.3 m/s, between ERA5's 0.95 at 10 m and 1.84 at
-100 m, while the polar SLP rises toward the reanalysis; the 5 km field
+45–55N fall to 0.6–1.3 m/s, against ERA5's 0.95 at 10 m and 1.84 at
+100 m, the low end below even the 10 m wind, while the polar SLP rises
+toward the reanalysis; the 5 km field
 is sampled at 2′30″ and its differences are bilinear between
 those points (σ 2–4 % below exact 5 km offsets on six cells); σ_flt
 averages 2′30″ blocks by their centres' cells, not each 30″ point (0.2–0.8 %

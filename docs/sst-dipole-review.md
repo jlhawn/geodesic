@@ -155,14 +155,17 @@ ocean-only protocols, not on the coupled global mean.
 ### 4. Why the trades are too strong
 
 **The excess pressure gradient.**
-- Over observed SST, sea-level pressure rises about 4.5 hPa from
-  180–160° W to 120–100° W, against about 2 hPa observed. 87 % of it
-  sits below 2 km (`docs/equatorial-wind-bias.md`, finding 2), but that
-  is a share of the total, not of the excess: in the coupled N=128 years
-  the excess sits at 800–500 hPa (the 775 hPa contrast, 140–170° E less
-  140–100° W at 12 UTC, is 2.55 and 1.68 K against ERA5's 0.33 K), and
-  over WOA23 on the current defaults the contrast is 1.4 times ERA5's
-  (N=64, nine members in five windows; Nov 7 audit).
+- Over observed SST, sea-level pressure rose about 4.5 hPa from
+  180–160° W to 120–100° W in the earlier arms. ERA5's August rise there
+  is 2.72 hPa in the day mean and 1.86 hPa at 12 UTC
+  (`data/era5_equatorial_stress.json`), not the 2 hPa those arms were
+  judged against, and over WOA23 on the current defaults the sea-level
+  pressure contrast is 1.4 times ERA5's (N=64, nine members in five
+  windows; Nov 7 audit). 87 % of the rise sits below 2 km
+  (`docs/equatorial-wind-bias.md`, finding 2), but that is a share of the
+  total, not of the excess: in the coupled N=128 years the excess sits at
+  800–500 hPa, where the 775 hPa temperature contrast, 140–170° E less
+  140–100° W at 12 UTC, is 2.55 and 1.68 K against ERA5's 0.33 K.
 - With fifteen's cloud options (`docs/toa-radiation-bias.md`,
   finding 8), the rise is 4.0–4.1 hPa.
 - The central-three stress is −85 to −91 mN/m² against about −52

@@ -209,14 +209,6 @@ top (relative humidity 0.67 at 2.1 km where about 0.4 is observed).
 
 - The drag law: C_D is neutral COARE over the cold tongue (Ri_b ≈ 0), the
   stable functions engage only below 17.5 °C (earlier finding).
-- Not the ocean. Twelve 120-day ocean-only arms over every column,
-  coordinate, eddy, tracer and closure knob, restored to WOA at
-  30 W/m²/K, leave the equatorial state unchanged within their 0.3 K
-  detection limit (9–24 W/m² of export) and cannot see a slow drift
-  (ocean-hybrid-coordinate.md, row 5). At 0.99 times ERA5's stress
-  (N=64 ocean-only control; Nov 7 audit) the 10 m current is −0.72 m/s
-  against TAO's −0.13 and the undercurrent at 100 m +0.09 against +1.21;
-  the stress excess explains 0.13–0.35 of that current error.
 - The depth of the boundary layer and of the deck as the lever: holding
   the deck at the Richardson depth (0.75 km instead of 1.76 over the cold
   tongue, the momentum mixing at 0.85 km instead of 1.8) leaves the stress
@@ -230,6 +222,17 @@ top (relative humidity 0.67 at 2.1 km where about 0.4 is observed).
   this diagnosis) takes 18 percent off the time-mean stress over
   160W–100W (−106 to −87 mN/m², the last row of the table below) and is
   kept on as a sink the model lacked, not as the cause.
+
+Not ruled out: the ocean. Twelve 120-day ocean-only arms over every
+column, coordinate, eddy, tracer and closure knob, restored to WOA at
+30 W/m²/K, leave the equatorial state unchanged within their 0.3 K
+detection limit (9–24 W/m² of export) and cannot see a slow drift
+(ocean-hybrid-coordinate.md, row 5). At 0.99 times ERA5's stress (N=64
+ocean-only control; Nov 7 audit) the 10 m current is −0.72 m/s against
+TAO's −0.13 and the undercurrent at 100 m +0.09 against +1.21; the
+stress excess explains 0.13–0.35 of that current error. The audit names
+an ocean whose thermocline and undercurrent are wrong at every stress
+among the bias's causes.
 
 ### 4. Knob arms over WOA23's sea surface
 
