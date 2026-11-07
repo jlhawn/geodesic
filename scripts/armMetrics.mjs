@@ -11,14 +11,15 @@
 import { readFileSync } from 'node:fs';
 import { SECTIONS, sectionName as binName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable } from './equatorialSections.mjs';
 import { diagnoseExchange } from './surfaceExchange.mjs';
+import { savedTerrain } from '../js/stateFile.module.js';
 const R = new URL('../', import.meta.url).pathname;
-const [{ stateGeography }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
+const [{ stateGeography, terrainKey }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
   import(R + 'js/geography.module.js'), import(R + 'js/model.module.js'), import(R + 'js/stateFile.module.js'), import(R + 'js/physics/regrid.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/physics/moist.module.js')]);
 const [LABEL, ...FILES] = process.argv.slice(2), LAT = Number(process.env.LAT ?? 3);
 const env = (n) => JSON.parse(process.env[n] ?? '{}');
 const first = await decodeState(new Uint8Array(readFileSync(FILES[0])));
 const { topography, geography, land: landOptions } = stateGeography(first);
-const model = createModel(stateGrid(first, topography).mesh, { topography, geography, land: landOptions, levels: savedLevels(first), ocean: false, radiation: env('RADIATION'), moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
+const model = createModel(stateGrid(first, topography).mesh, { terrain: savedTerrain(first) ?? true, topography, geography, land: landOptions, levels: savedLevels(first), ocean: false, radiation: env('RADIATION'), moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
 const { mesh, core, state, radiation, seaIce, land, surface } = model;
 const { K, C, E, sigmaMid, R: Rd, g, exnerLayer, geopotential } = core.diagnostics;
 const { thetaV } = core.arrays;
@@ -62,6 +63,7 @@ let files = 0;
 for (const file of FILES) {
   const saved = file === FILES[0] ? first : await decodeState(new Uint8Array(readFileSync(file)));
   if (meaned(saved) !== useMeans) throw new Error(`${file} ${useMeans ? 'carries no' : 'carries'} 30-day means, unlike ${FILES[0]}; give saves of one kind`);
+  if (terrainKey(savedTerrain(saved) ?? true) !== terrainKey(savedTerrain(first) ?? true)) throw new Error(`${file} stands on other terrain than ${FILES[0]}; give saves of one run`);
   const means = useMeans ? saved.means : null;
   STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
   seaIce.load(state[6], saved.concentration ?? null);

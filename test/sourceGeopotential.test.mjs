@@ -6,6 +6,7 @@ import { createModel } from '../js/model.module.js';
 import { topographyFromInt16, surfaceGeopotential, decodeSubgrid } from '../js/geography.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { withCadence } from '../js/cadence.module.js';
+import { savedTerrain } from '../js/stateFile.module.js';
 
 /*
  * The page's worker rebalances a saved run's surface pressure from the
@@ -33,3 +34,15 @@ for (const N of [16, 32]) {
     }
   });
 }
+
+test('a state saved over terrain of other options starts on it: the page\'s model and the saved mesh\'s physics-free model take the terrain its header records, so at the same resolution the rebalance has nothing to move', () => {
+  const terrain = { conserveVolume: true }, header = { N: 16, terrain: true, terrainOptions: terrain };
+  assert.deepEqual(savedTerrain(header), terrain);
+  assert.deepEqual(savedTerrain({ terrain: true, given: { terrain } }), terrain);
+  assert.equal(savedTerrain({ terrain: true }), undefined);
+  const recorded = savedTerrain(header) ?? true, subgrid = decodeSubgrid(readFileSync(new URL('../data/subgrid_N16.bin', import.meta.url)));
+  const source = createModel(new Grid(16), { physics: false, levels, topography, terrain: recorded }), plain = createModel(new Grid(16), { physics: false, levels, topography });
+  const options = { topography, subgrid, terrain: recorded, levels }, model = createModel(new Grid(16), { ...options, ...withCadence(options, 1350, 16) });
+  assert.deepEqual(Array.from(model.surfaceGeopotential), Array.from(source.surfaceGeopotential));
+  assert.ok(model.surfaceGeopotential.some((phi, i) => phi !== plain.surfaceGeopotential[i]), 'the recorded terrain is not the default one');
+});

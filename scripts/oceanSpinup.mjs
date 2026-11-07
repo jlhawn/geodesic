@@ -46,7 +46,7 @@ import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appen
 import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { stateGeography, geographyHeader } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
-import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, encodeState, savedLevels, savedTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS, MOIST_FIELDS, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
@@ -149,7 +149,7 @@ async function save(done, step, read = null) {
   const { o, surfaceT, ice, concentration } = read ?? await readSurface();
   const name = nameAt(done, step), landState = await model.land.serialize();
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
-    N, ...gridHeader(mesh), K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: !!model.surfaceGeopotential, ...geographyHeader(record), levels: core.levels,
+    N, ...gridHeader(mesh), K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: saved.terrain ?? !!model.surfaceGeopotential, ...(savedTerrain(saved) ? { terrainOptions: savedTerrain(saved) } : {}), ...geographyHeader(record), levels: core.levels,
     oceanYears: Math.floor(done / DAYS_PER_YEAR), oceanDays: done, ...(step ? { oceanStep: step } : {}),
     pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
     ...Object.fromEntries([...Object.keys(MOIST_FIELDS), ...Object.keys(RADIATION_FIELDS)].filter((name) => saved[name]).map((name) => [name, saved[name]])),

@@ -10509,12 +10509,19 @@ the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
   (rms 117 m), mostly the mesh's two smoothing passes. μ has that mean
   removed, so the height reaches neither the resolved surface nor the
   sub-grid fields: 42 m of the Maritime Continent's mean land height at
-  N=128, 96 m at N=64 (Nov 7 audit). Terrain `conserveVolume` gives each
-  land mass back the volume the two passes take from it, 29 of those
-  42 m at N=128 and 52 of the 96 m at N=64; the rest, lost where a
-  coastal cell's mean takes in the seabed, stays lost, and the bundled
-  files' μ, σ and γ stay those below the default surface. At
-  0.25° GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
+  N=128, 96 m at N=64 (Nov 7 audit). Terrain `conserveVolume` makes the
+  passes trade volume between land neighbors only, so each land mass
+  keeps its volume and each coast its step to the sea: 30 of those 42 m
+  come back at N=128 and 54 of the 96 m at N=64. Steep coasts come out
+  sharper than the default's; 1097 cells at N=128 stand over 50 m above
+  both their unsmoothed and their default heights, up to 531 m. The rest,
+  lost where a coastal cell's mean takes in the seabed at its depth,
+  stays lost. The bundled files' μ, σ and γ stay those below the default
+  surface; against this one μ differs by over 10 % in 274 of the 11,860
+  land cells at N=64 and 660 of the 47,482 at N=128. Under `passes` 0, 1
+  and 3, which keep the files too, μ differs by over 10 % in 4399, 1356
+  and 857 of the N=64 land cells, σ in 1017, 284 and 173. At 0.25°
+  GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
   over land outside Antarctica, 6.5 m (rms 76 m) over Antarctica.
 - σ_flt (§11.3.3): the 30″ orography smoothed at Δ 2 km and at Δ 20 km; the
   square of the difference averaged over each 2′30″ block (5 × 5 points),

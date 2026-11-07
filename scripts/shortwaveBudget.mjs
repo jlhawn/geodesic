@@ -13,7 +13,7 @@
 // up with and EXTRA (JSON) adds to them, MOIST (JSON) sets the moist physics'.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
-import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, savedTerrain } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { savedGeography, checkGeography, readTopography, geographyOptions } from '../js/geography.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS } from '../js/physics/regrid.module.js';
@@ -30,7 +30,7 @@ const RADIATION = withCadence({ radiation: { clearSkyPass: true, ...RADIATION_OP
 const dragEvery = withCadence({ dragEvery: undefined }, dt, N).dragEvery;
 const GEOGRAPHY = checkGeography({ ...savedGeography(saved) });
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
-const model = createModel(stateGrid(saved, topography).mesh, { topography, geography: sheets.geography, ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: {}, surface: {}, land: { ...sheets.land }, dynamics: {}, dragEvery, levels: savedLevels(saved) });
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: savedTerrain(saved) ?? true, topography, geography: sheets.geography, ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: {}, surface: {}, land: { ...sheets.land }, dynamics: {}, dragEvery, levels: savedLevels(saved) });
 const { mesh, core, state, radiation, boundaryLayer: bl, seaIce, land } = model;
 const { K, C, g, geopotential } = core.diagnostics;
 const [pi, theta, , surfaceT, q, qc, ice] = state;

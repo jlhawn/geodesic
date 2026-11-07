@@ -82,8 +82,9 @@
 // js/physics/orography.module.js, e.g. '{"constants":"cy41r2"}' for the
 // IFS's operational G, GKDRAG 0.3, or false),
 // TERRAIN (JSON options for the surface geopotential, see terrainOptions in
-// js/geography.module.js, e.g. '{"conserveVolume":true}' to give each land
-// mass back the volume the smoothing takes from it; without it a run keeps
+// js/geography.module.js, e.g. '{"conserveVolume":true}' to smooth by
+// trading volume between land neighbors only, so each land mass keeps its
+// own and the coasts keep their step to the sea; without it a run keeps
 // the terrain its state records, and a state saved over other terrain has
 // its surface pressure moved onto this one; the bundled sub-grid files,
 // whose μ, σ and γ lie below the default terrain's surface, are kept),
@@ -197,7 +198,7 @@ import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appen
 import { basename } from 'node:path';
 import { Grid } from '../js/grid.module.js';
 import { stateGrid, gridHeader, savedRelax, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
-import { createGeography, stateGeography, savedGeography, checkGeography, geographyHeader, readTopography, geographyOptions, decodeSoilWater, FRESH_GEOGRAPHY, surfaceGeopotential, terrainOptions, rebalanceSurfacePressure } from '../js/geography.module.js';
+import { createGeography, stateGeography, savedGeography, checkGeography, geographyHeader, readTopography, geographyOptions, decodeSoilWater, FRESH_GEOGRAPHY, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
@@ -216,7 +217,7 @@ import { START_CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { SEA_ICE_START_FILE, loadSeaIceStart } from '../js/physics/seaIceStart.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { withCadence } from '../js/cadence.module.js';
-import { headerOptions, differingGroups, savedTerrain, terrainMove } from './stateOptions.mjs';
+import { headerOptions, differingGroups, runTerrain, moveOntoTerrain } from './stateOptions.mjs';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
@@ -277,7 +278,7 @@ if (fromState && fromState.N !== N) throw new Error(`FROM ${process.env.FROM} is
 const base = saved ?? fromState, chosenParts = [['topography', 'TOPOGRAPHY'], ['iceSheets', 'ICE_SHEETS'], ['iceShelves', 'ICE_SHELVES'], ['mask', 'MASK']].filter(([, name]) => process.env[name]);
 const GEOGRAPHY = checkGeography({ ...(base ? savedGeography(base) : FRESH_GEOGRAPHY), ...Object.fromEntries(chosenParts.map(([key, name]) => [key, process.env[name]])) });
 if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (GEOGRAPHY[key] !== value) throw new Error(`${saved ? file : process.env.FROM} is on ${key} ${value}, not ${GEOGRAPHY[key]}`);
-const TERRAIN = GIVEN_TERRAIN ?? (base ? savedTerrain(base) : undefined);
+const TERRAIN = runTerrain(GIVEN_TERRAIN, base);
 if (GIVEN_TERRAIN === undefined && TERRAIN !== undefined) log(`terrain ${JSON.stringify(TERRAIN)}, as ${saved ? file : process.env.FROM} records`);
 const GIVEN_GROUPS = [['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['ocean', 'OCEAN'], ['lake', 'LAKE'], ['ice', 'ICE'], ['dynamics', 'DYNAMICS'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY']].filter(([, name]) => process.env[name] !== undefined);
 const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
@@ -292,11 +293,9 @@ const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mas
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 const deepNote = (land) => (model.land.deepWater ? `deep store of ${model.land.deepCapacity} kg/m² under the trees, ${land && land.deep ? 'from the saved land.deep' : 'started at the root zone\'s fill'}` : '');
 function rebalanceTerrain(source) {
-  const from = terrainMove(source, TERRAIN), to = TERRAIN ?? true;
-  if (from === null || !model.surfaceGeopotential) return;
-  core.diagnose(state[0], state[1], null, null);
-  rebalanceSurfacePressure(core, state[0], state[1], surfaceGeopotential(mesh, model.geography, terrainOptions(from)), model.surfaceGeopotential);
-  log(`surface pressure moved from terrain ${JSON.stringify(from)} onto ${JSON.stringify(to)}`);
+  if (!model.surfaceGeopotential) return;
+  const to = TERRAIN ?? true, from = moveOntoTerrain(source, to, { core, mesh, geography: model.geography }, state, model.surfaceGeopotential);
+  if (from !== null) log(`surface pressure moved from terrain ${JSON.stringify(from)} onto ${JSON.stringify(to)}`);
 }
 
 function loadSaved(saved) {

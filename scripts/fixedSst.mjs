@@ -25,7 +25,7 @@
 // state: what the atmosphere does over the observed sea.
 //   SST=woa DAYS=12 SAVE_DAYS=3 node scripts/fixedSst.mjs STATE.bin OUT TAG
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { stateGeography, geographyHeader, surfaceGeopotential, terrainOptions, rebalanceSurfacePressure } from '../js/geography.module.js';
+import { stateGeography, geographyHeader, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { withCadence } from '../js/cadence.module.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
@@ -38,7 +38,7 @@ import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 import { pressureColumns, residualCirculation, temSums, tropicalTable, temJson, TEM_PRESSURES } from './residualCirculation.mjs';
 import { upperWindLine } from './upperAtmosphere.mjs';
 import { loadSavedLand } from './savedLand.mjs';
-import { headerOptions, savedTerrain, terrainMove } from './stateOptions.mjs';
+import { headerOptions, savedTerrain, moveOntoTerrain } from './stateOptions.mjs';
 
 const [FILE, OUT, TAG] = process.argv.slice(2);
 const DAYS = Number(process.env.DAYS ?? 12), SAVE_DAYS = Number(process.env.SAVE_DAYS ?? 3), SAVE_FROM = Number(process.env.SAVE_FROM ?? 0), SST = process.env.SST ?? 'own', CAP = Number(process.env.CAP ?? 1e12), BATCH = 8;
@@ -62,11 +62,8 @@ if (PERTURB) {
   carried.theta = Float64Array.from(carried.theta, (x) => x * (1 + PERTURB * uniform()));
 }
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(carried[name]));
-if (saved.terrain && (!TERRAIN || terrainMove(saved, TERRAIN) !== null)) {
-  core.diagnose(state[0], state[1], null, null);
-  rebalanceSurfacePressure(core, state[0], state[1], surfaceGeopotential(mesh, model.geography, terrainOptions(SAVED_TERRAIN)), model.surfaceGeopotential);
-  console.log(`surface pressure moved from terrain ${JSON.stringify(SAVED_TERRAIN)} onto ${JSON.stringify(TERRAIN)}`);
-}
+const moved = moveOntoTerrain(saved, TERRAIN, { core, mesh, geography: model.geography }, state, model.surfaceGeopotential);
+if (moved !== null) console.log(`surface pressure moved from terrain ${JSON.stringify(moved)} onto ${JSON.stringify(TERRAIN)}`);
 model.seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
 for (const field of Object.keys(MOIST_FIELDS)) model.moist[field].set(savedMoistField(saved, field, model));

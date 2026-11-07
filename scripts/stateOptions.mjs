@@ -2,7 +2,8 @@ import { DEFAULT_SHORTWAVE } from '../js/physics/radiation.module.js';
 import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { DEFAULT_SOIL } from '../js/physics/land.module.js';
 import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
-import { terrainKey } from '../js/geography.module.js';
+import { terrainKey, terrainOptions, surfaceGeopotential, rebalanceSurfacePressure } from '../js/geography.module.js';
+import { savedTerrain } from '../js/stateFile.module.js';
 
 const SOIL_OPTIONS = ['soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity'];
 export const soilOptions = (land = {}) => Object.fromEntries(SOIL_OPTIONS.filter((name) => land[name] !== undefined).map((name) => [name, land[name]]));
@@ -22,8 +23,8 @@ export function recordedOptions(...layers) {
 
 /*
  * Every option group a run was given, over the defaults recordedOptions
- * records, a group given as false recorded as false: a header's `given`,
- * which the scripts read and the page does not. Later layers win.
+ * records, a group given as false recorded as false: a header's `given`.
+ * Later layers win.
  */
 export function givenOptions(...layers) {
   const groups = new Set([...Object.keys(DEFAULTS), ...layers.flatMap((layer) => Object.keys(layer ?? {}))]);
@@ -48,11 +49,7 @@ const canonical = (value) => (value && typeof value === 'object' && !Array.isArr
  */
 export const differingGroups = (a = {}, b = {}) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((group) => canonical(a[group]) !== canonical(b[group]));
 
-/*
- * The terrain options a state's header records, undefined when it records
- * none (the default terrain).
- */
-export const savedTerrain = (header) => header.given?.terrain ?? header.terrainOptions;
+export { savedTerrain };
 
 /*
  * The terrain whose surface a state's pressure stands on, when a run over
@@ -62,4 +59,24 @@ export const savedTerrain = (header) => header.given?.terrain ?? header.terrainO
 export function terrainMove(header, terrain = true) {
   const from = savedTerrain(header) ?? true;
   return header.terrain && terrainKey(from) !== terrainKey(terrain) ? from : null;
+}
+
+/*
+ * A run's terrain: TERRAIN when given, else the terrain the state it
+ * resumes records, undefined for the default.
+ */
+export const runTerrain = (given, saved) => given ?? (saved ? savedTerrain(saved) : undefined);
+
+/*
+ * Moves a resumed state's surface pressure, state[0] over state[1]'s θ,
+ * from the terrain its header records onto `toPhi`, the surface of a run
+ * over `terrain` (false for none), when that is another surface; returns
+ * the terrain it moved from, or null when nothing moved.
+ */
+export function moveOntoTerrain(header, terrain, { core, mesh, geography }, state, toPhi) {
+  const from = terrain === false ? (header.terrain ? savedTerrain(header) ?? true : null) : terrainMove(header, terrain);
+  if (from === null) return null;
+  core.diagnose(state[0], state[1], null, null);
+  rebalanceSurfacePressure(core, state[0], state[1], surfaceGeopotential(mesh, geography, terrainOptions(from)), toPhi);
+  return from;
 }
