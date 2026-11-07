@@ -360,11 +360,13 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * KCTOP), is no deeper than DEEP_CLOUD_DEPTH, as the IFS's code re-types
  * after the ascent (cumastrn.F90; its documentation types by the test parcel
  * alone). With `shallowRetype` (default false) a column the test parcel
- * leaves shallow runs the deep plume after all where the shallow plume's
- * own ascent, continued past `shallowTop` without tendencies, has a cloud
- * deeper than DEEP_CLOUD_DEPTH from its base interface to the last
- * interface it passes, the other half of that re-typing; `convectionRetype`
- * does not re-type such a column back. With `midLevelConvection` (default
+ * leaves shallow runs the deep plume after all, from the shallow plume's
+ * own source parcel, where that parcel's shallow ascent, continued past
+ * `shallowTop` without tendencies, has a cloud deeper than DEEP_CLOUD_DEPTH
+ * from its base interface to the last interface it passes, the other half
+ * of that re-typing: cumastrn.F90 types and runs one parcel. Where the
+ * deep plume's own cloud is then no deeper than DEEP_CLOUD_DEPTH, the
+ * column keeps its shallow plume. With `midLevelConvection` (default
  * false) a column that no
  * test parcel types deep and whose shallow plume does not rise tries the
  * mid-level type (IFS Cy41r2 Part IV §6.4.3): the lowest layer, from the
@@ -1382,6 +1384,13 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       deep.shallowDepth = shallowCloudDepth(i, pi, theta, q, qc);
       if (deep.shallowDepth > 0) deep.typeMargin = Math.min(deep.typeMargin, Math.abs(deep.shallowDepth - DEEP_CLOUD_DEPTH) / DEEP_CLOUD_DEPTH);
       deepened = deep.deepened = deep.shallowDepth > DEEP_CLOUD_DEPTH;
+      if (deepened) {
+        const own = sourceLayers(i, pi, cumulusSource === 'lowest');
+        source = own.source; mass = own.mass; sourceS = own.sourceS; sourceQ = own.sourceQ; stackBottom = bottom; rooted = true;
+        lcl = liftingCondensationLevel((sourceS - g * z[bottom]) / cp, sourceQ, p[bottom], kappa);
+        lclPressure = lcl ? lcl.pressure : 0;
+        deep.excessT = 0; deep.excessQ = 0; deep.sourceS = sourceS; deep.sourceQ = sourceQ; deep.sourceMass = mass;
+      }
     }
     if (!typed && !deepened) {
       if (plumeExits) {
@@ -1482,7 +1491,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       plumeS[k] = s; plumeQ[k] = w;
     }
     if (top === 0) top = 1;
-    if (retyped && !middle && !deepened && cloudy && top >= 1) {
+    if (((retyped && !middle) || deepened) && cloudy && top >= 1) {
       const depth = pi[i] * (levels[base] - levels[top + 1]);
       deep.typeMargin = Math.min(deep.typeMargin, Math.abs(depth - DEEP_CLOUD_DEPTH) / DEEP_CLOUD_DEPTH);
       if (!(depth > DEEP_CLOUD_DEPTH)) { if (plumeExits) traceExit(i, 5, pi[i] * levels[top]); return cumulusColumn(i, pi, theta, q, qc, dt); }
