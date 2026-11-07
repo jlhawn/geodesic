@@ -2,6 +2,7 @@ import { DEFAULT_SHORTWAVE } from '../js/physics/radiation.module.js';
 import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { DEFAULT_SOIL } from '../js/physics/land.module.js';
 import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
+import { terrainKey } from '../js/geography.module.js';
 
 const SOIL_OPTIONS = ['soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity'];
 export const soilOptions = (land = {}) => Object.fromEntries(SOIL_OPTIONS.filter((name) => land[name] !== undefined).map((name) => [name, land[name]]));
@@ -46,3 +47,19 @@ const canonical = (value) => (value && typeof value === 'object' && !Array.isArr
  * lacks counting as different.
  */
 export const differingGroups = (a = {}, b = {}) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((group) => canonical(a[group]) !== canonical(b[group]));
+
+/*
+ * The terrain options a state's header records, undefined when it records
+ * none (the default terrain).
+ */
+export const savedTerrain = (header) => header.given?.terrain ?? header.terrainOptions;
+
+/*
+ * The terrain whose surface a state's pressure stands on, when a run over
+ * `terrain` resumes it and that is another surface; null when the state
+ * stands on `terrain`'s own surface or has no terrain.
+ */
+export function terrainMove(header, terrain = true) {
+  const from = savedTerrain(header) ?? true;
+  return header.terrain && terrainKey(from) !== terrainKey(terrain) ? from : null;
+}
