@@ -2737,6 +2737,7 @@ export function relativeWindKernels({ physics, pblDiagnose, mixMomentum }) {
       ['let u = IN[S_U + k * E + e];', 'let u = IN[S_U + k * E + e] + select(0.0, lower * PH[PH_UO + e], k == K - 1);'],
       ['share += dt * surfaceDrag * here * here;', 'share += dt * surfaceDrag * (here - PH[PH_UO + e]) * (here - PH[PH_UO + e]);'],
       ['PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1];', 'PH[PH_STRESS + e] = surfaceDrag * (rhs[n - 1] - PH[PH_UO + e]);'],
+      ['  if (total > 0.0) {', '  loss -= 2.0 * dt * surfaceDrag * (rhs[n - 1] - PH[PH_UO + e]) * PH[PH_UO + e];\n  if (total > 0.0) {'],
     ].reduce((body, [from, to]) => replacedOnce(body, from, to), mixMomentum),
   };
 }

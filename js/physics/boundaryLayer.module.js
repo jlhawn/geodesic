@@ -704,6 +704,7 @@ export function createBoundaryLayer(mesh, core, {
         loss += m * (before[k] * before[k] - now * now);
         share[k] = m * change * change;
       }
+      if (flow) loss -= 2 * dt * edgeCoefficient[bottom] * (u[bottom * E + e] - flow) * flow;
       for (let k = kTop; k < bottom; k++) {
         const shear = u[k * E + e] - u[(k + 1) * E + e], part = dt * edgeCoefficient[k] * shear * shear;
         share[k] += part; share[k + 1] += part;

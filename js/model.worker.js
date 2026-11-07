@@ -285,6 +285,7 @@ function placeDeck(model, saved, N) {
   placeCumulus(model, saved && saved.N === N ? saved : null);
   if (model.skin) model.skin.load(saved && saved.N === N ? saved : null);
   placeBoundaryLayer(model, saved && saved.N === N ? saved : null);
+  if (model.seaFlow) { const flow = saved && saved.N === N ? saved.seaFlow : null; if (flow && flow.length === model.seaFlow.length) model.seaFlow.set(flow); else model.seaFlow.fill(0); }
 }
 
 /*
@@ -599,6 +600,7 @@ async function snapshot() {
   Object.assign(arrays, savedCumulus(model));
   for (const name of Object.keys(RADIATION_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   arrays.levels = Float64Array.from(model.core.levels).buffer;
+  if (model.seaFlow) arrays.seaFlow = Float64Array.from(model.seaFlow).buffer;
   if (model.skin) for (const [name, values] of Object.entries(model.skin.serialize())) arrays[name] = values.buffer;
   if (model.lake) for (const [name, values] of Object.entries(lakeArrays(await model.lake.serialize()))) arrays[name] = values.buffer;
   let ocean = null, land = null;

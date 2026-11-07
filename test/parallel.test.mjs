@@ -30,6 +30,26 @@ test('the worker-thread step reproduces the single-thread step bit for bit', asy
   }
 });
 
+test('with surface.relativeWind the worker-thread step reproduces the single-thread step bit for bit, the sea\'s velocity under the air included', async () => {
+  const options = { surface: { relativeWind: true } };
+  const serial = createModel(new Grid(16), options);
+  const parallel = await createParallelModel(new Grid(16), options, 3);
+  try {
+    const init = initializeState(serial, {});
+    for (const model of [serial, parallel]) {
+      for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+      model.ocean.initialize(model.state[3], model.state[6]);
+    }
+    for (let n = 0; n < 10; n++) { serial.step(900); parallel.step(900); }
+    assert.ok(serial.seaFlow.some((x) => Math.abs(x) > 1e-3), 'the sea moves under the air');
+    assert.deepEqual(parallel.seaFlow, serial.seaFlow);
+    for (let a = 0; a < serial.state.length; a++) assert.deepEqual(parallel.state[a], serial.state[a], `array ${a}`);
+    for (let a = 0; a < serial.ocean.state.length; a++) assert.deepEqual(parallel.ocean.state[a], serial.ocean.state[a], `ocean array ${a}`);
+  } finally {
+    await parallel.close();
+  }
+});
+
 test('with penetrating sunlight the worker-thread step reproduces the single-thread step bit for bit, the light waiting below the mixed layer included', async () => {
   const options = { ocean: { penetration: 'IB' } };
   const serial = createModel(new Grid(16), options);

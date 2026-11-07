@@ -122,7 +122,7 @@ export function createModel(gridOrMesh, {
   const aerosol = physics && climatologyOn(radiationOptions) ? createAerosolSampler(mesh, loadAerosol(radiationOptions.aerosolData)) : null;
   const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, ...(aerosol ? { aerosolFields: aerosol.fields } : {}), ...(gusty ? { gustiness: 0 } : {}), virtualDensity: surfaceOptions.virtualDensity === true, exchangeCoefficients: heatCoefficients, referenceCoefficients: rough ? exchange.reference : null, surfaceLayer: rough, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, seaHumidity, ...radiationOptions });
   if (surfaceOptions.relativeWind && !implicitDrag) throw new Error('surface.relativeWind needs the implicit drag of the roughness exchange');
-  const seaFlow = surfaceOptions.relativeWind ? new Float64Array(mesh.nEdges) : null;
+  const seaFlow = surfaceOptions.relativeWind ? new Float64Array(buffers && buffers.seaFlow ? buffers.seaFlow : new SharedArrayBuffer(8 * mesh.nEdges)) : null;
   const virtualBefore = surfaceOptions.virtualDensity === true ? new Float64Array(C).fill(1) : null;
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, heatCoefficients: rough ? heatCoefficients : null, surfaceBuoyancy: rough ? radiation.surfaceBuoyancy : null, surfaceHeat: rough ? radiation.sensibleHeat : null, surfaceEvaporation: rough ? radiation.evaporation : null, implicitDrag, formDrag, ...(gusty ? { surfaceWind: exchange.wind, gustiness: 0 } : {}), land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, deckLayer: radiation.deckInversion === 'subgrid' ? radiation.mlmLayer : null, deckShare: radiation.mlmShare, deckEntrainment: radiation.mlmEntrainment, stratiform: radiation.stratiform, longwave: radiation.longwave, openSea, seaHumidity, depositedHeat: radiation.sensibleHeat, depositedWater: moist ? radiation.evaporation : null, seaFlow, ...boundaryLayerOptions }) : null;
   if (boundaryLayer && boundaryLayer.turbulence === 'moist') radiation.useBoundaryLayer(boundaryLayer.regime, boundaryLayer.mixingTop, boundaryLayer.buoyancyFlux);
@@ -146,6 +146,10 @@ export function createModel(gridOrMesh, {
       const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1], area = 0.5 * (cover(a) + cover(b)), open = flowShelf ? 1 - 0.5 * (flowShelf[a] + flowShelf[b]) : 1;
       seaFlow[e] = edgeOcean[e] ? open * ((1 - area) * water[e] + (drift && drift.valid[e] ? area * drift.velocity[e] : 0)) : 0;
     }
+  }
+  if (seaFlow && ocean && ocean.iceDrift) {
+    const solve = ocean.iceDrift.advance;
+    ocean.iceDrift.advance = (given) => { const moved = solve(given); seaFlowOf(given.ice, given.concentration); return moved; };
   }
   const land = physics && geography ? createLandSurface(mesh, geography, { buffers: buffers ? buffers.land : null, ...landOptions }) : null;
   const landMask = geography ? geography.land : null;
@@ -198,7 +202,7 @@ export function createModel(gridOrMesh, {
       }
       if (lake) for (const i of lake.cells) { runoffStep[i] = lake.passed[i] - lakeSeen[i]; lakeSeen[i] = lake.passed[i]; }
       ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoffStep, dischargeStep);
-      ocean.advance(state[3], state[6], seaIce.oceanFlux, () => { const stress = surface.stress(state, stressScratch); if (seaFlow && ocean.u) seaFlowOf(state[6], seaIce.concentration); return stress; }, dt, seaIce.concentration, model.time + dt);
+      ocean.advance(state[3], state[6], seaIce.oceanFlux, () => { const stress = surface.stress(state, stressScratch); if (seaFlow && ocean.u && !ocean.iceDrift) seaFlowOf(state[6], seaIce.concentration); return stress; }, dt, seaIce.concentration, model.time + dt);
     },
     physics(iFrom, iTo, dt, sums) {
       if (!physics) return;
@@ -317,10 +321,10 @@ export function createModel(gridOrMesh, {
 
   let rk4 = null;
   const model = {
-    mesh, core, radiation, aerosol, surface, exchange, moist: moistPhysics, seaIce, ocean, lake, skin: seaSkin, boundaryLayer, gravityWaves, geography, geographyRecord: geographyRecordOf(topography, geographyOptions), land, orography, surfaceGeopotential: phis, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
+    mesh, core, radiation, aerosol, surface, exchange, moist: moistPhysics, seaIce, ocean, lake, skin: seaSkin, boundaryLayer, gravityWaves, geography, geographyRecord: geographyRecordOf(topography, geographyOptions), land, orography, surfaceGeopotential: phis, surfaceAlbedo, seaFlow, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
     radiationSteps: 0,
     energyRecord: createEnergyRecord(),
-    shared: { skin: seaSkin ? seaSkin.shared : null, core: core.shared, surface: surface.shared, exchange: exchange ? exchange.shared : null, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, gravityWaves: gravityWaves ? gravityWaves.shared : null, orography: orography ? orography.shared : null, drags: dragBuffer, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
+    shared: { skin: seaSkin ? seaSkin.shared : null, core: core.shared, surface: surface.shared, exchange: exchange ? exchange.shared : null, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, gravityWaves: gravityWaves ? gravityWaves.shared : null, orography: orography ? orography.shared : null, drags: dragBuffer, ...(seaFlow ? { seaFlow: seaFlow.buffer } : {}), land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
   model.oceanFields = (depth = 0, upwellingDepth = depth) => (ocean ? ocean.fields(depth, upwellingDepth) : null);
