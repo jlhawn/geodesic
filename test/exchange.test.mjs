@@ -310,6 +310,41 @@ test('surface.virtualDensity lowers the evaporation alike on both engines: the f
   }
 });
 
-test('the GPU refuses a surface.gustiness other than 3 m/s', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const surface of [{ exchange: 'fixed', gustiness: 6 }, { gustiness: 2 }]) await assert.rejects(createGpuModel(new Grid(16), { topography, surface }), /surface\.gustiness/);
+test('surface.gustiness moves the first step alike on both engines: the evaporation, the sensible heat and the lowest wind, with the fixed exchange and with the roughness one', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const [label, exchange] of [['fixed', { exchange: 'fixed' }], ['roughness', {}]]) {
+    const runs = [];
+    for (const surface of [{ ...exchange, gustiness: 6 }, exchange]) {
+      const cpu = prepare(createModel(new Grid(16), { topography, surface })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface }));
+      cpu.step(900); await gpu.step(900); await gpu.settle(); await gpu.sync();
+      const { nCells: C, nEdges: E } = cpu.mesh, PH = gpu.gpu.layout.PH, lowest = (cpu.core.K - 1) * E;
+      const [evaporation, heat] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['EVAP', 'SFLUX'].map((name) => ({ offset: PH[name], length: C })));
+      runs.push({
+        cpu: { E: Float64Array.from(cpu.radiation.evaporation, (x) => 2.5e6 * x), H: Float64Array.from(cpu.radiation.surfaceFlux), u: Float64Array.from(cpu.state[2].subarray(lowest, lowest + E)) },
+        gpu: { E: Float64Array.from(evaporation, (x) => 2.5e6 * x), H: Float64Array.from(heat), u: Float64Array.from(gpu.state[2].subarray(lowest, lowest + E)) },
+      });
+      gpu.destroy();
+    }
+    const [on, off] = runs, flux = {};
+    for (const name of ['E', 'H']) {
+      const f = (flux[name] = { apart: 0, moveApart: 0, mean: 0, largest: 0 }), n = on.cpu[name].length;
+      for (let i = 0; i < n; i++) {
+        const cpuMove = on.cpu[name][i] - off.cpu[name][i], gpuMove = on.gpu[name][i] - off.gpu[name][i];
+        f.apart = Math.max(f.apart, Math.abs(on.gpu[name][i] - on.cpu[name][i]) - 1e-5 * Math.abs(on.cpu[name][i]));
+        f.moveApart = Math.max(f.moveApart, Math.abs(gpuMove - cpuMove) - 2e-5 * Math.abs(on.cpu[name][i]));
+        f.mean += cpuMove / n;
+        f.largest = Math.max(f.largest, Math.abs(cpuMove));
+      }
+    }
+    let gap = 0, move = 0;
+    for (let e = 0; e < on.cpu.u.length; e++) {
+      const cpuMove = on.cpu.u[e] - off.cpu.u[e], gpuMove = on.gpu.u[e] - off.gpu.u[e];
+      gap += (gpuMove - cpuMove) ** 2;
+      move += cpuMove ** 2;
+    }
+    const windMove = Math.sqrt(move / on.cpu.u.length), windApart = Math.sqrt(gap / move);
+    console.log(`${label} exchange, gust 6 against 3 m/s: the evaporation moves ${flux.E.mean.toFixed(3)} W/m² in the mean, ${flux.E.largest.toFixed(2)} at most, the sensible heat ${flux.H.mean.toFixed(3)} and ${flux.H.largest.toFixed(2)}; the engines are apart by ${flux.E.apart.toExponential(1)} and ${flux.H.apart.toExponential(1)} W/m², their moves by ${flux.E.moveApart.toExponential(1)} and ${flux.H.moveApart.toExponential(1)}; the lowest wind moves ${windMove.toExponential(2)} m/s rms, the engines' moves apart by ${windApart.toExponential(1)} of it`);
+    for (const name of ['E', 'H']) assert.ok(flux[name].apart < 0.05 && flux[name].moveApart < 0.05, `${label} ${name}: apart ${flux[name].apart}, its move ${flux[name].moveApart} W/m²`);
+    assert.ok(windApart < 0.02, `${label}: the lowest wind's moves apart by ${windApart} of them`);
+    assert.ok(flux.E.largest > 1 && windMove > 1e-4, `${label}: the gust moves the evaporation by up to ${flux.E.largest} W/m² and the lowest wind by ${windMove} m/s`);
+  }
 });
