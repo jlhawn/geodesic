@@ -197,6 +197,59 @@ export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
 }
 
 /*
+ * Under shearDiffusivityResolution { scale s, power p } the shear-scaled
+ * diffusivity is scaled edge by edge by MOM6's resolution function (Hallberg
+ * 2013, Ocean Modell. 72, 92): 1/(1 + (s R_d/Δ)^p), R_d the deformation
+ * radius of deformationRadii and Δ the edge's spacing, so it falls away
+ * where the grid resolves the eddies the diffusion stands in for, at the
+ * equator the tropical instability waves. true takes s 1 and p 2, the form
+ * that scales the eddy diffusivity.
+ */
+export const SHEAR_RESOLUTION = { scale: 1, power: 2 };
+export function shearResolutionOptions(o) {
+  if (!o) return null;
+  const out = { ...SHEAR_RESOLUTION, ...(o === true ? {} : o) };
+  if (!(out.scale > 0) || !(out.power > 0)) throw new Error(`shearDiffusivityResolution takes a positive scale and power, not ${out.scale} and ${out.power}`);
+  return out;
+}
+export function shearResolution(mesh, { scale, power }) {
+  const { dcEdge } = mesh;
+  return Float64Array.from(deformationRadii(mesh), (radius, e) => 1 / (1 + (scale * radius / dcEdge[e]) ** power));
+}
+
+/*
+ * The interior's background diffusivity κ_b by latitude φ, cell by cell.
+ * 'uniform' holds κ_b everywhere. 'henyey' is MOM6's HENYEY_IGW_BACKGROUND,
+ * OM4's form (Harrison and Hallberg 2008, J. Phys. Oceanogr. 38, 1894,
+ * after Henyey, Wright and Flatté 1986): κ = max(κ_eq, κ_b G(φ)/G(30°))
+ * with G(φ) = |sin φ| arccosh(n/|sin φ|) and n = N0/2Ω = 20, so κ_b is the
+ * value at 30° and the poles take 1.68 κ_b. 'equatorial' is MOM025's
+ * (Holmes, Zika and England 2019, J. Phys. Oceanogr. 49, 141): κ_b poleward
+ * of 15°, κ_eq within 5°, and between them a raised cosine in latitude
+ * where MOM025 ramps linearly.
+ */
+export const BACKGROUND_LATITUDES = ['uniform', 'henyey', 'equatorial'];
+export const HENYEY_RATIO = 20, HENYEY_SINE_FLOOR = 1e-10, EQUATORIAL_BACKGROUND = { inner: 5, outer: 15 };
+export function backgroundDiffusivities(mesh, shape, kappa, equatorial) {
+  const { nCells: C, latCell } = mesh;
+  const out = new Float64Array(C).fill(kappa);
+  if (shape === 'henyey') {
+    const atThirty = 0.5 * Math.acosh(2 * HENYEY_RATIO);
+    for (let i = 0; i < C; i++) {
+      const s = Math.max(HENYEY_SINE_FLOOR, Math.abs(Math.sin(latCell[i])));
+      out[i] = Math.max(equatorial, kappa * s * Math.acosh(HENYEY_RATIO / s) / atThirty);
+    }
+  } else if (shape === 'equatorial') {
+    const { inner, outer } = EQUATORIAL_BACKGROUND;
+    for (let i = 0; i < C; i++) {
+      const x = (Math.abs(latCell[i]) * 180 / Math.PI - inner) / (outer - inner);
+      if (x < 1) out[i] = equatorial + (kappa - equatorial) * 0.5 * (1 - Math.cos(Math.PI * Math.max(0, x)));
+    }
+  } else if (shape !== 'uniform') throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${shape}`);
+  return out;
+}
+
+/*
  * Mixed-layer eddy restratification: the overturning that submesoscale
  * eddies drive across a lateral buoyancy front in the mixed layer,
  * Fox-Kemper, Ferrari & Hallberg (2008, J. Phys. Oceanogr. 38, 1145) with
@@ -216,7 +269,13 @@ export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
  * carries Ψ(top) − Ψ(bottom) from a to b, which sends light water over
  * dense, with the donor's temperature and salinity. H is the boundary
  * depth of the column physics run through a mean that jumps to a deeper
- * depth at once and relaxes to a shallower one over decayDays.
+ * depth at once and relaxes to a shallower one over decayDays. A
+ * taperLatitude φ_t scales Ψ by |f|/√(f² + f_t²), f_t = 2Ω sin φ_t, which
+ * goes to zero at the equator: the change in Fox-Kemper et al.'s (2011)
+ * scaling when the front's width follows the mixed layer's deformation
+ * radius NH/|f| (Fox-Kemper, Ferrari and Hallberg 2008) where |f| < f_t
+ * instead of holding at Lf. MOM6's OM4 form has no taper: its τ tends to
+ * H/(2κπ²u*) as f → 0.
  */
 export const RESTRATIFICATION = { coefficient: 1, frontLength: 500, decayDays: 30 };
 export const RESTRATIFICATION_VON_KARMAN = 0.41, RESTRATIFICATION_PI_SQUARED = 9.8696, RESTRATIFICATION_USTAR_MIN = 1e-6, RESTRATIFICATION_NEGLECT = 1e-9;
@@ -224,7 +283,15 @@ export function restratificationOptions(option) {
   if (!option) return null;
   const o = { ...RESTRATIFICATION, ...(option === true ? {} : option) };
   if (!(o.coefficient > 0) || !(o.frontLength > 0) || !(o.decayDays >= 0)) throw new Error(`mixedLayerRestratification takes a positive coefficient and frontLength and a non-negative decayDays, not ${o.coefficient}, ${o.frontLength} and ${o.decayDays}`);
+  if (o.taperLatitude !== undefined && !(o.taperLatitude >= 0 && o.taperLatitude < 90)) throw new Error(`mixedLayerRestratification's taperLatitude is a latitude from 0 to 90 degrees, not ${o.taperLatitude}`);
   return o;
+}
+export function restratificationScale(mesh, restrat) {
+  const { dcEdge, fEdge, omega } = mesh, taper = restrat.taperLatitude > 0 ? 2 * omega * Math.sin(restrat.taperLatitude * Math.PI / 180) : 0;
+  return Float64Array.from(deformationRadii(mesh), (radiusE, e) => {
+    const scale = restrat.coefficient * Math.min(dcEdge[e], radiusE) / restrat.frontLength;
+    return taper > 0 ? scale * Math.abs(fEdge[e]) / Math.hypot(fEdge[e], taper) : scale;
+  });
 }
 export function restratificationShape(s) {
   const x = 2 * s + 1, x2 = x * x;
@@ -288,10 +355,26 @@ export function beyondCells(mesh) {
  * the upwind one holds no water in the layer.
  */
 export const TRACER_ADVECTIONS = ['upwind', 'third'], EDGE_TRANSPORTS = ['remapped', 'kept'], SHEAR_DIFFUSIVITY = 0.2, HYCOM_DIFFUSION_SPEED = 0.005;
+export const EDDY_TRACERS = ['donor', 'third', 'centered'];
 export function limitedEdgeValue(field, up, down, uu, dUp, dCentral) {
   const phiU = field[up], central = field[down] - phiU;
   if (central === 0) return phiU;
   const r = (phiU - field[uu]) * dCentral / dUp / central;
+  return phiU + 0.5 * Math.max(0, Math.min(2 * r, (2 + r) / 3, 2)) * central;
+}
+
+/*
+ * limitedEdgeValue on the values themselves, `ratio` being dCentral/dUp.
+ * Under eddyTracers 'third' or 'centered' an eddy-phase layer flux carries
+ * this value or the two cells' mean, moved toward the donor's own in
+ * proportion to the share of the donor's allowance the flux takes, so that
+ * a layer the flux nearly drains keeps a bounded value; under 'donor' it
+ * carries the donor's.
+ */
+export function limitedFaceValue(phiU, phiD, phiUU, ratio) {
+  const central = phiD - phiU;
+  if (central === 0) return phiU;
+  const r = (phiU - phiUU) * ratio / central;
   return phiU + 0.5 * Math.max(0, Math.min(2 * r, (2 + r) / 3, 2)) * central;
 }
 
@@ -466,13 +549,14 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2, langmuirIce = 'tanh',
-  momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
+  momentumDepth = 50, shearViscosity = 1e-2, shearCutoff = Infinity, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureScale = 1, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'rh18', langmuirScheme = 'rescale', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
-  tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
+  backgroundLatitude = 'uniform', equatorialDiffusivity = 1e-6,
+  tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, shearDiffusivityResolution = false, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
-  iceDrift = false, mixedLayerRestratification = true,
+  iceDrift = false, mixedLayerRestratification = true, eddyTracers = 'donor',
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -491,10 +575,17 @@ export function createOcean(mesh, {
   const advection = tracerAdvection;
   if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
   if (!EDGE_TRANSPORTS.includes(edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${edgeTransport}`);
+  if (!EDDY_TRACERS.includes(eddyTracers)) throw new Error(`eddyTracers is one of ${EDDY_TRACERS.join(', ')}, not ${eddyTracers}`);
+  if (eddyTracers === 'third' && advection !== 'third') throw new Error("eddyTracers 'third' reads the beyond cells of tracerAdvection 'third'");
   const beyond = advection === 'third' ? beyondCells(mesh) : null;
   const shearDiffusion = shearDiffusivity;
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
   if (advection === 'third' && !(shearDiffusion > 0)) throw new Error('the limited third-order tracer flux admits grid-scale noise that the shear-scaled diffusion of the surface layers damps, so tracerAdvection third needs shearDiffusivity above zero');
+  const shearResolve = shearResolutionOptions(shearDiffusivityResolution), shearScale = shearResolve ? shearResolution(mesh, shearResolve) : null;
+  if (!(shearCutoff > 0)) throw new Error(`shearCutoff is a positive Richardson number, or Infinity for none, not ${shearCutoff}`);
+  if (!BACKGROUND_LATITUDES.includes(backgroundLatitude)) throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${backgroundLatitude}`);
+  if (!(equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${equatorialDiffusivity}`);
+  const backgroundKappa = backgroundLatitude === 'uniform' ? null : backgroundDiffusivities(mesh, backgroundLatitude, backgroundDiffusivity, equatorialDiffusivity);
   const lateralSpeed = lateralDiffusionSpeed;
   if (!(lateralSpeed >= 0)) throw new Error(`lateralDiffusionSpeed is a non-negative velocity scale, not ${lateralSpeed}`);
   const table = layerTable;
@@ -506,10 +597,11 @@ export function createOcean(mesh, {
   let spacing = 0, minSpacing = Infinity;
   for (let e = 0; e < E; e++) { spacing += dcEdge[e]; minSpacing = Math.min(minSpacing, dcEdge[e]); }
   spacing /= E;
-  const nu4 = closureCoefficient(spacing, closureHours, closureSpacing);
+  if (!(closureScale >= 0 && closureScale < Infinity)) throw new Error(`closureScale is a non-negative factor on the ∇⁴ closure, not ${closureScale}`);
+  const nu4 = closureCoefficient(spacing, closureHours, closureSpacing) * closureScale;
   const restrat = restratificationOptions(mixedLayerRestratification);
   const eddyKappa = eddyDiffusivities(mesh, eddyDiffusivity), eddyLimit = eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0, eddyFirst = restrat ? 0 : 1;
-  const restratScale = restrat ? Float64Array.from(deformationRadii(mesh), (radiusE, e) => restrat.coefficient * Math.min(dcEdge[e], radiusE) / restrat.frontLength) : null;
+  const restratScale = restrat ? restratificationScale(mesh, restrat) : null;
   let eddy = null;
 
   const { water, cellOcean, shelf, cellOpen, draft } = oceanCells(C, geography);
@@ -740,7 +832,7 @@ export function createOcean(mesh, {
           if (sheared) curl(mesh, uIn.subarray(oe, oe + E), zeta);
           for (let e = 0; e < E; e++) {
             const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], dc = dcEdge[e];
-            const kappa = lateralSpeed * dc + (sheared ? Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc) : 0);
+            const kappa = lateralSpeed * dc + (sheared ? Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc) * (shearScale ? shearScale[e] : 1) : 0);
             const weight = edgeOcean[e] ? kappa * hEdge[oe + e] / dc : 0;
             tracerFlux[e] = -weight * (T[b] - T[a]); edgeS[e] = -weight * (S[b] - S[a]);
           }
@@ -995,7 +1087,27 @@ export function createOcean(mesh, {
       for (let k = eddyFirst; k < L; k++) eddyFlux[k * E + e] = scale * classFlux[k];
     }
   }
+  const carried = new Float64Array(2);
+  function eddyEdgeValues(k, e, f, dt) {
+    const side = f > 0 ? 0 : 1, up = cellsOnEdge[2 * e + side], down = cellsOnEdge[2 * e + 1 - side], u = at(k, up), d = at(k, down);
+    let T = Q[u] / h[u], S = W[u] / h[u];
+    if (h[d] > 1e-6) {
+      const Td = Q[d] / h[d], Sd = W[d] / h[d];
+      let Tl = T, Sl = S;
+      if (eddyTracers === 'centered') { Tl = 0.5 * (T + Td); Sl = 0.5 * (S + Sd); } else {
+        const uu = beyond.cell[2 * e + side];
+        if (uu >= 0 && cellOcean[uu] && h[at(k, uu)] > 1e-6) {
+          const ratio = dcEdge[e] / dcEdge[beyond.edge[2 * e + side]], n = at(k, uu);
+          Tl = limitedFaceValue(T, Td, Q[n] / h[n], ratio); Sl = limitedFaceValue(S, Sd, W[n] / h[n], ratio);
+        }
+      }
+      const allowance = (Math.max(0, h[u] - EPS) + EDDY_SLACK) * areaCell[up] / (nEdgesOnCell[up] * dt), blend = Math.max(0, 1 - Math.abs(f) / allowance);
+      T += blend * (Tl - T); S += blend * (Sl - S);
+    }
+    carried[0] = T; carried[1] = S;
+  }
   function eddyCells(from, to) {
+    const dt = params[1];
     for (let i = from; i < to; i++) {
       for (let k = 0; k < L; k++) { const n = at(k, i); eddyVolume[n] = 0; eddyHeat[n] = 0; eddySalt[n] = 0; }
       if (!cellOcean[i]) continue;
@@ -1005,7 +1117,9 @@ export function createOcean(mesh, {
           const f = eddyFlux[k * E + e];
           if (f === 0) continue;
           const d = at(k, f > 0 ? a : b), n = at(k, i);
-          eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * Q[d] / h[d]); eddySalt[n] += sign * (f * W[d] / h[d]);
+          if (eddyTracers === 'donor') { eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * Q[d] / h[d]); eddySalt[n] += sign * (f * W[d] / h[d]); continue; }
+          eddyEdgeValues(k, e, f, dt);
+          eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * carried[0]); eddySalt[n] += sign * (f * carried[1]);
         }
       }
     }
@@ -1061,12 +1175,13 @@ export function createOcean(mesh, {
    * barotropic sub-stepping with each RK4 stage's trial state written to
    * alternating buffers and the stage, sub-step and averaging weight in
    * params[4..6]; the columns are then rescaled to the sub-step mean of
-   * the free surface and shifted to the mean transport, which lags the
-   * barotropic mode by half a step but is the only
-   * filter the split has, the end-of-window state alone running to the
-   * speed limit within months) reading the step's relax from params[2]
-   * and dt from
-   * params[1], so a column runner (setColumnRunner) can hand the ranges
+   * the free surface and shifted to the mean transport, which moves the
+   * barotropic mode each step by (1 + 1/M)/2 of its change over the M
+   * sub-steps (0.52 at M = 21), so it evolves at about half its rate, but
+   * is the only filter the split has, the end-of-window state alone
+   * running to the speed limit within months) reading the step's relax
+   * from params[2] and dt from params[1], so a column runner
+   * (setColumnRunner) can hand the ranges
    * to worker threads that adopt the shared arrays; counts holds the dried
    * and clamped tallies.
    */
@@ -1140,13 +1255,14 @@ export function createOcean(mesh, {
   }
   function columnCells(from, to) {
     const dt = params[1], { h: hCol, T: TCol, S: SCol, rho: rhoCol, shear, kappa, nu, vector } = cols, out = { kappa, nu };
-    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, mstarScheme, langmuirScheme, nstar, langmuir, shearViscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
+    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, mstarScheme, langmuirScheme, nstar, langmuir, shearViscosity, shearCutoff, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
     for (let i = from; i < to; i++) {
       if (!cellOcean[i]) { mixedDepths[i] = 0; boundaryDepths[i] = 0; continue; }
       cellColumn(i, hCol, TCol, SCol);
       for (let k = 0; k < L; k++) cellVectorAt(k, i, vector, 3 * k);
       for (let k = 0; k < L - 1; k++) shear[k] = (vector[3 * k] - vector[3 * k + 3]) ** 2 + (vector[3 * k + 1] - vector[3 * k + 4]) ** 2 + (vector[3 * k + 2] - vector[3 * k + 5]) ** 2;
       options.guess = boundaryDepths[i]; options.langmuir = shelf[i] ? 0 : langmuir; options.waves = waves[i];
+      if (backgroundKappa) options.backgroundDiffusivity = backgroundKappa[i];
       const buoyancy = mstarScheme === 'rh18' && !shelf[i] ? surfaceBuoyancy(TCol[0], SCol[0], heatIn[i], saltIn[i], dt, g) : 0;
       let meltHeat = 0, meltSalt = 0;
       if (shelf[i] && meltOn) {
