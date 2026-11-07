@@ -402,4 +402,6 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
     }
     console.log(`${label} exchange, virtualDensity against none (relative rms): ${report.join('; ')}`);
   }
+  assert.throws(() => createModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
+  await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
 });

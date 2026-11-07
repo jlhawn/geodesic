@@ -289,7 +289,8 @@ export function createBoundaryLayer(mesh, core, {
   const keptTheta = diagnoseFirst ? new Float64Array(C) : null, keptWater = diagnoseFirst ? new Float64Array(C) : null;
 
   function diagnose(state, iFrom = 0, iTo = C, dt = 0) {
-    if (!(diagnoseFirst && dt > 0)) { diagnoseColumns(state, iFrom, iTo); return; }
+    if (!diagnoseFirst) { diagnoseColumns(state, iFrom, iTo); return; }
+    if (!(dt > 0)) throw new Error(`diagnoseFirst withholds the step's deposited fluxes over its dt, which must be above 0, not ${dt}`);
     const [pi, theta, , , q = null, qc = null] = state, wet = q && depositedWater;
     for (let i = iFrom; i < iTo; i++) {
       const base = bottom * C + i;

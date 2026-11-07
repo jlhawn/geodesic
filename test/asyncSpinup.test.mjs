@@ -102,6 +102,7 @@ test('the hand-off takes the sea surface, ice and ocean, keeps the atmosphere, t
   assert.deepEqual([merged.day, merged.time, merged.oceanYears], [730, 730 * 86400, 200]);
   for (const name of SST_FIELDS) assert.ok(!(name in merged), name);
   assert.throws(() => withOceanOf(coupled, { ...alone, N: 32 }, land), /N=32/);
+  assert.ok(!('seaFlow' in withOceanOf({ ...coupled, seaFlow: Float32Array.of(0.25) }, alone, land)), 'the coupled state\'s sea velocity under the air stays behind with its ocean');
 });
 
 test('the driver leaves a lock held in this boot by another live driver alone and takes over one taken in an earlier boot or carrying its own pid', () => {

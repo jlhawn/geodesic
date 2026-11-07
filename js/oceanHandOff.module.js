@@ -21,8 +21,9 @@ export function withOceanOf(coupled, ocean, land) {
   if (!ocean.ocean || !ocean.ocean.h) throw new Error('the state to take the ocean from has no ocean');
   const sea = (mine, theirs) => Float32Array.from(mine, (x, i) => (land[i] ? x : theirs[i]));
   const concentration = ocean.concentration ? (coupled.concentration ? sea(coupled.concentration, ocean.concentration) : Float32Array.from(ocean.concentration)) : null;
+  const { seaFlow, ...atmosphere } = withoutSstRing(coupled);
   return {
-    ...withoutSstRing(coupled),
+    ...atmosphere,
     surfaceT: sea(coupled.surfaceT, ocean.surfaceT),
     ice: sea(coupled.ice, ocean.ice),
     concentration,
