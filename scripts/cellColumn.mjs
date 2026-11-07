@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
-import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, savedTerrain } from '../js/stateFile.module.js';
 import { THIN } from '../js/ocean/layered.module.js';
 import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 const CELL = Number(process.env.CELL ?? 6777);
@@ -13,8 +13,8 @@ const topography = topographyFromInt16(readFileSync(new URL('../data/topography_
 let model = null, modelKey = null;
 for (const file of process.argv.slice(2)) {
   const saved = await decodeState(new Uint8Array(readFileSync(file)));
-  const key = `${saved.N} ${stateRelax(saved, topography).relax} ${savedLevels(saved).join(',')}`;
-  if (key !== modelKey) { model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') } }); modelKey = key; }
+  const key = `${saved.N} ${stateRelax(saved, topography).relax} ${savedLevels(saved).join(',')} ${JSON.stringify(savedTerrain(saved) ?? null)}`;
+  if (key !== modelKey) { model = createModel(stateGrid(saved, topography).mesh, { terrain: savedTerrain(saved) ?? true, topography, levels: savedLevels(saved), ocean: { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') } }); modelKey = key; }
   const { mesh, ocean, state } = model;
   STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
   ocean.load(saved.ocean, state[3], state[6]);

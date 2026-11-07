@@ -5,7 +5,7 @@
 // writing explain/data/surface_budget.json. About 25 minutes on one core.
 import { writeFileSync } from 'node:fs';
 import { createModel } from '../js/model.module.js';
-import { savedLevels } from '../js/stateFile.module.js';
+import { savedLevels, savedTerrain } from '../js/stateFile.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { LATENT_HEAT, placeCumulus } from '../js/physics/moist.module.js';
 import { readTopography, readState, tagOf } from './figures/figureState.mjs';
@@ -16,7 +16,7 @@ const out = process.argv[3] ?? new URL('../explain/data/surface_budget.json', im
 const saved = await readState(file);
 const dt = 1350 * 16 / saved.N, steps = Number(process.env.STEPS ?? Math.round(86400 / dt));
 const topography = readTopography(saved);
-const model = createModel(stateGrid(saved, topography).mesh, { ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography });
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: savedTerrain(saved) ?? true, ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography });
 const { moist, boundaryLayer, radiation, mesh, geography } = model, C = mesh.nCells;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => model.state[a].set(saved[name]));
 if (saved.boundaryDepth) boundaryLayer.depth.set(saved.boundaryDepth);

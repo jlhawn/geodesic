@@ -30,7 +30,7 @@
 import { readFileSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
-import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, savedTerrain } from '../js/stateFile.module.js';
 import { DAY } from '../js/physics/radiation.module.js';
 import { SNOW_AGEING } from '../js/physics/ice.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
@@ -41,7 +41,7 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const TIMES = Number(process.env.TIMES ?? 48), LAND = JSON.parse(process.env.LAND ?? '{}'), ICE = JSON.parse(process.env.ICE ?? '{}'), AT = Number(process.env.DAY ?? saved.day);
 const SNOWY = 10, MELTING = 273.15;
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, land: LAND, ice: ICE });
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: savedTerrain(saved) ?? true, topography, levels: savedLevels(saved), ocean: false, land: LAND, ice: ICE });
 const { mesh, state, seaIce, land, geography, radiation } = model;
 const C = mesh.nCells, deg = 180 / Math.PI;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
