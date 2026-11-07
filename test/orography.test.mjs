@@ -129,9 +129,9 @@ test('over a wind that weakens with height the waves break low, and the stress n
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 
-function prepare(model) {
+function prepare(model, f32 = false) {
   const init = initializeState(model, {});
-  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  for (let a = 0; a < init.length; a++) model.state[a].set(f32 ? Array.from(init[a], Math.fround) : init[a]);
   model.seaIce.load(model.state[6]);
   if (model.load) model.load();
   model.ocean.initialize(model.state[3], model.state[6]);
@@ -189,18 +189,25 @@ test('without the scheme the model has no orographic drag', () => {
   assert.equal(model.orography, null);
 });
 
-test('both engines lay the same blocking, wave drag, stress and gusty wind', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test("both engines lay the same blocking, wave drag, stress and gusty wind over the bundled file's fields and over the raster's, each value the CPU's from the same start or from that start rounded to f32, the GPU's own", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const levels = sigmaInterfaces('bl34'), dt = 1350;
-  const cpu = prepare(createModel(new Grid(16), { topography, levels }));
-  const gpu = prepare(await createGpuModel(new Grid(16), { topography, levels }));
-  cpu.step(dt); await gpu.step(dt); await gpu.settle();
-  const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells, E = cpu.mesh.nEdges, K = cpu.core.K;
-  const [beta, wave, stress, launch, wind, drag] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [['OBETA', K * C], ['OWAVE', K * C], ['OSTRESS', E], ['OLAUNCH', C], ['XWIND', C], ['DRAG', C]].map(([name, length]) => ({ offset: PH[name], length })));
-  const apart = (a, b) => { let worst = 0, scale = 0; for (let n = 0; n < b.length; n++) { worst = Math.max(worst, Math.abs(a[n] - b[n])); scale = Math.max(scale, Math.abs(b[n])); } return worst / scale; };
-  const o = cpu.orography;
-  const report = { beta: apart(beta, o.beta), wave: apart(wave, o.wave), stress: apart(stress, o.stress), launch: apart(launch, o.launch), wind: apart(wind, cpu.exchange.wind), drag: apart(drag, cpu.exchange.drag) };
-  console.log(`engines apart, largest difference over largest value: ${Object.entries(report).map(([k, v]) => `${k} ${v.toExponential(1)}`).join(', ')}`);
-  for (const [k, v] of Object.entries(report)) assert.ok(v < 1e-3, `${k} ${v}`);
+  const apart = (a, b, c) => { let worst = 0, scale = 0; for (let n = 0; n < b.length; n++) { worst = Math.max(worst, Math.min(Math.abs(a[n] - b[n]), Math.abs(a[n] - c[n]))); scale = Math.max(scale, Math.abs(b[n])); } return worst / scale; };
+  for (const [fields, given] of [['the bundled file\'s fields', {}], ['the raster\'s fields', { subgrid: false }]]) {
+    const options = { topography, levels, ...given };
+    const cpu = prepare(createModel(new Grid(16), options)), rounded = prepare(createModel(new Grid(16), options), true);
+    const gpu = prepare(await createGpuModel(new Grid(16), options));
+    assert.equal(cpu.orography.fields.raster, given.subgrid === false || undefined);
+    cpu.step(dt); rounded.step(dt); await gpu.step(dt); await gpu.settle();
+    const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells, E = cpu.mesh.nEdges, K = cpu.core.K;
+    const [beta, wave, stress, launch, wind, drag] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [['OBETA', K * C], ['OWAVE', K * C], ['OSTRESS', E], ['OLAUNCH', C], ['XWIND', C], ['DRAG', C]].map(([name, length]) => ({ offset: PH[name], length })));
+    const o = cpu.orography, r = rounded.orography;
+    const report = { beta: apart(beta, o.beta, r.beta), wave: apart(wave, o.wave, r.wave), stress: apart(stress, o.stress, r.stress), launch: apart(launch, o.launch, r.launch), wind: apart(wind, cpu.exchange.wind, rounded.exchange.wind), drag: apart(drag, cpu.exchange.drag, rounded.exchange.drag) };
+    const parted = Array.from(o.blocking).filter((height, i) => Math.abs(height - r.blocking[i]) > 1).length;
+    console.log(`over ${fields}, engines apart, largest difference from the nearer CPU start over largest value: ${Object.entries(report).map(([k, v]) => `${k} ${v.toExponential(1)}`).join(', ')}; the starts' blocking heights part by more than 1 m in ${parted} of ${C} columns`);
+    assert.ok(parted <= 0.01 * C, `${fields}: the f32 start moves the blocking height in ${parted} columns`);
+    for (const [k, v] of Object.entries(report)) assert.ok(v < 1e-3, `${fields}: ${k} ${v}`);
+    gpu.destroy();
+  }
   const off = await createGpuModel(new Grid(16), { topography, orography: false });
   assert.equal(off.gpu.kernels.orography, undefined);
 });
