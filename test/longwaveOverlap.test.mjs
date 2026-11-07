@@ -93,7 +93,7 @@ test('scripts/longwaveOverlap.mjs repeats the radiation\'s OLR and surface downw
   const dir = mkdtempSync(join(tmpdir(), 'longwaveOverlap-')), file = join(dir, 'overlap16_day0000.bin');
   writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
   const script = (radiation) => spawnSync(process.execPath, [new URL('../scripts/longwaveOverlap.mjs', import.meta.url).pathname, file], { env: { ...process.env, RADIATION: JSON.stringify({ ...PREVIOUS_RADIATION, ...radiation }), MOIST: JSON.stringify(PREVIOUS_MOIST) }, encoding: 'utf8' });
-  const runs = [script({}), script({ longwaveOverlap: 'random' })];
+  const runs = [script({}), script({ longwaveOverlap: 'random' })], ramped = script({ traceCloudPath: 1e-3 });
   rmSync(dir, { recursive: true, force: true });
   for (const [n, run] of runs.entries()) {
     assert.equal(run.status, 0, run.stderr);
@@ -103,6 +103,10 @@ test('scripts/longwaveOverlap.mjs repeats the radiation\'s OLR and surface downw
     const [, raised] = run.stdout.match(/^global: .*exponential-random less random: OLR (-?[0-9.]+),/m);
     assert.ok(Number(raised) > 0, `exponential-random less random OLR ${raised} W/m2`);
   }
+  assert.equal(ramped.status, 0, ramped.stderr);
+  const [, rampedOlr, rampedDown] = ramped.stdout.match(/repeats the radiation's OLR to ([0-9.e+-]+) and its surface downward longwave to ([0-9.e+-]+) relative/);
+  console.log(`traceCloudPath 1e-3 kg/m²: the script repeats the radiation's OLR to ${rampedOlr} and its surface downward longwave to ${rampedDown} relative`);
+  assert.ok(Number(rampedOlr) < 1e-6 && Number(rampedDown) < 1e-6, `traceCloudPath 1e-3: OLR to ${rampedOlr}, downward to ${rampedDown}`);
 });
 
 test('with traceCloudPath a layer whose cloud water is a trace enters the longwave overlap chain with cover W/t: the OLR no longer jumps when the trace appears, and columns with no layer under the trace path are untouched', () => {

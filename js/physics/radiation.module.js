@@ -286,7 +286,9 @@ export function seasonTimes(orbit = DEFAULT_ORBIT) {
  * f (1 − exp(−κ W/f)), the expectation under random overlap (α = 0).
  * With `traceCloudPath` t (kg/m², null: none) a layer whose in-cloud path W/f
  * is under t enters the chain with cover W/t and the same mean emissivity,
- * so a trace of cloud water does not join the clouds around it.
+ * so a trace of cloud water does not join the clouds around it. The cover
+ * stops at TRACE_CHAIN_FLOOR (1e-6, or the chain cover it had if less),
+ * below which the GPU's f32 joint covers lose it.
  *
  * With `boundaryCover` 'variance' (the default; 'pdf' keeps the cover
  * above) a cloudy layer whose midpoint lies below the moist boundary
@@ -654,6 +656,7 @@ export const STABILITY_SIGMA = 0.7;
 export const DECK_CLOUD_LEVELS = 8;
 export const UNDECIDED = 0.5;
 export const VISIBLE_PATH = 1e-3;
+export const TRACE_CHAIN_FLOOR = 1e-6;
 export const REFERENCE_PRESSURE = 101325;
 export const RAYLEIGH_BANDS = [[0.7049, 0.0957], [0.2951, 0.5806]], NEAR_INFRARED_RAYLEIGH = 0.0114, VISIBLE_FRACTION = 0.4707, LAND_AEROSOL = 0.12, SEA_AEROSOL = 0.07;
 const DIFFUSE_PATH = 5 / 3;
@@ -1877,7 +1880,7 @@ export function createRadiation(mesh, core, {
           const water = cloudWater[k], decked = deck > 0 && k === deckK;
           chainCover[k] = water > 0 && !decked ? layerCover[k] * (k >= replaced ? 1 - fraction : 1) : 0;
           chainCloud[k] = chainCover[k] > 0 ? (cloudSpread > 0 ? 1 - transmitted(infrared[k] * water / layerCover[k]) : -Math.expm1(-infrared[k] * water / layerCover[k])) : 0;
-          if (traceCloudPath !== null && chainCover[k] > 0 && water < layerCover[k] * traceCloudPath) { const shown = water / traceCloudPath; chainCloud[k] *= layerCover[k] / shown; chainCover[k] *= shown / layerCover[k]; }
+          if (traceCloudPath !== null && chainCover[k] > 0 && water < layerCover[k] * traceCloudPath) { const kept = Math.max(water / (layerCover[k] * traceCloudPath), Math.min(1, TRACE_CHAIN_FLOOR / chainCover[k])); chainCloud[k] /= kept; chainCover[k] *= kept; }
           chainOutside[k] = decked ? cloudEmissivity[k] : 0;
           clearShareInverse[k] = chainCover[k] < 1 ? 1 / (1 - chainCover[k]) : 0;
           cloudShareInverse[k] = chainCover[k] > 0 ? 1 / chainCover[k] : 0;
