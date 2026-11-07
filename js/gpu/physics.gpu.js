@@ -2864,9 +2864,9 @@ const SHALLOW_RETYPE = [['  if (!typed) { return cumulusColumn(i, pi, dt); }\n',
   if (!typed) { return cumulusColumn(i, pi, dt); }
 `]];
 export const shallowPlumeRetype = (body) => SHALLOW_DEPTH_WGSL + replaceOnce(SHALLOW_RETYPE, body, 'shallow re-typing').replace('top >= 1 && !(pi * (LV[L_SU + base]', 'top >= 1 && !deepened && !(pi * (LV[L_SU + base]');
-export function midLevelPlume(body) {
+export function midLevelPlume(body, retype = false) {
   const text = replaceOnce(MID_LEVEL_PLUME, body, 'mid-level');
-  return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)}; const MID_BUOYANCY: f32 = ${wgslFloat(MID_LEVEL.buoyancy)};\n` + text.replace(RETYPE_TEST, 'if (PL_RETYPE && !middle && cloudy && top >= 1');
+  return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)}; const MID_BUOYANCY: f32 = ${wgslFloat(MID_LEVEL.buoyancy)};\n` + (retype ? replaceOnce([[RETYPE_TEST, 'if (PL_RETYPE && !middle && cloudy && top >= 1']], text, 'mid-level retype exemption') : text);
 }
 export function bergeronRain(body) {
   return BERGERON_RAIN.reduce((text, [from, to]) => {

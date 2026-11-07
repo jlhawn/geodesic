@@ -1887,6 +1887,10 @@ test('with midLevelConvection the engines agree on random columns under a random
   const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
   assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, midLevelConvection: 1 }), /midLevelConvection/);
 });
+test('with midLevelConvection and convectionRetype the engines agree on random columns under a random large-scale ascent', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { midLevel } = await parity({ midLevelConvection: true, convectionRetype: true }, { ascent: true });
+  assert.ok(midLevel >= 50, `${midLevel} columns convect at mid-level on the CPU`);
+});
 
 test("a rainEvaporationLaw other than 'deficit', 'kessler' or 'cloudsc', a rainCover other than 'overlap' or a share in (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
   const refused = [{ rainEvaporationLaw: 'ifs' }, { rainCover: 'maximum' }, { rainCover: 0 }, { rainCover: 1.5 }, { rainCover: '0.1' }, { rainEvaporationCeiling: -0.1 }, { rainEvaporationCeiling: 1.2 }, { rainEvaporationCeiling: '0.7' }];

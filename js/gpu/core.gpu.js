@@ -994,7 +994,7 @@ export async function createGpuCore(mesh, {
   if (phys.shallowRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = shallowPlumeRetype(kernelBodies[name]);
   if (phys.bergeronAutoconversion) kernelBodies.adjustRain = bergeronRain(kernelBodies.adjustRain);
   if (deepOn) kernelBodies.adjustRain = deepStoreRain(kernelBodies.adjustRain);
-  if (phys.midLevelConvection && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = midLevelPlume(kernelBodies[name]);
+  if (phys.midLevelConvection && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = midLevelPlume(kernelBodies[name], !!phys.convectionRetype);
   if (phys.midLevelConvection && phys.convectionType === 'testParcel') kernelBodies.cellTendency = omegaStore(kernelBodies.cellTendency);
   if (lake) Object.assign(kernelBodies, lakeKernels(kernelBodies, { held: heldRadiation, skin: skinOn }));
   for (const [name, raw] of Object.entries(kernelBodies)) {
