@@ -265,16 +265,17 @@ test('ice that drifts into water above freezing melts exactly the heat that the 
   near(handed, water - FREEZING_POINT, 1e-9, 'the heat the ice base receives');
 });
 
-test('the surface energy changes by exactly the surface flux while the ice drifts, closes up and melts away', () => {
-  const m = meshOf(16), r = rig(m, { rheology: 'frozen' }), dt = 3600, patch = withinCap(m, -65, 40, 20);
+for (const brine of [false, true]) test(`the surface energy${brine ? ', the brine reservoir counted,' : ''} changes by exactly the surface flux while the ice drifts, closes up and melts away`, () => {
+  const m = meshOf(16), r = rig(m, { rheology: 'frozen' }, null, {}, brine ? { iceLight: true, brineReservoir: true } : {}), dt = 3600, patch = withinCap(m, -65, 40, 20);
   r.dt = dt;
   for (const i of patch) { r.thickness[i] = 1.2; r.concentration[i] = 0.7; r.snow[i] = 40; r.surfaceT[i] = FREEZING_POINT - 10; }
   const tiny = nearestCell(m, 40 * DEG, 100 * DEG);
   r.thickness[tiny] = 0.01; r.concentration[tiny] = 0.02; r.surfaceT[tiny] = FREEZING_POINT - 2;
+  if (brine) for (const i of [...patch, tiny]) r.seaIce.brine[i] = 3e6;
   r.drift.velocity.set(rotationOn(m, 6 / m.radius));
   for (let k = 0; k < m.nEdgesOnCell[tiny]; k++) r.drift.velocity[m.edgesOnCell[m.maxEdges * tiny + k]] = m.edgeSignOnCell[m.maxEdges * tiny + k] * 8;
-  const flux = new Float64Array(r.C), energy = () => { let s = 0; for (let i = 0; i < r.C; i++) s += m.areaCell[i] * r.seaIce.energy(r.surfaceT[i], r.thickness[i], r.snow[i], r.concentration[i]); return s; };
-  let expected = energy(), cleared = 0, worst = 0, held = 0;
+  const flux = new Float64Array(r.C), energy = () => { let s = 0; for (let i = 0; i < r.C; i++) s += m.areaCell[i] * r.seaIce.energy(r.surfaceT[i], r.thickness[i], r.snow[i], r.concentration[i], brine ? r.seaIce.brine[i] : 0); return s; };
+  let expected = energy(), cleared = 0, worst = 0, held = 0, carried = 0;
   const scale = patch.reduce((s, i) => s + m.areaCell[i] * r.seaIce.latent * 1.2, 0);
   for (let n = 0; n < 60; n++) {
     flux.fill(n < 20 ? -30 : 80);
@@ -285,12 +286,14 @@ test('the surface energy changes by exactly the surface flux while the ice drift
     r.drift.transport(r.env());
     for (let i = 0; i < r.C; i++) {
       if (had[i] && !(r.thickness[i] > 0)) cleared++;
+      if (brine && r.seaIce.brine[i] > 0) carried++;
       if (r.drift.arrived[i]) held += m.areaCell[i] * r.seaIce.slabHeatCapacity * (r.drift.waterT[i] - FREEZING_POINT);
     }
     worst = Math.max(worst, Math.abs(energy() + held - expected) / scale);
   }
   console.log(`60 steps with ${cleared} cells emptied by transport: the energy follows the flux to ${worst.toExponential(2)} of the patch's latent heat`);
   assert.ok(cleared >= 2 && worst < 1e-11, `${cleared} ${worst}`);
+  if (brine) assert.ok(carried > 0, 'the drift carries brine');
 });
 
 function history(iceDrift) {
