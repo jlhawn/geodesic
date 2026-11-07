@@ -2877,7 +2877,8 @@ const SHALLOW_RETYPE = [['  if (!typed) { return cumulusColumn(i, pi, dt); }\n',
     lcl = condensationLevel((sourceS - GRAV * surfaceZ) / CP, sourceQ, surfaceP);
   }
   if (!typed) { return cumulusColumn(i, pi, dt); }
-`], ['  if (!cloudy || top < 1 || !(PL_PARCEL ||', '  if (deepened && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||']];
+`], ['  if (!cloudy || top < 1 || !(PL_PARCEL ||', '  if (deepened && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||'],
+  ['upS = select(belowS / belowMass, sourceS, PL_LOWEST); upQ = select(belowQ / belowMass, sourceQ, PL_LOWEST);', 'upS = select(belowS / belowMass, sourceS, select(PL_LOWEST, CU_LOWEST, deepened)); upQ = select(belowQ / belowMass, sourceQ, select(PL_LOWEST, CU_LOWEST, deepened));']];
 export const shallowPlumeRetype = (body) => SHALLOW_DEPTH_WGSL + replaceOnce(SHALLOW_RETYPE, body, 'shallow re-typing');
 export function midLevelPlume(body, retype = false) {
   const text = replaceOnce(MID_LEVEL_PLUME, body, 'mid-level');

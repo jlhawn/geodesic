@@ -361,7 +361,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * after the ascent (cumastrn.F90; its documentation types by the test parcel
  * alone). With `shallowRetype` (default false) a column the test parcel
  * leaves shallow runs the deep plume after all, from the shallow plume's
- * own source parcel, where that parcel's shallow ascent, continued past
+ * own source parcel, its stack feeding the plume below the source by
+ * `cumulusSource` as the shallow plume's does, where that parcel's shallow
+ * ascent, continued past
  * `shallowTop` without tendencies, finds a cloud deeper than
  * DEEP_CLOUD_DEPTH, the other half of that re-typing (cumastrn.F90 types
  * and runs one parcel). As in IFS Cy41r2 Part IV §6.4.1's shallow test,
@@ -1592,13 +1594,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       deep.start = start;
     }
     let belowMass = 0, belowS = 0, belowQ = 0;
+    const parcelLowest = deepened ? cumulusSource === 'lowest' : deepLowest;
     fluxS.fill(0); fluxQ.fill(0);
     for (let j = bottom; j > top; j--) {
       let upS = plumeS[j], upQ = plumeQ[j];
       if (j > stackBottom) { upS = envS[j - 1]; upQ = envQ[j - 1]; }
       else if (j > source) {
         belowMass += dp[j]; belowS += dp[j] * envS[j]; belowQ += dp[j] * envQ[j];
-        upS = deepLowest ? sourceS : belowS / belowMass; upQ = deepLowest ? sourceQ : belowQ / belowMass;
+        upS = parcelLowest ? sourceS : belowS / belowMass; upQ = parcelLowest ? sourceQ : belowQ / belowMass;
       }
       fluxS[j] = cumulusFlux[j] * (upS - envS[j - 1]) + share * draftFlux[j] * (draftS[j] - envS[j]);
       fluxQ[j] = cumulusFlux[j] * (upQ - envQ[j - 1]) + share * draftFlux[j] * (draftQ[j] - envQ[j]);

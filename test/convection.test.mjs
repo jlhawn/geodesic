@@ -2178,6 +2178,29 @@ const replayPageColumn = (c, deepen) => {
   return { d, cu: { ...moist.cumulus }, flux: moist.cumulusBaseFlux[0], snap: snapshot(model, 0), depth: d.deep ? pi[0] * (levels[d.base] - levels[d.top + 1]) : 0, base: pi[0] * levels[d.shallowBase], ps: pi[0], levels };
 };
 const steppedAlike = (a, b) => ['theta', 'q', 'qc'].every((key) => a.snap[key].every((v, k) => v === b.snap[key][k]));
+test("with shallowRetype a re-typed deep plume feeds its stack below the source by cumulusSource, as the shallow plume does: under cumulusSource 'lowest' a re-typed column steps alike under either plumeSource", () => {
+  const runs = ['mean', 'lowest'].map((plumeSource) => {
+    const model = createModel(new Grid(16), { ocean: false, levels, moist: { ...LIGHT_CUMULUS, cumulusSource: 'lowest', plumeSource, shallowRetype: true } }), C = model.mesh.nCells, { moist, core } = model, { K, levels: edges } = core.diagnostics;
+    randomColumns(model);
+    const [pi, theta, , , q, qc] = model.state, retyped = new Map();
+    for (let i = 0; i < C; i++) {
+      core.diagnoseColumn(i, pi, theta, q, qc);
+      moist.plumeColumn(i, pi, theta, q, qc, 900);
+      if (moist.deep.deepened) retyped.set(i, moist.deep.deep && moist.deep.sourceMass > 1.000001 * pi[i] * (1 - edges[K - 1]));
+    }
+    return { model, retyped };
+  });
+  let compared = 0, fed = 0;
+  for (const [i, stacked] of runs[0].retyped) {
+    if (!runs[1].retyped.has(i)) continue;
+    const a = snapshot(runs[0].model, i), b = snapshot(runs[1].model, i);
+    for (const key of ['theta', 'q', 'qc']) assert.deepEqual(b[key], a[key], `column ${i}: ${key} differs between plumeSource 'mean' and 'lowest'`);
+    compared++;
+    if (stacked) fed++;
+  }
+  console.log(`  ${compared} columns re-type under both plumeSource values, ${fed} of them firing from a stack of more than one layer`);
+  assert.ok(fed > 0, `${compared} columns re-type under both, ${fed} of them firing from a stack of more than one layer`);
+});
 test("with shallowRetype the column of the N=64 page state at 30N (seventeen64 day 365, column 13676, after two steps), whose shallow parcel first holds condensate at 539 hPa, is not re-typed: its w² from the closure's velocity scale vanishes below that layer", () => {
   const [off, on] = [false, true].map((deepen) => replayPageColumn(PAGE_COLUMN_13676, deepen));
   assert.ok(!on.d.deepened && on.d.shallowDepth === 0 && steppedAlike(on, off), `the column is not re-typed: shallow cloud ${on.d.shallowDepth} Pa, re-typed ${on.d.deepened}`);
@@ -2191,7 +2214,9 @@ test('with shallowRetype the column of the N=64 page state at 6N (seventeen64 da
   while (base > 1 && !(off.ps * off.levels[base] <= off.cu.lclPressure)) base--;
   assert.equal(on.d.base, base, `the deep plume's cloud base is the interface at the shallow plume's condensation level, ${off.cu.lclPressure} Pa`);
 });
-test('with shallowRetype under a light shallow plume the engines agree on random columns, and the GPU refuses a value other than true or false', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test("with shallowRetype under a light shallow plume the engines agree on random columns, under cumulusSource 'lowest' too, and the GPU refuses a value other than true or false", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const lowest = await parity({ shallowRetype: true, cumulusSource: 'lowest', ...LIGHT_CUMULUS });
+  assert.ok(lowest.deepened > 0, `${lowest.deepened} columns re-type deep under cumulusSource 'lowest'`);
   const { deepened } = await parity({ shallowRetype: true, ...LIGHT_CUMULUS }), fine = await parity({ shallowRetype: true, ...LIGHT_CUMULUS }, { grid: sigmaInterfaces('bl48') });
   const withRetype = await parity({ shallowRetype: true, convectionRetype: true, ...LIGHT_CUMULUS });
   assert.ok(withRetype.deepened > 0, `${withRetype.deepened} columns re-type deep with convectionRetype on as well`);
