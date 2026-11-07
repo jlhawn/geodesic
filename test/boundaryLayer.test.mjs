@@ -166,6 +166,48 @@ test('a strongly stable column stays unmixed', () => {
   for (let k = 0; k < K; k++) assert.equal(theta[k * C + i], before[k * C + i]);
 });
 
+test('with diagnoseFirst the diagnosis is the plain one of the lowest layer without the step\'s surface heat and evaporation, and the state and diagnostics are left as deposited', () => {
+  const { exnerLayer, sigmaMid, kappa, cp } = core.diagnostics, { thetaV } = core.arrays;
+  const heat = Float64Array.from({ length: C }, (_, i) => 150 * Math.sin(0.9 * i)), water = Float64Array.from({ length: C }, (_, i) => 6e-5 * (1 + Math.cos(1.7 * i))), dt = 900, base = (K - 1) * C;
+  const first = createBoundaryLayer(mesh, core, { turbulence: 'dry', diagnoseFirst: true, depositedHeat: heat, depositedWater: water }), plain = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
+  const state = column(300, -1e-3, 8, 1000);
+  for (let i = 0; i < C; i++) state[3][i] = state[1][base + i] * exnerLayer[base + i] * Math.pow(sigmaMid[K - 1], -kappa) + 2;
+  const deposited = state.map((a) => Float64Array.from(a));
+  plain.diagnose(state);
+  const depositedDepth = Float64Array.from(plain.depth), depositedV = Float64Array.from(thetaV);
+  first.diagnose(state, 0, C, dt);
+  for (let a = 0; a < state.length; a++) assert.deepEqual(state[a], deposited[a]);
+  assert.deepEqual(Float64Array.from(thetaV), depositedV);
+  const [pi, theta, , , q] = state;
+  for (let i = 0; i < C; i++) {
+    theta[base + i] -= dt * heat[i] / (cp * (pi[i] * dSigma[K - 1] / g)) / exnerLayer[base + i];
+    q[base + i] -= dt * water[i] * g / (pi[i] * dSigma[K - 1]);
+  }
+  plain.diagnose(state);
+  assert.deepEqual(first.depth, plain.depth);
+  assert.deepEqual(first.mixing, plain.mixing);
+  let deeper = 0, shallower = 0;
+  for (let i = 0; i < C; i++) { if (depositedDepth[i] > first.depth[i] + 1) { assert.ok(heat[i] > 0 || water[i] > 0); deeper++; } if (depositedDepth[i] < first.depth[i] - 1) shallower++; }
+  assert.ok(deeper > C / 4, `the deposit deepens ${deeper} of ${C} columns and shallows ${shallower}`);
+});
+
+test('surfaceExcess 8.5 deepens the Richardson depth of a column over a warm surface by searching from θ_v plus Troen and Mahrt\'s excess, and leaves a column over a cool one alone', () => {
+  const { exnerLayer, sigmaMid, kappa } = core.diagnostics;
+  const base = (K - 1) * C, plain = createBoundaryLayer(mesh, core, { turbulence: 'dry' }), excessive = createBoundaryLayer(mesh, core, { turbulence: 'dry', surfaceExcess: 8.5 });
+  for (const [offset, deepens] of [[3, true], [-3, false]]) {
+    const state = column(300, -1e-3, 8, 1000);
+    for (let i = 0; i < C; i++) state[3][i] = state[1][base + i] * exnerLayer[base + i] * Math.pow(sigmaMid[K - 1], -kappa) + offset;
+    plain.diagnose(state); excessive.diagnose(state);
+    let deeper = 0, gain = 0;
+    for (let i = 0; i < C; i++) {
+      assert.ok(excessive.depth[i] >= plain.depth[i] - 1e-9, `cell ${i}: ${excessive.depth[i]} against ${plain.depth[i]}`);
+      if (excessive.depth[i] > plain.depth[i] + 1) { deeper++; gain = Math.max(gain, excessive.depth[i] - plain.depth[i]); }
+    }
+    if (deepens) assert.ok(deeper > C / 2 && gain < 2000, `${deeper} of ${C} deeper, by up to ${gain} m`);
+    else assert.deepEqual(excessive.depth, plain.depth);
+  }
+});
+
 test('momentum mixing brings wind down to the surface layer and changes each edge column\'s momentum by the surface stress alone', () => {
   const state = column(300, -1e-3, 8, 1000);
   const [pi, , u] = state;
