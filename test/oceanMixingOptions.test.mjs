@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND, restratificationScale, restratificationOptions, deformationRadii, limitedFaceValue, limitedEdgeValue, eddyDiffusivities, shearResolution, shearResolutionOptions, isoneutralOptions, ISONEUTRAL } from '../js/ocean/layered.module.js';
-import { interiorMixing, lmd94Shape } from '../js/ocean/column.module.js';
+import { interiorMixing, lmd94Shape, LMD94_VISCOSITY } from '../js/ocean/column.module.js';
 
 /*
  * The ocean's optional interior closures on the CPU at N = 16, each against
@@ -99,24 +99,29 @@ test('lmd94Shape is Large, McWilliams and Doney\'s interior shape: 1 at Ri 0 and
   for (let r = 0.01; r < 0.7; r += 0.01) assert.ok(lmd94Shape(r) < lmd94Shape(r - 0.01));
 });
 
-test('under interiorShear lmd94 the interior shear term is ν₀[1 − (Ri/0.7)²]³ in viscosity and diffusivity alike, over the backgrounds; pp81, the default, is Pacanowski and Philander\'s', () => {
+test('under interiorShear lmd94 the interior shear term is ν₀[1 − (Ri/0.7)²]³ in viscosity and diffusivity alike, over the backgrounds, with ν₀ lmd94Viscosity, 5e-3 unless set, whatever shearViscosity is; pp81, the default, is Pacanowski and Philander\'s', () => {
   const K = 8, h = new Float64Array(K).fill(10), T = Float64Array.from({ length: K }, (_, k) => 293.15 - 0.5 * k), S = new Float64Array(K).fill(35);
   const u = Float64Array.of(1, 0.75, 0.55, 0.4, 0.3, 0.25, 0.24, 0.235), v = new Float64Array(K);
   const scratch = { rho: new Float64Array(K) }, nu0 = 5e-3, nub = 1e-4, kb = 1e-5;
   const run = (extra) => { const kappa = new Float64Array(K), nu = new Float64Array(K); interiorMixing({ h, T, S, u, v, K, shearViscosity: nu0, backgroundViscosity: nub, backgroundDiffusivity: kb, ...extra }, kappa, nu, scratch); return { kappa, nu }; };
-  const off = run({}), pp81 = run({ interiorShear: 'pp81' }), lmd = run({ interiorShear: 'lmd94' });
+  const off = run({}), pp81 = run({ interiorShear: 'pp81' }), lmd = run({ interiorShear: 'lmd94' }), lmdSheared = run({ interiorShear: 'lmd94', shearViscosity: 3e-2 }), own = 2e-3, lmdOwn = run({ interiorShear: 'lmd94', lmd94Viscosity: own });
+  assert.equal(LMD94_VISCOSITY, 5e-3);
   assert.deepEqual(Array.from(pp81.nu), Array.from(off.nu));
   assert.deepEqual(Array.from(pp81.kappa), Array.from(off.kappa));
+  assert.deepEqual(Array.from(lmdSheared.nu), Array.from(lmd.nu));
+  assert.deepEqual(Array.from(lmdSheared.kappa), Array.from(lmd.kappa));
   let below = 0, above = 0;
   for (let k = 0; k < K - 1; k++) {
-    const ri = (Math.sqrt(nu0 / (off.nu[k] - nub)) - 1) / 5, shear = nu0 * Math.max(0, 1 - (ri / 0.7) ** 2) ** 3;
+    const ri = (Math.sqrt(nu0 / (off.nu[k] - nub)) - 1) / 5, shape = Math.max(0, 1 - (ri / 0.7) ** 2) ** 3, shear = LMD94_VISCOSITY * shape;
     assert.ok(Math.abs(off.kappa[k] - (off.nu[k] / (1 + 5 * ri) + kb)) < 1e-9 * off.kappa[k], `PP81 at interface ${k}`);
     assert.ok(Math.abs(lmd.nu[k] - (shear + nub)) < 1e-9 * lmd.nu[k], `interface ${k} at Ri ${ri}: ${lmd.nu[k]} against ${shear + nub}`);
     assert.ok(Math.abs(lmd.kappa[k] - (shear + kb)) < 1e-9 * lmd.nu[k], `interface ${k} at Ri ${ri}: ${lmd.kappa[k]} against ${shear + kb}`);
+    assert.ok(Math.abs(lmdOwn.kappa[k] - (own * shape + kb)) < 1e-9 * lmdOwn.nu[k], `interface ${k} at Ri ${ri} under lmd94Viscosity ${own}: ${lmdOwn.kappa[k]} against ${own * shape + kb}`);
     if (ri < 0.7) below++; else above++;
   }
   assert.ok(below >= 2 && above >= 2, `${below} interfaces below Ri 0.7 and ${above} above`);
   assert.throws(() => createOcean(mesh, { interiorShear: 'kpp' }), /interiorShear/);
+  assert.throws(() => createOcean(mesh, { interiorShear: 'lmd94', lmd94Viscosity: -1e-3 }), /lmd94Viscosity/);
 });
 
 test('interiorShear lmd94 reaches the ocean\'s column phase: under a sheared surface current it raises some interfaces\' viscosity and lowers others\'', () => {

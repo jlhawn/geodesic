@@ -102,9 +102,10 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * interior mixing on the gradient Richardson number of the resolved shear
  * and stratification: under interiorShear 'pp81' Pacanowski and
  * Philander's (1981) viscosity ν = ν₀/(1 + 5Ri)² + ν_b and diffusivity
- * ν/(1 + 5Ri) + κ_b, under 'lmd94' Large, McWilliams and Doney's (1994)
- * shear mixing ν₀[1 − (Ri/0.7)²]³ below Ri 0.7 and 0 above, in viscosity
- * and diffusivity alike, plus ν_b and κ_b (their ν₀ is 5 × 10⁻³ m²/s);
+ * ν/(1 + 5Ri) + κ_b with ν₀ shearViscosity, under 'lmd94' Large,
+ * McWilliams and Doney's (1994) shear mixing ν₀[1 − (Ri/0.7)²]³ below
+ * Ri 0.7 and 0 above, in viscosity and diffusivity alike, plus ν_b and
+ * κ_b, with ν₀ lmd94Viscosity (their 5 × 10⁻³ m²/s unless set);
  * a convective diffusivity where the column is
  * still unstable; and one implicit solve (solveColumn) of the column's
  * heat and salt with the summed diffusivities, which conserves both. The
@@ -609,13 +610,13 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy
 }
 
 export const INTERIOR_SHEARS = ['pp81', 'lmd94'];
-export const LMD94_RICHARDSON = 0.7;
+export const LMD94_RICHARDSON = 0.7, LMD94_VISCOSITY = 5e-3;
 export function lmd94Shape(richardson) {
   const x = Math.min(1, Math.max(0, richardson) / LMD94_RICHARDSON), y = 1 - x * x;
   return y * y * y;
 }
 
-export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, rho0 = SEAWATER.rho0, gravity = GRAVITY, shearViscosity = 1e-2, interiorShear = 'pp81', backgroundViscosity = 1e-4, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1 }, kappa, nu, scratch) {
+export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, rho0 = SEAWATER.rho0, gravity = GRAVITY, shearViscosity = 1e-2, interiorShear = 'pp81', lmd94Viscosity = LMD94_VISCOSITY, backgroundViscosity = 1e-4, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1 }, kappa, nu, scratch) {
   const { rho } = scratch;
   layerDensities(T, S, K, rho);
   for (let k = 0; k < K - 1; k++) {
@@ -624,7 +625,7 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
     const du = u ? u[k] - u[k + 1] : 0, dv = v ? v[k] - v[k + 1] : 0, squared = shear ? shear[k] : du * du + dv * dv;
     const richardson = buoyancy * dz / (squared + 1e-12);
     if (interiorShear === 'lmd94') {
-      const shear = shearViscosity * lmd94Shape(richardson);
+      const shear = lmd94Viscosity * lmd94Shape(richardson);
       nu[k] = shear + backgroundViscosity;
       kappa[k] = shear + backgroundDiffusivity;
       continue;
