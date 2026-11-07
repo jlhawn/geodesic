@@ -371,16 +371,20 @@ for (const melt of [20, 60]) test(`with the ice melting at ${melt} W/m² under a
   const surfaceT = new Float64Array([MELTING_POINT]), ice = new Float64Array([h0]), flux = new Float64Array(1);
   sea.load(ice, new Float64Array([1]));
   const base = melt + sun * i0 * Math.exp(-1.5 * (h0 - 0.1)) + 1.8 / (h0 / 2);
-  let inside = 0, atMelting = 0;
+  const total = () => sea.energy(surfaceT[0], ice[0], sea.snow[0], sea.cover(0, ice[0]), sea.brine[0]);
+  let inside = 0, atMelting = 0, both = 0, energy = total();
   for (let n = 0; n < 64 * 30; n++) {
     const T = surfaceT[0], h = ice[0], Q = sea.brine[0], passed = sun * i0, held = passed - passed * Math.exp(-1.5 * (h - 0.1));
     flux[0] = base - 15 * (T - MELTING_POINT);
     sea.update(surfaceT, ice, flux, 0, dt, 0, sun, 0.5);
+    energy += dt * flux[0];
+    assert.ok(Math.abs(total() - energy) < 1e-9 * sea.latent * 2, `step ${n}: energy ${total()} vs ${energy}`);
+    if (T < Math.fround(MELTING_POINT) && Q > 0) both++;
     inside += dt * held;
     if (T >= MELTING_POINT) { assert.ok(Math.abs(sea.brine[0] - Q - dt * held) < 1e-9 * (Q + dt * held), `step ${n}: from a skin at the melting point the brine gains ${sea.brine[0] - Q} for ${dt * held}`); atMelting++; }
   }
-  console.log(`melting at ${melt} W/m² for 30 days: the brine holds ${(sea.brine[0] / 1e6).toFixed(1)} MJ/m² of the ${(inside / 1e6).toFixed(1)} the ice held, the skin at the melting point in ${atMelting} of ${64 * 30} steps`);
-  if (melt < 40) assert.ok(sea.brine[0] > 0.75 * inside, 'the brine keeps most of the light the ice holds');
+  console.log(`melting at ${melt} W/m² for 30 days: the brine holds ${(sea.brine[0] / 1e6).toFixed(1)} MJ/m² of the ${(inside / 1e6).toFixed(1)} the ice held, the skin at the melting point in ${atMelting} of ${64 * 30} steps, filling and releasing in ${both}`);
+  if (melt < 40) assert.ok(sea.brine[0] > 0.75 * inside && both > 64 * 20, `the brine keeps most of the light the ice holds, filling and releasing in ${both} steps`);
   else assert.ok(atMelting === 64 * 30 && sea.brine[0] > (1 - 1e-9) * inside, 'the brine keeps all the light the ice holds');
 });
 
