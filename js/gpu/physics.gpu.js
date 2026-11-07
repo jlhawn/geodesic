@@ -2725,6 +2725,7 @@ const MID_LEVEL_PLUME = [
   }
 `],
   ['epsilon = IFS_EPS * (IFS_RH - rh) * ratio * ratio * ratio; }\n', 'epsilon = IFS_EPS * select(1.0, MID_FE, middle) * (IFS_RH - rh) * ratio * ratio * ratio; }\n      if (middle) { detrained = select(0.0, epsilon * (IFS_DRH - rh), mixes); }\n'],
+  ['      else if (buoyancy > 0.0) { flux[k] = flux[k + 1] * exp((epsilon - detrained) * depth); }', '      else if (buoyancy > 0.0 || (middle && k == base - 1)) { flux[k] = flux[k + 1] * exp((epsilon - detrained) * depth); }'],
   ['PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }', 'PL_BY_DEPTH))) { if (middle) { return 0.0; } return cumulusColumn(i, pi, dt); }'],
   ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
   if (middle) {

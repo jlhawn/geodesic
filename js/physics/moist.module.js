@@ -383,6 +383,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * departs with its own s_l and q_t
  * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
  * detraining that rate times (1.6 − RH) as the IFS code's types 2 and 3 do,
+ * keeping its whole base flux through its first cloud layer, where
+ * cuascn.F90's cloud block (KLAB(JK+1) = 2) and its organized detrainment
+ * do not run,
  * with eq. 6.31's base flux max(−ω/g in its source layer, (H + L E)/(g
  * z_base)), z_base the cloud base's height above the ground (a closure at
  * or below CUMULUS_FLOOR gives no plume and ends the search), and does not
@@ -1515,7 +1518,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (ifsEntrainment) {
       for (let k = source - 1; k > top; k--) {
         if (k >= base) cumulusFlux[k] = cumulusFlux[k + 1];
-        else if (plumeBuoyancy[k] > 0) cumulusFlux[k] = cumulusFlux[k + 1] * Math.exp((plumeEntrained[k] - plumeDetrained[k]) * plumeDepth[k]);
+        else if (plumeBuoyancy[k] > 0 || (middle && k === base - 1)) cumulusFlux[k] = cumulusFlux[k + 1] * Math.exp((plumeEntrained[k] - plumeDetrained[k]) * plumeDepth[k]);
         else cumulusFlux[k] = cumulusFlux[k + 1] * Math.exp(-plumeDetrained[k] * plumeDepth[k]) * Math.min(1, (IFS_ENTRAINMENT.detrainmentHumidity - envHumidity[k]) * Math.sqrt(plumeSpeed[k] / plumeSpeed[k + 1]));
       }
     } else {
