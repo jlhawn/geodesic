@@ -30,7 +30,7 @@ const du = stage[1], { h, u, edgeOcean } = ocean;
 const hEdge = new Float64Array(ocean.shared.hEdge), pressure = new Float64Array(ocean.shared.pressure), gradEta = new Float64Array(ocean.shared.gradEta), gradRho = new Float64Array(ocean.shared.gradRho);
 const { nEdgesOnEdge, edgesOnEdge, weightsOnEdge, maxEdgesOnEdge, dcEdge, dvEdge, cellsOnEdge, verticesOnEdge, fVertex } = mesh;
 let spacing = 0; for (let e = 0; e < E; e++) spacing += dcEdge[e]; spacing /= E;
-const nu4 = closureCoefficient(spacing, OCEAN.closureHours ?? 12), centring = OCEAN.vorticityCentring ?? 0.5;
+const nu4 = closureCoefficient(spacing, OCEAN.closureHours ?? 12, OCEAN.closureSpacing) * (OCEAN.closureScale ?? 1), centring = OCEAN.vorticityCentring ?? 0.5;
 const zeta = new Float64Array(mesh.nVertices), Kc = new Float64Array(C), gK = new Float64Array(E), phi = new Float64Array(C), gP = new Float64Array(E), lap = new Float64Array(E), lap2 = new Float64Array(E), dS = new Float64Array(C), cS = new Float64Array(mesh.nVertices), fluxPV = new Float64Array(E), q = new Float64Array(E);
 const ae = (k, e) => k * E + e, at = (k, i) => k * C + i;
 console.log(`== ${FILE.split('/').pop()} day ${saved.day} step ${saved.step ?? 0}; terms in 1e-5 m/s2`);

@@ -245,9 +245,8 @@ test('the slab\'s coordinate and the options without a hybrid meaning are refuse
   createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), tracerAdvection: 'upwind', shearDiffusivity: 0 });
 });
 
-test('the worker engine computes the hybrid ocean bit for bit as the serial one, tendencies, regrid and column physics alike', async () => {
+const workerMatches = async (options) => {
   const { createParallelModel } = await import('../js/parallel.module.js');
-  const options = { vertical: 'hybrid', everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5 };
   const parallel = await createParallelModel(new Grid(16), { ocean: options }, 3), mesh = parallel.mesh, C = mesh.nCells, E = mesh.nEdges;
   const serial = createOcean(mesh, options);
   const surfaceT = new Float64Array(C).fill(290), ice = new Float64Array(C), flux = new Float64Array(C), wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
@@ -267,4 +266,7 @@ test('the worker engine computes the hybrid ocean bit for bit as the serial one,
   } finally {
     await parallel.close();
   }
-});
+};
+const WORKER_OCEAN = { vertical: 'hybrid', everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5 };
+test('the worker engine computes the hybrid ocean bit for bit as the serial one, tendencies, regrid and column physics alike', () => workerMatches(WORKER_OCEAN));
+test('the worker engine computes the hybrid ocean bit for bit as the serial one under isoneutralDiffusion', () => workerMatches({ ...WORKER_OCEAN, isoneutralDiffusion: true }));
