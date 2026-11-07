@@ -387,7 +387,7 @@ export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, fresh
     enthalpy(i) { return lakeEnthalpy(read(i), depth[i]); },
     serialize() { return { ...Object.fromEntries(LAKE_FIELDS.map((name) => [name, Float64Array.from(fields[name])])), passed: Float64Array.from(passed), depth: Float64Array.from(depth) }; },
     load(saved) {
-      const other = saved.depth ? cells.find((i) => Math.abs(saved.depth[i] - depth[i]) > 1e-9 * depth[i]) : undefined;
+      const other = saved.depth ? cells.find((i) => Math.abs(saved.depth[i] - depth[i]) > 1e-6 * depth[i]) : undefined;
       if (other !== undefined) throw new Error(`the saved lakes have other depths than this run's (cell ${other}: ${saved.depth[other]} m saved, ${depth[other]} m here): give the lake options they were made with`);
       for (const name of [...LAKE_FIELDS, 'passed']) if (saved[name]) (name === 'passed' ? passed : fields[name]).set(saved[name]);
       seen.set(passed);
