@@ -1,5 +1,5 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, readAcross, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
-import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, TEMPERATURE_CLOSURES, STANDARD_TEMPERATURE, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, sunDistance, DEFAULT_ORBIT, DEFAULT_SHORTWAVE, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { createAerosolSampler, loadAerosol, AEROSOL_FIELDS, DEFAULT_AEROSOL } from '../aerosol.module.js';
@@ -91,6 +91,26 @@ ${named('PH_', L.PH)}
 ${'CG' in L.PH ? '' : 'const PH_CG: i32 = 0; const PH_CGH: i32 = 0; const PH_CGW: i32 = 0;'}
 ${'MIXH' in L.PH ? 'const PH_MIXS: i32 = PH_MIXH;' : 'const PH_MIXH: i32 = 0; const PH_MIXS: i32 = PH_MIX;'}
 ${named('FR_', L.FR)}`;
+}
+
+/*
+ * The ∇⁴ closure's first Laplacian of T less the US Standard Atmosphere
+ * at the layer's pressure (temperatureClosure 'standard').
+ */
+function standardReferenceClosure(body) {
+  const table = (column) => `array<f32, ${STANDARD_TEMPERATURE.length}>(${STANDARD_TEMPERATURE.map((row) => row[column].toExponential(9)).join(', ')})`;
+  const here = 'let hereT = IN[S_TH + idx] * D[D_EXM + idx];', there = 'sumT += dv * (IN[S_TH + row + j] * D[D_EXM + row + j] - hereT) / dc;';
+  if (!body.includes(here) || !body.includes(there)) throw new Error('lapScalar1 no longer reads T as the standard-reference closure expects');
+  return `const STDATM_SIGMA = ${table(0)};
+const STDATM_T = ${table(1)};
+const STDATM_EXPONENT = ${table(2)};
+fn standardAtmosphereT(p: f32) -> f32 {
+  let sigma = p / ${P0.toFixed(1)};
+  var j = 0;
+  for (var m = 1; m < ${STANDARD_TEMPERATURE.length}; m++) { if (STDATM_SIGMA[m] >= sigma) { j = m; } }
+  return STDATM_T[j] * pow(sigma / STDATM_SIGMA[j], STDATM_EXPONENT[j]);
+}
+${body.replace(here, 'let hereT = IN[S_TH + idx] * D[D_EXM + idx] - standardAtmosphereT(piHere * LV[L_SM + k]);').replace(there, 'sumT += dv * (IN[S_TH + row + j] * D[D_EXM + row + j] - standardAtmosphereT(piThere[m] * LV[L_SM + k]) - hereT) / dc;')}`;
 }
 
 function prelude(L, constants) {
@@ -866,11 +886,13 @@ export const PHYSICS_DEFAULTS = {
 
 export async function createGpuCore(mesh, {
   levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma',
+  divergenceViscosity = 0, temperatureClosure = 'sigma',
   dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = TOP_DRAG.sigma, topDragDays = TOP_DRAG.days, spongeRates: spongeOption, spongeMeanRates: meanOption, gravityWaves = {}, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
   registerLength = 0, lake = false,
 } = {}) {
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
-  const hybrid = divergenceSurfaces === 'hybrid' && divergenceDamping > 0;
+  if (!TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
+  const hybrid = divergenceSurfaces === 'hybrid' && (divergenceDamping > 0 || divergenceViscosity > 0);
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
   phys.deckResolved ??= phys.mixedLayerDeck && phys.prognosticHeight ? 'above' : 'added';
   phys.cloudColumns ??= phys.cloudCover === 'pdf' && phys.cloudOverlap === 'exponentialRandom';
@@ -976,7 +998,7 @@ export async function createGpuCore(mesh, {
   let meshSpacing = 0;
   for (let e = 0; e < E; e++) meshSpacing += mesh.dcEdge[e];
   meshSpacing /= E;
-  const divergenceStep = divergenceDamping * meshSpacing * meshSpacing;
+  const divergenceStep = divergenceDamping * meshSpacing * meshSpacing, divergenceOn = divergenceViscosity > 0 || divergenceStep > 0;
   const kernels = {};
   const waveSource = waveColumns ? waveColumns.deepest : 0, waveAmplitudes = waves ? gravityWaveSpectrum({ ...waves, flux: 1 }) : [0];
   const waveSums = gravityWaveSums(waveAmplitudes), waveBreaking = waves ? gravityWaveBreaking(waves) : [0];
@@ -989,6 +1011,7 @@ export async function createGpuCore(mesh, {
   if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
   if (!sponge) { delete kernelBodies.spongeMean; delete kernelBodies.spongeApply; }
   if (!hybrid) { delete kernelBodies.divergenceHybrid; delete kernelBodies.divergenceDampHybrid; }
+  if (temperatureClosure === 'standard') kernelBodies.lapScalar1 = standardReferenceClosure(kernelBodies.lapScalar1);
   if (phys.bergeronAutoconversion) kernelBodies.adjustRain = bergeronRain(kernelBodies.adjustRain);
   if (deepOn) kernelBodies.adjustRain = deepStoreRain(kernelBodies.adjustRain);
   if (lake) Object.assign(kernelBodies, lakeKernels(kernelBodies, { held: heldRadiation, skin: skinOn }));
@@ -1124,15 +1147,15 @@ export async function createGpuCore(mesh, {
         });
       }
     }
-    if (divergenceStep > 0) {
-      setParams([divergenceStep, 0, nu4 > 0 ? 1 : 0]);
+    if (divergenceOn) {
+      setParams([divergenceViscosity > 0 ? divergenceViscosity * dt : divergenceStep, 0, nu4 > 0 ? 1 : 0]);
       compute((pass) => {
         dispatch(pass, hybrid ? 'divergenceHybrid' : 'divCurl', g, C);
         dispatch(pass, hybrid ? 'divergenceDampHybrid' : 'divergenceDamp', g, E);
       });
     }
     if (sponge) {
-      setParams([dt, 0, nu4 > 0 || divergenceStep > 0 ? 1 : 0]);
+      setParams([dt, 0, nu4 > 0 || divergenceOn ? 1 : 0]);
       compute((pass) => {
         dispatch(pass, 'spongeMean', g, sponge.layers * sponge.bands * WORKGROUP);
         dispatch(pass, 'spongeApply', g, E);

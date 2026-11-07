@@ -26,16 +26,25 @@ const CAM_L26_HYBI = [
 ];
 
 export const DIVERGENCE_SURFACES = ['sigma', 'hybrid'];
+export const TEMPERATURE_CLOSURES = ['sigma', 'standard'];
 
 /*
  * The models' `dynamics` options with their defaults: divergenceSurfaces,
- * the surfaces the divergence damping acts along, 'sigma' or 'hybrid'.
+ * the surfaces the divergence damping acts along, 'sigma' or 'hybrid';
+ * divergenceViscosity, the damping's ν_d in m²/s in place of the
+ * coefficient c of `divergenceDamping` (0 keeps c, so ν_d = c d²/dt);
+ * temperatureClosure, 'sigma' for the ∇⁴ closure on T along σ, or
+ * 'standard' for it on T less the US Standard Atmosphere 1976 at the
+ * layer's pressure πσ, which takes out T's hydrostatic slope along σ over
+ * terrain. The last two are returned only when given.
  */
-export function dynamicsOptions({ divergenceSurfaces = 'sigma', ...rest } = {}) {
+export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscosity, temperatureClosure, ...rest } = {}) {
   const unknown = Object.keys(rest);
-  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, not ${unknown.join(', ')}`);
+  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, divergenceViscosity and temperatureClosure, not ${unknown.join(', ')}`);
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
-  return { divergenceSurfaces };
+  if (divergenceViscosity !== undefined && !(typeof divergenceViscosity === 'number' && divergenceViscosity >= 0 && Number.isFinite(divergenceViscosity))) throw new Error(`divergenceViscosity is ν_d in m²/s, 0 or more, not ${divergenceViscosity}`);
+  if (temperatureClosure !== undefined && !TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
+  return { divergenceSurfaces, ...(divergenceViscosity !== undefined ? { divergenceViscosity } : {}), ...(temperatureClosure !== undefined ? { temperatureClosure } : {}) };
 }
 
 /*
@@ -87,6 +96,16 @@ export function standardSigma(z) {
 export function standardHeight(sigma) {
   const [z0, T0, lapse, sigma0] = STANDARD_LAYERS.findLast((layer) => layer[3] >= sigma) ?? STANDARD_LAYERS[0];
   return lapse === 0 ? z0 + STANDARD.R * T0 / STANDARD.g * Math.log(sigma0 / sigma) : z0 + T0 / lapse * (1 - Math.pow(sigma / sigma0, STANDARD.R * lapse / STANDARD.g));
+}
+
+/*
+ * The standard atmosphere's layers as [base σ, base T, exponent] with
+ * T = T_base (σ/σ_base)^exponent inside each, and the temperature at a σ.
+ */
+export const STANDARD_TEMPERATURE = STANDARD_LAYERS.map(([, T0, lapse, sigma0]) => [sigma0, T0, STANDARD.R * lapse / STANDARD.g]);
+export function standardTemperature(sigma) {
+  const [sigma0, T0, exponent] = STANDARD_TEMPERATURE.findLast((layer) => layer[0] >= sigma) ?? STANDARD_TEMPERATURE[0];
+  return T0 * Math.pow(sigma / sigma0, exponent);
 }
 
 export const SIGMA_GRIDS = ['cam26', 'bl34', 'bl36', 'bl42', 'bl48', 'bl60'];
@@ -196,15 +215,18 @@ export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
     nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma', surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null, spongeMeanRates = null,
+    divergenceViscosity = 0, temperatureClosure = 'sigma',
   } = options;
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
+  if (!TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
+  const standardClosure = temperatureClosure === 'standard';
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
     cellsOnEdge, verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, areaTriangle, dcEdge, dvEdge, fVertex,
   } = mesh;
   const K = levels.length - 1;
   const kappa = R / cp;
-  if (divergenceDamping > 0 && !splitClosure) throw new Error('divergence damping needs a core with splitClosure');
+  if ((divergenceDamping > 0 || divergenceViscosity > 0) && !splitClosure) throw new Error('divergence damping needs a core with splitClosure');
   const sponged = [spongeRates, spongeMeanRates].some((rates) => rates && rates.some((rate) => rate > 0));
   if (sponged && !splitClosure) throw new Error('the sponge needs a core with splitClosure');
   const sigmaUpper = levels.subarray(0, K);
@@ -257,9 +279,9 @@ export function createSigmaCore(mesh, options = {}) {
   let spacing = 0;
   for (let e = 0; e < E; e++) spacing += dcEdge[e];
   spacing /= E;
-  const divergenceStep = divergenceDamping * spacing * spacing;
+  const divergenceStep = divergenceDamping * spacing * spacing, damped = divergenceViscosity > 0 || divergenceStep > 0;
   const gradDiv = new Float64Array(E);
-  const coupled = divergenceSurfaces === 'hybrid' && divergenceStep > 0;
+  const coupled = divergenceSurfaces === 'hybrid' && damped;
   const surfaceWeight = coupled ? hybridWeights(sigmaMid) : null, lnSigmaStep = coupled ? logSigmaSteps(sigmaMid) : null;
   const hybridDivergence = coupled ? new Float64Array(K * C) : null, halfLnRatio = coupled ? new Float64Array(E) : null;
   const sponge = sponged ? spongeGeometry(mesh) : null, bandMeans = sponge ? new Float64Array(2 * sponge.bands) : null;
@@ -356,6 +378,7 @@ export function createSigmaCore(mesh, options = {}) {
     const off = k * C;
     if (exner) {
       for (let i = 0; i < C; i++) massField[i] = field[off + i] * exner[off + i];
+      if (standardClosure) for (let i = 0; i < C; i++) massField[i] -= standardTemperature(pi[i] * sigmaMid[k] / P0);
       laplacianScalar(mesh, massField, lapTheta);
       laplacianScalar(mesh, lapTheta, lapTheta2, pi);
       for (let i = 0; i < C; i++) target[off + i] -= coefficient * lapTheta2[i] / (pi[i] * exner[off + i]);
@@ -382,14 +405,15 @@ export function createSigmaCore(mesh, options = {}) {
   /*
    * Divergence damping of one layer over one step: u += c d² ∇(∇·u) with
    * d the mean distance between cell centres, the tendency ν_d ∇δ with
-   * ν_d = c d²/dt. The gradient of a divergence has no curl on the C-grid,
-   * so the vorticity is untouched.
+   * ν_d = c d²/dt, or with divergenceViscosity u += ν_d Δt ∇(∇·u). The
+   * gradient of a divergence has no curl on the C-grid, so the vorticity
+   * is untouched.
    */
-  function divergenceClosure(k, u) {
+  function divergenceClosure(k, u, step) {
     const off = k * E, uk = u.subarray(off, off + E);
     divergence(mesh, uk, divScratch);
     gradient(mesh, divScratch, gradDiv);
-    for (let e = 0; e < E; e++) u[off + e] += divergenceStep * gradDiv[e];
+    for (let e = 0; e < E; e++) u[off + e] += step * gradDiv[e];
   }
 
   /*
@@ -404,7 +428,7 @@ export function createSigmaCore(mesh, options = {}) {
    * through the edge, ∇_σ D_η − w (∂D_η/∂ln σ) ∇ln π. The derivatives
    * couple the layers, so all of them are damped at once.
    */
-  function hybridDivergenceClosure(pi, u) {
+  function hybridDivergenceClosure(pi, u, divergenceStep) {
     const { maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, areaCell } = mesh;
     for (let e = 0; e < E; e++) halfLnRatio[e] = 0.5 * Math.log(pi[cellsOnEdge[2 * e + 1]] / pi[cellsOnEdge[2 * e]]);
     for (let k = 0; k < K; k++) {
@@ -480,7 +504,7 @@ export function createSigmaCore(mesh, options = {}) {
   function phaseClosure(state, kFrom, kTo, dt, part = 'all') {
     const [pi, theta, u] = state;
     const q = state[4] ?? null, qc = state[5] ?? null;
-    const together = coupled && part !== 'tracers';
+    const together = coupled && part !== 'tracers', step = divergenceViscosity > 0 ? divergenceViscosity * dt : divergenceStep;
     if (together && (kFrom !== 0 || kTo !== K)) throw new Error('the hybrid divergence damping couples the layers: close all of them at once');
     for (let k = kFrom; k < kTo; k++) {
       if (part !== 'momentum' && nu4Theta > 0) {
@@ -496,16 +520,16 @@ export function createSigmaCore(mesh, options = {}) {
         continue;
       }
       const spongeRate = sponge && spongeRates ? spongeRates[k] : 0, meanRate = sponge && spongeMeanRates ? spongeMeanRates[k] : 0;
-      if (nu4 > 0 || divergenceStep > 0 || spongeRate > 0 || meanRate > 0) {
+      if (nu4 > 0 || damped || spongeRate > 0 || meanRate > 0) {
         for (let e = 0; e < E; e++) uBefore[e] = u[off + e];
         if (nu4 > 0) momentumClosure(k, u, u, dt * nu4);
-        if (divergenceStep > 0) divergenceClosure(k, u);
+        if (damped) divergenceClosure(k, u, step);
         if (spongeRate > 0 || meanRate > 0) dampEddies(mesh, sponge, u.subarray(off, off + E), spongeRate, dt, bandMeans, meanRate);
         for (let e = 0; e < E; e++) dissipation[off + e] = uBefore[e] * uBefore[e] - u[off + e] * u[off + e];
       } else dissipation.fill(0, off, off + E);
     }
     if (!together) return;
-    hybridDivergenceClosure(pi, u);
+    hybridDivergenceClosure(pi, u, step);
     for (let k = 0; k < K; k++) {
       const off = k * E;
       const spongeRate = sponge && spongeRates ? spongeRates[k] : 0, meanRate = sponge && spongeMeanRates ? spongeMeanRates[k] : 0;
@@ -581,5 +605,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, divergenceViscosity, temperatureClosure, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }
