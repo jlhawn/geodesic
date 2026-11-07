@@ -9,8 +9,11 @@ equatorial state to be the forced response to those winds.
 
 The twelve-local recording (N=128, year 5, days 1461–1825) carries a
 2S–2N zonal stress of −0.06 to −0.09 N/m² over 160E–100W from June to
-October and −0.08 to −0.12 over the warm pool, against about −0.04 to
-−0.055 and −0.02 observed (QuikSCAT and TAO climatologies, approximate).
+October and −0.08 to −0.12 over the warm pool, against −0.043 to −0.053
+by month and, at 140E–160E, −0.011 to −0.019 in ERA5's hourly mean at
+3S–3N (2007–2019, four days a month; `data/era5_equatorial_stress.json`),
+which same-year ASCAT and the TAO buoys' COARE stress match within about
+5 % at 160W–100W (Nov 7 audit).
 Replaying the recording on the ocean at 0.6 of its stress puts the
 tropics, the 140W thermocline and the undercurrent on the World Ocean
 Atlas; nothing in the ocean moves them. The stress is the atmosphere's,
@@ -67,7 +70,7 @@ West of the date line the coupled bias is the Bjerknes loop on the
 ocean's cold warm pool: the atmosphere over the observed sea surface
 makes the observed winds there within six days.
 
-### 2. Over the central and eastern Pacific the atmosphere alone is 1.3 to 2 times too strong
+### 2. East of 150W the atmosphere alone is too strong
 
 The time mean over WOA23's sea surface (the base of section 4, days
 1609–1617, `plumeMomentum` on):
@@ -85,7 +88,14 @@ about 2 hPa is observed in August (ICOADS and ERA climatologies,
 approximate: 1010 at 170W, 1011.3 at 140W, 1012 at 110W). The
 pressure-gradient force across the central Pacific is about twice the
 observed, the wind 1.2 to 1.45 times (u² follows the gradient), the
-stress 1.3 to 2.2 times, largest at 160W–140W. The model's trough is too
+stress 1.3 to 2.2 times the table's approximate observed values,
+largest at 160W–140W. That ratio rests on a stress rebuilt with a
+constant drag coefficient, typed references and one start. Like for like the atmosphere's own excess is
+about 1.2 times and lies east of 150W only (Nov 7 audit: SST held at
+WOA23, N=64, nine members in five windows, stress from each run's own
+exchange against ERA5's hourly mean: 160W–100W 1.21 times, an excess of
+−11.2 ± 3.2 mN/m², the sea-level pressure contrast 1.4 times; 150E–180
+0.5 times). The model's trough is too
 flat over the warm pool and the date line (0.3 hPa from 150E to 170W
 where 1.5 is observed) and too steep east of it.
 
@@ -154,13 +164,23 @@ The excess has two parts of similar size:
    band (11.4 mm/d against 6 to 7 observed) and is weak at 120W–100W
    (3.2 against 7.5).
 
-The budget closes the same way in every arm: in the boundary layer the
-surface drag (−τx over the layer's mass, −7 to −8 × 10⁻⁵ m/s²) balances
-the pressure-gradient force (−2 to −7), the relative-vorticity flux of
+At 12 UTC the budget closes the same way in every arm: in the boundary
+layer the surface drag (−τx over the layer's mass, −7 to −8 × 10⁻⁵
+m/s²) balances the pressure-gradient force (−2 to −7), the relative-vorticity flux of
 the cross-equatorial southerlies (−1 to −5, largest in the east where
 v = 4 to 7 m/s carries the stronger south-east trades across the
 equator) and the mixing-down of the 10 to 15 m/s easterly jet that sits
-between 1 and 2 km.
+between 1 and 2 km. That split is one hour's: at 12 UTC the tide's
+pressure-gradient force at 1000 hPa over 170E–150W is +2.2 to +3.7 ×
+10⁻⁵ m/s² in ERA5 and the model, barotropic to 500 hPa, opposite to the
+day-mean force (−0.3 to −4.1) and as large, so a single-hour budget
+misstates the pressure gradient by 40–60 mN/m² per 30° of longitude. In
+the time mean, with the tide removed (Nov 7 audit: the coupled N=128
+year of each arm of the closure-floor pair, below σ 0.82 at 3S–3N
+170E–130W), the balance closes on the pressure gradient: for arm A a
+stress of −82.2 mN/m² against forces of −81.5 and −83.0 by two
+instruments, 70 % of them pressure; about 90 % of the excess over ERA5
+is pressure-held, and no turbulent flux crosses 1.7 km.
 
 What cools the eastern column between 1.5 and 3 km (the process budget
 of `scripts/tropicalHeating.mjs` on the 3S–3N 180–100W box, K/day, one
@@ -177,9 +197,14 @@ top (relative humidity 0.67 at 2.1 km where about 0.4 is observed).
 
 - The drag law: C_D is neutral COARE over the cold tongue (Ri_b ≈ 0), the
   stable functions engage only below 17.5 °C (earlier finding).
-- The ocean: twelve ocean-only arms over every column, coordinate, eddy,
-  tracer and closure knob leave the equatorial state unchanged
-  (ocean-hybrid-coordinate.md, row 5).
+- Not the ocean. Twelve 120-day ocean-only arms over every column,
+  coordinate, eddy, tracer and closure knob, restored to WOA at
+  30 W/m²/K, leave the equatorial state unchanged within their 0.3 K
+  detection limit (9–24 W/m² of export) and cannot see a slow drift
+  (ocean-hybrid-coordinate.md, row 5). At 0.99 times ERA5's stress
+  (N=64 ocean-only control; Nov 7 audit) the 10 m current is −0.72 m/s
+  against TAO's −0.13 and the undercurrent at 100 m +0.09 against +1.21;
+  the stress excess explains 0.13–0.35 of that current error.
 - The depth of the boundary layer and of the deck as the lever: holding
   the deck at the Richardson depth (0.75 km instead of 1.76 over the cold
   tongue, the momentum mixing at 0.85 km instead of 1.8) leaves the stress
@@ -198,9 +223,14 @@ top (relative humidity 0.67 at 2.1 km where about 0.4 is observed).
 
 Twenty days from `twelve_day1597.bin` over WOA23's August sea surface,
 judged on the mean of days 1609, 1611, 1613, 1615 and 1617; the base is
-the model's defaults (`plumeMomentum` on). Observed, about: the
-sea-level pressure difference −2 hPa, the stress −50, −55, −50 mN/m²,
-the wind −6, −6, −5.5 m/s at 20 m.
+the model's defaults (`plumeMomentum` on). ERA5 in August (hourly mean,
+3S–3N, 2007–2019, four days a month; `data/era5_equatorial_stress.json`):
+the sea-level pressure difference −1.86 hPa at 12 UTC (−2.72 in the day
+mean), the stress −68, −66, −46 mN/m². The wind of about −6, −6,
+−5.5 m/s at 20 m is an estimate: the repository holds no low-level ERA5
+wind. The arms are single starts, and their stress is rebuilt with a
+constant drag coefficient, which inflates 140W–100W by 13–24 % (Nov 7
+audit).
 
 | arm | SLP 180–160W less 120W–100W (hPa) | τx 160W–140W | 140W–120W | 120W–100W (mN/m²) | u 160W–140W | 140W–120W | 120W–100W (m/s) | deck h 120W–100W (m) | T 1.5 km east (°C) | T 2.1 km east |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -433,8 +463,13 @@ The cause is identified to three structures and not yet fixed:
    −22 percent of stress). Judge each on the 20-day means on bl42.
 3. The warm pool's part of the coupled bias is the ocean's cold warm
    pool under the recorded winds, closed in the coupled run by the
-   Bjerknes loop; it needs no atmospheric change and will follow the
-   central Pacific's.
+   Bjerknes loop. At N=64 it does not follow the central Pacific's: in
+   the observation scorecard's two coupled N=64 runs the warm pool is
+   1.09 and 1.07 K below WOA while the cold tongue is +0.26 and −2.30 K,
+   at 0.84 and 1.18 times ERA5's stress. At N=128 it moves with the
+   30S–30N mean (warm pool less that mean within −0.35 to +0.16 K as the
+   mean goes from about −0.6 to −1.40 K), so the two are not separated
+   (Nov 7 audit).
 3. The cumulus-layer top over the central Pacific (finding 7). Its
    cloud fraction and the lifetime of the detrained condensate set the
    cloud-top LW cooling that, with the plume's detrainment, holds the
