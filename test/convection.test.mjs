@@ -1801,8 +1801,8 @@ test('with convectionRetype the engines agree on random columns, and the GPU ref
 
 test('with midLevelConvection a column that no test parcel types deep and whose shallow plume does not rise lifts the lowest layer above the lowest below 10 km in large-scale ascent with q above 0.8 q_s whose parcel condenses at the next layer and is less than 0.5 K colder there, at a base flux of −π σ̇/g or (H + L E)/(g z_base), with enthalpy and water exact; sinking, drier air or the option off leave the column as without it', () => {
   const dt = 600;
-  const run = (options, { ascent = -0.2, humid = 0.95, sensible = 0, evaporation = 0, lapse = 6.5e-3, low = 1000, high = 3000, profile = null, column = null, buoyancy = -1e-4, depth = 500, ground = null } = {}) => {
-    const model = ground === null ? build(options) : createModel(new Grid(16), { topography: syntheticTopography(90, 180, () => ground), ocean: false, levels, moist: options }), { moist, core } = model, { K, C, dSigma, geopotential, g, piSigmaDot } = core.diagnostics, [pi] = model.state;
+  const run = (options, { ascent = -0.2, humid = 0.95, sensible = 0, evaporation = 0, lapse = 6.5e-3, low = 1000, high = 3000, profile = null, column = null, buoyancy = -1e-4, depth = 500, ground = null, grid = levels } = {}) => {
+    const model = createModel(new Grid(16), { ...(ground === null ? {} : { topography: syntheticTopography(90, 180, () => ground) }), ocean: false, levels: grid, moist: options }), { moist, core } = model, { K, C, dSigma, geopotential, g, piSigmaDot } = core.diagnostics, [pi] = model.state;
     place(model, 0, 101500, column ?? ((z, p) => { const T = 290 - lapse * Math.min(z, 11000); return { T, q: (z > low && z < high ? humid : 0.3) * saturationHumidity(T, p) }; }));
     setDepth(model, 0, depth);
     model.boundaryLayer.buoyancyFlux[0] = buoyancy; model.boundaryLayer.friction[0] = 0.25; model.radiation.mlmGate[0] = 0.3;
@@ -1824,6 +1824,10 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   assert.ok(lifted.deep.midLevel && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14 && lifted.height > on.height, `with no ascent at its cloud base the lowest candidate gives way to the next one up: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
   const lee = run({ midLevelConvection: true }, { profile: () => 0.2 }), windward = run({ midLevelConvection: true }, { ascent: 0.2, profile: () => -0.2 });
   assert.ok(!lee.deep.midLevel && same(lee, off), 'no mid-level plume where omega > 0 though pi sigma-dot < 0');
+  const single = (rh) => ({ column: (z, p, memo) => { const T = 290 - 8e-3 * Math.min(z, 11000), picked = !memo.picked && z > 2800; if (picked) memo.picked = true; return { T, q: (picked ? rh : 0.3) * saturationHumidity(T, p) }; }, grid: sigmaInterfaces('bl48') });
+  const shallowLcl = run({ midLevelConvection: true }, single(0.805)), shallowLclOff = run({}, single(0.805)), wet = run({ midLevelConvection: true }, single(0.97));
+  assert.ok(!shallowLcl.deep.midLevel && same(shallowLcl, shallowLclOff), `a bl48 layer near 3 km at RH 0.805, whose parcel condenses above its top interface though below the next layer's midpoint, gets no mid-level plume: base flux ${shallowLcl.deep.baseFlux} from ${shallowLcl.height} m`);
+  assert.ok(wet.deep.midLevel && wet.height > 2000, `the same layer at RH 0.97 departs: base flux ${wet.deep.baseFlux} from ${wet.height} m`);
   assert.ok(windward.deep.midLevel && Math.abs(windward.deep.baseFlux * g / 0.2 - 1) < 1e-14, `where omega < 0 though pi sigma-dot > 0 the plume departs at -omega/g: ${windward.deep.baseFlux}`);
   const mixing = Array.from({ length: on.deep.base - on.deep.top }, (_, n) => on.deep.top + n).filter((k) => on.entrained[k] > 0);
   assert.ok(mixing.length >= 3 && mixing.every((k) => on.detrained[k] >= 0.6 * on.entrained[k] * (1 - 1e-12) && on.detrained[k] <= 1.6 * on.entrained[k] * (1 + 1e-12)), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(3)).join(' ')}`);

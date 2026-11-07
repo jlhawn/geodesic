@@ -373,9 +373,12 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * second lowest up, whose midpoint lies within MID_LEVEL.height (10 km) of
  * the ground, in large-scale ascent (the core's ω = σ (∂π/∂t + v·∇π) + π σ̇
  * below 0), with q above MID_LEVEL.humidity (0.8) of q_s, and whose parcel
- * lifted to the next layer's midpoint holds condensate there and is less
- * than MID_LEVEL.buoyancy (0.5 K) colder in virtual temperature than the
- * air, and whose closure below would give it a base flux above
+ * lifted to its upper interface holds condensate there and is less than
+ * MID_LEVEL.buoyancy (0.5 K) colder in virtual temperature than the air
+ * there (CUININ's half-level PTENH and PQENH: the higher dry static energy
+ * of the two layers at the interface's height, saturated at constant
+ * c_p T + L q from the upper layer's q_s, less the upper layer's saturation
+ * deficit), and whose closure below would give it a base flux above
  * CUMULUS_FLOOR (a layer that fails any of these gives way to the next one
  * up, as cuascn.F90's type-3 cancellations do), departs with its own s_l
  * and q_t
@@ -1408,8 +1411,10 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         if (!(layerOmega[k * C + i] < 0 && Math.max(0, q[k * C + i]) > MID_LEVEL.humidity * saturation(T[k], p[k]).qs)) continue;
         lcl = liftingCondensationLevel((envS[k] - g * z[k]) / cp, envQ[k], p[k], kappa);
         if (!lcl || !(lcl.pressure > pi[i] * levels[1])) continue;
-        plumeState(envS[k], envQ[k], z[k - 1], p[k - 1], 0);
-        if (!(plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - T[k - 1] * (1 + tv * Math.max(0, q[(k - 1) * C + i])) > -MID_LEVEL.buoyancy)) continue;
+        const zh = upperInterface(i, k), ph = pi[i] * levels[k], qsAbove = saturationHumidity(T[k - 1], p[k - 1]);
+        const th = saturatedTemperature(Math.max(cp * T[k - 1] + g * z[k - 1], cp * T[k] + g * z[k]) - g * zh + latentHeat * qsAbove, ph, T[k - 1]);
+        plumeState(envS[k], envQ[k], zh, ph, 0);
+        if (!(plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - th * (1 + tv * Math.max(0, Math.min(Math.max(0, q[(k - 1) * C + i]), qsAbove) + saturationHumidity(th, ph) - qsAbove)) > -MID_LEVEL.buoyancy)) continue;
         let j = k;
         while (j > 1 && pi[i] * levels[j] > lcl.pressure) j--;
         if (Math.min(open * Math.max(0, -0.5 * (layerOmega[(j - 1) * C + i] + layerOmega[j * C + i]) / g, enthalpy / (g * (upperInterface(i, j) - ground))), cumulusBoundaryLoss * dp[k] / (g * dt)) > CUMULUS_FLOOR) { kb = k; break; }

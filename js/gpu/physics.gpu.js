@@ -2714,8 +2714,10 @@ const MID_LEVEL_PLUME = [
       let midEnv = plumeEnv(i, k);
       let midLcl = condensationLevel((midEnv.x - GRAV * plumeZ(i, k)) / CP, midEnv.y, layerP(pi, k));
       if (!(midLcl.y > pi * LV[L_SL + 0])) { continue; }
-      let midFirst = plumeState(midEnv.x, midEnv.y, plumeZ(i, k - 1), layerP(pi, k - 1), 0.0);
-      if (!(midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - plumeT(i, k - 1) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + (k - 1) * C + i])) > -MID_BUOYANCY)) { continue; }
+      let midZh = upperInterface(i, k); let midPh = pi * LV[L_SU + k]; let midQsAbove = qsat(plumeT(i, k - 1), layerP(pi, k - 1));
+      let midTh = saturatedTemperature(max(CP * plumeT(i, k - 1) + GRAV * plumeZ(i, k - 1), CP * plumeT(i, k) + GRAV * plumeZ(i, k)) - GRAV * midZh + LHEAT * midQsAbove, midPh, plumeT(i, k - 1));
+      let midFirst = plumeState(midEnv.x, midEnv.y, midZh, midPh, 0.0);
+      if (!(midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - midTh * (1.0 + PARCEL_VIRT * max(0.0, min(max(0.0, IN[S_Q + (k - 1) * C + i]), midQsAbove) + qsat(midTh, midPh) - midQsAbove)) > -MID_BUOYANCY)) { continue; }
       var midBase = k;
       while (midBase > 1 && pi * LV[L_SU + midBase] > midLcl.y) { midBase -= 1; }
       let midDrive = max(0.0, max(-0.5 * (D[D_OMG + (midBase - 1) * C + i] + D[D_OMG + midBase * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, midBase) - ground))));
