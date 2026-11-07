@@ -10,8 +10,9 @@ const OPTIONS = {
   radiation: { cloudColumns: true, cloudSpread: 0.75, varianceCover: 'water', buoyancyLength: 0.53 },
   moist: { stratocumulusInversion: 7, cumulusEntrainmentHeight: 1, cumulusAscent: 'kinetic' },
 };
+const TERRAIN = { conserveVolume: true };
 
-test("the page's worker runs a saved state with the options it records, and its snapshots and restores carry them", async () => {
+test("the page's worker runs a saved state with the options and the terrain it records, its surface pressure where it stands, and its snapshots and restores carry them; a restore onto other terrain restarts the model", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'run-options-'));
   const messages = [], fetched = globalThis.fetch;
   globalThis.self = { postMessage: (message) => messages.push(message) };
@@ -37,7 +38,9 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.deepEqual((await start()).options, {});
     const fresh = await snapshot();
     assert.deepEqual(fresh.options, {});
-    const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, ...(fresh.grid ? { grid: fresh.grid } : {}), options: OPTIONS };
+    assert.equal(fresh.terrain, true);
+    assert.equal(fresh.terrainOptions, undefined);
+    const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, terrainOptions: TERRAIN, ...(fresh.grid ? { grid: fresh.grid } : {}), options: OPTIONS };
     for (const [key, buffer] of Object.entries(fresh.arrays)) saved[key] = new Float64Array(buffer.slice(0));
     saved.ocean = { ...groupHeader(fresh.ocean), ...Object.fromEntries(Object.entries(groupArrays(fresh.ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
     saved.land = Object.fromEntries(Object.entries(fresh.land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
@@ -46,8 +49,15 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.deepEqual((await start(file)).options, OPTIONS);
     const taken = await snapshot();
     assert.deepEqual(taken.options, OPTIONS);
+    assert.deepEqual(taken.terrainOptions, TERRAIN);
+    assert.deepEqual(new Float64Array(taken.arrays.pi), saved.pi);
     assert.deepEqual((await restore(fresh)).options, {});
+    assert.equal((await snapshot()).terrainOptions, undefined);
     assert.deepEqual((await restore(taken)).options, OPTIONS);
+    const { terrainOptions, ...plain } = await snapshot();
+    assert.deepEqual(terrainOptions, TERRAIN);
+    assert.deepEqual((await restore(plain)).options, OPTIONS);
+    assert.equal((await snapshot()).terrainOptions, undefined);
   } finally {
     globalThis.fetch = fetched;
     delete globalThis.self;
