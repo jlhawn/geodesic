@@ -210,6 +210,69 @@ test('surfaceExcess 8.5 deepens the Richardson depth of a column over a warm sur
   }
 });
 
+function profileColumns(extra) {
+  const pair = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl34'), boundaryLayer: { turbulence: 'dry', ...extra }, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
+  const { core: c, state, boundaryLayer: layer } = pair;
+  const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
+  const [pi, theta, u, surfaceT, q, qc] = state;
+  const init = initializeState(pair, {});
+  for (let a = 0; a < init.length; a++) state[a].set(init[a]);
+  c.diagnose(pi, theta, q, qc);
+  let seed = 4099;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let i = 0; i < nC; i++) {
+    const zb = phi[(nK - 1) * nC + i] / grav, surface = 286 + 14 * random(), top = 300 + 1500 * random(), below = -1e-3 + 2e-3 * random(), above = 3e-3 + 5e-3 * random(), jump = 4 * random();
+    for (let k = 0; k < nK; k++) {
+      const x = k * nC + i, z = phi[x] / grav - zb;
+      theta[x] = z < top ? surface + below * z : surface + below * top + jump + above * (z - top);
+      if (sigmaMid[k] < 0.2) theta[x] = Math.max(theta[x], init[1][x]);
+      q[x] = 0.5 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]);
+      qc[x] = 0;
+    }
+    surfaceT[i] = theta[(nK - 1) * nC + i] * exnerLayer[(nK - 1) * nC + i] * Math.pow(sigmaMid[nK - 1], -kappa) - 3 + 6 * random();
+  }
+  for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 8 * (random() - 0.5) : 12 * (random() - 0.5);
+  c.diagnose(pi, theta, q, qc);
+  layer.diagnose(state);
+  return pair;
+}
+
+test('the K-profile options: profileHeight \'ground\' takes the profile\'s z and h from the ground, stableProfile \'holtslagBoville\' divides a stable column\'s profile by 1 + 5 z/L (5 + z/L above z/L = 1), and prandtlCoefficient is the a of Pr', () => {
+  const base = profileColumns({}), ground = profileColumns({ profileHeight: 'ground' }), stable = profileColumns({ stableProfile: 'holtslagBoville' }), plain = profileColumns({ prandtlCoefficient: 0 });
+  const { core: c, boundaryLayer: layer } = base, { K: nK, C: nC, g: grav, cp, geopotential: phi, exnerLayer, exnerLower } = c.diagnostics, thetaV = c.arrays.thetaV;
+  const shape = (z, h) => z * (1 - z / h) ** 2, mixed = (B0, ustar, h) => Math.cbrt(ustar ** 3 + 0.6 * B0 * h);
+  const prandtl = (B0, ustar, h, a) => Math.pow(1 + 1.5 * 0.4 * B0 * h / ustar ** 3, -1 / 6) + a * 0.4 * 0.1 * Math.cbrt(B0 * h) / mixed(B0, ustar, h);
+  for (const other of [ground, stable, plain]) assert.deepEqual(other.boundaryLayer.depth, layer.depth);
+  const columns = { stable: 0, unstable: 0 }, worst = { ground: 0, stable: 0, prandtl: 0, untouched: 0 };
+  let strongest = 1, lifted = 0;
+  for (let i = 0; i < nC; i++) {
+    const b = (nK - 1) * nC + i, zb = phi[b] / grav, h = layer.depth[i] - zb, B0 = layer.buoyancyFlux[i], ustar = layer.friction[i];
+    if (!(h > 0)) continue;
+    const lift = cp * thetaV[b] * (exnerLower[b] - exnerLayer[b]) / grav;
+    lifted = Math.max(lifted, lift);
+    columns[B0 < 0 ? 'stable' : 'unstable']++;
+    for (let k = layer.kTop; k < nK - 1; k++) {
+      const x = k * nC + i, z = 0.5 * (phi[x] / grav + phi[x + nC] / grav) - zb, m = layer.mixing[x];
+      if (z >= h) continue;
+      const expected = shape(z + lift, h + lift) / shape(z, h) * (B0 > 0 ? mixed(B0, ustar, h + lift) / mixed(B0, ustar, h) : 1);
+      worst.ground = Math.max(worst.ground, Math.abs(ground.boundaryLayer.mixing[x] / m / expected - 1));
+      if (B0 < 0) {
+        const zeta = -0.4 * z * B0 / ustar ** 3, phiStable = zeta <= 1 ? 1 + 5 * zeta : 5 + zeta;
+        strongest = Math.max(strongest, phiStable);
+        worst.stable = Math.max(worst.stable, Math.abs(stable.boundaryLayer.mixing[x] * phiStable / m - 1));
+        worst.untouched = Math.max(worst.untouched, Math.abs(plain.boundaryLayer.mixing[x] - m), Math.abs(plain.boundaryLayer.scalarMixing[x] - layer.scalarMixing[x]));
+      } else {
+        worst.untouched = Math.max(worst.untouched, Math.abs(stable.boundaryLayer.mixing[x] - m), Math.abs(stable.boundaryLayer.scalarMixing[x] - layer.scalarMixing[x]), Math.abs(plain.boundaryLayer.mixing[x] - m));
+        if (B0 > 0) worst.prandtl = Math.max(worst.prandtl, Math.abs(plain.boundaryLayer.scalarMixing[x] / layer.scalarMixing[x] * prandtl(B0, ustar, h, 0) / prandtl(B0, ustar, h, 7.2) - 1));
+      }
+    }
+  }
+  console.log(`${columns.stable} stable and ${columns.unstable} unstable columns with h > 0; the midpoints stand up to ${lifted.toFixed(1)} m above the ground and the stable φ reaches ${strongest.toFixed(1)}; the coefficients differ from the formulas by ${worst.ground.toExponential(1)} (ground), ${worst.stable.toExponential(1)} (stable φ) and ${worst.prandtl.toExponential(1)} (Pr without a)`);
+  assert.ok(columns.stable > 20 && columns.unstable > 20 && lifted > 5 && strongest > 1.5, JSON.stringify({ columns, lifted, strongest }));
+  assert.equal(worst.untouched, 0, 'stableProfile leaves unstable columns alone and prandtlCoefficient the momentum and the stable columns');
+  assert.ok(worst.ground < 1e-9 && worst.stable < 1e-9 && worst.prandtl < 1e-9, JSON.stringify(worst));
+});
+
 test('momentum mixing brings wind down to the surface layer and changes each edge column\'s momentum by the surface stress alone', () => {
   const state = column(300, -1e-3, 8, 1000);
   const [pi, , u] = state;
@@ -716,10 +779,10 @@ test('the cumulus-capped rule matches between the engines: the cumulus columns c
   assert.ok(worstTop < 0.5, `mixing top ${worstTop}`);
 });
 
-test('the countergradient and velocityScale \'holtslagBoville\' match between the engines on the random columns, alone and together: each interface\'s ρK a w* / (w_m² h), the kinematic surface fluxes, the coefficients that mix momentum and those that mix heat and water, and θ, q, qc and the wind after the step and what each option changes in them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the countergradient, velocityScale \'holtslagBoville\' and the K-profile options match between the engines on the random columns, alone and together: each interface\'s ρK a w* / (w_m² h), the kinematic surface fluxes, the coefficients that mix momentum and those that mix heat and water, and θ, q, qc and the wind after the step and what each option changes in them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const holtslag = { velocityScale: 'holtslagBoville' }, built = new Map();
   const build = async (options) => { const key = JSON.stringify(options); if (!built.has(key)) built.set(key, await engines({}, options)); return built.get(key); };
-  const cases = ['dry', 'moist'].flatMap((turbulence) => [['countergradient', { velocityScale: 'capped', countergradient: 7.2, turbulence }, { velocityScale: 'capped', turbulence }], ['holtslagBoville', { ...holtslag, turbulence }, { velocityScale: 'capped', turbulence }], ['holtslagBoville with the countergradient', { ...holtslag, countergradient: 7.2, turbulence }, { ...holtslag, turbulence }]].map((c) => [turbulence, ...c]));
+  const cases = ['dry', 'moist'].flatMap((turbulence) => [['countergradient', { velocityScale: 'capped', countergradient: 7.2, turbulence }, { velocityScale: 'capped', turbulence }], ['holtslagBoville', { ...holtslag, turbulence }, { velocityScale: 'capped', turbulence }], ['holtslagBoville with the countergradient', { ...holtslag, countergradient: 7.2, turbulence }, { ...holtslag, turbulence }], ['the K-profile from the ground with the stable φ and a Prandtl a of 0', { ...holtslag, profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 0, turbulence }, { ...holtslag, turbulence }], ['the K-profile from the ground with the stable φ and the countergradient', { ...holtslag, countergradient: 7.2, profileHeight: 'ground', stableProfile: 'holtslagBoville', turbulence }, { ...holtslag, countergradient: 7.2, turbulence }]].map((c) => [turbulence, ...c]));
   for (const [turbulence, name, onOptions, baseOptions] of cases) {
     const on = await build(onOptions), base = await build(baseOptions), label = `${turbulence}, ${name}`;
     const { K: nK, C: nC, E: nE, kTop, mesh: m } = on, carries = !!on.cpu.nonlocal, scalars = !!on.cpu.scalarMixing;

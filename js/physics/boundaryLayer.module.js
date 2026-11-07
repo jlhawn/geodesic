@@ -193,10 +193,18 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * φ_m = (1 − 15 z/L)^−⅓ of A8), with no floor on ζ, and heat and water
  * take the profile's K divided by their Prandtl number
  * Pr = φ_h/φ_m + a κ (z/h) w* / w_m at z = 0.1 h (A13, φ_h = (1 − 15 z/L)^−½
- * of A6, their a = 7.2 whatever `countergradient` is), on the profile's
- * part of each coefficient alone: `mixing` keeps the coefficients that
- * mix momentum and `scalarMixing` those that mix heat and water. Stable
- * columns keep u* and Pr = 1.
+ * of A6, a = `prandtlCoefficient`, their 7.2 by default, whatever
+ * `countergradient` is), on the profile's part of each coefficient alone:
+ * `mixing` keeps the coefficients that mix momentum and `scalarMixing`
+ * those that mix heat and water. Stable columns keep u* and Pr = 1; with
+ * `stableProfile` 'holtslagBoville' their profile is divided by
+ * φ = 1 + 5 z/L, or 5 + z/L above z/L = 1 as in CAM's, with
+ * z/L = −κ z B0 / u*³. The profile's z and h are heights above the lowest
+ * layer's midpoint, where the depth search starts; with `profileHeight`
+ * 'ground' the profile, w_m, Pr and the countergradient's outer layer take
+ * both from the ground, as Holtslag and Boville's are, by adding the
+ * midpoint's height above the ground, and the profile still ends at the
+ * same interface.
  *
  * With `diagnoseFirst` the diagnosis (depth, K, regime and the rest) sees
  * the lowest layer without the step's surface sensible heat and
@@ -217,13 +225,16 @@ export function createBoundaryLayer(mesh, core, {
   dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, seaFlow = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, openSea = null, seaHumidity = 1, deckTop = null, deckGate = null, deckLayer = null, deckShare = null, deckEntrainment = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
   countergradient = 0, surfaceHeat = null, surfaceEvaporation = null, velocityScale = 'holtslagBoville',
-  diagnoseFirst = false, depositedHeat = null, depositedWater = null, surfaceExcess = 0,
+  diagnoseFirst = false, depositedHeat = null, depositedWater = null, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
   if (diagnoseFirst && !depositedHeat) throw new Error('diagnoseFirst needs the depositedHeat (and with moisture the depositedWater) of the step\'s surface fluxes');
   if (velocityScale !== 'capped' && velocityScale !== 'holtslagBoville') throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${velocityScale}`);
   const holtslag = velocityScale === 'holtslagBoville';
+  if (profileHeight !== 'midpoint' && profileHeight !== 'ground') throw new Error(`profileHeight must be 'midpoint' or 'ground', not ${profileHeight}`);
+  if (stableProfile !== 'flat' && stableProfile !== 'holtslagBoville') throw new Error(`stableProfile must be 'flat' or 'holtslagBoville', not ${stableProfile}`);
+  if (!(prandtlCoefficient >= 0)) throw new Error(`prandtlCoefficient must be 0 or more, not ${prandtlCoefficient}`);
   if (!(countergradient >= 0)) throw new Error(`countergradient must be 0 or more, not ${countergradient}`);
   if (countergradient > 0 && givenBuoyancy && !(surfaceHeat && surfaceEvaporation)) throw new Error('countergradient with surfaceBuoyancy needs the surfaceHeat and surfaceEvaporation it was made from');
   const { efficiency, shear, cap, jumpFloor, shearOnset, evaporativeEnhancement, maximumEfficiency, taper: tapered, jumpLayers, subsidence: subsiding } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
@@ -383,22 +394,23 @@ export function createBoundaryLayer(mesh, core, {
       buoyancyFlux[i] = buoyancy;
       if (nonlocal) surfaceFluxes(i, pi, theta, surfaceT, q);
       if (h <= 0) continue;
+      const lift = profileLift(i), profileDepth = h + lift;
       let scale = friction[i], prandtl = 1;
-      if (stability && buoyancy > 0) scale = holtslag ? Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * h) : friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
-      if (holtslag && stability && buoyancy > 0) prandtl = prandtlNumber(i, h, scale, buoyancy);
+      if (stability && buoyancy > 0) scale = holtslag ? Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * profileDepth) : friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * profileDepth * vonKarman * buoyancy / friction[i] ** 3), 0.25);
+      if (holtslag && stability && buoyancy > 0) prandtl = prandtlNumber(i, profileDepth, scale, buoyancy);
       let entrainK = -1;
       for (let k = kTop; k < bottom; k++) {
         const idx = k * C + i, below = idx + C;
         const zAbove = geopotential[idx] / g, zBelow = geopotential[below] / g;
         const z = 0.5 * (zAbove + zBelow) - zb;
         if (z >= h) { entrainK = k; continue; }
-        const diffusivity = vonKarman * scale * z * (1 - z / h) ** 2;
+        const diffusivity = profileDiffusivity(z + lift, profileDepth, scale, buoyancy, i);
         const rhoAbove = pi[i] * sigmaMid[k] / (R * theta[idx] * exnerLayer[idx]);
         const rhoBelow = pi[i] * sigmaMid[k + 1] / (R * theta[below] * exnerLayer[below]);
         mixing[idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
         if (scalarMixing) scalarMixing[idx] = mixing[idx] * (1 / prandtl - 1);
       }
-      if (nonlocal) layNonlocal(i, pi, theta, zb, h, scale / prandtl, buoyancy);
+      if (nonlocal) layNonlocal(i, pi, theta, zb, h, scale / prandtl, buoyancy, lift);
       const open = deckGate ? Math.min(1, Math.max(0, (DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN))) : 1;
       const taper = open * (stratiform ? 1 - stratiform[i] : 1);
       if (entraining && entrainK >= kTop && buoyancy > 0 && taper > 0) {
@@ -417,7 +429,20 @@ export function createBoundaryLayer(mesh, core, {
   }
 
   function prandtlNumber(i, h, mixed, buoyancy) {
-    return Math.pow(1 + 1.5 * vonKarman * buoyancy * h / friction[i] ** 3, -1 / 6) + 7.2 * vonKarman * 0.1 * Math.cbrt(buoyancy * h) / mixed;
+    return Math.pow(1 + 1.5 * vonKarman * buoyancy * h / friction[i] ** 3, -1 / 6) + prandtlCoefficient * vonKarman * 0.1 * Math.cbrt(buoyancy * h) / mixed;
+  }
+
+  function profileLift(i) {
+    if (profileHeight !== 'ground') return 0;
+    const base = bottom * C + i;
+    return cp * thetaV[base] * (exnerLower[base] - exnerLayer[base]) / g;
+  }
+
+  function profileDiffusivity(z, h, scale, buoyancy, i) {
+    const diffusivity = vonKarman * scale * z * (1 - z / h) ** 2;
+    if (stableProfile === 'flat' || !stability || !(buoyancy < 0) || !(friction[i] > 0)) return diffusivity;
+    const zeta = -vonKarman * z * buoyancy / friction[i] ** 3;
+    return diffusivity / (zeta <= 1 ? 1 + 5 * zeta : 5 + zeta);
   }
 
   function addScalarMixing(i) {
@@ -443,11 +468,11 @@ export function createBoundaryLayer(mesh, core, {
     kinematicWater[i] = q && !(land && land[i]) ? exchange * (saturationHumidity(surfaceT[i], pi[i]) * (1 - (1 - seaHumidity) * (openSea ? openSea[i] : 1)) - q[base]) : 0;
   }
 
-  function layNonlocal(i, pi, theta, zb, h, scale, buoyancy) {
-    if (!(buoyancy > 0) || !(h > 0)) return;
-    const mixed = Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * h), factor = countergradient * Math.cbrt(buoyancy * h) / (mixed * mixed * h);
+  function layNonlocal(i, pi, theta, zb, depthAbove, scale, buoyancy, lift) {
+    if (!(buoyancy > 0) || !(depthAbove > 0)) return;
+    const h = depthAbove + lift, mixed = Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * h), factor = countergradient * Math.cbrt(buoyancy * h) / (mixed * mixed * h);
     for (let k = kTop; k < bottom; k++) {
-      const z = 0.5 * (geopotential[k * C + i] / g + geopotential[(k + 1) * C + i] / g) - zb;
+      const z = 0.5 * (geopotential[k * C + i] / g + geopotential[(k + 1) * C + i] / g) - zb + lift;
       if (z > 0.1 * h && z < h) nonlocal[k * C + i] = 0.5 * (density(pi, k, i, theta) + density(pi, k + 1, i, theta)) * (vonKarman * scale * z * (1 - z / h) ** 2) * factor;
     }
   }
@@ -592,18 +617,19 @@ export function createBoundaryLayer(mesh, core, {
     if (top >= 0 && layerDepth > 0) velocityCubed = g / thetaV[top * C + i] * cooling / (density(pi, top, i, theta) * cp) * layerDepth;
     const velocity = Math.cbrt(velocityCubed);
     radiativeVelocity[i] = velocity;
+    const lift = profileLift(i), profileDepth = h + lift;
     let scale = friction[i], prandtl = 1;
-    if (stability && buoyancy > 0 && h > 0) scale = holtslag ? Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * h) : friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
-    if (holtslag && stability && buoyancy > 0 && h > 0) prandtl = prandtlNumber(i, h, scale, buoyancy);
+    if (stability && buoyancy > 0 && h > 0) scale = holtslag ? Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * profileDepth) : friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * profileDepth * vonKarman * buoyancy / friction[i] ** 3), 0.25);
+    if (holtslag && stability && buoyancy > 0 && h > 0) prandtl = prandtlNumber(i, profileDepth, scale, buoyancy);
     for (let k = kTop; k < bottom; k++) {
       const z = interfaceZ(k);
       let diffusivity = 0;
-      if (z < h) diffusivity += vonKarman * scale * z * (1 - z / h) ** 2;
+      if (z < h) diffusivity += profileDiffusivity(z + lift, profileDepth, scale, buoyancy, i);
       if (scalarMixing && z < h) scalarMixing[k * C + i] = 0.5 * (density(pi, k, i, theta) + density(pi, k + 1, i, theta)) * diffusivity * (1 / prandtl - 1) / (geopotential[k * C + i] / g - geopotential[(k + 1) * C + i] / g);
       if (velocity > 0 && z > base0 && z < cloudTopZ) { const x = (z - base0) / layerDepth; diffusivity += profile * vonKarman * velocity * layerDepth * x * x * Math.sqrt(1 - x); }
       if (diffusivity > 0) mixing[k * C + i] = 0.5 * (density(pi, k, i, theta) + density(pi, k + 1, i, theta)) * diffusivity / (geopotential[k * C + i] / g - geopotential[(k + 1) * C + i] / g);
     }
-    if (nonlocal) layNonlocal(i, pi, theta, zb, h, scale / prandtl, buoyancy);
+    if (nonlocal) layNonlocal(i, pi, theta, zb, h, scale / prandtl, buoyancy, lift);
     if (!entraining) return;
     const onset = shearOnset > 0 ? Math.min(1, buoyancy / shearOnset) : 1;
     const sheared = buoyancy > 0 ? onset * friction[i] ** 3 : 0;
@@ -719,7 +745,7 @@ export function createBoundaryLayer(mesh, core, {
 
   return {
     diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, cloudLayer, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence, implicitDrag, seaFlow, surfaceDrag, surfaceStress, stressReady, formRate, formStress, formDrag: formOptions,
-    countergradient, nonlocal, kinematicHeat, kinematicWater, velocityScale, scalarMixing, diagnoseFirst, surfaceExcess,
+    countergradient, nonlocal, kinematicHeat, kinematicWater, velocityScale, scalarMixing, diagnoseFirst, surfaceExcess, profileHeight, stableProfile, prandtlCoefficient,
     shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, cloudLayer: cloudLayerBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer, surfaceDrag: surfaceDragBuffer, surfaceStress: stressBuffer, ...(formDrag ? { formRate: formRateBuffer, formStress: formStressBuffer } : {}), ...(nonlocal ? { nonlocal: nonlocalBuffer, kinematicFlux: kinematicBuffer } : {}), ...(scalarMixing ? { scalarMixing: scalarBuffer } : {}) },
   };
 }
