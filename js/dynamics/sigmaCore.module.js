@@ -236,7 +236,7 @@ export function sigmaGridName(levels) {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma', surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null, spongeMeanRates = null,
+    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma', surfaceGeopotential = null, buffers = null, storeOmega = false, splitClosure = false, spongeRates = null, spongeMeanRates = null,
     divergenceViscosity = 0, temperatureClosure = 'sigma', verticalAdvection = 'centered',
   } = options;
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
@@ -268,6 +268,7 @@ export function createSigmaCore(mesh, options = {}) {
   const uBefore = new Float64Array(E);
   const divFlux = sharedArray('divFlux', K * C);
   const piSigmaDot = sharedArray('piSigmaDot', (K + 1) * C);
+  const layerOmega = storeOmega ? sharedArray('omega', K * C) : null;
   const exnerLower = sharedArray('exnerLower', K * C);
   const exnerLayer = sharedArray('exnerLayer', K * C);
   const dExnerDpi = sharedArray('dExnerDpi', K * C);
@@ -518,6 +519,7 @@ export function createSigmaCore(mesh, options = {}) {
     for (let i = 0; i < C; i++) {
       const idx = k * C + i;
       const omega = sigmaMid[k] * (dPi[i] + divFlux[idx] - pi[i] * divScratch[i]) + 0.5 * (piSigmaDot[idx] + piSigmaDot[idx + C]);
+      if (layerOmega) layerOmega[idx] = omega;
       dTheta[idx] += kappa * theta[idx] * (VIRTUAL_FACTOR * q[idx] - (qc ? qc[idx] : 0)) * omega / (pi[i] * sigmaMid[k]);
     }
   }
@@ -627,7 +629,7 @@ export function createSigmaCore(mesh, options = {}) {
     phaseLayer(state, out, 0, K);
   }
 
-  const diagnostics = { K, C, E, V, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, diagnose, diagnoseColumn };
+  const diagnostics = { K, C, E, V, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, omega: layerOmega, diagnose, diagnoseColumn };
 
   function mass(pi) {
     let m = 0;

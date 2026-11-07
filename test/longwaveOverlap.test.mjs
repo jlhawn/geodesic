@@ -93,7 +93,7 @@ test('scripts/longwaveOverlap.mjs repeats the radiation\'s OLR and surface downw
   const dir = mkdtempSync(join(tmpdir(), 'longwaveOverlap-')), file = join(dir, 'overlap16_day0000.bin');
   writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
   const script = (radiation) => spawnSync(process.execPath, [new URL('../scripts/longwaveOverlap.mjs', import.meta.url).pathname, file], { env: { ...process.env, RADIATION: JSON.stringify({ ...PREVIOUS_RADIATION, ...radiation }), MOIST: JSON.stringify(PREVIOUS_MOIST) }, encoding: 'utf8' });
-  const runs = [script({}), script({ longwaveOverlap: 'random' })];
+  const runs = [script({}), script({ longwaveOverlap: 'random' })], ramped = script({ traceCloudPath: 1e-3 });
   rmSync(dir, { recursive: true, force: true });
   for (const [n, run] of runs.entries()) {
     assert.equal(run.status, 0, run.stderr);
@@ -103,4 +103,33 @@ test('scripts/longwaveOverlap.mjs repeats the radiation\'s OLR and surface downw
     const [, raised] = run.stdout.match(/^global: .*exponential-random less random: OLR (-?[0-9.]+),/m);
     assert.ok(Number(raised) > 0, `exponential-random less random OLR ${raised} W/m2`);
   }
+  assert.equal(ramped.status, 0, ramped.stderr);
+  const [, rampedOlr, rampedDown] = ramped.stdout.match(/repeats the radiation's OLR to ([0-9.e+-]+) and its surface downward longwave to ([0-9.e+-]+) relative/);
+  console.log(`traceCloudPath 1e-3 kg/m²: the script repeats the radiation's OLR to ${rampedOlr} and its surface downward longwave to ${rampedDown} relative`);
+  assert.ok(Number(rampedOlr) < 1e-6 && Number(rampedDown) < 1e-6, `traceCloudPath 1e-3: OLR to ${rampedOlr}, downward to ${rampedDown}`);
+});
+
+test('with traceCloudPath a layer whose cloud water is a trace enters the longwave overlap chain with cover W/t: the OLR no longer jumps when the trace appears, and columns with no layer under the trace path are untouched', () => {
+  const model = partlyCloudy(), [pi, theta, , , q, qc] = model.state, { K } = model.core, C = model.mesh.nCells;
+  const { exnerLayer, sigmaMid } = model.core.diagnostics;
+  const gaps = [];
+  for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
+    const x = k * C + i, inside = sigmaMid[k] > 0.3 && sigmaMid[k] < 0.9;
+    if (inside && (k + i) % 5 === 0) { q[x] = 0.9 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]); qc[x] = 0; gaps.push(x); }
+    else if (!inside) qc[x] = 0;
+  }
+  const trace = { traceCloudPath: 1e-6 }, zero = { base: columns(model, {}), trace: columns(model, trace) };
+  for (const x of gaps) qc[x] = 1e-15;
+  const traced = { base: columns(model, {}), trace: columns(model, trace) };
+  let cliff = 0, kept = 0, untouched = 0;
+  for (let i = 0; i < C; i++) {
+    cliff = Math.max(cliff, Math.abs(traced.base.outgoing[i] - zero.base.outgoing[i]));
+    kept = Math.max(kept, Math.abs(traced.trace.outgoing[i] - zero.trace.outgoing[i]));
+    if (zero.trace.outgoing[i] === zero.base.outgoing[i] && zero.trace.back[i] === zero.base.back[i]) untouched++;
+  }
+  console.log(`${gaps.length} gap layers given 1e-15 kg/kg of cloud water at N=16: the OLR moves by up to ${cliff.toFixed(3)} W/m² without traceCloudPath and ${kept.toExponential(1)} with 1e-6 kg/m²; ${untouched} of ${C} columns without a trace untouched`);
+  assert.ok(untouched === C, `${C - untouched} columns with no trace changed`);
+  assert.ok(cliff > 0.01 && kept < 1e-3 * cliff, `the trace moves the OLR by ${cliff} W/m² without the option, ${kept} with it`);
+  assert.ok(traced.trace.closure < 1e-11 * traced.trace.scale, `closure ${traced.trace.closure} W/m²`);
+  assert.throws(() => columns(model, { traceCloudPath: 2e-3 }), /traceCloudPath must be null or an in-cloud water path/);
 });

@@ -59,7 +59,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, FUSION_HEAT, IFS_PRECIPITATION, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, fogConstants, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, FUSION_HEAT, IFS_PRECIPITATION, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, fogConstants, liquidFraction, liftingCondensationLevel, stratiformRainEvaporation, rainShareBelow, RAIN_COVER_FLOOR } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -231,6 +231,7 @@ function heated(i, s, n, term) {
 const saturated = { qs: 0, slope: 0, liquid: 1 };
 const saturation = (T, p) => cloudSaturation(T, p, O.iceSaturation, O.liquidTemperature, O.iceTemperature, saturated);
 const halfWidth = (p, ps) => (1 - criticalHumidityAt(p, ps, O.surfaceCriticalHumidity, O.topCriticalHumidity, O.criticalExponent)) * saturated.qs / (1 + L * saturated.slope / cp);
+const rainShares = O.rainCover === 'overlap' && (O.rainEvaporationLaw !== 'deficit' || O.rainEvaporationCeiling !== null);
 const upperInterface = (i, k) => (geopotential[k * C + i] + cp * thetaV[k * C + i] * (exnerLayer[k * C + i] - exnerLower[(k - 1) * C + i])) / g;
 function longCloudShare(twin, i, k, iced) {
   if (twin.cumulusBaseFlux[i] > 0 && pi[i] * sigmaMid[k] >= twin.cumulusTop[i]) return 0;
@@ -248,18 +249,30 @@ function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
   fall.evaporated.fill(0); fall.convective.fill(0); fall.converted.fill(0); fall.melted.fill(0); fall.sublimated.fill(0); fall.refunded.fill(0);
   let frozen = 0;
   const tags = fall.tags; tags.low = 0; tags.high = 0; tags.ice = 0;
-  let rain = 0, convective = 0, streamed = 0, descending = 0, settling = 0;
+  let rain = 0, convective = 0, streamed = 0, descending = 0, settling = 0, rainShare = 0, coverAbove = 0, iceAbove = false;
   const floor = O.autoconversionFloor === 'boundaryLayer' && bl.depth ? bl.depth[i] : null;
   for (let k = 0; k < K; k++) {
     const idx = k * C + i;
+    let layerCover = 0;
+    if (rainShares) {
+      if (!(rain > 0) && !(descending > 0) && !iceAbove) rainShare = 0;
+      if (cc[idx] > 0) {
+        const pressure = pi[i] * sigmaMid[k];
+        saturation(th[idx] * exnerLayer[idx], pressure);
+        layerCover = uniformCover(cc[idx], halfWidth(pressure, pi[i]));
+      }
+      rainShare = rainShareBelow(rainShare, layerCover, coverAbove);
+      coverAbove = layerCover;
+      iceAbove = cc[idx] > 0 && th[idx] * exnerLayer[idx] < O.liquidTemperature;
+    }
     if (rain > 0 && (O.evaporationInCloud || !(cc[idx] > CLEAR_AIR)) && O.rainEvaporation > 0) {
       const exl = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
       const temperature = th[idx] * exl;
       const qs = O.iceSaturation ? saturation(temperature, pi[i] * sigmaMid[k]).qs : saturationHumidity(temperature, pi[i] * sigmaMid[k]);
       const slope = O.iceSaturation ? saturated.slope : qs * L / (R_VAPOR * temperature * temperature);
-      const deficit = Math.max(0, (qs - qq[idx]) / (1 + L * slope / cp)) * mass;
-      const evaporated = Math.min(rain, O.rainEvaporation * deficit);
+      const evaporated = stratiformRainEvaporation(O, rain, dt, mass, qs, qq[idx], L * slope / cp, sigmaMid[k], rainShare, layerCover);
       if (evaporated > 0) {
+        if (rainShares) rainShare = Math.max(RAIN_COVER_FLOOR, rainShare - Math.max(0, (rainShare - layerCover) * evaporated / rain));
         const before = rain;
         rain = Math.max(0, rain - evaporated);
         const keep = before > 0 ? rain / before : 0;

@@ -27,7 +27,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, STEFAN_BOLTZMANN, YEAR } from '../js/physics/radiation.module.js';
+import { DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, STEFAN_BOLTZMANN, YEAR, TRACE_CHAIN_FLOOR } from '../js/physics/radiation.module.js';
 import { ozoneWeights, ozoneAbove as climatologyAbove } from '../js/physics/ozone.module.js';
 import { longwaveTableFor, longwaveCores, LONGWAVE_CORES, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
@@ -161,6 +161,7 @@ for (let i = 0; i < C; i++) {
       effective[k] = fraction * (1 - Math.exp(-kappa * (water[k] + deck))) + (1 - fraction) * effective[k];
       outside[k] = effective[k]; cover[k] = 0; inCloud[k] = 0;
     }
+    if (R.traceCloudPath != null && cover[k] > 0 && water[k] < cover[k] * R.traceCloudPath) { const kept = Math.max(water[k] / (cover[k] * R.traceCloudPath), Math.min(1, TRACE_CHAIN_FLOOR / cover[k])); cover[k] *= kept; inCloud[k] /= kept; }
     alpha[k] = k > 0 ? Math.exp(-(geopotential[(k - 1) * C + i] - geopotential[idx]) / (g * z0)) : 0;
     const dry = Math.max(0, 1 - Math.max(0, q[idx]));
     layerPaths(pathRow, pi[i] * sigmaMid[k], mass, T[k], q[idx], layerOzone[k] * OZONE_CM_ATM, wellMixed[0] * dry, wellMixed[1] * dry, wellMixed[2] * dry, table);

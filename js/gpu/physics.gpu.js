@@ -1,9 +1,9 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT, seaIceRemoval, ICE_LIGHT } from '../physics/ice.module.js';
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
-import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
+import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, TRACE_CHAIN_FLOOR, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, MID_LEVEL, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, longwaveCores, LONGWAVE_CORES, CORE_EDGES, CORE_FACTOR_POINTS, coreFactors } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -234,6 +234,8 @@ export function physicsConstants(o) {
   if (o.plumePhase !== 'mixed' && o.plumePhase !== 'liquid') throw new Error(`plumePhase must be 'mixed' or 'liquid', not ${o.plumePhase}`);
   if (o.convectionType !== 'testParcel' && o.convectionType !== 'cloudDepth' && o.convectionType !== 'top') throw new Error(`convectionType must be 'testParcel', 'cloudDepth' or 'top', not ${o.convectionType}`);
   if (typeof o.convectionRetype !== 'boolean') throw new Error(`convectionRetype must be true or false, not ${o.convectionRetype}`);
+  if (typeof o.midLevelConvection !== 'boolean') throw new Error(`midLevelConvection must be true or false, not ${o.midLevelConvection}`);
+  if (typeof o.shallowRetype !== 'boolean') throw new Error(`shallowRetype must be true or false, not ${o.shallowRetype}`);
   if (o.stratusIndex !== 'eis' && o.stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${o.stratusIndex}`);
   if (!((o.countergradient ?? 0) >= 0)) throw new Error(`countergradient must be 0 or more, not ${o.countergradient}`);
   if (!['capped', 'holtslagBoville'].includes(o.velocityScale ?? 'holtslagBoville')) throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${o.velocityScale}`);
@@ -284,9 +286,10 @@ export function physicsConstants(o) {
   if (o.fogDroplets !== null && !(Array.isArray(o.fogDroplets) && o.fogDroplets.length === 2 && o.fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(o.fogDroplets)}`);
   if (!(Number.isFinite(o.fogDeposition) && o.fogDeposition >= 0)) throw new Error(`fogDeposition must be an efficiency of 0 or more, not ${o.fogDeposition}`);
   if (!(Number.isFinite(o.fogDepositionLimit) && o.fogDepositionLimit > 0)) throw new Error(`fogDepositionLimit must be a speed above 0 in m/s, not ${o.fogDepositionLimit}`);
-  if (o.rainEvaporationLaw !== 'deficit' && o.rainEvaporationLaw !== 'kessler') throw new Error(`rainEvaporationLaw must be 'deficit' or 'kessler', not ${o.rainEvaporationLaw}`);
-  if (!(Number.isFinite(o.rainCover) && o.rainCover > 0 && o.rainCover <= 1)) throw new Error(`rainCover must be a share above 0 and at most 1, not ${o.rainCover}`);
+  if (o.rainEvaporationLaw !== 'deficit' && o.rainEvaporationLaw !== 'kessler' && o.rainEvaporationLaw !== 'cloudsc') throw new Error(`rainEvaporationLaw must be 'deficit', 'kessler' or 'cloudsc', not ${o.rainEvaporationLaw}`);
+  if (o.rainCover !== 'overlap' && !(Number.isFinite(o.rainCover) && o.rainCover > 0 && o.rainCover <= 1)) throw new Error(`rainCover must be 'overlap' or a share above 0 and at most 1, not ${o.rainCover}`);
   if (o.rainEvaporationCeiling != null && !(Number.isFinite(o.rainEvaporationCeiling) && o.rainEvaporationCeiling >= 0 && o.rainEvaporationCeiling <= 1)) throw new Error(`rainEvaporationCeiling must be null or a relative humidity from 0 to 1, not ${o.rainEvaporationCeiling}`);
+  if (o.traceCloudPath != null && !(Number.isFinite(o.traceCloudPath) && o.traceCloudPath > 0 && o.traceCloudPath <= VISIBLE_PATH)) throw new Error(`traceCloudPath must be null or an in-cloud water path above 0 and at most ${VISIBLE_PATH} kg/m², not ${o.traceCloudPath}`);
   const fog = fogConstants(o.fogDroplets);
   if (o.boundaryCondensation !== 'cloudLayer' && o.boundaryCondensation !== 'uniform' && o.boundaryCondensation !== 'saturation') throw new Error(`boundaryCondensation must be 'cloudLayer', 'uniform' or 'saturation', not ${o.boundaryCondensation}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
@@ -337,7 +340,7 @@ const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}
 const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
-const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const LW_CHAIN: bool = ${o.longwaveOverlap === 'exponentialRandom'}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
+const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const LW_CHAIN: bool = ${o.longwaveOverlap === 'exponentialRandom'}; const TRACE_CHAIN: bool = ${o.traceCloudPath != null}; const TRACE_PATH: f32 = ${o.traceCloudPath ?? 0}; const TRACE_FLOOR: f32 = ${TRACE_CHAIN_FLOOR}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
 const LW_TSELF: f32 = ${LONGWAVE_TABLE.tSelf}; const LW_TCO2: f32 = ${LONGWAVE_TABLE.tCo2}; const LW_NO3: f32 = ${LONGWAVE_TABLE.nO3};
 const LW_DH2O: f32 = ${LONGWAVE_TABLE.dopplerH2o ?? 0}; const LW_DCO2: f32 = ${LONGWAVE_TABLE.dopplerCo2 ?? 0}; const LW_DO3: f32 = ${LONGWAVE_TABLE.dopplerO3 ?? 0};
 const LW_CH2O: f32 = ${LONGWAVE_TABLE.dopplerCoreH2o ?? 1}; const LW_CCO2: f32 = ${LONGWAVE_TABLE.dopplerCoreCo2 ?? 1}; const LW_CO3: f32 = ${LONGWAVE_TABLE.dopplerCoreO3 ?? 1};
@@ -377,7 +380,7 @@ const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME}; const GONE_CONC: f32 = ${seaIceRemoval(!!o.keepSmallIce).concentration}; const GONE_VOLUME: f32 = ${seaIceRemoval(!!o.keepSmallIce).volume}; const PENETRATING: bool = ${!!o.penetration};${o.iceLight ? `
 const I0_CLEAR: f32 = ${ICE_LIGHT.clear}; const I0_CLOUDY: f32 = ${ICE_LIGHT.cloudy}; const ICE_EXT: f32 = ${ICE_LIGHT.extinction}; const ICE_TOP: f32 = ${ICE_LIGHT.surfaceLayer};${o.brineReservoir ? ` const BRINE_SHARE: f32 = ${ICE_LIGHT.reservoirShare};` : ''}` : ''}
 ${o.warmLayer || o.coolSkin ? skinConstants(o) : ''}const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
-const RAIN_EVAP: f32 = ${o.rainEvaporation}; const RAIN_KESSLER: bool = ${o.rainEvaporationLaw === 'kessler'}; const RAIN_COVER: f32 = ${o.rainCover}; const RAIN_CEILING: bool = ${rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover) < 1}; const RAIN_RH: f32 = ${rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover)}; const KE_RATE: f32 = ${KESSLER_EVAPORATION.rate}; const KE_FLUX: f32 = ${KESSLER_EVAPORATION.flux}; const KE_EXP: f32 = ${KESSLER_EVAPORATION.exponent}; const KE_P0: f32 = ${KESSLER_EVAPORATION.pressure};
+const RAIN_EVAP: f32 = ${o.rainEvaporation}; const RAIN_KESSLER: bool = ${o.rainEvaporationLaw === 'kessler'}; const RAIN_CLOUDSC: bool = ${o.rainEvaporationLaw === 'cloudsc'}; const RAIN_OVERLAP: bool = ${o.rainCover === 'overlap' && (o.rainEvaporationLaw !== 'deficit' || o.rainEvaporationCeiling != null)}; const RAIN_FLOOR: f32 = ${RAIN_COVER_FLOOR}; const RAIN_COVER: f32 = ${o.rainCover === 'overlap' ? 0 : o.rainCover}; const RAIN_CEILING: bool = ${o.rainCover === 'overlap' ? o.rainEvaporationCeiling != null : rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover) < 1}; const RAIN_RH: f32 = ${o.rainCover === 'overlap' ? o.rainEvaporationCeiling ?? 1 : rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover)}; const KE_RATE: f32 = ${KESSLER_EVAPORATION.rate}; const KE_FLUX: f32 = ${KESSLER_EVAPORATION.flux}; const KE_EXP: f32 = ${KESSLER_EVAPORATION.exponent}; const KE_SHAFT: f32 = ${KESSLER_EVAPORATION.cloudsc};
 const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = ${o.boundaryCondensation === 'uniform'}; const BL_CLOUDLAYER: bool = ${o.boundaryCondensation === 'cloudLayer' && moistTurbulence}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
 const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
 const FOG: bool = ${o.fogDroplets !== null}; const FOG_SETTLE_LAND: f32 = ${fog.settleLand}; const FOG_SETTLE_SEA: f32 = ${fog.settleSea}; const FOG_KK_LAND: f32 = ${fog.drizzleLand}; const FOG_KK_SEA: f32 = ${fog.drizzleSea}; const FOG_THIRDS: f32 = 0.6666666666666666;
@@ -1585,7 +1588,9 @@ ${aerosol ? `      var deckLight = vec4<f32>(0.0, 0.0, 0.0, 0.0);
   stash(9, i, ts); stash(10, i, warmth); stash(11, i, wetness); stash(12, i, bareShare); stash(13, i, surfaceEmission);
   stash(22, i, landAlbedo); stash(23, i, stratiform); stash(24, i, ozoneColumn); stash(25, i, adir);
 }`;
-export const radiationKernel = (held, layered = false, aerosol = false) => `${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+const TRACE_CHAIN_WGSL = `    if (LW_CHAIN && TRACE_CHAIN && chainF[k] > 0.0 && water < f * TRACE_PATH) { chainF[k] *= max(water / (f * TRACE_PATH), min(1.0, TRACE_FLOOR / chainF[k])); }
+`;
+export const radiationKernel = (held, layered = false, aerosol = false, trace = false) => `${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -1633,7 +1638,7 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
     if (STRATUS && k == deckK && deck > 0.0) { cloudE[k] = fraction * (1.0 - transmitted(optics.y * (select(water, 0.0, k >= replaced) + deck))) + (1.0 - fraction) * cloudE[k]; }
     else if (k >= replaced) { cloudE[k] *= 1.0 - fraction; }
     if (LW_CHAIN) { chainF[k] = select(0.0, f * select(1.0, 1.0 - fraction, k >= replaced), water > 0.0 && !(STRATUS && k == deckK && deck > 0.0)); }
-    let clear = 1.0 - cloudE[k];
+${trace ? TRACE_CHAIN_WGSL : ''}    let clear = 1.0 - cloudE[k];
     vaporE[k] = 1.0 - (1.0 - eps) * clear;
     mixedE[k] = 1.0 - (1.0 - LV[L_GASE + k]) * clear;
     temperature[k] = IN[S_TH + idx] * D[D_EXM + idx];
@@ -2001,8 +2006,7 @@ function thomasSolve(upper, lower, rhs) {
     for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; next = ${rhs}[j] - gain[j] * next; ${rhs}[j] = next; }
   }`;
 }
-const ADJUST_FUNCTIONS = `fn kesslerRate(flux: f32, pressure: f32) -> f32 { return RAIN_COVER * KE_RATE * pow(sqrt(pressure / KE_P0) * flux / (RAIN_COVER * KE_FLUX), KE_EXP); }
-fn upperInterface(i: i32, k: i32) -> f32 {
+const ADJUST_FUNCTIONS = `fn upperInterface(i: i32, k: i32) -> f32 {
   let idx = k * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + k] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
 }
@@ -2452,7 +2456,6 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     }
   }
   if (top == 0) { top = 1; flux[1] = 0.0; } else { rainAbove += rainOne; }
-  if (PL_RETYPE && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }
   if (!cloudy || top < 1 || !(PL_PARCEL || select((LV[L_SU + top] * DEEP_REFERENCE < SHALLOW_TOP), (pi * (LV[L_SU + base] - LV[L_SU + top]) > DEEP_DEPTH), PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }
   clearCumulus(i);
   let topHeight = upperInterface(i, top);
@@ -2833,6 +2836,185 @@ const BERGERON_RAIN = [
   ['exp(-AUTO_R * dt)) + liquid * (1.0 - exp(-dt / lifetime))', 'exp(-AUTO_R * bergeron * dt)) + liquid * (1.0 - exp(-bergeron * dt / lifetime))'],
 ];
 
+const wgslFloat = (x) => (Number.isInteger(x) ? x.toFixed(1) : String(x));
+const MID_LEVEL_PLUME = [
+  ['  if (!typed) { return cumulusColumn(i, pi, dt); }\n', `  var middle = false;
+  if (!typed) {
+    let shallowRain = cumulusColumn(i, pi, dt);
+    if (PH[PH_CUMF + i] > 0.0 || (SC_SWITCH && cloudBaseFound(i, pi) && stratocumulusTopped(i, pi))) { return shallowRain; }
+    let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
+    var kb = -1;
+    for (var k = bottom - 1; k > 1; k--) {
+      if (!(plumeZ(i, k) - ground < MID_HEIGHT)) { break; }
+      if (!(D[D_OMG + k * C + i] < 0.0 && max(0.0, IN[S_Q + k * C + i]) > MID_RH * cloudSat(plumeT(i, k), layerP(pi, k)).x)) { continue; }
+      let midEnv = plumeEnv(i, k);
+      let midLcl = condensationLevel((midEnv.x - GRAV * plumeZ(i, k)) / CP, midEnv.y, layerP(pi, k));
+      if (!(midLcl.y > pi * LV[L_SL + 0])) { continue; }
+      let midFirst = plumeState(midEnv.x, midEnv.y, plumeZ(i, k - 1), layerP(pi, k - 1), 0.0);
+      if (!(midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - plumeT(i, k - 1) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + (k - 1) * C + i])) > -MID_BUOYANCY)) { continue; }
+      var midBase = k;
+      while (midBase > 1 && pi * LV[L_SU + midBase] > midLcl.y) { midBase -= 1; }
+      let midDrive = max(0.0, max(-0.5 * (D[D_OMG + (midBase - 1) * C + i] + D[D_OMG + midBase * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, midBase) - ground))));
+      if (min(open * midDrive, CU_LOSS * layerDp(pi, k) / (GRAV * dt)) > CU_FLOOR) { kb = k; lcl = midLcl; break; }
+    }
+    if (kb < 0) { return shallowRain; }
+    let env = plumeEnv(i, kb);
+    source = kb; sourceBottom = kb; mass = layerDp(pi, kb); sourceS = env.x; sourceQ = env.y; rooted = false; middle = true;
+  }
+`],
+  ['epsilon = IFS_EPS * (IFS_RH - rh) * ratio * ratio * ratio; }\n', 'epsilon = IFS_EPS * select(1.0, MID_FE, middle) * (IFS_RH - rh) * ratio * ratio * ratio; }\n      if (middle) { detrained = select(0.0, epsilon * (IFS_DRH - rh), mixes); }\n'],
+  ['PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }', 'PL_BY_DEPTH))) { if (middle) { return 0.0; } return cumulusColumn(i, pi, dt); }'],
+  ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
+  if (middle) {
+    let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
+    drive = max(0.0, max(-0.5 * (D[D_OMG + (base - 1) * C + i] + D[D_OMG + base * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, base) - ground))));
+  }
+  var baseFlux = min(open * drive, CU_LOSS * mass / (GRAV * dt));
+`],
+  ['if (PL_RELAXED) { return cumulusColumn(i, pi, dt); }', 'if (PL_RELAXED && !middle) { return cumulusColumn(i, pi, dt); }'],
+];
+const RETYPE_TEST = 'if (PL_RETYPE && cloudy && top >= 1';
+const replaceOnce = (pairs, body, what) => pairs.reduce((text, [from, to]) => {
+  const at = text.indexOf(from);
+  if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error(`the ${what} anchor is not in the kernel exactly once`);
+  return text.slice(0, at) + to + text.slice(at + from.length);
+}, body);
+const RAIN_SHARE_WGSL = `fn rainShareBelow(share: f32, cover: f32, above: f32) -> f32 { return max(RAIN_FLOOR, 1.0 - (1.0 - share) * (1.0 - max(cover, above)) / (1.0 - min(above, 1.0 - 1e-6))); }
+`;
+const RAIN_EVAPORATION = [
+  ['var fogged = 0.0;', 'var fogged = 0.0; var rainShare = 0.0; var coverAbove = 0.0; var iceAbove = false;'],
+  [`    let mass = pi * LV[L_DS + k] / GRAV;
+    if (rained > 0.0 && (EVAP_IN_CLOUD`, `    let mass = pi * LV[L_DS + k] / GRAV;
+    var layerCover = 0.0;
+    if (RAIN_OVERLAP) {
+      if (!(rained > 0.0) && !(descending > 0.0) && !iceAbove) { rainShare = 0.0; }
+      let condensate = IN[S_QC + idx];
+      if (condensate > 0.0) {
+        let pressure = pi * LV[L_SM + k];
+        layerCover = uniformCover(condensate, uniformWidth(cloudSat(IN[S_TH + idx] * D[D_EXM + idx], pressure), pressure, pi));
+      }
+      rainShare = rainShareBelow(rainShare, layerCover, coverAbove);
+      coverAbove = layerCover;
+      iceAbove = condensate > 0.0 && IN[S_TH + idx] * D[D_EXM + idx] < LIQUID_T;
+    }
+    if (rained > 0.0 && (EVAP_IN_CLOUD`],
+  [`      let evaporated = min(rained, RAIN_EVAP * deficit);
+`, `      var evaporated = min(rained, RAIN_EVAP * deficit);
+      if (RAIN_CEILING || RAIN_KESSLER || RAIN_CLOUDSC) {
+        let gamma = LHEAT * slope / CP;
+        let clear = select(RAIN_COVER, max(0.0, rainShare - layerCover), RAIN_OVERLAP);
+        let rh = select(RAIN_RH, min(1.0, RAIN_RH + (1.0 - RAIN_RH) * clear / max(1e-14, 1.0 - layerCover)), RAIN_OVERLAP);
+        if (RAIN_CEILING && rh < 1.0) { evaporated = min(rained, RAIN_EVAP * max(0.0, (rh * qs - IN[S_Q + idx]) / (1.0 + rh * gamma)) * mass); }
+        if (RAIN_KESSLER || RAIN_CLOUDSC) {
+          let rate = KE_RATE * pow(sqrt(LV[L_SM + k]) * (rained / dt) / (select(RAIN_COVER, rainShare, RAIN_OVERLAP) * KE_FLUX), KE_EXP);
+          let outside = max(1e-14, 1.0 - layerCover); let clearQ = clamp((IN[S_Q + idx] - layerCover * qs) / outside, 0.0, qs);
+          if (RAIN_KESSLER) { evaporated = min(evaporated, (qs - clearQ) * outside / (1.0 + gamma) * mass * relaxedFraction(clear * rate * (1.0 + gamma) * dt / outside)); }
+          else { let shaft = KE_SHAFT * rate; evaporated = min(evaporated, clear * shaft * (qs - clearQ) * dt / (1.0 + shaft * dt * (1.0 + gamma)) * mass); }
+        }
+      }
+`],
+  [`      if (evaporated > 0.0) {
+        rained = max(0.0, rained - evaporated);
+`, `      if (evaporated > 0.0) {
+        if (RAIN_OVERLAP) { rainShare = max(RAIN_FLOOR, rainShare - max(0.0, (rainShare - layerCover) * evaporated / rained)); }
+        rained = max(0.0, rained - evaporated);
+`],
+];
+export const rainEvaporationOptions = (body) => RAIN_SHARE_WGSL + replaceOnce(RAIN_EVAPORATION, body, 'rain evaporation');
+const PLUME_RETYPE = [[`  if (!cloudy || top < 1 || !(PL_PARCEL ||`, `  if (PL_RETYPE && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }
+  if (!cloudy || top < 1 || !(PL_PARCEL ||`]];
+export const plumeRetype = (body) => replaceOnce(PLUME_RETYPE, body, 'retype');
+const SHALLOW_DEPTH_WGSL = `fn shallowSource(i: i32, pi: f32) -> vec4<f32> {
+  let bottom = K - 1;
+  let depth = PH[PH_DEPTH + i];
+  var mass = 0.0; var energy = 0.0; var water = 0.0; var source = bottom;
+  for (var k = bottom; k >= 0; k--) {
+    let pk = layerP(pi, k);
+    if (k < bottom && ((!(upperInterface(i, k + 1) < depth) && !(pk >= pi - CU_SOURCE)) || !(pk > SHALLOW_TOP))) { break; }
+    let dpk = layerDp(pi, k); let env = plumeEnv(i, k);
+    mass += dpk; energy += dpk * env.x; water += dpk * env.y; source = k;
+  }
+  var sourceS = energy / mass; var sourceQ = water / mass;
+  if (CU_LOWEST) { let env = plumeEnv(i, bottom); sourceS = env.x; sourceQ = env.y; }
+  return vec4<f32>(sourceS, sourceQ, mass, f32(source));
+}
+fn shallowCloudDepth(i: i32, pi: f32) -> f32 {
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0) * select(1.0, 0.0, SC_SWITCH && cloudBaseFound(i, pi) && stratocumulusTopped(i, pi));
+  if (!(open > 0.0) || !(PH[PH_BUOY + i] > 0.0)) { return 0.0; }
+  let bottom = K - 1;
+  let own = shallowSource(i, pi);
+  let source = i32(own.w); let sourceS = own.x; let sourceQ = own.y;
+  if (!(sourceQ > 0.0)) { return 0.0; }
+  let lcl = condensationLevel((sourceS - GRAV * plumeZ(i, bottom)) / CP, sourceQ, layerP(pi, bottom));
+  if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
+  var s = sourceS; var w = sourceQ; var cloudy = false; var guess = 0.0; var w2 = PL_W0 * PL_W0; var share = 1.0; var reached = 1;
+  let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
+  for (var k = source - 1; k >= 1; k--) {
+    let pk = layerP(pi, k);
+    let below = upperInterface(i, k + 1); let above = upperInterface(i, k);
+    let mixes = pi * LV[L_SL + k] <= lcl.y;
+    let zk = plumeZ(i, k); let env = plumeEnv(i, k);
+    let epsilon = select(0.0, select(CU_EPS, CU_EPS_Z / max(zk - ground, 1.0), CU_BY_Z), mixes);
+    let half = exp(-epsilon * (zk - below));
+    let midS = env.x + (s - env.x) * half; let midQ = env.y + (w - env.y) * half;
+    let mid = plumeState(midS, midQ, zk, pk, guess);
+    guess = mid.x;
+    let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
+    let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - plumeT(i, k) * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * layerDp(pi, k) / pk;
+    if (mid.y > 0.0) { cloudy = true; }
+    if (cloudy) {
+      if (!(work > 0.0)) {
+        if (CU_KINETIC) {
+          if (!(work < 0.0)) { share = 1.0; }
+          else if (!(w2 > 0.0)) { share = 0.0; }
+          else {
+            let layer = above - below; let mixing = PL_DRAG * epsilon;
+            let lift = -PL_ACC * work / layer; let y = mixing * w2 / lift;
+            let reach = select(w2 / (2.0 * lift), select(y * (1.0 - 0.5 * y), log(1.0 + y), y > 1e-3) / (2.0 * mixing), mixing > 0.0);
+            share = min(1.0, reach / layer);
+          }
+        }
+        if (!(CU_CARRY && share >= 1.0)) { reached = k + 1; break; }
+      }
+      if (CU_KINETIC) {
+        let x = 2.0 * PL_DRAG * epsilon * (above - below);
+        w2 = w2 * exp(-x) + 2.0 * PL_ACC * work * select(1.0, relaxedFraction(x) / x, x > 0.0);
+      }
+    }
+    let full = exp(-epsilon * (above - below));
+    s = env.x + (s - env.x) * full; w = env.y + (w - env.y) * full;
+    if (CU_RAIN) {
+      if (PL_MIXED) {
+        let at = frozenState(s, w, above, pi * LV[L_SU + k], guess);
+        let excess = at.y - CU_RAIN_Q;
+        if (excess > 0.0) { w -= excess; s += LHEAT * excess; s += LFUSION * (excess * at.z / at.y); }
+      } else {
+        let liquidAt = plumeState(s, w, above, pi * LV[L_SU + k], guess);
+        let liquidExcess = liquidAt.y - CU_RAIN_Q;
+        if (liquidExcess > 0.0) { w -= liquidExcess; s += LHEAT * liquidExcess; }
+      }
+    }
+  }
+  if (!cloudy) { return 0.0; }
+  var base = source;
+  while (base > 1 && !(pi * LV[L_SU + base] <= lcl.y)) { base--; }
+  return pi * (LV[L_SU + base] - LV[L_SU + reached]);
+}
+`;
+const SHALLOW_RETYPE = [['  if (!typed) { return cumulusColumn(i, pi, dt); }\n', `  var deepened = false;
+  if (!typed && lcl.y > pi * LV[L_SL + 0] && shallowCloudDepth(i, pi) > DEEP_DEPTH) {
+    typed = true; deepened = true;
+    let shallowOwn = shallowSource(i, pi);
+    sourceS = shallowOwn.x; sourceQ = shallowOwn.y; mass = shallowOwn.z; source = i32(shallowOwn.w); sourceBottom = bottom; rooted = true;
+    lcl = condensationLevel((sourceS - GRAV * surfaceZ) / CP, sourceQ, surfaceP);
+  }
+  if (!typed) { return cumulusColumn(i, pi, dt); }
+`], ['  if (!cloudy || top < 1 || !(PL_PARCEL ||', '  if (deepened && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||']];
+export const shallowPlumeRetype = (body) => SHALLOW_DEPTH_WGSL + replaceOnce(SHALLOW_RETYPE, body, 'shallow re-typing');
+export function midLevelPlume(body, retype = false) {
+  const text = replaceOnce(MID_LEVEL_PLUME, body, 'mid-level');
+  return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)}; const MID_BUOYANCY: f32 = ${wgslFloat(MID_LEVEL.buoyancy)};\n` + (retype ? replaceOnce([[RETYPE_TEST, 'if (PL_RETYPE && !middle && cloudy && top >= 1']], text, 'mid-level retype exemption') : text);
+}
 export function bergeronRain(body) {
   return BERGERON_RAIN.reduce((text, [from, to]) => {
     const at = text.indexOf(from);
@@ -3147,9 +3329,7 @@ fn blSeal(i: i32, pi: f32) {
       let qs = saturated.x;
       let slope = saturated.y;
       let deficit = max(0.0, (qs - IN[S_Q + idx]) / (1.0 + LHEAT * slope / CP)) * mass;
-      var evaporated = min(rained, RAIN_EVAP * deficit);
-      if (RAIN_CEILING) { evaporated = min(rained, RAIN_EVAP * max(0.0, (RAIN_RH * qs - IN[S_Q + idx]) / (1.0 + RAIN_RH * LHEAT * slope / CP)) * mass); }
-      if (RAIN_KESSLER) { evaporated = min(evaporated, deficit * relaxedFraction(kesslerRate(rained / dt, pi * LV[L_SM + k]) * (1.0 + LHEAT * slope / CP) * dt)); }
+      let evaporated = min(rained, RAIN_EVAP * deficit);
       if (evaporated > 0.0) {
         rained = max(0.0, rained - evaporated);
         IN[S_Q + idx] += evaporated / mass;
@@ -3456,3 +3636,5 @@ fn mixEdge(e: i32, a: i32, b: i32) {
   for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
 }`,
 };
+
+export const omegaStore = (body) => replaceOnce([['    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);\n', '    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);\n    D[D_OMG + idx] = omega;\n']], body, 'omega store');

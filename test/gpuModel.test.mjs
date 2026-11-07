@@ -446,6 +446,39 @@ test('the longwave\'s exponential-random overlap of resolved cloud of partial co
   assert.ok(closure < 1e-3, `the GPU's longwave closes to ${closure} W/m2`);
 });
 
+test('with traceCloudPath a trace of cloud water between two cloudy runs of layers enters the longwave overlap chain with cover W/t alike in both engines: the layers heat alike with and without it, and it moves the OLR alike', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const traced = cloudyState().base, [pi, theta, , , q, qc] = traced.state, { K } = traced.core, C = traced.mesh.nCells;
+  traced.core.diagnose(pi, theta, q, qc);
+  const { exnerLayer, sigmaMid } = traced.core.diagnostics;
+  let gaps = 0;
+  for (let i = 0; i < C; i += 2) {
+    let highest = -1, lowest = -1;
+    for (let k = 0; k < K; k++) if (qc[k * C + i] > 0) { if (highest < 0) highest = k; lowest = k; }
+    for (let k = highest + 1; k < lowest; k++) {
+      const x = k * C + i;
+      if (qc[x] > 0) continue;
+      q[x] = 0.97 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]); qc[x] = Math.fround(1e-12); gaps++;
+    }
+  }
+  const plain = await physicsHeating(traced, {}), trace = await physicsHeating(traced, { traceCloudPath: 1e-6 });
+  let engines = 0, scale = 0, change = 0, olr = 0, moved = 0, olrChange = 0;
+  for (let i = 0; i < C; i++) {
+    olr = Math.max(olr, ...[plain, trace].map((r) => Math.abs(r.cpuOutgoing[i] - r.gpuOutgoing[i])));
+    moved = Math.max(moved, Math.abs(trace.cpuOutgoing[i] - plain.cpuOutgoing[i]));
+    olrChange = Math.max(olrChange, Math.abs((trace.cpuOutgoing[i] - plain.cpuOutgoing[i]) - (trace.gpuOutgoing[i] - plain.gpuOutgoing[i])));
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i;
+      engines = Math.max(engines, ...[plain, trace].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
+      scale = Math.max(scale, Math.abs(plain.cpu[x]));
+      change = Math.max(change, Math.abs((trace.cpu[x] - plain.cpu[x]) - (trace.gpu[x] - plain.gpu[x])));
+    }
+  }
+  console.log(`${gaps} trace layers in ${C / 2} columns at N=${N}: the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}, the OLR by ${olr.toExponential(1)} W/m2; traceCloudPath moves the OLR by up to ${moved.toFixed(3)} W/m2, the engines' changes apart by ${olrChange.toExponential(1)}`);
+  assert.ok(gaps > 0 && moved > 0.01, `${gaps} trace layers; the option moves the OLR by ${moved} W/m2`);
+  assert.ok(engines < 1e-5 * scale && change < 1e-5 * scale, `layer heating differs by ${engines} K/day, its change by ${change}, against ${scale}`);
+  assert.ok(olr < 2e-5 * 300 && olrChange < 2e-5 * 300, `OLR apart by ${olr}, its change by ${olrChange} W/m2`);
+});
+
 test('the shortwave\'s independent columns of the overlap, with the water inside each cloud uniform or spread, heat the layers, absorb the sunlight and emit alike in both engines, and the columns absorb more than the pooled column', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { base } = cloudyState();
   const pooled = await physicsHeating(base, {}), columns = await physicsHeating(base, { cloudColumns: true }), spread = await physicsHeating(base, { cloudColumns: true, cloudSpread: 0.75 });
@@ -555,7 +588,7 @@ test('the variance cover that holds each layer\'s cloud water, and the turbulenc
 });
 
 test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}]) {
+  for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}, { deckReference: 'interpolate' }]) {
     const run = await mixedLayerPair(4, { turbulence: 'moist', ...options });
     const { K: nK } = run.model.core, keep = [];
     let coupled = 0, open = 0, parted = 0;
