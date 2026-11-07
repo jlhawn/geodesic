@@ -268,13 +268,12 @@ export function regridDeckField(source, target, values, name = 'mlmSubsidence') 
 }
 
 /*
- * A field of the sea (per unit of its ice, say) regridded: interpolated
- * from the source's sea cells, and 0 over the target's land.
+ * A field per unit of the sea ice, regridded with that ice: each target
+ * cell takes its value from the same source tile as its ice, and 0 where
+ * its ice is inferred from the land.
  */
-export function regridSeaField(source, target, values) {
-  const out = regridCellField(source, target, Float64Array.from(values), interpolationWeights(source.mesh, target.mesh.xCell), seaMask(source));
-  if (target.geography) for (let n = 0; n < out.length; n++) if (target.geography.land[n]) out[n] = 0;
-  return out;
+export function regridIceField(source, target, values) {
+  return sampleTiles(source, target, Float64Array.from(values), seaMask(source), interpolationWeights(source.mesh, target.mesh.xCell));
 }
 
 export const regridSubsidence = (source, target, subsidence) => regridDeckField(source, target, subsidence, 'mlmSubsidence');
