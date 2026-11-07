@@ -1813,7 +1813,7 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
     const before = budget(model, 0);
     moist.adjust(model.state, 0, 1, dt);
     const after = budget(model, 0), source = Array.from({ length: K }, (_, k) => k).find((k) => Math.abs(pi[0] * dSigma[k] - moist.deep.sourceMass) < 1e-12 * moist.deep.sourceMass);
-    return { deep: { ...moist.deep }, rain: moist.rain[0], entrained: Float64Array.from(moist.plumeEntrained), detrained: Float64Array.from(moist.plumeDetrained), flux: Float64Array.from(moist.cumulusFlux), before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, source, z: Float64Array.from({ length: K }, (_, k) => geopotential[k * C] / g), g };
+    return { deep: { ...moist.deep }, rain: moist.rain[0], entrained: Float64Array.from(moist.plumeEntrained), detrained: Float64Array.from(moist.plumeDetrained), humidity: Float64Array.from(moist.envHumidity), flux: Float64Array.from(moist.cumulusFlux), before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, source, z: Float64Array.from({ length: K }, (_, k) => geopotential[k * C] / g), g };
   };
   const same = (a, b) => a.state.every((x, n) => x.every((v, j) => v === b.state[n][j]));
   const off = run({}), on = run({ midLevelConvection: true }), g = on.g;
@@ -1826,6 +1826,8 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   assert.ok(lifted.deep.midLevel && lifted.source === on.source && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14, `descent at 0.45 Pa/s in the layer above the cloud base leaves the plume in its source layer at -omega/g of that layer: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
   const faint = { profile: (k) => (k === on.source ? -1e-7 : -0.2) }, weak = run({ midLevelConvection: true }, faint), weakOff = run({}, faint);
   assert.ok(!weak.deep.midLevel && same(weak, weakOff), `a source layer ascending at 1e-7 Pa/s, which closes the plume below CUMULUS_FLOOR, gets no plume and ends the search, though the layer above ascends at 0.2 Pa/s: base flux ${weak.deep.baseFlux}, from ${weak.height} m`);
+  const layered = run({ midLevelConvection: true }, { profile: (k) => (k === on.source ? -0.2 : Math.abs(k - on.source) === 1 ? 0.2 : -0.3) });
+  assert.ok(layered.deep.midLevel && layered.source === on.source && Math.abs(layered.deep.baseFlux * g / 0.2 - 1) < 1e-14, `with the source layer ascending at 0.2 Pa/s between layers that descend at 0.2 Pa/s, in ascent of 0.3 Pa/s elsewhere, the plume departs from the source layer (${layered.height} m against ${on.height} m) at -omega/g of that layer: ${layered.deep.baseFlux}`);
   const lee = run({ midLevelConvection: true }, { profile: () => 0.2 }), windward = run({ midLevelConvection: true }, { ascent: 0.2, profile: () => -0.2 });
   assert.ok(!lee.deep.midLevel && same(lee, off), 'no mid-level plume where omega > 0 though pi sigma-dot < 0');
   const single = (rh, lapse = 8e-3) => ({ column: (z, p, memo) => { const T = 290 - lapse * Math.min(z, 11000), picked = !memo.picked && z > 2800; if (picked) memo.picked = true; return { T, q: (picked ? rh : 0.3) * saturationHumidity(T, p) }; }, grid: sigmaInterfaces('bl48') });
@@ -1844,7 +1846,8 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   assert.ok(!lowest.deep.midLevel && same(lowest, lowestOff), `a column moist only in its lowest layer, under an inversion at 300-700 m, gets no mid-level plume: the search starts at the second-lowest layer (base flux ${lowest.deep.baseFlux})`);
   assert.ok(windward.deep.midLevel && Math.abs(windward.deep.baseFlux * g / 0.2 - 1) < 1e-14, `where omega < 0 though pi sigma-dot > 0 the plume departs at -omega/g: ${windward.deep.baseFlux}`);
   const mixing = Array.from({ length: on.deep.base - on.deep.top }, (_, n) => on.deep.top + n).filter((k) => on.entrained[k] > 0);
-  assert.ok(mixing.length >= 3 && mixing.every((k) => on.detrained[k] >= 0.6 * on.entrained[k] * (1 - 1e-12) && on.detrained[k] <= 1.6 * on.entrained[k] * (1 + 1e-12)), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(3)).join(' ')}`);
+  const spread = Math.max(...mixing.map((k) => on.humidity[k])) - Math.min(...mixing.map((k) => on.humidity[k]));
+  assert.ok(mixing.length >= 3 && spread > 0.05 && mixing.every((k) => Math.abs(on.detrained[k] / (on.entrained[k] * (1.6 - on.humidity[k])) - 1) < 1e-12), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ratios ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(4)).join(' ')} against 1.6 - RH ${mixing.map((k) => (1.6 - on.humidity[k]).toFixed(4)).join(' ')}`);
   const deckColumn = (z, p) => {
     const T = (z < 900 ? 290 : 304 + 5e-3 * (z - 900)) * Math.pow(p / 1e5, 0.2857);
     return { T, q: z < 900 ? Math.min(0.0105, saturationHumidity(T, p)) : Math.min(0.003, 0.3 * saturationHumidity(T, p)) };
