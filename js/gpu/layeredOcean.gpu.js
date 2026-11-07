@@ -1023,10 +1023,9 @@ ${o.restrat ? `    depth += 0.5 * (ha + hb); shapeBelow = restratShape(-depth * 
     let moved = flux[k];
     if (moved == 0.0) { continue; }
     let qa = IN[qOff(k) + a]; let qb = IN[qOff(k) + b]; let wa = IN[wOff(k) + a]; let wb = IN[wOff(k) + b];
-    let toB = moved > 0.0;
+    let toB = moved > 0.0;${o.eddyTracers === 'donor' ? ' let carried = moved / IN[hOff(k) + select(b, a, toB)];' : ''}
     OD[O_EDDYV + k * E + e] = moved / P[0];
-${o.eddyTracers === 'donor' ? `    let carried = moved / IN[hOff(k) + select(b, a, toB)];
-    OD[O_EDDYQ + k * E + e] = eddyShare(qa, qb, sa, sb, carried * select(qb, qa, toB)) / P[0];
+${o.eddyTracers === 'donor' ? `    OD[O_EDDYQ + k * E + e] = eddyShare(qa, qb, sa, sb, carried * select(qb, qa, toB)) / P[0];
     OD[O_EDDYW + k * E + e] = eddyShare(wa, wb, sa, sb, carried * select(wb, wa, toB)) / P[0];
 ` : `    let up = select(b, a, toB); let hu = IN[hOff(k) + up]; let hd = IN[hOff(k) + select(a, b, toB)];
     var te = select(qb, qa, toB) / hu; var se = select(wb, wa, toB) / hu;
