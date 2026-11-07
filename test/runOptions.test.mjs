@@ -9,6 +9,7 @@ import { encodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile
 const OPTIONS = {
   radiation: { cloudColumns: true, cloudSpread: 0.75, varianceCover: 'water', buoyancyLength: 0.53 },
   moist: { stratocumulusInversion: 7, cumulusEntrainmentHeight: 1, cumulusAscent: 'kinetic' },
+  surface: { relativeWind: true },
 };
 
 test("the page's worker runs a saved state with the options it records, and its snapshots and restores carry them", async () => {
@@ -37,17 +38,22 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.deepEqual((await start()).options, {});
     const fresh = await snapshot();
     assert.deepEqual(fresh.options, {});
+    assert.equal(fresh.arrays.seaFlow, undefined);
     const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, ...(fresh.grid ? { grid: fresh.grid } : {}), options: OPTIONS };
     for (const [key, buffer] of Object.entries(fresh.arrays)) saved[key] = new Float64Array(buffer.slice(0));
     saved.ocean = { ...groupHeader(fresh.ocean), ...Object.fromEntries(Object.entries(groupArrays(fresh.ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
     saved.land = Object.fromEntries(Object.entries(fresh.land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
+    saved.seaFlow = Float64Array.from({ length: saved.u.length / fresh.K }, (_, e) => Math.fround(0.25 * Math.sin(0.37 * e)));
     const file = join(dir, 'optioned_day0000.bin');
     writeFileSync(file, encodeState(saved, { f64: f64Names(saved) }));
     assert.deepEqual((await start(file)).options, OPTIONS);
     const taken = await snapshot();
     assert.deepEqual(taken.options, OPTIONS);
+    assert.deepEqual(new Float64Array(taken.arrays.seaFlow), saved.seaFlow, 'the start places the sea\'s velocity under the air and the snapshot carries it');
     assert.deepEqual((await restore(fresh)).options, {});
+    assert.equal((await snapshot()).arrays.seaFlow, undefined);
     assert.deepEqual((await restore(taken)).options, OPTIONS);
+    assert.deepEqual(new Float64Array((await snapshot()).arrays.seaFlow), saved.seaFlow, 'the restore places it again');
   } finally {
     globalThis.fetch = fetched;
     delete globalThis.self;

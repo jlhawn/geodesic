@@ -1003,7 +1003,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     return li;
   };
   const toSnapshot = (saved, url = null) => {
-    const arrays = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice', 'concentration', 'mlmSubsidence', 'mlmHeight', 'mlmGate', 'convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'warmLayer', 'coolSkin', 'levels'].filter((k) => saved[k]).map((k) => [k, Float64Array.from(saved[k]).buffer]));
+    const arrays = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice', 'concentration', 'mlmSubsidence', 'mlmHeight', 'mlmGate', 'convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'warmLayer', 'coolSkin', 'boundaryDepth', 'mixingTop', 'boundaryRegime', 'seaFlow', 'levels'].filter((k) => saved[k]).map((k) => [k, Float64Array.from(saved[k]).buffer]));
     const ocean = saved.ocean ? { ...groupHeader(saved.ocean), ...Object.fromEntries(Object.entries(groupArrays(saved.ocean)).map(([k, v]) => [k, Float64Array.from(v).buffer])) } : null;
     const land = saved.land ? Object.fromEntries(Object.entries(saved.land).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const size = (o) => (o ? Object.values(groupArrays(o)).reduce((n, b) => n + b.byteLength, 0) : 0);

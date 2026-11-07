@@ -309,6 +309,11 @@ async function moistEngines(options = {}, moist = {}) {
   gpu.uploadPhysics({ mlmGate: r.mlmGate });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(r.stratiform));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LWH, Float32Array.from(longwave));
+  if (options.diagnoseFirst) {
+    for (let i = 0; i < nC; i++) { r.sensibleHeat[i] = Math.fround(60 * Math.sin(0.7 * i)); r.evaporation[i] = Math.fround(4e-5 * (1 + Math.cos(1.3 * i))); }
+    device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(r.sensibleHeat));
+    device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(r.evaporation));
+  }
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
   for (const [name, count] of [['pblDiagnose', nC], ...ADJUST_KERNELS.map((name) => [name, nC]), ['mixMomentum', nE]]) {
@@ -319,7 +324,7 @@ async function moistEngines(options = {}, moist = {}) {
   pass.end();
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
-  layer.diagnose(state);
+  layer.diagnose(state, 0, nC, dt);
   const cpu = Object.fromEntries(['entrainment', 'mixing', 'regime', 'radiativeVelocity', 'mixingTop', 'depth', 'cloudTopCooling'].map((name) => [name, Float64Array.from(layer[name])]));
   pair.phases.adjust(0, nC, dt);
   pair.phases.mixMomentum(0, nE, dt);
@@ -327,7 +332,7 @@ async function moistEngines(options = {}, moist = {}) {
 }
 
 test('the moist boundary layer matches between the engines on a random set of columns in every regime: the regime, V, w_e, the coefficients, the depths and θ, q, qc and the wind after the step, with convection vetoed under coupled stratocumulus as well', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }], ['the subsidence share', { entrainment: { subsidence: true } }]]) {
+  for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }], ['the subsidence share', { entrainment: { subsidence: true } }], ['the surface excess', { surfaceExcess: 8.5 }], ['diagnosed before the deposit', { diagnoseFirst: true }], ['both', { diagnoseFirst: true, surfaceExcess: 8.5 }]]) {
     const run = await moistEngines(options, moist), { K: nK, C: nC, E: nE, kTop, cpu, ph } = run;
     let coupledPlumes = 0;
     for (let i = 0; i < nC; i++) if (ph.REGIME[i] === REGIME.COUPLED && ph.CUMF[i] > 0) coupledPlumes++;
@@ -361,7 +366,8 @@ test('the moist boundary layer matches between the engines on a random set of co
     console.log(`${label}: ${nC} columns, stable/surface/decoupled/coupled ${counts.join('/')}; the regime differs on ${flips}; V by ${worstV.toExponential(1)} relative, w_e by ${worstW.toExponential(1)}, the coefficients by ${worstMix.toExponential(1)} of each column's largest, the depths by ${worstDepth.toExponential(1)} m; after the step (but for ${adjusted} columns whose near-neutral lowest layers the dry adjustment merges in one engine only) θ by ${theta.toExponential(1)} K, q by ${q.toExponential(1)}, qc by ${qc.toExponential(1)}, the wind by ${wind.toExponential(1)} m/s off the ${besideParted} edges beside a column that differs in regime or parts`);
     assert.ok(counts[REGIME.SURFACE] > nC / 20 && counts[REGIME.DECOUPLED] > nC / 20 && counts[REGIME.COUPLED] > nC / 10 && counts[REGIME.STABLE] > nC / 20, `regimes ${counts}`);
     assert.ok(flips <= nC / 100, `${flips} columns differ in regime`);
-    assert.ok(worstV < 1e-4 && worstW < 2e-3 && worstMix < 2e-3 && worstDepth < 0.05, `V ${worstV}, w_e ${worstW}, coefficients ${worstMix}, depths ${worstDepth}`);
+    const withheld = options.diagnoseFirst ? 5 : 1;
+    assert.ok(worstV < 1e-4 && worstW < 2e-3 * withheld && worstMix < 2e-3 && worstDepth < 0.05 * withheld, `V ${worstV}, w_e ${worstW}, coefficients ${worstMix}, depths ${worstDepth}`);
     assert.ok(adjusted <= nC / 50, `${adjusted} columns part`);
     assert.ok(theta < 5e-3 && q < 4e-6 && qc < 2e-6 && wind < 2e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
   }

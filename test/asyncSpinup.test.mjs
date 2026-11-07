@@ -208,6 +208,19 @@ test('a coupled run split at each day\'s end ends byte for byte where the uninte
   assert.ok(Buffer.from(encodeState(withoutMeans(x), { f64: f64Names(x) })).equals(Buffer.from(encodeState(withoutMeans(y), { f64: f64Names(y) }))), 'the split run ends where the uninterrupted one does');
 });
 
+test('with surface.relativeWind a coupled run split at a day\'s end ends byte for byte where the uninterrupted run does: the sea\'s velocity under the air is saved and loaded', { skip }, async () => {
+  const whole = outDir('flowWhole', 'f_day0000.bin'), parts = outDir('flowParts', 'f_day0000.bin');
+  const env = { TAG: 'f', MINUTES: '100', SURFACE: '{"relativeWind":true}' };
+  assert.equal(run('spinup.mjs', { ...env, OUT: whole, DAYS: '2' }), 0);
+  assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '1' }), 0);
+  const day = await load(join(parts, 'f_day0001.bin'));
+  assert.ok(day.seaFlow && day.seaFlow.some((x) => Math.abs(x) > 1e-3), 'the day\'s file carries the sea\'s velocity under the air');
+  assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '2' }), 0);
+  const [x, y] = await Promise.all([whole, parts].map((out) => load(join(out, 'f_day0002.bin'))));
+  assert.deepEqual(apart(x, y), [], 'the arrays the split run ends with differ from the uninterrupted one\'s');
+  assert.ok(Buffer.from(encodeState(withoutMeans(x), { f64: f64Names(x) })).equals(Buffer.from(encodeState(withoutMeans(y), { f64: f64Names(y) }))), 'the split run ends where the uninterrupted one does');
+});
+
 test('a state saved with the instantaneous cumulus cloud loads with that cloud as the memory\'s start: the first step relaxes each layer\'s cover and cover × water from it toward the plume\'s', { skip }, async () => {
   const { readState, gpuModelFrom, dt } = await import('../scripts/figures/figureState.mjs');
   const { readRanges } = await import('../js/gpu/device.module.js');

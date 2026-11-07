@@ -284,3 +284,32 @@ test('both engines take seaHumidity alike: from one state the first step\'s evap
     for (const k of ['open sea', 'part ice']) assert.ok(worst[k].meanFall > 0, `${k}: the evaporation falls`);
   }
 });
+
+test('surface.virtualDensity lowers the evaporation alike on both engines: the first step, and with the sea skin the second', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const [label, skin, steps] of [['first step', {}, 1], ['sea skin, second step', { warmLayer: true, coolSkin: true }, 2]]) {
+    const runs = [];
+    for (const surface of [{ virtualDensity: true, ...skin }, skin]) {
+      const cpu = prepare(createModel(new Grid(16), { topography, surface })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface }));
+      for (let n = 0; n < steps; n++) { cpu.step(900); await gpu.step(900); }
+      await gpu.settle();
+      const [evaporation] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.EVAP, length: cpu.mesh.nCells }]);
+      runs.push({ cpu: Float64Array.from(cpu.radiation.evaporation), gpu: Float64Array.from(evaporation) });
+    }
+    const [on, off] = runs;
+    let apart = 0, moveApart = 0, largest = 0, mean = 0;
+    for (let i = 0; i < on.cpu.length; i++) {
+      const cpuMove = on.cpu[i] - off.cpu[i], gpuMove = on.gpu[i] - off.gpu[i];
+      apart = Math.max(apart, 2.5e6 * (Math.abs(on.gpu[i] - on.cpu[i]) - 1e-5 * Math.abs(on.cpu[i])));
+      moveApart = Math.max(moveApart, 2.5e6 * (Math.abs(gpuMove - cpuMove) - 2e-5 * Math.abs(on.cpu[i])));
+      largest = Math.max(largest, -2.5e6 * cpuMove);
+      mean += 2.5e6 * cpuMove / on.cpu.length;
+    }
+    console.log(`${label}: the evaporation moves by ${mean.toFixed(3)} W/m² in the mean and falls by up to ${largest.toFixed(2)}; the engines are apart by ${apart.toExponential(1)} W/m², their moves by ${moveApart.toExponential(1)}`);
+    assert.ok(apart < 0.05 && moveApart < 0.05, `${label}: evaporation ${apart}, its move ${moveApart} W/m²`);
+    assert.ok(mean < 0 && largest > 0.1, `${label}: the evaporation moves by ${mean} W/m² in the mean and falls by up to ${largest}`);
+  }
+});
+
+test('the GPU refuses a surface.gustiness other than 3 m/s', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const surface of [{ exchange: 'fixed', gustiness: 6 }, { gustiness: 2 }]) await assert.rejects(createGpuModel(new Grid(16), { topography, surface }), /surface\.gustiness/);
+});

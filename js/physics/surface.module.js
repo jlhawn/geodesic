@@ -16,7 +16,7 @@ export const TOP_DRAG = { sigma: 0.02, days: 0 };
  * solve, the lowest layer's drag and its heat are left to it, and stress
  * gives the stress that solve applied once it has run.
  */
-export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, implicitStress = null, buffers = null } = {}) {
+export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, implicitStress = null, seaFlow = null, buffers = null } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, cp, exnerLayer } = core.diagnostics;
   const { cellsOnEdge, nEdgesOnCell, edgesOnCell, maxEdges, dcEdge, dvEdge, areaCell } = mesh;
   const bottom = K - 1;
@@ -25,8 +25,14 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
   const windSpeed = new Float64Array(windBuffer);
   const dragRate = new Float64Array(C);
 
+  const flowVector = seaFlow ? new Float64Array(3 * C) : null;
   function lowestWindSpeed(u, iFrom = 0, iTo = C) {
     cellVector(mesh, u.subarray(bottom * E, K * E), vector, iFrom, iTo);
+    if (flowVector) {
+      cellVector(mesh, seaFlow, flowVector, iFrom, iTo);
+      for (let i = iFrom; i < iTo; i++) windSpeed[i] = Math.hypot(vector[3 * i] - flowVector[3 * i], vector[3 * i + 1] - flowVector[3 * i + 1], vector[3 * i + 2] - flowVector[3 * i + 2]);
+      return windSpeed;
+    }
     for (let i = iFrom; i < iTo; i++) windSpeed[i] = Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]);
     return windSpeed;
   }

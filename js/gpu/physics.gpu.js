@@ -2687,6 +2687,80 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   for (var j = 0; j < n; j++) { IN[fieldOff + (KTOP + j) * C + i] = rhs[j]; }
 }`;
 
+const PBL_MAIN = `@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+`;
+const PBL_DEPTH = `  PH[PH_DEPTH + i] = depth;
+  var top = depth;`;
+const pblExcess = (b) => `fn blExcessDepth(i: i32, pi: f32, depth: f32, zb: f32, friction: f32, speed: f32, bottomWind: vec3<f32>) -> f32 {
+  let base = (K - 1) * C + i;
+  let iceConc = PH[PH_CONC + i]; let seaOpen = 1.0 - select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
+  let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) * (1.0 - X_SEA_REDUCTION * seaOpen) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
+  let buoyancy = select(GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture), PH[PH_BUOY + i], ROUGH);
+  if (!(buoyancy > 0.0)) { return depth; }
+  let mixed = pow(friction * friction * friction + 0.6 * buoyancy * max(0.0, depth - zb), 1.0 / 3.0);
+  let excess = ${b} * buoyancy * D[D_THV + base] / (GRAV * mixed);
+  var riPrev = 0.0; var zPrev = zb;
+  for (var k = K - 2; k >= KTOP; k--) {
+    let idx = k * C + i;
+    let z = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
+    let dw = edgeWind(i, k) - bottomWind;
+    let ri = GRAV * (D[D_THV + idx] - D[D_THV + base] - excess) * (z - zb) / (D[D_THV + base] * (dot(dw, dw) + 100.0 * friction * friction));
+    if (ri > RIC) { return zPrev + (z - zPrev) * (RIC - riPrev) / (ri - riPrev); }
+    riPrev = ri; zPrev = z;
+  }
+  return zPrev;
+}
+`;
+const PBL_FIRST = `
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let base = (K - 1) * C + i; let pi = IN[S_PI + i]; let dt = P[0];
+  let theta = IN[S_TH + base]; let water = IN[S_Q + base];
+  IN[S_TH + base] = theta - dt * PH[PH_SH + i] / (CP * (pi * LV[L_DS + K - 1] / GRAV)) / (pow(pi / P0, KAPPA) * LV[L_CM + K - 1]);
+  IN[S_Q + base] = water - dt * PH[PH_EVAP + i] * GRAV / (pi * LV[L_DS + K - 1]);
+  blColumn(i);
+  IN[S_TH + base] = theta; IN[S_Q + base] = water;
+  diagnoseColumnMid(i);
+}`;
+const seaFlowAt = (name) => `var ${name} = vec3<f32>(0.0, 0.0, 0.0);
+  for (var m = 0; m < MAXE; m++) {
+    let f = MI[EOC + MAXE * i + m];
+    ${name} += abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + f] * MF[F_DV + f] * PH[PH_UO + f] * vec3<f32>(MF[F_NEDGE + 3 * f], MF[F_NEDGE + 3 * f + 1], MF[F_NEDGE + 3 * f + 2]);
+  }
+  ${name} = ${name} / MF[F_AREA + i];
+`;
+const replacedOnce = (body, from, to) => {
+  const parts = body.split(from);
+  if (parts.length !== 2) throw new Error(`relativeWind: ${parts.length - 1} places in the kernel read ${from}`);
+  return parts.join(to);
+};
+export function relativeWindKernels({ physics, pblDiagnose, mixMomentum }) {
+  return {
+    physics: replacedOnce(physics, 'let ws = length(wind);', `${seaFlowAt('seaFlow')}  let ws = length(wind - seaFlow);`),
+    pblDiagnose: replacedOnce(pblDiagnose, 'let speed = length(bottomWind);', `${seaFlowAt('seaFlow')}  let speed = length(bottomWind - seaFlow);`),
+    mixMomentum: [
+      ['let u = IN[S_U + k * E + e];', 'let u = IN[S_U + k * E + e] + select(0.0, lower * PH[PH_UO + e], k == K - 1);'],
+      ['share += dt * surfaceDrag * here * here;', 'share += dt * surfaceDrag * (here - PH[PH_UO + e]) * (here - PH[PH_UO + e]);'],
+      ['PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1];', 'PH[PH_STRESS + e] = surfaceDrag * (rhs[n - 1] - PH[PH_UO + e]);'],
+      ['  if (total > 0.0) {', '  loss -= 2.0 * dt * surfaceDrag * (rhs[n - 1] - PH[PH_UO + e]) * PH[PH_UO + e];\n  if (total > 0.0) {'],
+    ].reduce((body, [from, to]) => replacedOnce(body, from, to), mixMomentum),
+  };
+}
+export function virtualDensityKernels(bodies) {
+  const anchor = '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);';
+  const names = Object.keys(bodies).filter((name) => typeof bodies[name] === 'string' && bodies[name].includes(anchor));
+  if (names.length === 0) throw new Error('virtualDensity: no kernel lays the surface flux\'s density');
+  return Object.fromEntries(names.map((name) => [name, replacedOnce(bodies[name], anchor, '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));')]));
+}
+export function boundaryLayerDiagnosis(body, { diagnoseFirst = false, surfaceExcess = 0 } = {}) {
+  if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
+  if (!body.includes(PBL_MAIN) || !body.includes(PBL_DEPTH)) throw new Error('pblDiagnose kernel text moved');
+  let out = body;
+  if (surfaceExcess > 0) out = out.replace(PBL_MAIN, `${pblExcess(Number(surfaceExcess).toExponential(9))}${PBL_MAIN}`).replace(PBL_DEPTH, `  depth = blExcessDepth(i, pi, depth, zb, friction, speed, bottomWind);\n${PBL_DEPTH}`);
+  if (diagnoseFirst) out = out.replace(PBL_MAIN, 'fn blColumn(i: i32) {\n') + PBL_FIRST;
+  return out;
+}
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
 const BERGERON_RAIN = [
