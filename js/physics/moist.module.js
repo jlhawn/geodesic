@@ -584,9 +584,10 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * `rainCover` 'overlap' a_P is the maximum-random overlap of the cloud
  * cover from the rain's top down (eq. 7.65), at least 0.1, reduced in
  * proportion to what evaporates and reset only where nothing precipitates
- * into a layer: no rain or ice falls into it or into the layer above, and
- * the layer above holds no ice (cloudsc.F90's ZQPRETOT, which counts the
- * rain and snow a layer stores). A number sets a_P and a_clr to it and a to
+ * into a layer: no rain or ice falls into it and the layer above holds no
+ * ice (cloudsc.F90's ZQPRETOT: the flux into the layer, set at 2713-2720,
+ * plus the rain and snow the layer stores, which the model does not). A
+ * number sets a_P and a_clr to it and a to
  * 0. With `rainEvaporationCeiling` c (null: none) no law takes a layer past
  * the relative humidity c + (1 − c) a_clr / (1 − a), the IFS's eq. 7.77 (c
  * 0.7 there). A filler removes negative humidity by borrowing from the
@@ -847,7 +848,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0, frozenStream = null) {
-    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0, rainShare = 0, coverAbove = 0, iceAbove = false, rainedAbove = false;
+    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0, rainShare = 0, coverAbove = 0, iceAbove = false;
     falling.moved = false;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : autoconversionFloor === 'mixingTop' && (boundaryTop ?? boundaryDepth) ? (boundaryTop ?? boundaryDepth)[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
@@ -855,8 +856,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const idx = k * C + i;
       let layerCover = 0;
       if (rainShares) {
-        if (!(rain > 0) && !(descending > 0) && !iceAbove && !rainedAbove) rainShare = 0;
-        rainedAbove = rain > 0 || descending > 0;
+        if (!(rain > 0) && !(descending > 0) && !iceAbove) rainShare = 0;
         if (qc[idx] > 0) {
           const pressure = pi[i] * sigmaMid[k];
           saturation(theta[idx] * exnerLayer[idx], pressure);

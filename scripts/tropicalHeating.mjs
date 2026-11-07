@@ -249,14 +249,13 @@ function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
   fall.evaporated.fill(0); fall.convective.fill(0); fall.converted.fill(0); fall.melted.fill(0); fall.sublimated.fill(0); fall.refunded.fill(0);
   let frozen = 0;
   const tags = fall.tags; tags.low = 0; tags.high = 0; tags.ice = 0;
-  let rain = 0, convective = 0, streamed = 0, descending = 0, settling = 0, rainShare = 0, coverAbove = 0, iceAbove = false, rainedAbove = false;
+  let rain = 0, convective = 0, streamed = 0, descending = 0, settling = 0, rainShare = 0, coverAbove = 0, iceAbove = false;
   const floor = O.autoconversionFloor === 'boundaryLayer' && bl.depth ? bl.depth[i] : null;
   for (let k = 0; k < K; k++) {
     const idx = k * C + i;
     let layerCover = 0;
     if (rainShares) {
-      if (!(rain > 0) && !(descending > 0) && !iceAbove && !rainedAbove) rainShare = 0;
-      rainedAbove = rain > 0 || descending > 0;
+      if (!(rain > 0) && !(descending > 0) && !iceAbove) rainShare = 0;
       if (cc[idx] > 0) {
         const pressure = pi[i] * sigmaMid[k];
         saturation(th[idx] * exnerLayer[idx], pressure);

@@ -185,7 +185,7 @@ test("under rainCover 'overlap' rain that forms beneath an ice-only layer, or a 
   }
 });
 
-test("under rainCover 'overlap' a cloud beneath a clear layer in which all the rain falling into it evaporated carries the share cut to max(0.1, a) there, as cloudsc keeps ZCOVPTOT where ZQPRETOT counts the rain a layer stores", () => {
+test("under rainCover 'overlap' a cloud beneath a clear layer in which all the rain falling into it evaporated resets the share to max(0.1, a), as cloudsc resets ZCOVPTOT where ZQPRETOT, the flux into the layer, is zero", () => {
   const saturated = { qs: 0, slope: 0, liquid: 1 }, D = MOIST_DEFAULTS, dt = 900;
   let mesh = null;
   const lowerClear = (options, upperCover, lowerCover) => {
@@ -213,9 +213,9 @@ test("under rainCover 'overlap' a cloud beneath a clear layer in which all the r
     return { gap: q[gap * C] - gapBefore, gained: q[(low + 1) * C] - before };
   };
   for (const [upperCover, lowerCover] of [[0.2, 0.5], [0.2, 0.3]]) {
-    const carried = rainShareBelow(0.1, lowerCover, 0);
-    const overlap = lowerClear({}, upperCover, lowerCover), shared = lowerClear({ rainCover: carried }, upperCover, lowerCover);
-    assert.ok(overlap.gap > 0 && shared.gained > 0 && Math.abs(overlap.gained - shared.gained) <= 1e-9 * shared.gained, `upper cover ${upperCover}, its rain evaporated in the clear layer above lower cover ${lowerCover}: the first clear layer below gains ${overlap.gained} kg/kg, and ${shared.gained} under rainCover ${carried}`);
+    const reset = Math.max(0.1, lowerCover);
+    const overlap = lowerClear({}, upperCover, lowerCover), shared = lowerClear({ rainCover: reset }, upperCover, lowerCover);
+    assert.ok(overlap.gap > 0 && shared.gained > 0 && Math.abs(overlap.gained - shared.gained) <= 1e-9 * shared.gained, `upper cover ${upperCover}, its rain evaporated in the clear layer above lower cover ${lowerCover}: the first clear layer below gains ${overlap.gained} kg/kg, and ${shared.gained} under rainCover ${reset}`);
   }
 });
 
