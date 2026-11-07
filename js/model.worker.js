@@ -4,7 +4,7 @@ import { createParallelModel } from './parallel.module.js';
 import { createGpuModel } from './gpu/model.gpu.js';
 import { withCadence } from './cadence.module.js';
 import { initializeState } from './physics/init.module.js';
-import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
+import { regridState, regridOcean, regridLand, regridConcentration, regridIceField, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
 import { CUMULUS_FIELDS, placeCumulus } from './physics/moist.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, maskUrl, missingMask, decodeMask, decodeLandIce, landIceUrl, decodeLandCover, landCoverUrl, decodeSoilWater, soilWaterUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
@@ -261,13 +261,13 @@ function initialState(model, saved, N) {
 }
 
 /*
- * The sea-ice concentration that goes with the placed ice: the saved
- * run's, regridded if it was saved at another resolution, or full cover
+ * The sea-ice concentration and brine that go with the placed ice: the
+ * saved run's, regridded if it was saved at another resolution, or full cover
  * wherever a run saved without one has ice.
  */
 function placeIce(model, saved, N) {
   const kept = !saved ? model.seaIce.concentration : !saved.concentration ? null : saved.N === N ? saved.concentration : regridConcentration(sourceFor(saved), model, saved.concentration, { land: saved.land ?? null, surfaceT: saved.surfaceT });
-  model.seaIce.load(model.state[6], kept);
+  model.seaIce.load(model.state[6], kept, !saved ? model.seaIce.brine : !saved.brine ? null : saved.N === N ? saved.brine : regridIceField(sourceFor(saved), model, saved.brine));
 }
 
 /*
@@ -595,6 +595,7 @@ async function snapshot() {
   const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
   const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
   arrays.concentration = Float64Array.from(model.seaIce.concentration).buffer;
+  if (model.seaIce.brine) arrays.brine = Float64Array.from(model.seaIce.brine).buffer;
   for (const name of Object.keys(DECK_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   for (const name of Object.keys(MOIST_FIELDS)) arrays[name] = Float64Array.from(model.moist[name]).buffer;
   Object.assign(arrays, savedCumulus(model));

@@ -101,6 +101,9 @@ test('the hand-off takes the sea surface, ice and ocean, keeps the atmosphere, t
   assert.equal(merged.land.soil, coupled.land.soil);
   assert.deepEqual([merged.day, merged.time, merged.oceanYears], [730, 730 * 86400, 200]);
   for (const name of SST_FIELDS) assert.ok(!(name in merged), name);
+  assert.ok(!('brine' in withOceanOf({ ...coupled, brine: cells(5e5) }, alone, land)), 'the coupled brine stays behind');
+  const brine = withOceanOf({ ...coupled, brine: cells(5e5) }, { ...alone, brine: cells(3e5) }, land).brine;
+  for (let i = 0; i < C; i++) assert.equal(brine[i], land[i] ? 0 : 3e5 + i);
   assert.throws(() => withOceanOf(coupled, { ...alone, N: 32 }, land), /N=32/);
 });
 

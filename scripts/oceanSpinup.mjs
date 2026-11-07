@@ -100,7 +100,7 @@ const stepBefore = existing.length ? saved.oceanStep ?? 0 : 0;
 if (stepBefore % everySteps) throw new Error(`${from} stopped at step ${stepBefore}, off the ocean's ${everySteps}-step cadence`);
 const baseDay = saved.day - doneBefore, baseTime = saved.time - doneBefore * 86400 - stepBefore * dt;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
-model.seaIce.load(state[6], saved.concentration ?? null);
+model.seaIce.load(state[6], saved.concentration ?? null, saved.brine ?? null);
 for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
 model.time = saved.time;
 model.load();

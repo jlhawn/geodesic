@@ -157,6 +157,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
   const A = new Float64Array(C), V = new Float64Array(C), Sn = new Float64Array(C), En = new Float64Array(C), Sa = new Float64Array(C), mass = new Float64Array(C), pressure = new Float64Array(C);
   const hi = new Float64Array(C), si = new Float64Array(C), di = new Float64Array(C), ai = new Float64Array(C);
   const dA = new Float64Array(C), dV = new Float64Array(C), dS = new Float64Array(C), dE = new Float64Array(C), dSa = new Float64Array(C);
+  const Br = new Float64Array(C), bi = new Float64Array(C), dB = new Float64Array(C);
   const Vstart = new Float64Array(C), Astart = new Float64Array(C), touched = new Uint8Array(C), touchedList = new Int32Array(C), cellList = new Int32Array(C);
   const Ae = new Float64Array(E), mu = new Float64Array(E), uw = new Float64Array(E), uwt = new Float64Array(E), tilt = new Float64Array(E);
   const act = new Int32Array(E), upd = new Int32Array(E);
@@ -180,15 +181,16 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
   function prepare({ surfaceT, ice: thickness, concentration }) {
     if (!ice) throw new Error('the ice drift has no sea ice: call ocean.useSeaIce(concentration, seaIce) first');
     if (!concentration) throw new Error('the ice drift moves the sea ice concentration, which the ocean was not given');
-    const { snow, snowAlbedo, skinHeatCapacity, freshSnowAlbedo } = ice;
+    const { snow, snowAlbedo, skinHeatCapacity, freshSnowAlbedo, brine } = ice;
     nCellsActive = 0;
     for (let i = 0; i < C; i++) {
       const a = cellOpen[i] ? coverOf(thickness, concentration, i) : 0;
       if (a > 0) {
         A[i] = a; V[i] = a * thickness[i]; Sn[i] = a * snow[i]; En[i] = a * skinHeatCapacity * (surfaceT[i] - FREEZING_POINT); Sa[i] = Sn[i] * snowAlbedo[i];
+        if (brine) Br[i] = a * brine[i];
         mass[i] = iceDensity * V[i] + Sn[i];
         cellList[nCellsActive++] = i;
-      } else { A[i] = 0; V[i] = 0; Sn[i] = 0; En[i] = 0; Sa[i] = 0; mass[i] = 0; sigma[i] = 0; }
+      } else { A[i] = 0; V[i] = 0; Sn[i] = 0; En[i] = 0; Sa[i] = 0; mass[i] = 0; sigma[i] = 0; Br[i] = 0; }
     }
     nAct = 0;
     for (let e = 0; e < E; e++) {
@@ -266,7 +268,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
   }
 
   function carry({ surfaceT, ice: thickness, concentration }, dt) {
-    const { skinHeatCapacity, freshSnowAlbedo, snow, snowAlbedo, latent, latentHeatFusion, meltAway } = ice;
+    const { skinHeatCapacity, freshSnowAlbedo, snow, snowAlbedo, latent, latentHeatFusion, meltAway, brine } = ice;
     let courant = 0;
     for (let n = 0; n < nAct; n++) { const e = act[n]; courant = Math.max(courant, Math.abs(velocity[e]) * dt / dcEdge[e]); }
     count.courant = courant; count.removed = 0;
@@ -277,14 +279,14 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
     for (let s = 0; s < sub; s++) {
       for (let i = 0; i < C; i++) {
         const a = A[i];
-        if (a > 0) { hi[i] = V[i] / a; si[i] = Sn[i] / a; di[i] = En[i] / a; ai[i] = Sn[i] > 0 ? Sa[i] / Sn[i] : freshSnowAlbedo; } else { hi[i] = 0; si[i] = 0; di[i] = 0; ai[i] = freshSnowAlbedo; }
+        if (a > 0) { hi[i] = V[i] / a; si[i] = Sn[i] / a; di[i] = En[i] / a; ai[i] = Sn[i] > 0 ? Sa[i] / Sn[i] : freshSnowAlbedo; if (brine) bi[i] = Br[i] / a; } else { bi[i] = 0; hi[i] = 0; si[i] = 0; di[i] = 0; ai[i] = freshSnowAlbedo; }
       }
       for (let n = 0; n < nAct; n++) {
         const e = act[n], u = velocity[e];
         if (u === 0) continue;
         const side = u > 0 ? 0 : 1, a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], up = side === 0 ? a : b, down = side === 0 ? b : a;
         if (!(A[up] > 0)) continue;
-        let Astar = A[up], hs = hi[up], ss = si[up], ds = di[up], as = ai[up];
+        let Astar = A[up], hs = hi[up], ss = si[up], ds = di[up], as = ai[up], bs = bi[up];
         if (beyond) {
           const uu = beyond.cell[2 * e + side];
           if (cellOpen[uu]) {
@@ -293,6 +295,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
             if (A[down] > 0 && A[uu] > 0) {
               hs = limited(hi, up, down, uu, dUp, dCentral); ss = limited(si, up, down, uu, dUp, dCentral);
               ds = limited(di, up, down, uu, dUp, dCentral); as = limited(ai, up, down, uu, dUp, dCentral);
+              if (brine) bs = limited(bi, up, down, uu, dUp, dCentral);
             }
           } else count.fallbacks++;
         }
@@ -300,6 +303,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
         volumeFlux[e] += fV / sub;
         dA[a] -= fA * ia; dV[a] -= fV * ia; dS[a] -= fS * ia; dE[a] -= fE * ia; dSa[a] -= fSa * ia;
         dA[b] += fA * ib; dV[b] += fV * ib; dS[b] += fS * ib; dE[b] += fE * ib; dSa[b] += fSa * ib;
+        if (brine) { dB[a] -= fA * bs * ia; dB[b] += fA * bs * ib; }
         if (!touched[a]) { touched[a] = 1; touchedList[nTouched++] = a; Vstart[a] = V[a]; Astart[a] = A[a]; }
         if (!touched[b]) { touched[b] = 1; touchedList[nTouched++] = b; Vstart[b] = V[b]; Astart[b] = A[b]; }
       }
@@ -307,6 +311,7 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
         const i = touchedList[n];
         A[i] = Math.max(0, A[i] + dA[i]); V[i] = Math.max(0, V[i] + dV[i]); Sn[i] = Math.max(0, Sn[i] + dS[i]); En[i] += dE[i]; Sa[i] = Math.max(0, Sa[i] + dSa[i]);
         dA[i] = 0; dV[i] = 0; dS[i] = 0; dE[i] = 0; dSa[i] = 0;
+        if (brine) { Br[i] = Math.max(0, Br[i] + dB[i]); dB[i] = 0; }
       }
     }
     for (let n = 0; n < nTouched; n++) {
@@ -318,11 +323,11 @@ export function createIceDrift(mesh, options, { cellOpen, edgeOcean, waterDensit
       if (A1 > o.maximumConcentration) { count.closedArea += (A1 - o.maximumConcentration) * areaCell[i]; count.closures++; A1 = o.maximumConcentration; }
       if (A1 < removal.concentration || V1 < removal.volume || (A1 < MINIMUM_CONCENTRATION && remnant(A1, V1, S1, E1))) {
         count.removed += areaCell[i] * V1;
-        meltAway(surfaceT, thickness, i, E1 - latent * V1 - latentHeatFusion * S1, areaCell[i] * V1, areaCell[i] * S1, Astart[i] > 0 ? FREEZING_POINT : surfaceT[i]);
+        meltAway(surfaceT, thickness, i, E1 + (brine ? Br[i] : 0) - latent * V1 - latentHeatFusion * S1, areaCell[i] * V1, areaCell[i] * S1, Astart[i] > 0 ? FREEZING_POINT : surfaceT[i]);
         continue;
       }
       if (Astart[i] === 0) { waterT[i] = surfaceT[i]; arrived[i] = 1; }
-      thickness[i] = V1 / A1; concentration[i] = A1; snow[i] = S1 / A1; surfaceT[i] = FREEZING_POINT + E1 / (A1 * skinHeatCapacity); snowAlbedo[i] = S1 > 0 ? Math.min(1, Sa1 / S1) : freshSnowAlbedo;
+      thickness[i] = V1 / A1; concentration[i] = A1; snow[i] = S1 / A1; surfaceT[i] = FREEZING_POINT + E1 / (A1 * skinHeatCapacity); if (brine) brine[i] = Br[i] / A1; snowAlbedo[i] = S1 > 0 ? Math.min(1, Sa1 / S1) : freshSnowAlbedo;
       count.thickest = Math.max(count.thickest, thickness[i]);
     }
   }

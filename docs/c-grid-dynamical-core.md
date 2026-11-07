@@ -954,9 +954,9 @@ coupling (albedo and longwave emissivity of cloud) is the next step.
 ### M9 — Sea ice and surface albedo — done
 
 `js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model,
-Fichefet and Morales Maqueda's (1997) E1 + E4 simplifications of
-Semtner's (1976) three-layer model (no brine reservoir, no sunlight
-through the ice), on the slab ocean, with ice thickness
+Fichefet and Morales Maqueda's (1997) E1, E3 and E4 simplifications of
+Semtner's (1976) three-layer model (no heat stored in the ice, no
+sunlight into it, one thickness), on the slab ocean, with ice thickness
 as the seventh state array. Open water is the mixed layer (2.1×10⁷
 J/m²/K); when it cools to the seawater freezing point (271.35 K) the
 deficit freezes into ice of latent heat ρ_i L_f. Ice has a skin of
@@ -994,6 +994,33 @@ the poles by up to 2 Q₀ — and melts ice from below where it is
 covered. It stands in for the poleward heat carried by ocean currents,
 without which the ice–albedo feedback runs the ice edge to ~45°.
 
+Two options lift E3 and the latent half of E1. `ice.iceLight` passes
+FMM97's share i0 = 0.18 (1 − c) + 0.35 c of the sunlight the ice absorbs
+at its surface, with c the diffuse share of the beam, fading linearly
+to none under 20 kg/m² of snow; below the top 0.1 m it decays at
+1.5 m⁻¹, and of what reaches the base a layered ocean takes its
+transmitted share, the rest melting the ice from below. The part the
+ice absorbs on the way stays with the skin, unless `ice.brineReservoir`
+(which needs `iceLight`) holds it, while the skin is at the melting
+point, in Semtner's brine reservoir (`brine`, J/m² of ice, in the state
+file and carried by the drift): at most half the ice's latent heat at
+the end of a step, the rest melting ice. FMM97's eq. 9 (p. 12,613,
+after Semtner) spends the reservoir keeping the upper ice layer from
+cooling below the melting point in autumn, as the brine pockets refreeze.
+A model with no heat in its ice can only approximate that: FMM97 note
+(p. 12,627) that its stored heat "could not be used to moderate the ice
+cooling in autumn", and leave applying it at the base untried as a
+change to the model's physics. Here, while the reservoir lasts and the
+skin is below the melting point, a virtual upper half-layer (its
+midpoint at h/4) is held at the melting point: the skin takes
+(T_m − T_skin)/(h/4k + snow's resistance) from it, the base sees
+(T_f − T_m)/(3h/4k) in place of the conduction through the whole slab,
+so the ice does not grow at its base, and the reservoir pays the
+difference, the last of it over part of a step. In idealized perennial
+columns this thickens the ice by 1.1 to 1.7 m over ten to thirty years
+against `iceLight` alone (FMM97's sign: latent storage thickens the
+ice), and seasonal ice by a few centimeters.
+
 Ice covers a fraction A of its cell (`concentration`, a per-cell array
 beside the snow, in the state file and on the page), with the thickness
 h over that part, so the volume per cell area is A h; the rest, the
@@ -1013,7 +1040,7 @@ area as Hibler (1979) does, half the relative loss of volume from the
 area; ice frozen in the leads closes (1 − A) of its own area of new
 ice 0.3 m thick (`leadClosing`), so the open area closes as its square
 (`leadClosure` 'squared'; 'hibler' closes all of it, Hibler's 1979 h₀
-law), and open water that cools below freezing forms ice
+law, at h₀ = `leadClosing`, where Hibler and FMM97's Table 1 take 0.5 m), and open water that cools below freezing forms ice
 0.3 m thick over the area its volume covers. Ice below 1 % of its cell
 or 10⁻⁴ m of volume melts away. The snow on lost area melts into the
 water, its latent heat freezing the same mass onto the ice, and new
@@ -2544,7 +2571,7 @@ model and loops the first DAYS_PER_YEAR (365) recorded days over it for
 YEARS years, never stepping the atmosphere (`createForcedOcean`). At
 every atmosphere step of dt = 1350·16/N s a kernel runs the physics
 kernel's own sea-cell surface update, spliced in as the same WGSL text
-(`SEA_SURFACE_WGSL`, and `snowOnSea` for the snowfall), with the
+(`seaSurfaceWgsl`, and `snowOnSea` for the snowfall), with the
 recorded net flux in place of the computed one; the lead/ice split
 takes the recorded downward shortwave times the ice's diffuse albedo
 contrast. Every fourth step takes the recorded freshwater through the

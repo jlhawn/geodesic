@@ -24,9 +24,17 @@ test(`at N=${N} a CPU model whose lakes load a running total of passed water han
   const base = prepare(0), loaded = prepare(1000);
   let lakeArea = 0;
   for (const i of base.lake.cells) lakeArea += base.mesh.areaCell[i];
-  for (let n = 0; n <= base.ocean.everySteps; n++) { base.step(DT); loaded.step(DT); }
+  for (let n = 0; n < base.ocean.everySteps - 1; n++) { base.step(DT); loaded.step(DT); }
   const gap = Math.abs(fresh(loaded) - fresh(base)), load = 1000 * lakeArea;
   console.log(`${base.lake.cells.length} lake cells: the sea's fresh water differs by ${(gap / load).toExponential(1)} of the loaded total`);
   assert.ok(fresh(base) !== 0, 'the lakes pass water');
   assert.ok(gap < 1e-9 * load, `the sea's fresh water differs by ${gap} kg against a load of ${load} kg`);
+});
+
+test(`at N=${N} a saved lake carries its column depths, and a run whose lakes have other depths refuses it`, () => {
+  const model = prepare(0), saved = model.lake.serialize(), i = model.lake.cells[0];
+  assert.equal(saved.depth[i], model.lake.depth[i]);
+  model.lake.load(saved);
+  saved.depth[i] += 5;
+  assert.throws(() => model.lake.load(saved), /other depths/);
 });

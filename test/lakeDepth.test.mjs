@@ -38,3 +38,21 @@ test('sourceLakeDepths reads only lake cells and finds nothing without lakes nea
   for (let i = 0; i < mesh.nCells; i++) if (!geography.lake[i]) assert.ok(Number.isNaN(depth[i]));
   assert.ok(sourceLakeDepths(mesh, geography.lake, [{ lon: -150, lat: 0, area: 1e5, depth: 30, source: 1 }]).every((d) => Number.isNaN(d)));
 });
+
+test('a lake group that reaches no pour point takes a big lake whose extent covers it while the groups at its pour point leave enough of it unclaimed', () => {
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, D = 180 / Math.PI;
+  const unit = (i) => [Math.cos(mesh.latCell[i]) * Math.cos(mesh.lonCell[i]), Math.cos(mesh.latCell[i]) * Math.sin(mesh.lonCell[i]), Math.sin(mesh.latCell[i])];
+  const km = (i, j) => { const p = unit(i), q = unit(j); return 6371 * Math.acos(Math.min(1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2])); };
+  const far = 0, near = Array.from({ length: C }, (_, j) => j).find((j) => km(far, j) > 1250 && km(far, j) < 1450);
+  const big = { lon: mesh.lonCell[near] * D, lat: mesh.latCell[near] * D, area: 2e5, depth: 33 };
+  const lone = new Uint8Array(C);
+  lone[far] = 1;
+  assert.ok(Number.isNaN(sourceLakeDepths(mesh, lone, [big], { extent: 0 })[far]), 'beyond its reach the lake is no candidate without the extent');
+  assert.equal(sourceLakeDepths(mesh, lone, [big])[far], 33, 'its extent covers the far group');
+  const both = Uint8Array.from(lone);
+  both[near] = 1;
+  const claimed = sourceLakeDepths(mesh, both, [big]);
+  assert.equal(claimed[near], 33);
+  assert.ok(Number.isNaN(claimed[far]), 'the group at its pour point claims all of it');
+  assert.equal(sourceLakeDepths(mesh, both, [{ ...big, area: 5e5 }])[far], 33, 'a lake larger than the group at its pour point is left over');
+});

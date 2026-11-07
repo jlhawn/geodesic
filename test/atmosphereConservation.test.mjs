@@ -123,6 +123,27 @@ function overOceanSkin() {
 }
 
 /*
+ * The same with sea ice that lets light through to the water and a brine
+ * reservoir: a meter of ice at cover 0.9 poleward of 63 degrees, its skin
+ * 3 K below freezing, and a centimeter at cover 0.0105 from 58 to 63 degrees,
+ * just above the removal floors; the brine of both at 2×10⁵ J/m².
+ */
+function brineOcean() {
+  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: {}, ice: { iceLight: true, brineReservoir: true } });
+  slab.state.forEach((values, s) => model.state[s].set(values));
+  const concentration = Float64Array.from(slab.seaIce.concentration);
+  for (let i = 0; i < model.mesh.nCells; i++) {
+    const lat = Math.abs(model.mesh.latCell[i]) * 180 / Math.PI;
+    if (lat > 63) { model.state[6][i] = 1; concentration[i] = 0.9; model.state[3][i] = FREEZING_POINT - 3; } else if (lat > 58) { model.state[6][i] = 0.01; concentration[i] = 0.0105; model.state[3][i] = FREEZING_POINT; }
+  }
+  model.seaIce.load(model.state[6], concentration);
+  model.ocean.initialize(model.state[3], model.state[6]);
+  for (let i = 0; i < model.mesh.nCells; i++) if (model.state[6][i] > 0) model.seaIce.brine[i] = 2e5;
+  model.time = slab.time;
+  return model;
+}
+
+/*
  * The air's enthalpy c_p T, latent heat L q and kinetic energy, and the
  * surface's store (seaIce.energy, with an ocean's heat capacity over open
  * water), as global means in J/m², summed in double precision with the
@@ -138,7 +159,7 @@ function bookkeeper(model) {
     let H = 0, Lq = 0, KE = 0, S = 0;
     for (let i = 0; i < C; i++) {
       for (let k = 0; k < K; k++) { const n = k * C + i, m = areaCell[i] * pi[i] * dSigma[k] / g; H += m * cp * theta[n] * exner[n]; Lq += m * L * q[n]; }
-      S += areaCell[i] * (ocean && !(ice[i] > 0) ? ocean.capacity[i] * (surfaceT[i] - FREEZING_POINT) : seaIce.energy(surfaceT[i], ice[i], seaIce.snow[i], seaIce.cover(i, ice[i])));
+      S += areaCell[i] * (ocean && !(ice[i] > 0) ? ocean.capacity[i] * (surfaceT[i] - FREEZING_POINT) : seaIce.energy(surfaceT[i], ice[i], seaIce.snow[i], seaIce.cover(i, ice[i]), seaIce.brine ? seaIce.brine[i] : 0));
     }
     for (let k = 0; k < K; k++) for (let e = 0; e < E; e++) {
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
@@ -152,11 +173,12 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build, dynamicsBound = 0.02] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ["over a slab with dynamics.verticalAdvection 'vanLeer'", () => spunUpVerticalAdvection('vanLeer'), 0.2], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with surface.relativeWind and a moving sea, the work its stress does on the sea included', () => movingSea(overOcean({ relativeWind: true }))], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within ${dynamicsBound === 0.02 ? 'its truncation' : `${dynamicsBound} W/m²`}`, () => {
+for (const [label, build, dynamicsBound = 0.02] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ["over a slab with dynamics.verticalAdvection 'vanLeer'", () => spunUpVerticalAdvection('vanLeer'), 0.2], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with surface.relativeWind and a moving sea, the work its stress does on the sea included', () => movingSea(overOcean({ relativeWind: true }))], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin], ['over a layered ocean whose sea ice lets light through to the water and a brine reservoir', brineOcean]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within ${dynamicsBound === 0.02 ? 'its truncation' : `${dynamicsBound} W/m²`}`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
   const record = { dynamics: [], closure: [], boundaryLayer: [], adjust: [], momentum: [], ...(model.seaFlow ? { seaWork: [] } : {}) };
+  let brineMoved = 0, brineMelted = 0, brineLeads = 0;
   for (let n = 0; n < MEASURED_STEPS; n++) {
     radiation.setTime(model.time);
     let a = books(state);
@@ -164,7 +186,19 @@ for (const [label, build, dynamicsBound = 0.02] of [['over a slab', spunUp], ['o
     let b = books(state);
     record.dynamics.push((b.H + b.Lq + b.KE - a.H - a.Lq - a.KE) / DT);
     const slabBefore = Float64Array.from(state[3]), iceBefore = Float64Array.from(state[6]), penBefore = model.ocean && model.ocean.penetrated ? Float64Array.from(model.ocean.penetrated) : null;
+    const surfaceOf = (i) => (model.ocean && !(state[6][i] > 0) ? model.ocean.capacity[i] * (state[3][i] - FREEZING_POINT) : model.seaIce.energy(state[3][i], state[6][i], model.seaIce.snow[i], model.seaIce.cover(i, state[6][i]), model.seaIce.brine ? model.seaIce.brine[i] : 0));
+    const iceEnergyBefore = model.seaIce.brine ? Float64Array.from(iceBefore, (h, i) => (h > 0 ? surfaceOf(i) : 0)) : null, brineBefore = model.seaIce.brine ? Float64Array.from(model.seaIce.brine) : null;
+    const coverBefore = Float64Array.from(model.seaIce.concentration);
     phases.physics(0, C, DT, model.totals);
+    if (iceEnergyBefore) {
+      for (let i = 0; i < C; i++) if (iceBefore[i] > 0) {
+        const paid = DT * (radiation.surfaceFlux[i] + model.seaIce.oceanFlux[i]) - (model.ocean.penetrated[i] - penBefore[i]);
+        assert.ok(Math.abs(surfaceOf(i) - iceEnergyBefore[i] - paid) <= 1e-6 + 1e-12 * Math.abs(iceEnergyBefore[i]), `cell ${i}: the ice gains ${surfaceOf(i) - iceEnergyBefore[i]} J/m² for ${paid} of flux`);
+        if (model.seaIce.brine[i] !== brineBefore[i]) brineMoved++;
+        if (brineBefore[i] > 0 && !(state[6][i] > 0)) brineMelted++;
+        else if (brineBefore[i] > 0 && model.seaIce.concentration[i] !== coverBefore[i]) brineLeads++;
+      }
+    }
     if (model.skin) {
       let seen = 0;
       for (let i = 0; i < C; i++) if (!(iceBefore[i] > 0) && !(state[6][i] > 0)) {
@@ -198,6 +232,10 @@ for (const [label, build, dynamicsBound = 0.02] of [['over a slab', spunUp], ['o
     record.momentum.push(momentum / DT);
     model.time += DT;
     model.radiationSteps++;
+  }
+  if (model.seaIce.brine) {
+    console.log(`CPU ${label}: brine changed in ${brineMoved} cell steps, carried through a change of cover in ${brineLeads}, handed to the water by ice melting away in ${brineMelted}`);
+    assert.ok(brineMoved > 0 && brineLeads > 0 && brineMelted > 0, 'the brine changes, rides a change of cover and melts away with its ice');
   }
   for (const [name, rows] of Object.entries(record)) console.log(`CPU ${label} ${name}: ${show(mean(rows))} W/m² on average, ${show(largest(rows))} at most`);
   for (const name of ['closure', 'boundaryLayer', 'adjust', 'momentum']) assert.ok(largest(record[name]) < 1e-6, `${name}: ${largest(record[name])} W/m²`);

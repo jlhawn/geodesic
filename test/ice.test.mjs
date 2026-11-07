@@ -281,3 +281,86 @@ test('with a transmission, open water keeps the passing share of its absorbed su
   plain.update(alone, new Float64Array(1), flux, 0, dt, 0, solar);
   assert.equal(alone[0], water + dt * flux[0] / capacity[0], 'without a transmission all of the sunlight stays in the mixed layer');
 });
+
+for (const brineReservoir of [false, true]) test(`with iceLight${brineReservoir ? ' and brineReservoir' : ''} the surface energy${brineReservoir ? ', the brine counted,' : ''} changes by exactly the surface flux through a sunlit melt and a cold autumn${brineReservoir ? ', the brine ending each step at most half the latent heat of the ice, reaching it, and spent at the base against growth while the skin cools freely' : ''}`, () => {
+  const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir });
+  const surfaceT = new Float64Array([FREEZING_POINT - 1]), ice = new Float64Array([1]), flux = new Float64Array(1), dt = 900;
+  sea.load(ice);
+  const total = () => sea.energy(surfaceT[0], ice[0], sea.snow[0], sea.cover(0, ice[0]), brineReservoir ? sea.brine[0] : 0);
+  let energy = total(), capped = false, cold = 0, spent = false;
+  for (let n = 0; n < 96 * 90; n++) {
+    const sunny = n < 96 * 23, solar = sunny ? 400 : 0;
+    flux[0] = sunny ? 120 : -120;
+    const Q0 = brineReservoir ? sea.brine[0] : 0, T0 = surfaceT[0];
+    sea.update(surfaceT, ice, flux, 0, dt, 0, solar, 0.5);
+    energy += dt * flux[0];
+    assert.ok(Math.abs(total() - energy) < 1e-9 * sea.latent * 2, `step ${n}: energy ${total()} vs ${energy}`);
+    assert.ok(ice[0] > 0, `step ${n}: the ice is still there`);
+    if (!brineReservoir) continue;
+    const Q = sea.brine[0], cap = 0.5 * sea.latent * ice[0];
+    assert.ok(Q >= 0 && Q <= cap * (1 + 1e-12), `step ${n}: brine ${Q} over ${cap} for ${ice[0]} m`);
+    if (Q >= cap * (1 - 1e-9)) capped = true;
+    if (T0 < MELTING_POINT && Q0 === 0) assert.equal(Q, 0, `step ${n}: the brine fills only while the skin is at the melting point`);
+    if (!sunny) {
+      assert.ok(Q <= Q0, `step ${n}: the brine only drains in the cold`);
+      if (Q > 0) cold++;
+      if (Q0 > 0 && Q === 0) spent = true;
+    }
+  }
+  if (brineReservoir) assert.ok(capped && cold > 0 && spent, `capped ${capped}, ${cold} cold steps with brine, spent ${spent}`);
+});
+
+test('in autumn the brine holds an upper half-layer of the ice at the melting point: the skin takes its conduction from there, the base the downward conduction below it, and the brine pays the difference', () => {
+  const k = 2, rs = 300 * 0.31, dt = 1350;
+  const build = (brineReservoir) => {
+    const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir, conductivity: k, minimumThickness: 0.1, snowDensity: 300, snowConductivity: 0.31 });
+    const surfaceT = new Float64Array([MELTING_POINT]), ice = new Float64Array([1.5]), flux = new Float64Array([-90]);
+    sea.load(ice, new Float64Array([1]));
+    sea.snow[0] = 10;
+    if (brineReservoir) sea.brine[0] = 3e7;
+    return { sea, surfaceT, ice, flux };
+  };
+  const held = build(true), free = build(false);
+  let steps = 0, drained = false;
+  for (let n = 0; n < 64 * 40 && !drained; n++) {
+    const { sea, surfaceT, ice, flux } = held, T = surfaceT[0], h = ice[0], s = sea.snow[0], Q = sea.brine[0], A = sea.cover(0, h), volume = sea.concentration[0] * h;
+    sea.update(surfaceT, ice, flux, 0, dt);
+    free.sea.update(free.surfaceT, free.ice, free.flux, 0, dt);
+    if (!(Q > 0) || T >= MELTING_POINT) continue;
+    const upper = (MELTING_POINT - T) / (h / (4 * k) + s / rs), lower = (FREEZING_POINT - MELTING_POINT) / (3 * h / (4 * k)), cost = dt * (upper - lower);
+    if (cost < Q) {
+      assert.ok(Math.abs(Q - sea.brine[0] - cost) < 1e-9 * Q, `step ${n}: the brine pays ${Q - sea.brine[0]} for ${cost}`);
+      const iceFlux = flux[0] + (1 - A) * sea.leadExchange * (FREEZING_POINT - T);
+      assert.ok(Math.abs(surfaceT[0] - T - dt * (iceFlux + upper) / sea.skinHeatCapacity) < 1e-9, `step ${n}: the skin takes ${upper} W/m²`);
+      const leadIce = Math.max(0, -(1 - A) * (flux[0] - A * sea.leadExchange * (FREEZING_POINT - T)) * dt / sea.latent);
+      assert.ok(sea.concentration[0] * ice[0] <= volume + leadIce * (1 + 1e-9), `step ${n}: the ice grows only in its leads while the brine lasts`);
+      steps++;
+    } else { assert.equal(sea.brine[0], 0, `step ${n}: the last of the brine`); drained = true; }
+  }
+  console.log(`the brine held the upper half-layer for ${(steps / 64).toFixed(1)} days, the skin at ${held.surfaceT[0].toFixed(2)} K against ${free.surfaceT[0].toFixed(2)} K without it, the ice ${held.ice[0].toFixed(3)} m against ${free.ice[0].toFixed(3)} m`);
+  assert.ok(steps > 64 && drained, `${steps} steps`);
+  assert.ok(held.surfaceT[0] > free.surfaceT[0] && held.ice[0] < free.ice[0]);
+});
+
+test('over ten years a perennial column with the brine reservoir ends thicker than with iceLight alone, as FMM97 find for latent storage', () => {
+  const sigma = 5.67e-8, dt = 1350, perDay = 64;
+  const column = (brineReservoir) => {
+    const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir }), surfaceT = new Float64Array([250]), ice = new Float64Array([2.5]), flux = new Float64Array(1);
+    sea.load(ice);
+    sea.oceanFlux[0] = 2;
+    let low = Infinity, mean = 0;
+    for (let y = 0; y < 10; y++) for (let n = 0; n < 365 * perDay; n++) {
+      const d = n / perDay, air = Math.min(273.2, 255 + 18 * Math.cos(2 * Math.PI * (d - 200) / 365)), sw = 0.6 * Math.max(0, 340 * Math.cos(2 * Math.PI * (d - 172) / 365) - 40);
+      const solar = sw * (1 - sea.albedo(ice[0], null, sea.snow[0], sea.cover(0, ice[0]), surfaceT[0], sea.snowAlbedo[0])), T = surfaceT[0];
+      flux[0] = solar + 180 + 120 * (air - 237) / 36.2 - 0.98 * sigma * T ** 4 + 12 * (air - T);
+      sea.update(surfaceT, ice, flux, 0, dt, 0, solar, 0.5);
+      const volume = sea.concentration[0] * ice[0];
+      if (y === 9) { low = Math.min(low, volume); mean += volume / (365 * perDay); }
+    }
+    return { low, mean };
+  };
+  const alone = column(false), stored = column(true);
+  console.log(`year 10 mean ice volume: ${alone.mean.toFixed(3)} m with iceLight alone, ${stored.mean.toFixed(3)} m with the brine reservoir (least ${alone.low.toFixed(2)} and ${stored.low.toFixed(2)} m)`);
+  assert.ok(alone.low > 0.5 && stored.low > 0.5, 'both columns are perennial');
+  assert.ok(stored.mean > alone.mean + 0.5, 'the brine thickens the perennial ice');
+});

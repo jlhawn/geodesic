@@ -46,11 +46,12 @@ function windStress(mesh) {
  * the ocean initialized on the CPU and uploaded to the device with the ice in
  * the atmosphere's buffers.
  */
-async function scenario(drift, { global = false, velocity = null, stress = null, keep = iceDriftMoves(drift), ocean: options = {} } = {}) {
-  const gpuModel = await createGpuModel(new Grid(N), { topography, ice: { keepSmallIce: keep }, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false, ...options } });
+async function scenario(drift, { global = false, velocity = null, stress = null, keep = iceDriftMoves(drift), ocean: options = {}, brine = false, fringe = false } = {}) {
+  const light = brine ? { iceLight: true, brineReservoir: true } : {};
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ice: { keepSmallIce: keep, ...light }, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false, ...options } });
   const mesh = gpuModel.mesh, geography = gpuModel.geography, C = mesh.nCells, E = mesh.nEdges, gpu = gpuModel.gpu, ocean = gpuModel.oceanEngine;
   const cpu = createOcean(mesh, { geography, vertical: 'hybrid', everySteps: 1, iceDrift: drift, ...options });
-  const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity, keepSmallIce: keep });
+  const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity, keepSmallIce: keep, ...light });
   cpu.useSeaIce(seaIce.concentration, seaIce);
   const surfaceT = new Float64Array(C).fill(280), ice = new Float64Array(C);
   const centre = [Math.cos(-78 * DEG) * Math.cos(40 * DEG), Math.cos(-78 * DEG) * Math.sin(40 * DEG), Math.sin(-78 * DEG)];
@@ -59,11 +60,12 @@ async function scenario(drift, { global = false, velocity = null, stress = null,
     const lat = mesh.latCell[i] / DEG;
     const bump = Math.exp(-((Math.acos(Math.min(1, mesh.xCell[3 * i] * centre[0] + mesh.xCell[3 * i + 1] * centre[1] + mesh.xCell[3 * i + 2] * centre[2])) * mesh.radius / 1.5e6) ** 2));
     if (global) { seaIce.concentration[i] = 0.4 + 0.5 * bump; ice[i] = 0.3 + 0.8 * bump; seaIce.snow[i] = 20 * bump; surfaceT[i] = FREEZING_POINT - 6 * bump; continue; }
-    if (lat < -60) { seaIce.concentration[i] = 0.85; ice[i] = 0.6; seaIce.snow[i] = 12; surfaceT[i] = FREEZING_POINT - 4; } else if (lat < -55) { seaIce.concentration[i] = 0.3; ice[i] = 0.3; seaIce.snow[i] = 2; surfaceT[i] = FREEZING_POINT - 1; }
+    if (lat < -60) { seaIce.concentration[i] = 0.85; ice[i] = 0.6; seaIce.snow[i] = 12; surfaceT[i] = FREEZING_POINT - 4; } else if (lat < -55) { seaIce.concentration[i] = 0.3; ice[i] = 0.3; seaIce.snow[i] = 2; surfaceT[i] = FREEZING_POINT - 1; } else if (fringe && lat < -50) { seaIce.concentration[i] = 0.012; ice[i] = 0.05; surfaceT[i] = FREEZING_POINT; }
   }
   cpu.initialize(surfaceT, ice, { concentration: seaIce.concentration });
   for (let i = 0; i < C; i++) if (cpu.cellOcean[i] && !(ice[i] > 0)) surfaceT[i] = cpu.T0[i];
   seaIce.snowAlbedo.fill(0.85);
+  if (brine) for (let i = 0; i < C; i++) seaIce.brine[i] = ice[i] > 0 ? (seaIce.concentration[i] < 0.1 ? 4e7 : 4e6) * (1 + Math.sin(3 * mesh.lonCell[i])) : 0;
   if (velocity) cpu.iceDrift.velocity.set(velocity);
   const wind = stress ?? new Float64Array(E);
   const volume = Float64Array.from(ice, (h, i) => h * seaIce.concentration[i]);
@@ -72,6 +74,7 @@ async function scenario(drift, { global = false, velocity = null, stress = null,
   const write = (buffer, offset, values) => gpu.device.queue.writeBuffer(buffer, 4 * offset, Float32Array.from(values));
   write(gpu.buffers.S, gpu.layout.S.ICE, ice);
   write(gpu.buffers.PH, gpu.layout.PH.CONC, seaIce.concentration); write(gpu.buffers.PH, gpu.layout.PH.SNOW, seaIce.snow); write(gpu.buffers.PH, gpu.layout.PH.SNOWALB, seaIce.snowAlbedo);
+  if (brine) write(gpu.buffers.PH, gpu.layout.PH.BRINE, seaIce.brine);
   if (drift) ocean.setAirStress(wind);
   const s = { gpuModel, mesh, C, E, gpu, ocean, cpu, seaIce, surfaceT, ice, wind, flux: new Float64Array(C) };
   s.stepCpu = () => cpu.advance(surfaceT, ice, seaIce.oceanFlux, wind, DT, seaIce.concentration);
@@ -79,7 +82,8 @@ async function scenario(drift, { global = false, velocity = null, stress = null,
   s.readIce = async () => {
     const [h, ts] = await readRanges(gpu.device, gpu.buffers.S, [{ offset: gpu.layout.S.ICE, length: C }, { offset: gpu.layout.S.TS, length: C }]);
     const [conc, snow, albedo] = await readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'SNOW', 'SNOWALB'].map((name) => ({ offset: gpu.layout.PH[name], length: C })));
-    return { h, ts, conc, snow, albedo };
+    const [held] = brine ? await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.BRINE, length: C }]) : [null];
+    return { h, ts, conc, snow, albedo, held };
   };
   return s;
 }
@@ -127,6 +131,35 @@ for (const [rheology, limit] of [['free', 2e-3], ['cavitating', 1e-2]]) {
     s.gpuModel.destroy();
   });
 }
+
+test('the GPU carries the brine of a prescribed ice velocity like the CPU over twenty calls of the drift alone, its total kept but for what the removed ice hands the water, which warms as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), velocity = streamOn(probe.mesh, 20 / probe.mesh.radius);
+  probe.destroy();
+  const s = await scenario({ rheology: 'frozen' }, { velocity, brine: true, fringe: true });
+  const held = (h, conc, brine) => Float64Array.from(brine, (q, i) => (h[i] > 0 ? q * conc[i] : 0));
+  const sum = (x) => x.reduce((t, q, i) => t + s.mesh.areaCell[i] * q, 0), before = sum(held(s.ice, s.seaIce.concentration, s.seaIce.brine));
+  let removed = 0, fringe = 0, top = 0, device = await s.readIce();
+  for (let n = 0; n < 20; n++) {
+    const was = held(s.ice, s.seaIce.concentration, s.seaIce.brine), wasDevice = device.h;
+    s.cpu.iceDrift.advance({ surfaceT: s.surfaceT, ice: s.ice, concentration: s.seaIce.concentration, stress: s.wind, waterU: s.cpu.u, eta: s.cpu.eta, dt: DT });
+    removed += s.cpu.iceDrift.count.removed;
+    s.ocean.driftStep(DT); await s.gpu.device.queue.onSubmittedWorkDone();
+    device = await s.readIce();
+    for (let i = 0; i < s.C; i++) {
+      if (!(was[i] > 0 && wasDevice[i] > 0) || s.ice[i] > 0 || device.h[i] > 0) continue;
+      const warming = was[i] / s.cpu.capacity[i];
+      assert.ok(Math.abs(device.ts[i] - s.surfaceT[i]) < 1e-4 + 0.05 * warming, `call ${n}, cell ${i}: the water under the removed ice is ${s.surfaceT[i]} on the CPU, ${device.ts[i]} on the device, the brine warming it ${warming} K`);
+      fringe++; top = Math.max(top, warming);
+    }
+  }
+  const g = device, a = held(s.ice, s.seaIce.concentration, s.seaIce.brine), b = held(g.h, g.conc, g.held), r = stats(a, b);
+  console.log(`${fringe} cells of fringe ice removed on the same call by both engines, their brine warming the water by up to ${top.toExponential(2)} K`);
+  assert.ok(fringe > 0 && top > 2e-3, `the drift removes fringe ice holding brine (${fringe} cells, ${top} K)`);
+  console.log(`brine carried by a prescribed velocity: rms ${r.rmsRel.toExponential(2)} max ${r.maxDiff.toExponential(2)}, totals ${(sum(a) / before - 1).toExponential(2)} and ${(sum(b) / before - 1).toExponential(2)} from the start, ${removed.toExponential(2)} m³ of ice removed`);
+  assert.ok(r.rmsRel < 1e-4, `brine rms relative ${r.rmsRel}`);
+  assert.ok(Math.abs(sum(b) / sum(a) - 1) < 1e-4, 'the engines keep the same brine');
+  s.gpuModel.destroy();
+});
 
 test('the hemisphere switch keeps the other hemisphere\'s ice still on the device', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), stress = windStress(probe.mesh);
@@ -207,6 +240,24 @@ test('ice that drifts into open water at a Courant number of 0.005 persists on t
   assert.equal(missing.length, 0, 'every trace cell above 1e-5 on the CPU is on the device');
   assert.ok(worst < 1e-4 * scale + 1e-8, 'their covers agree');
   await compareIce('five calls of trace arrivals', s, { A: 1e-4, V: 1e-4, S: 1e-4, E: 1e-3 });
+  s.gpuModel.destroy();
+});
+
+test('ice that drifts into open water brings its brine on the GPU as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh, toward = northwardOn(pm, (lat) => lat < -40 * DEG);
+  probe.destroy();
+  const velocity = Float64Array.from(toward, (d, e) => d * 0.005 * pm.dcEdge[e] / DT);
+  const s = await scenario({ rheology: 'frozen' }, { velocity, keep: true, brine: true }), bare = Float64Array.from(s.ice, (h) => (h > 0 ? 0 : 1));
+  for (let n = 0; n < 5; n++) { s.stepCpu(); await s.stepGpu(); }
+  const g = await s.readIce();
+  let reached = 0;
+  for (let i = 0; i < s.C; i++) {
+    if (!bare[i] || !(s.ice[i] > 0) || !(g.h[i] > 0)) continue;
+    assert.ok(s.seaIce.brine[i] > 0 && g.held[i] > 0 && Math.abs(g.held[i] - s.seaIce.brine[i]) < 1e-3 * s.seaIce.brine[i], `cell ${i}: the arrived ice holds ${s.seaIce.brine[i]} J/m² of brine on the CPU, ${g.held[i]} on the device`);
+    reached++;
+  }
+  console.log(`${reached} cells of open water reached by ice carrying its brine`);
+  assert.ok(reached >= 10, `${reached} cells reached`);
   s.gpuModel.destroy();
 });
 
