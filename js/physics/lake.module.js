@@ -99,10 +99,14 @@ export function readLakeDepths() {
  * pour points (NaN where none is found). A group of lake cells, connected
  * across gaps of at most one cell, takes as candidates the lakes of at least `share` of its area whose pour
  * point lies within `reach` cell spacings plus half the square root of the
- * lake's area of one of its cells. Each of its cells takes the largest
- * candidate whose pour point lies within `extent` square roots of its area
- * plus a cell spacing, since a lake's outlet may lie at its far end, else
- * the candidate nearest it in units of the square root of its area.
+ * lake's area of one of its cells. A long lake the grid splits at its
+ * narrows leaves its far basins without its pour point, so a group that
+ * reaches none takes instead the lakes within `extent` square roots of their area plus a cell
+ * spacing of one of its cells whose area the groups that reach their pour
+ * point leave unclaimed by at least half the group's. Each of its cells
+ * takes the largest candidate whose pour point lies within that extent,
+ * since a lake's outlet may lie at its far end, else the candidate nearest
+ * it in units of the square root of its area.
  */
 export function sourceLakeDepths(mesh, lake, lakes, { share = 0.05, reach = 2, extent = 2.5 } = {}) {
   const C = mesh.nCells, depth = new Float64Array(C).fill(NaN), group = new Int32Array(C).fill(-1);
@@ -110,7 +114,8 @@ export function sourceLakeDepths(mesh, lake, lakes, { share = 0.05, reach = 2, e
   const toUnit = (lon, lat) => { const a = lon * Math.PI / 180, b = lat * Math.PI / 180; return [Math.cos(b) * Math.cos(a), Math.cos(b) * Math.sin(a), Math.sin(b)]; };
   const km = (p, q) => 6371 * Math.acos(Math.min(1, Math.max(-1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2])));
   const spacing = Math.sqrt(4 * Math.PI * 6371 ** 2 / C), points = lakes.map((l) => toUnit(l.lon, l.lat));
-  const edges = mesh.cellsOnCell.length / C;
+  const edges = mesh.cellsOnCell.length / C, groups = [], claimed = new Float64Array(lakes.length);
+  const size = (n) => Math.sqrt(lakes[n].area);
   for (let start = 0; start < C; start++) {
     if (!lake[start] || group[start] >= 0) continue;
     const members = [start];
@@ -127,8 +132,12 @@ export function sourceLakeDepths(mesh, lake, lakes, { share = 0.05, reach = 2, e
       }
     }
     const area = members.reduce((sum, i) => sum + mesh.areaCell[i] * 1e-6, 0), centers = members.map(unit);
-    const size = (n) => Math.sqrt(lakes[n].area);
     const candidates = lakes.map((l, n) => n).filter((n) => lakes[n].area >= share * area && centers.some((p) => km(p, points[n]) <= reach * spacing + 0.5 * size(n)));
+    for (const n of candidates) claimed[n] += area;
+    groups.push({ members, area, centers, candidates });
+  }
+  for (const { members, area, centers, candidates: reached } of groups) {
+    const candidates = reached.length ? reached : lakes.map((l, n) => n).filter((n) => lakes[n].area >= share * area && lakes[n].area - claimed[n] >= 0.5 * area && centers.some((p) => km(p, points[n]) <= extent * size(n) + spacing));
     if (!candidates.length) continue;
     members.forEach((i, k) => {
       let best = -1, score = Infinity;
