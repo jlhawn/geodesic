@@ -1,5 +1,6 @@
 export const FREEZING_POINT = 271.35;
 export const MELTING_POINT = 273.15;
+const DEVICE_MELTING_POINT = Math.fround(MELTING_POINT);
 export const MINIMUM_CONCENTRATION = 0.01;
 export const MINIMUM_VOLUME = 1e-4;
 export const NEGLIGIBLE_CONCENTRATION = 1e-6;
@@ -119,7 +120,6 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * (T_f - T_m) / (3h / 4k), and the reservoir pays the difference. With no
  * heat in the ice to hold, this only approximates eq. 9.
  */
-const DEVICE_MELTING_POINT = Math.fround(MELTING_POINT);
 export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
 
 export const LEAD_CLOSURES = ['squared', 'hibler'];
