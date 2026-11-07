@@ -282,7 +282,7 @@ test('with a transmission, open water keeps the passing share of its absorbed su
   assert.equal(alone[0], water + dt * flux[0] / capacity[0], 'without a transmission all of the sunlight stays in the mixed layer');
 });
 
-for (const brineReservoir of [false, true]) test(`with iceLight${brineReservoir ? ' and brineReservoir' : ''} the surface energy${brineReservoir ? ', the brine counted,' : ''} changes by exactly the surface flux through a sunlit melt and a cold autumn${brineReservoir ? ', the brine ending each step at most half the latent heat of the ice, reaching it, and spent at the base against growth while the skin cools freely' : ''}`, () => {
+for (const brineReservoir of [false, true]) test(`with iceLight${brineReservoir ? ' and brineReservoir' : ''} the surface energy${brineReservoir ? ', the brine counted,' : ''} changes by exactly the surface flux through a sunlit melt and a cold autumn${brineReservoir ? ', the brine ending each step at most half the latent heat of the ice, reaching it, and drained in the cold' : ''}`, () => {
   const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir });
   const surfaceT = new Float64Array([FREEZING_POINT - 1]), ice = new Float64Array([1]), flux = new Float64Array(1), dt = 900;
   sea.load(ice);
@@ -300,7 +300,7 @@ for (const brineReservoir of [false, true]) test(`with iceLight${brineReservoir 
     const Q = sea.brine[0], cap = 0.5 * sea.latent * ice[0];
     assert.ok(Q >= 0 && Q <= cap * (1 + 1e-12), `step ${n}: brine ${Q} over ${cap} for ${ice[0]} m`);
     if (Q >= cap * (1 - 1e-9)) capped = true;
-    if (T0 < MELTING_POINT && Q0 === 0) assert.equal(Q, 0, `step ${n}: the brine fills only while the skin is at the melting point`);
+    if (T0 < Math.fround(MELTING_POINT) && Q0 === 0) assert.equal(Q, 0, `step ${n}: an empty brine stays empty under a skin below the melting point`);
     if (!sunny) {
       assert.ok(Q <= Q0, `step ${n}: the brine only drains in the cold`);
       if (Q > 0) cold++;
@@ -363,4 +363,50 @@ test('over ten years a perennial column with the brine reservoir ends thicker th
   console.log(`year 10 mean ice volume: ${alone.mean.toFixed(3)} m with iceLight alone, ${stored.mean.toFixed(3)} m with the brine reservoir (least ${alone.low.toFixed(2)} and ${stored.low.toFixed(2)} m)`);
   assert.ok(alone.low > 0.5 && stored.low > 0.5, 'both columns are perennial');
   assert.ok(stored.mean > alone.mean + 0.5, 'the brine thickens the perennial ice');
+});
+
+for (const melt of [20, 60]) test(`with the ice melting at ${melt} W/m² under a steady sun the brine stores ${melt < 40 ? 'most of' : 'all'} the light the ice holds, a skin at the melting point releasing none of it, as eq. 9 stores its source term`, () => {
+  const dt = 1350, sun = 150, i0 = 0.18 + (0.35 - 0.18) * 0.5, h0 = 2;
+  const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir: true });
+  const surfaceT = new Float64Array([MELTING_POINT]), ice = new Float64Array([h0]), flux = new Float64Array(1);
+  sea.load(ice, new Float64Array([1]));
+  const base = melt + sun * i0 * Math.exp(-1.5 * (h0 - 0.1)) + 1.8 / (h0 / 2);
+  const total = () => sea.energy(surfaceT[0], ice[0], sea.snow[0], sea.cover(0, ice[0]), sea.brine[0]);
+  let inside = 0, atMelting = 0, both = 0, energy = total();
+  for (let n = 0; n < 64 * 30; n++) {
+    const T = surfaceT[0], h = ice[0], Q = sea.brine[0], passed = sun * i0, held = passed - passed * Math.exp(-1.5 * (h - 0.1));
+    flux[0] = base - 15 * (T - MELTING_POINT);
+    sea.update(surfaceT, ice, flux, 0, dt, 0, sun, 0.5);
+    energy += dt * flux[0];
+    assert.ok(Math.abs(total() - energy) < 1e-9 * sea.latent * 2, `step ${n}: energy ${total()} vs ${energy}`);
+    if (T < Math.fround(MELTING_POINT) && Q > 0) both++;
+    inside += dt * held;
+    if (T >= MELTING_POINT) { assert.ok(Math.abs(sea.brine[0] - Q - dt * held) < 1e-9 * (Q + dt * held), `step ${n}: from a skin at the melting point the brine gains ${sea.brine[0] - Q} for ${dt * held}`); atMelting++; }
+  }
+  console.log(`melting at ${melt} W/m² for 30 days: the brine holds ${(sea.brine[0] / 1e6).toFixed(1)} MJ/m² of the ${(inside / 1e6).toFixed(1)} the ice held, the skin at the melting point in ${atMelting} of ${64 * 30} steps, filling and releasing in ${both}`);
+  if (melt < 40) assert.ok(sea.brine[0] > 0.75 * inside && both > 64 * 20, `the brine keeps most of the light the ice holds, filling and releasing in ${both} steps`);
+  else assert.ok(atMelting === 64 * 30 && sea.brine[0] > (1 - 1e-9) * inside, 'the brine keeps all the light the ice holds');
+});
+
+test('a melting skin saved at single precision reloads into the same step: the brine fills from the light whether it held any or not', async () => {
+  const { encodeState, decodeState } = await import('../js/stateFile.module.js');
+  const C = model.mesh.nCells, dt = 1350, sun = 300;
+  const fresh = () => {
+    const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir: true }), surfaceT = new Float64Array(C).fill(FREEZING_POINT), ice = new Float64Array(C);
+    ice[0] = 2; ice[1] = 2; surfaceT[0] = MELTING_POINT; surfaceT[1] = MELTING_POINT;
+    return { sea, surfaceT, ice };
+  };
+  const twin = fresh();
+  twin.sea.load(twin.ice, Float64Array.from(twin.ice, (h) => (h > 0 ? 1 : 0)), Float64Array.from({ length: C }, (_, i) => (i === 1 ? 1e7 : 0)));
+  const saved = await decodeState(encodeState({ N: 16, K: model.core.K, day: 1, time: 86400, surfaceT: twin.surfaceT, ice: twin.ice, concentration: twin.sea.concentration, brine: twin.sea.brine }));
+  assert.ok(saved.surfaceT[0] < MELTING_POINT, 'the saved skin rounds below the melting point');
+  const loaded = fresh();
+  loaded.surfaceT.set(saved.surfaceT); loaded.ice.set(saved.ice);
+  loaded.sea.load(loaded.ice, saved.concentration, saved.brine);
+  for (const { sea, surfaceT, ice } of [twin, loaded]) for (const i of [0, 1]) sea.update(surfaceT, ice, new Float64Array(C).fill(50), i, dt, 0, sun, 0.5);
+  for (const i of [0, 1]) {
+    const start = i === 1 ? 1e7 : 0;
+    assert.ok(twin.sea.brine[i] > start, `cell ${i}: the brine fills`);
+    assert.ok(Math.abs(loaded.sea.brine[i] - twin.sea.brine[i]) < 1e-6 * twin.sea.brine[i], `cell ${i}: reloaded ${loaded.sea.brine[i]} against ${twin.sea.brine[i]}`);
+  }
 });
