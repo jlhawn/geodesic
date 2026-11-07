@@ -11,7 +11,7 @@ import { SIDEREAL_DAY, orographyFields, dragConstants } from '../model.module.js
 import { createGpuCore } from './core.gpu.js';
 import { createLayeredOcean, oceanStateLength, OCEAN_DEFAULTS } from './layeredOcean.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
-import { createGeography, surfaceGeopotential, geographyRecordOf } from '../geography.module.js';
+import { createGeography, surfaceGeopotential, terrainOptions, geographyRecordOf } from '../geography.module.js';
 import { readRanges } from './device.module.js';
 import { RAIN_MEMORY, VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH, OCEAN_FIELDS } from '../frames.module.js';
 import { createLandSurface, soilColumn, SOIL_CARBON } from '../physics/land.module.js';
@@ -68,7 +68,7 @@ export async function createGpuModel(gridOrMesh, {
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
-  const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
+  const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;
   const lakeCpu = geography && lakeModelOf(geography, lakeOptions) !== 'off' ? createLake(mesh, geography, lakeOptions) : null;
   const mode = exchangeMode(surface, landOptions);
   const skinSet = skinOptions(surface), skinOn = skinSet.warmLayer || skinSet.coolSkin;
