@@ -287,6 +287,7 @@ export function physicsConstants(o) {
   if (o.rainEvaporationLaw !== 'deficit' && o.rainEvaporationLaw !== 'kessler') throw new Error(`rainEvaporationLaw must be 'deficit' or 'kessler', not ${o.rainEvaporationLaw}`);
   if (!(Number.isFinite(o.rainCover) && o.rainCover > 0 && o.rainCover <= 1)) throw new Error(`rainCover must be a share above 0 and at most 1, not ${o.rainCover}`);
   if (o.rainEvaporationCeiling != null && !(Number.isFinite(o.rainEvaporationCeiling) && o.rainEvaporationCeiling >= 0 && o.rainEvaporationCeiling <= 1)) throw new Error(`rainEvaporationCeiling must be null or a relative humidity from 0 to 1, not ${o.rainEvaporationCeiling}`);
+  if (o.traceCloudPath != null && !(Number.isFinite(o.traceCloudPath) && o.traceCloudPath > 0 && o.traceCloudPath <= VISIBLE_PATH)) throw new Error(`traceCloudPath must be null or an in-cloud water path above 0 and at most ${VISIBLE_PATH} kg/m², not ${o.traceCloudPath}`);
   const fog = fogConstants(o.fogDroplets);
   if (o.boundaryCondensation !== 'cloudLayer' && o.boundaryCondensation !== 'uniform' && o.boundaryCondensation !== 'saturation') throw new Error(`boundaryCondensation must be 'cloudLayer', 'uniform' or 'saturation', not ${o.boundaryCondensation}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
@@ -337,7 +338,7 @@ const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}
 const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
-const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const LW_CHAIN: bool = ${o.longwaveOverlap === 'exponentialRandom'}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
+const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const LW_CHAIN: bool = ${o.longwaveOverlap === 'exponentialRandom'}; const TRACE_CHAIN: bool = ${o.traceCloudPath != null}; const TRACE_PATH: f32 = ${o.traceCloudPath ?? 0}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
 const LW_TSELF: f32 = ${LONGWAVE_TABLE.tSelf}; const LW_TCO2: f32 = ${LONGWAVE_TABLE.tCo2}; const LW_NO3: f32 = ${LONGWAVE_TABLE.nO3};
 const LW_DH2O: f32 = ${LONGWAVE_TABLE.dopplerH2o ?? 0}; const LW_DCO2: f32 = ${LONGWAVE_TABLE.dopplerCo2 ?? 0}; const LW_DO3: f32 = ${LONGWAVE_TABLE.dopplerO3 ?? 0};
 const LW_CH2O: f32 = ${LONGWAVE_TABLE.dopplerCoreH2o ?? 1}; const LW_CCO2: f32 = ${LONGWAVE_TABLE.dopplerCoreCo2 ?? 1}; const LW_CO3: f32 = ${LONGWAVE_TABLE.dopplerCoreO3 ?? 1};
@@ -1611,6 +1612,7 @@ ${held ? HELD_OPEN : SOLAR_OPEN}  for (var k = 0; k < K; k++) {
     if (STRATUS && k == deckK && deck > 0.0) { cloudE[k] = fraction * (1.0 - transmitted(optics.y * (select(water, 0.0, k >= replaced) + deck))) + (1.0 - fraction) * cloudE[k]; }
     else if (k >= replaced) { cloudE[k] *= 1.0 - fraction; }
     if (LW_CHAIN) { chainF[k] = select(0.0, f * select(1.0, 1.0 - fraction, k >= replaced), water > 0.0 && !(STRATUS && k == deckK && deck > 0.0)); }
+    if (LW_CHAIN && TRACE_CHAIN && chainF[k] > 0.0 && water < f * TRACE_PATH) { chainF[k] *= water / (f * TRACE_PATH); }
     let clear = 1.0 - cloudE[k];
     vaporE[k] = 1.0 - (1.0 - eps) * clear;
     mixedE[k] = 1.0 - (1.0 - LV[L_GASE + k]) * clear;

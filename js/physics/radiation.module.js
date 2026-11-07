@@ -284,6 +284,9 @@ export function seasonTimes(orbit = DEFAULT_ORBIT) {
  * the divergence of the summed net flux. The deck's layer is one region
  * with its blended emissivity. 'random' takes each layer's mean emissivity
  * f (1 − exp(−κ W/f)), the expectation under random overlap (α = 0).
+ * With `traceCloudPath` t (kg/m², null: none) a layer whose in-cloud path W/f
+ * is under t enters the chain with cover W/t and the same mean emissivity,
+ * so a trace of cloud water does not join the clouds around it.
  *
  * With `boundaryCover` 'variance' (the default; 'pdf' keeps the cover
  * above) a cloudy layer whose midpoint lies below the moist boundary
@@ -744,7 +747,7 @@ export function createRadiation(mesh, core, {
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, referenceCoefficients = null, surfaceLayer = false, seaHumidity = 1, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
-  longwaveScheme = 'correlated', longwaveOverlap = 'exponentialRandom', longwaveLines = 'voigt', solarGases = 'clirad', nearInfrared = 'bands', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
+  longwaveScheme = 'correlated', longwaveOverlap = 'exponentialRandom', traceCloudPath = null, longwaveLines = 'voigt', solarGases = 'clirad', nearInfrared = 'bands', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
   rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, nearInfraredRayleigh = NEAR_INFRARED_RAYLEIGH, upwardAbsorption = true, visibleFraction = VISIBLE_FRACTION, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, aerosol = DEFAULT_AEROSOL, aerosolScale = 1, aerosolFields = null, land = null, iceSheet = null, longwaveTable = null,
   liquidTemperature = CLOUD_OPTICS.liquidTemperature, iceTemperature = CLOUD_OPTICS.iceTemperature, seaDropletRadius = CLOUD_OPTICS.seaDropletRadius, landDropletRadius = CLOUD_OPTICS.landDropletRadius,
   liquidInfrared = CLOUD_OPTICS.liquidInfrared, diffusivity = CLOUD_OPTICS.diffusivity, iceFitWarmest = CLOUD_OPTICS.iceFitWarmest, iceFitColdest = CLOUD_OPTICS.iceFitColdest, radiationEvery = 1,
@@ -762,6 +765,7 @@ export function createRadiation(mesh, core, {
   if (orbit !== 'circular' && orbit !== 'kepler') throw new Error(`orbit must be 'circular' or 'kepler', not ${orbit}`);
   if (longwaveScheme !== 'correlated' && longwaveScheme !== 'gray') throw new Error(`longwaveScheme must be 'correlated' or 'gray', not ${longwaveScheme}`);
   if (longwaveOverlap !== 'exponentialRandom' && longwaveOverlap !== 'random') throw new Error(`longwaveOverlap must be 'exponentialRandom' or 'random', not ${longwaveOverlap}`);
+  if (traceCloudPath !== null && !(Number.isFinite(traceCloudPath) && traceCloudPath > 0 && traceCloudPath <= VISIBLE_PATH)) throw new Error(`traceCloudPath must be null or an in-cloud water path above 0 and at most ${VISIBLE_PATH} kg/m², not ${traceCloudPath}`);
   if (solarGases !== 'clirad' && solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${solarGases}`);
   if (nearInfrared !== 'clirad' && nearInfrared !== 'bands') throw new Error(`nearInfrared must be 'clirad' or 'bands', not ${nearInfrared}`);
   if (ozone !== 'afgl' && ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${ozone}`);
@@ -1873,6 +1877,7 @@ export function createRadiation(mesh, core, {
           const water = cloudWater[k], decked = deck > 0 && k === deckK;
           chainCover[k] = water > 0 && !decked ? layerCover[k] * (k >= replaced ? 1 - fraction : 1) : 0;
           chainCloud[k] = chainCover[k] > 0 ? (cloudSpread > 0 ? 1 - transmitted(infrared[k] * water / layerCover[k]) : -Math.expm1(-infrared[k] * water / layerCover[k])) : 0;
+          if (traceCloudPath !== null && chainCover[k] > 0 && water < layerCover[k] * traceCloudPath) { const shown = water / traceCloudPath; chainCloud[k] *= layerCover[k] / shown; chainCover[k] *= shown / layerCover[k]; }
           chainOutside[k] = decked ? cloudEmissivity[k] : 0;
           clearShareInverse[k] = chainCover[k] < 1 ? 1 / (1 - chainCover[k]) : 0;
           cloudShareInverse[k] = chainCover[k] > 0 ? 1 / chainCover[k] : 0;
