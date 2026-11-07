@@ -253,3 +253,19 @@ test('a state saved with the convection\'s activity loads its moist fields as sa
   model.step(900);
   assert.ok(model.state.every((a) => a.every(Number.isFinite)), 'the model steps');
 });
+
+test('a field of the sea regridded to another resolution is interpolated from the sea alone and 0 over land', async () => {
+  const { regridSeaField } = await import('../js/physics/regrid.module.js');
+  const { syntheticTopography } = await import('../js/geography.module.js');
+  const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
+  const source = createModel(new Grid(16), { topography }), target = createModel(new Grid(24), { topography });
+  const values = Float64Array.from(source.geography.land, (land, i) => (land ? 1e9 : 2e5 * (1 + Math.cos(source.mesh.latCell[i]))));
+  const moved = regridSeaField(source, target, values);
+  let seaCells = 0;
+  for (let n = 0; n < target.mesh.nCells; n++) {
+    if (target.geography.land[n]) { assert.equal(moved[n], 0, `land cell ${n}`); continue; }
+    seaCells++;
+    assert.ok(moved[n] >= 2e5 - 1e-6 && moved[n] <= 4e5 + 1e-6, `sea cell ${n}: ${moved[n]}`);
+  }
+  assert.ok(seaCells > 0);
+});
