@@ -232,23 +232,26 @@ export function shearResolution(mesh, { scale, power }) {
  * the cross terms are, is added to the interfaces' diffusivity in the
  * column phase's implicit solve. A triad's slope terms, though not its
  * horizontal diffusion, take Danabasoglu and McWilliams's (1995, J. Climate
- * 8, 2967) taper of κ, ½[1 + tanh((slopeCap − |S|)/slopeWidth)], so a
- * triad turns nothing where its interface is unstable or neutral (density
- * rising downward across it by less than NEUTRAL_STRATIFICATION of itself
- * per meter, N² ≈ 1e-8 s⁻², above what float32 resolves across a 3 m
- * layer), where its slope is steeper than slopeCap + 10 slopeWidth (the
- * taper there is 2e-9), or anywhere under a slopeCap of 0. Under
- * boundaryTaper a triad whose interface lies above the base of its cell's
- * boundary layer takes, in place of its own slope, the tapered slope of its
- * cell's triad along the same edge at the first interface at or below that
- * base (the last fixed interface at most), in the layer above that
- * interface, times its depth over the boundary layer's, as NEMO's
- * mixed-layer slopes do. A triad needs both layers at its interface thicker
- * than twice minimumLayer, and a triad whose slope comes from a base needs
- * the layer above that base as thick in both cells of its edge; where one
- * is missing, at the surface, a thin layer or a shelf, its quarter of the
- * flux stays horizontal. The triads below the last fixed layer reach the
- * first isopycnal layer.
+ * 8, 2967) tanh taper of κ, ½[1 + tanh((slopeCap − |S|)/slopeWidth)],
+ * centered on slopeCap rather than their 4e-3. S is each triad's own slope,
+ * the interface's tilt along the triad's edge, so past slopeCap an
+ * interface's κS² falls but not to zero, kept by the triads of the edges
+ * that cross its tilt gently. A triad turns nothing where its interface is
+ * unstable or neutral (density rising downward across it by less than
+ * NEUTRAL_STRATIFICATION of itself per meter, N² ≈ 1e-8 s⁻², above what
+ * float32 resolves across a 3 m layer), where its slope is steeper than
+ * slopeCap + 10 slopeWidth (the taper there is 2e-9), or anywhere under a
+ * slopeCap of 0. Under boundaryTaper a triad whose interface lies above
+ * the base of its cell's boundary layer takes, in place of its own slope,
+ * the tapered slope of its cell's triad along the same edge at the first
+ * interface at or below that base (the last fixed interface at most), in
+ * the layer above that interface, times its depth over the boundary
+ * layer's, a NEMO-like mixed-layer slope. A triad needs both layers at its
+ * interface thicker than twice minimumLayer, and a triad whose slope comes
+ * from a base needs the layer above that base as thick in both cells of
+ * its edge; where one is missing, at the surface, a thin layer or a shelf,
+ * its quarter of the flux stays horizontal. The triads below the last
+ * fixed layer reach the first isopycnal layer.
  */
 export const ISONEUTRAL = { slopeCap: 0.01, slopeWidth: 0.001, boundaryTaper: true }, NEUTRAL_STRATIFICATION = 1e-9;
 export function isoneutralOptions(o) {

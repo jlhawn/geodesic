@@ -215,23 +215,39 @@ test('the GPU hybrid ocean takes each of six steps under an option as the CPU do
   const change = await optionSteps(HYBRID, { isoneutralDiffusion: true });
   for (const [f, bound] of [['T', 0.2], ['S', 0.25]]) assert.ok(change[f].ratio < bound, `${f}: the GPU misses ${change[f].ratio} of the CPU's step`);
 });
-test('under isoneutralDiffusion the κS² diffusivity the GPU hybrid ocean\'s column takes from a dynamics phase is the CPU\'s 1:2:2:1 mean of the four stages\', not the fourth stage\'s', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('under isoneutralDiffusion and 30 m boundary layers the κS² diffusivity the GPU hybrid ocean\'s column takes from a dynamics phase is the CPU\'s 1:2:2:1 mean of the four stages\', not the fourth stage\'s, and its triads move the tracers above 30 m as the CPU\'s do', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const options = { ...HYBRID, isoneutralDiffusion: true }, { mesh, cpu, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, zeros = new Float64Array(C), dt = 4 * DT;
-  cpu.initialize(Float64Array.from(surfaceT), ice);
-  for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = 0.6 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+  const off = scenario(N, HYBRID).cpu, sheared = (ocean) => {
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = 0.6 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+    ocean.boundaryDepths.fill(30);
+  };
+  sheared(cpu); sheared(off);
   const start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths };
-  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options }), gpu = gpuModel.oceanEngine;
-  await gpu.upload(start, Float64Array.from(surfaceT), ice);
-  gpu.setStress(stress.map(() => 0), ice);
-  gpu.phases.dynamics(dt);
-  const kappa = Float64Array.from(await gpu.readSection('ISOK'));
-  gpuModel.destroy();
+  const upper = Array.from(cpu.h, (hv, n) => { let z = 0; for (let k = 0; k < Math.floor(n / C); k++) z += cpu.h[k * C + n % C]; return z < 30 && hv > 1; }), moved = [];
+  let kappa;
+  for (const ocean of [options, HYBRID]) {
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean }), gpu = gpuModel.oceanEngine;
+    await gpu.upload(start, Float64Array.from(surfaceT), ice);
+    gpu.setStress(stress.map(() => 0), ice);
+    gpu.phases.dynamics(dt);
+    if (ocean === options) kappa = Float64Array.from(await gpu.readSection('ISOK'));
+    moved.push(await gpu.download());
+    gpuModel.destroy();
+  }
   cpu.phases.dynamics(dt);
-  const mean = Float64Array.from(cpu.isoKappa);
+  off.phases.dynamics(dt);
+  const mean = Float64Array.from(cpu.isoKappa), on = cpuFields(cpu, C), without = cpuFields(off, C), turned = {};
   cpu.tendency(cpu.trial, cpu.stages[0].map((a) => new Float64Array(a.length)));
   const fourth = Float64Array.from(cpu.isoKappa), toMean = stats(mean, kappa), apart = stats(mean, fourth);
-  console.log(`κS² after a dynamics phase, rms relative to the CPU's: the GPU's from the CPU's 1:2:2:1 mean ${toMean.rmsRel.toExponential(2)}, the CPU's fourth stage's from it ${apart.rmsRel.toExponential(2)}, the GPU's from the fourth stage's ${stats(fourth, kappa).rmsRel.toExponential(2)}`);
-  assert.ok(apart.rmsRel > 0 && toMean.rmsRel < 0.5 * apart.rmsRel, `the GPU's κS² parts from the CPU's stage mean by ${toMean.rmsRel}, the fourth stage's from it by ${apart.rmsRel}`);
+  for (const f of ['T', 'S']) {
+    let miss = 0, change = 0;
+    for (let n = 0; n < upper.length; n++) if (upper[n]) { const c = on[f][n] - without[f][n], g = moved[0][f][n] - moved[1][f][n]; miss += (g - c) ** 2; change += c * c; }
+    turned[f] = Math.sqrt(miss / change);
+  }
+  console.log(`κS² after a dynamics phase, rms relative to the CPU's: the GPU's from the CPU's 1:2:2:1 mean ${toMean.rmsRel.toExponential(2)}, the CPU's fourth stage's from it ${apart.rmsRel.toExponential(2)}; the GPU's miss of the triads' change above 30 m, T ${turned.T.toExponential(2)} and S ${turned.S.toExponential(2)}`);
+  assert.ok(apart.rmsRel > 0 && toMean.rmsRel < 2e-3 && toMean.rmsRel < 0.5 * apart.rmsRel, `the GPU's κS² parts from the CPU's stage mean by ${toMean.rmsRel}, the fourth stage's from it by ${apart.rmsRel}`);
+  assert.ok(turned.T < 2e-2 && turned.S < 2e-2, `the GPU misses the triads' change above 30 m by ${turned.T} in T and ${turned.S} in S`);
 });
 test('under isoneutralDiffusion the GPU hybrid ocean takes the CPU\'s κS² diffusivity on a shelf sea, where no column takes a slope from a shelf\'s thin layer at its boundary layer\'s base', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const shelf = syntheticTopography(90, 180, (lat, lon) => { const d = Math.acos(Math.max(-1, Math.min(1, Math.cos(lat) * Math.cos(lon)))) * 180 / Math.PI; return d < 7 ? 100 : -Math.min(4000, 40 * 1.6 ** ((d - 7) / 4)); });
