@@ -22,6 +22,7 @@
 //                env OCEAN a JSON object of ocean options for both models, env RADIATION one of
 //                radiation options, env MOIST one of moist options, env SURFACE one of surface options and
 //                env LAND one of land options
+//   The default runs the clear-sky pass, which the page does not: RADIATION='{"clearSkyPass":false}' compares the page's shader.
 // Run it with the GPU free (CLAUDE.md): one GPU model at a time.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { serialize, deserialize } from 'node:v8';
@@ -38,7 +39,7 @@ if (!FILE) { console.error('usage: node scripts/compareEngines.mjs STATE.bin [ST
 
 // PH region -> the CPU model's array ([tail]: the CPU array is K·C long and the region holds its last layers)
 export const PH_MAP = {
-  SFLUX: 'radiation.surfaceFlux', OFLUX: 'seaIce.oceanFlux', CAP: 'ocean.capacity', MIX: 'boundaryLayer.mixing', DEPTH: 'boundaryLayer.depth', MIXTOP: 'boundaryLayer.mixingTop',
+  SFLUX: 'radiation.surfaceFlux', OFLUX: 'seaIce.oceanFlux', CAP: 'ocean.capacity', MIX: 'boundaryLayer.mixing', MIXH: 'boundaryLayer.scalarMixing', FSTRESS: 'boundaryLayer.formStress', TOFD: 'boundaryLayer.formRate[tail]', OFLT: 'boundaryLayer.formDrag.sigma', DEPTH: 'boundaryLayer.depth', MIXTOP: 'boundaryLayer.mixingTop',
   RAIN: 'moist.precipitation', STEPRAIN: 'moist.rain', CONV: 'moist.convectivePrecipitation', COND: 'moist.largeScalePrecipitation', FOG: 'moist.fogPrecipitation',
   SH: 'radiation.sensibleHeat', EVAP: 'radiation.evaporation', SWDN: 'radiation.surfaceShortwave', BUOY: 'radiation.surfaceBuoyancy', USTAR: 'boundaryLayer.friction',
   STRESS: 'boundaryLayer.surfaceStress', SDRAG: 'boundaryLayer.surfaceDrag', HEATX: 'exchange.heat', REFX: 'exchange.reference', DRAG: 'exchange.drag', XWIND: 'exchange.wind',
@@ -46,7 +47,7 @@ export const PH_MAP = {
   DECK: 'radiation.stratus', DECKF: 'radiation.stratusFraction', STRAT: 'radiation.stratiform', MLMCOVER: 'radiation.mlmCover', MLMWATER: 'radiation.mlmWater', MLMENT: 'radiation.mlmEntrainment',
   MLMTOP: 'radiation.mlmTop', MLMH: 'radiation.mlmHeight', MLMSUB: 'radiation.mlmSubsidence', MLMGATE: 'radiation.mlmGate', LWH: 'radiation.longwave',
   REFLSUM: 'radiation.summed.reflectedSolar', ABSSUM: 'radiation.summed.absorbedSolar',
-  OLR: 'radiation.held.outgoing', OLRSUM: 'radiation.summed.outgoingLongwave', ATMSUM: 'radiation.summed.atmosphereSolar',
+  OLR: 'radiation.outgoing', OLRSUM: 'radiation.summed.outgoingLongwave', ATMSUM: 'radiation.summed.atmosphereSolar',
   INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.summed.clearOutgoingLongwave',
   ASRMEAN: 'radiation.meanAbsorbedSolar', OLRMEAN: 'radiation.meanOutgoingLongwave', ALBMEAN: 'radiation.meanPlanetaryAlbedo', SWCREMEAN: 'radiation.meanShortwaveCloudEffect', LWCREMEAN: 'radiation.meanLongwaveCloudEffect',
   CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
@@ -62,23 +63,27 @@ export const PH_MAP = {
 };
 // regions that are inputs or hand-offs with no CPU array of their own (they are checked for non-finite values only)
 export const PH_INPUT = {
-  TAU: 'relaxation time, an input', ADIF: 'diffuse albedo, a local of model.module.js', LAND: 'surface flags 0/1/2, an input', CUFALL: 'plume-to-rain hand-off', CURESERVE: 'plume-to-rain hand-off', CUFROZEN: 'plume-to-rain hand-off',
+  TAU: 'relaxation time, an input', LAKE: 'lake state slots, some compared by test/lakeGpu.test.mjs', ADIF: 'diffuse albedo, a local of model.module.js', LAND: 'surface flags 0/1/2, an input', CUFALL: 'plume-to-rain hand-off', CURESERVE: 'plume-to-rain hand-off', CUFROZEN: 'plume-to-rain hand-off',
   CUDEEP: 'plume-to-rain hand-off', CUBASE: 'plume-to-rain hand-off', CURAIN: 'cumulus part of CONV', LWSFCSUM: 'running sum for the means', CLOUDK: 'cloud layer index, written inside the physics kernel',
   CUSHALLOW: 'plume diagnostic', CUSNOW: 'plume diagnostic', MOMU: 'momentum-layer scratch', MOMK: 'momentum-layer scratch', MOMD: 'momentum-layer scratch', MOMKD: 'momentum-layer scratch', MOMS: 'momentum-layer scratch',
   ABS: 'per-step value whose CPU counterpart is the running sum ABSSUM compares', INS: 'per-step value whose CPU counterpart is the running sum INSSUM compares', REFL: 'per-step value whose CPU counterpart is the running sum REFLSUM compares', ATMSW: 'per-step value whose CPU counterpart is the running sum ATMSUM compares',
-  FOGMEAN: 'running mean', FSTRESS: 'form drag, off unless formDrag is on', OFLT: 'orographic filter scratch', TOFD: 'form drag profile', RADP: 'held radiation scratch', LYR: 'layered shortwave hand-off from the radiation kernel to its pass',
+  FOGMEAN: 'running mean', RADP: 'held radiation scratch', LYR: 'layered shortwave hand-off from the radiation kernel to its pass',
 };
 // mapped regions that may legitimately be all zero in a configuration (env MAY_BE_ZERO_EXTRA adds names, comma separated); the land
 // regions are exempt on a planet without land and the radiation.held ones where held radiation is off (no CPU array, no GPU region)
-export const MAY_BE_ZERO = new Set(['OFLUX', 'FSTRESS', 'OSTRESS', 'OLAUNCH', 'OWAVE', 'OBETA', 'OBLOCK', 'ODIR', 'GWE', 'GWN', 'RUNOFF', 'DISCHARGE', 'ICELOSS', 'MLMK', 'MLMM', 'SNOW', 'SNOWALB', 'FOG', 'FOGMEAN', ...(process.env.MAY_BE_ZERO_EXTRA ?? '').split(',').filter(Boolean)]);
+export const MAY_BE_ZERO = new Set(['OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'OSTRESS', 'OLAUNCH', 'OWAVE', 'OBETA', 'OBLOCK', 'ODIR', 'GWE', 'GWN', 'RUNOFF', 'DISCHARGE', 'ICELOSS', 'MLMK', 'MLMM', 'SNOW', 'SNOWALB', 'FOG', 'FOGMEAN', ...(process.env.MAY_BE_ZERO_EXTRA ?? '').split(',').filter(Boolean)]);
 // mapped regions set by a threshold decision in each column (mixing regime, cumulus trigger, rain, fog, launch): f32 and
 // f64 part at a few columns near the threshold, so these are judged by the share of cells that differ by more than TOL of
 // the row's largest CPU value and fail past their bound here, max(3 × the worst share measured on
-// runs/sixteen/sixteen128_day0730.bin through 17 steps, 1e-3); env SHARE sets one bound for every row, env DECISION_EXTRA
-// adds rows (comma separated) under it
-export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001 };
+// runs/sixteen/sixteen128_day0730.bin through 17 steps, 1e-3), the rows from COND on measured on seventeen128 day 1095 and
+// combined128 day 1460, and the rms of the cells under that threshold stays within 3 TOL; env SHARE sets one bound for every row, env
+// DECISION_EXTRA adds rows (comma separated) under it
+export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001, COND: 0.001, MIXH: 0.0078, STRESS: 0.0165, DRAG: 0.0066, HEATX: 0.0048, DECKF: 0.001, MLMCOVER: 0.001, MLMENT: 0.001, OBETA: 0.001, OBLOCK: 0.001, OLAUNCH: 0.00156, OSTRESS: 0.00126, CONC: 0.001, STRAT: 0.001, USTAR: 0.001 };
+// f32 rounding of the soil store: eight spacings at 300 kg/m²
+const ABSOLUTE_FLOOR = { RUNOFF: 2.5e-4, DISCHARGE: 2.5e-4 };
 for (const name of (process.env.DECISION_EXTRA ?? '').split(',').filter(Boolean)) DECISION_BOUNDS[name] ??= 1e-3;
 export const DECISION_ROWS = new Set(Object.keys(DECISION_BOUNDS));
+const NO_CLEAR_SKY = JSON.parse(process.env.RADIATION ?? '{}').clearSkyPass === false, CLEAR_SKY_ROWS = new Set(['ABSCLRSUM', 'OLRCLRSUM', 'RADCLROLR', 'RADCLRSW', 'RADTC']);
 const decisionBound = (name) => (process.env.SHARE ? Number(process.env.SHARE) : DECISION_BOUNDS[name]);
 
 const typed = (v) => ArrayBuffer.isView(v) && !(v instanceof DataView);
@@ -105,10 +110,10 @@ async function build(file) {
   const { savedLevels } = await import(`${REPO}/js/stateFile.module.js`);
   const { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } = await import(`${REPO}/js/physics/regrid.module.js`);
   const { stateGrid } = await import(`${REPO}/js/stateGrid.module.js`);
-  const { decodeSubgrid, stateGeography, subgridUrl } = await import(`${REPO}/js/geography.module.js`);
+  const { stateGeography } = await import(`${REPO}/js/geography.module.js`);
   const saved = await fs.readState(file), sg = stateGeography(saved), topography = sg.topography, dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
-  const subgridOf = () => { if (process.env.NO_SUBGRID) return undefined; try { const b = readFileSync(subgridUrl(saved.N, sg.record.topography)); return decodeSubgrid(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); } catch { return undefined; } };
+  const subgrid = process.env.NO_SUBGRID ? { subgrid: false } : {};
   const options = { topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
   const load = (model) => {
     const { state } = model, C = model.mesh.nCells, K = model.core.K;
@@ -133,15 +138,15 @@ async function build(file) {
     }
     const sv = model.moist.subcloudVirtual;
     if (saved.subcloudVirtual && saved.subcloudVirtual.length === sv.length) sv.set(saved.subcloudVirtual); else sv.fill(0);
-    if (!model.gpu && model.surfaceGeopotential) for (let i = 0; i < C; i++) { const zs = model.surfaceGeopotential[i] / 9.80665; if (saved.boundaryDepth) model.boundaryLayer.depth[i] += zs; if (saved.mixingTop) model.boundaryLayer.mixingTop[i] += zs; }
+    if (!model.gpu && model.surfaceGeopotential) for (let i = 0; i < C; i++) { const zs = model.surfaceGeopotential[i] / model.core.diagnostics.g; if (saved.boundaryDepth) model.boundaryLayer.depth[i] += zs; if (saved.mixingTop) model.boundaryLayer.mixingTop[i] += zs; }
     model.time = saved.time;
     if (model.load) model.load();
     model.ocean.load(saved.ocean, state[3], state[6]);
     if (saved.land) model.land.load(saved.land, state[6], saved.time, state[3]);
     return model;
   };
-  const cpu = GPU_DUMP ? null : load(createModel(mesh, { ...options, subgrid: subgridOf() }));
-  const gpu = NO_GPU ? null : load(await createGpuModel(mesh, { ...options, subgrid: subgridOf() }));
+  const cpu = GPU_DUMP ? null : load(createModel(mesh, { ...options, ...subgrid }));
+  const gpu = NO_GPU ? null : load(await createGpuModel(mesh, { ...options, ...subgrid }));
   return { cpu, gpu, dt, label: `${file.replace(/.*\//, '')} N=${saved.N}` };
 }
 
@@ -150,21 +155,22 @@ const C = (cpu ?? gpu).mesh.nCells;
 const lines = [`# ${label}: CPU against GPU, dt ${dt} s (${REPO.replace(/.*\//, '')})`];
 let failures = 0;
 const fail = (text) => { failures++; lines.push(`**${text}**`); };
+if (cpu && cpu.orography?.fields?.raster && !process.env.NO_SUBGRID) fail('the model took the raster sub-grid orography, with no form drag, which is not the configuration a saved state runs');
 
 function stats(g, c, base = null, n = Math.min(g.length, c.length), gOffset = 0, cOffset = 0, gBase = null) {
   let dd = 0, cc = 0, bb = 0, gg = 0, mc = 0, md = 0, gz = 0, cz = 0, nan = 0;
   for (let x = 0; x < n; x++) {
     const a = g[gOffset + x], b = c[cOffset + x];
-    if (!Number.isFinite(a) || !Number.isFinite(b)) { if (Number.isFinite(a) !== Number.isFinite(b)) nan++; continue; }
+    if (!Number.isFinite(a) || !Number.isFinite(b)) { nan++; continue; }
     const d = a - b;
     dd += d * d; cc += b * b; md = Math.max(md, Math.abs(d)); mc = Math.max(mc, Math.abs(b));
     if (a === 0) gz++; if (b === 0) cz++;
     if (base) { const s = b - base[cOffset + x]; bb += s * s; }
     if (gBase) { const s = a - gBase[gOffset + x]; gg += s * s; }
   }
-  let over = 0;
-  for (let x = 0; x < n; x++) { const a = g[gOffset + x], b = c[cOffset + x]; if (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) > TOL * mc) over++; }
-  return { own: base && gBase ? [Math.sqrt(bb / n), Math.sqrt(gg / n)] : null, share: over / n, rms: cc > 0 ? Math.sqrt(dd / cc) : dd > 0 ? Infinity : 0, max: mc > 0 ? md / mc : md > 0 ? Infinity : 0, step: base ? (bb > 0 ? Math.sqrt(dd / bb) : dd > 0 ? Infinity : 0) : null, gz: gz / n, cz: cz / n, scale: mc, nan, n };
+  let over = 0, under = 0;
+  for (let x = 0; x < n; x++) { const a = g[gOffset + x], b = c[cOffset + x]; if (!Number.isFinite(a) || !Number.isFinite(b)) continue; const d = a - b; if (Math.abs(d) > TOL * mc) over++; else under += d * d; }
+  return { own: base && gBase ? [Math.sqrt(bb / n), Math.sqrt(gg / n)] : null, share: over / n, rest: cc > 0 ? Math.sqrt(under / cc) : 0, rms: cc > 0 ? Math.sqrt(dd / cc) : dd > 0 ? Infinity : 0, max: mc > 0 ? md / mc : md > 0 ? Infinity : 0, step: base ? (bb > 0 ? Math.sqrt(dd / bb) : dd > 0 ? Infinity : 0) : null, gz: gz / n, cz: cz / n, scale: mc, nan, n };
 }
 const fmt = (v) => (v === null ? '-' : v === Infinity ? 'inf' : v === 0 ? '0' : v.toExponential(1));
 const row = (name, s) => `| ${name} | ${fmt(s.rms)} | ${fmt(s.max)} | ${s.step === null ? '-' : fmt(s.step)} | ${(100 * s.gz).toFixed(0)}/${(100 * s.cz).toFixed(0)} | ${s.own ? `${fmt(s.own[0])} / ${fmt(s.own[1])}` : '-'} | ${fmt(s.scale)}${s.nan ? ` (${s.nan} non-finite on one side)` : ''} |`;
@@ -183,8 +189,10 @@ function mappedReport(phNames, phArray, step) {
   if (unmapped.length) fail(`UNMAPPED PH regions (add them to PH_MAP or PH_INPUT): ${unmapped.join(', ')}`);
   for (const [name, region] of phNames.map((n) => [n, phArray(n)])) {
     const path = PH_MAP[name];
+    if (NO_CLEAR_SKY && CLEAR_SKY_ROWS.has(name)) { lines.push(`| ${name} | ${path} | | | | | n/a (no clear-sky pass) |`); continue; }
     if (!path) { const bad = region ? nonFinite(region) : null; lines.push(`| ${name} | (input: ${PH_INPUT[name] ?? 'unmapped'}) | | | | | ${bad ?? 'ok'} |`); if (bad) failures++; continue; }
     const found = cpuArray(cpu, path);
+    if (!found && path.startsWith('boundaryLayer.form') && !cpu.boundaryLayer.formDrag) { lines.push(`| ${name} | ${path} | | | | | n/a (form drag is off on this grid) |`); continue; }
     if (!found && path.startsWith('radiation.held.') && !cpu.radiation?.held) { lines.push(`| ${name} | ${path} | | | | | n/a (held radiation is off at this N) |`); continue; }
     if (!found) { fail(`MISSING CPU array ${path} for PH ${name}`); lines.push(`| ${name} | ${path} | | | | | MISSING |`); continue; }
     const c = found.tail && region ? found.array.subarray(found.array.length - region.length) : found.array;
@@ -194,14 +202,14 @@ function mappedReport(phNames, phArray, step) {
     const s = stats(region, c, null, Math.min(region.length, c.length));
     let gNonzero = false; for (let x = 0; x < region.length; x++) if (region[x] !== 0) { gNonzero = true; break; }
     let verdict = 'ok';
-    if (!gNonzero && cNonzero) verdict = 'GPU ALL ZERO'; else if (gNonzero && !cNonzero) verdict = 'CPU ALL ZERO'; else if (!gNonzero && !cNonzero) verdict = MAY_BE_ZERO.has(name) ? 'zero on both (listed)' : 'ZERO ON BOTH (not exercised)';
-    else if (DECISION_ROWS.has(name)) verdict = s.share > decisionBound(name) ? `OFF (share > ${decisionBound(name)})` : 'ok';
-    else if (!(s.rms <= TOL)) verdict = `OFF (> ${TOL})`;
+    if (s.nan) verdict = `NON-FINITE (${s.nan} of ${Math.min(region.length, c.length)})`; else if (!gNonzero && cNonzero) verdict = 'GPU ALL ZERO'; else if (gNonzero && !cNonzero) verdict = 'CPU ALL ZERO'; else if (!gNonzero && !cNonzero) verdict = MAY_BE_ZERO.has(name) ? 'zero on both (listed)' : 'ZERO ON BOTH (not exercised)';
+    else if (DECISION_ROWS.has(name)) verdict = s.share > decisionBound(name) ? `OFF (share > ${decisionBound(name)})` : s.rest > 3 * TOL ? `OFF (rms under the threshold > ${3 * TOL})` : 'ok';
+    else if (!(s.rms <= TOL) && !(s.max * s.scale <= ABSOLUTE_FLOOR[name])) verdict = `OFF (> ${TOL})`;
     if (verdict !== 'ok' && verdict !== 'zero on both (listed)' && !((MAY_BE_ZERO.has(name) || landless) && verdict.startsWith('ZERO'))) failures++;
-    if (DECISION_ROWS.has(name) && gNonzero && cNonzero) decisions.push(`| ${name} | ${path} | ${fmt(s.share)} | ${decisionBound(name)} | ${fmt(s.rms)} | ${fmt(s.max)} | ${fmt(s.scale)} | ${verdict} |`);
+    if (DECISION_ROWS.has(name) && gNonzero && cNonzero) decisions.push(`| ${name} | ${path} | ${fmt(s.share)} | ${decisionBound(name)} | ${fmt(s.rms)} | ${fmt(s.rest)} | ${fmt(s.max)} | ${fmt(s.scale)} | ${verdict} |`);
     else lines.push(`| ${name} | ${path} | ${fmt(s.rms)} | ${fmt(s.max)} | ${(100 * s.gz).toFixed(0)}/${(100 * s.cz).toFixed(0)} | ${fmt(s.scale)} | ${verdict} |`);
   }
-  lines.push(`\n### decision divergence: share of cells\n\n| PH | CPU array | share > TOL | bound | rel rms | rel max | max abs cpu | verdict |\n|---|---|---|---|---|---|---|---|`, ...decisions);
+  lines.push(`\n### decision divergence: share of cells\n\n| PH | CPU array | share > TOL | bound | rel rms | rel rms under TOL | rel max | max abs cpu | verdict |\n|---|---|---|---|---|---|---|---|---|`, ...decisions);
 }
 
 const held = (v) => (typed(v) ? v.slice() : Array.isArray(v) && v.every((x) => typeof x === 'number') ? Float64Array.from(v) : v);
@@ -245,7 +253,7 @@ for (const target of STEPS) {
   }
   mappedReport(Object.keys(g.regions), (n) => {
     let r = g.regions[n];
-    if ((n === 'DEPTH' || n === 'MIXTOP') && cpu.surfaceGeopotential) { r = Float32Array.from(r); for (let i = 0; i < C; i++) r[i] += cpu.surfaceGeopotential[i] / 9.80665; }
+    if ((n === 'DEPTH' || n === 'MIXTOP') && cpu.surfaceGeopotential) { r = Float32Array.from(r); for (let i = 0; i < C; i++) r[i] += cpu.surfaceGeopotential[i] / cpu.core.diagnostics.g; }
     return r;
   }, done);
   before = cpu.state.map((x) => Float64Array.from(x));
