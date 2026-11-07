@@ -185,6 +185,40 @@ test("under rainCover 'overlap' rain that forms beneath an ice-only layer, or a 
   }
 });
 
+test("under rainCover 'overlap' a cloud beneath a clear layer in which all the rain falling into it evaporated carries the share cut to max(0.1, a) there, as cloudsc keeps ZCOVPTOT where ZQPRETOT counts the rain a layer stores", () => {
+  const saturated = { qs: 0, slope: 0, liquid: 1 }, D = MOIST_DEFAULTS, dt = 900;
+  let mesh = null;
+  const lowerClear = (options, upperCover, lowerCover) => {
+    const m = createModel(mesh ?? new Grid(16), { ocean: false, moist: { rainEvaporationLaw: 'kessler', ...options } });
+    mesh = m.mesh;
+    const { K, C, sigmaMid, exnerLayer, cp } = m.core.diagnostics;
+    const pi = new Float64Array(C).fill(101325), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
+    m.core.diagnose(pi, theta);
+    const T = Array.from(sigmaMid, (s) => Math.max(200, 300 + 6.5e-3 * 7000 * Math.log(s)));
+    const low = T.findIndex((t) => t > 288), gap = low - 1, high = low - 2;
+    for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
+      theta[k * C + i] = T[k] / exnerLayer[k * C + i];
+      q[k * C + i] = (k === gap ? 0.05 : 0.9) * saturationHumidity(T[k], pi[i] * sigmaMid[k]);
+    }
+    const width = (k) => {
+      const p = pi[0] * sigmaMid[k];
+      cloudSaturation(T[k], p, D.iceSaturation, D.liquidTemperature, D.iceTemperature, saturated);
+      return (1 - criticalHumidityAt(p, pi[0], D.surfaceCriticalHumidity, D.topCriticalHumidity, D.criticalExponent)) * saturated.qs / (1 + LATENT_HEAT * saturated.slope / cp);
+    };
+    qc[high * C] = upperCover * upperCover * width(high);
+    qc[low * C] = lowerCover * lowerCover * width(low);
+    m.core.diagnoseColumn(0, pi, theta, q, qc);
+    const gapBefore = q[gap * C], before = q[(low + 1) * C];
+    m.moist.autoconvertColumn(0, pi, theta, q, qc, dt);
+    return { gap: q[gap * C] - gapBefore, gained: q[(low + 1) * C] - before };
+  };
+  for (const [upperCover, lowerCover] of [[0.2, 0.5], [0.2, 0.3]]) {
+    const carried = rainShareBelow(0.1, lowerCover, 0);
+    const overlap = lowerClear({}, upperCover, lowerCover), shared = lowerClear({ rainCover: carried }, upperCover, lowerCover);
+    assert.ok(overlap.gap > 0 && shared.gained > 0 && Math.abs(overlap.gained - shared.gained) <= 1e-9 * shared.gained, `upper cover ${upperCover}, its rain evaporated in the clear layer above lower cover ${lowerCover}: the first clear layer below gains ${overlap.gained} kg/kg, and ${shared.gained} under rainCover ${carried}`);
+  }
+});
+
 test('under evaporationInCloud rain over a partly cloudy layer evaporates from the clear-sky humidity q_e = (q - a q_s)/(1 - a), floored at 0, over the clear share, with 1/(1 - a) in the Kessler exponent', () => {
   const law = (rainEvaporationLaw) => ({ rainEvaporation: 1, rainEvaporationLaw, rainEvaporationCeiling: null, rainCover: 'overlap' });
   const rain = 0.05, dt = 900, mass = 300, qs = 0.01, gamma = 1.5, sigma = 0.8, share = 0.7, cover = 0.5, clear = share - cover;
