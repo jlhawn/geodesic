@@ -175,6 +175,10 @@ test(`${OPTION_CHANGE}: closureScale`, { skip: !gpuAvailable && 'webgpu not inst
   const change = await optionChange(HYBRID, { closureScale: 0.25 });
   assert.ok(change.u.ratio < 0.1, `u: the GPU misses ${change.u.ratio} of the option's change`);
 });
+for (const eddyTracers of ['third', 'centered']) test(`${OPTION_CHANGE}: eddyTracers ${eddyTracers}, under a strengthened restratification`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, mixedLayerRestratification: { coefficient: 1000 } }, { eddyTracers });
+  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.1, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+});
 
 const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
 test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
