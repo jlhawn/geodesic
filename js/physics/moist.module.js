@@ -21,8 +21,32 @@ export const TEST_PARCEL = { entrainment: 0.4, removal: 0.5 };
 export const DEPARTURE = { depth: 350e2, temperature: 0.2, humidity: 1e-4, reference: 'lowest' };
 export const IFS_PRECIPITATION = { conversion: 1.4e-3, liquidFactor: 1.3, critical: 5e-4, seaThreshold: 3e-4, landThreshold: 5e-4, bergeron: 268.16, ice: 250.16, speed: 10, velocityScale: 0.75 };
 export const SOURCE_EXCESS = { coefficient: 1.5, temperature: 3, humidity: 2e-3, scale: 1.2, layer: 1.5, karman: 0.4, friction: 0.1, virtual: 0.61 };
-export const KESSLER_EVAPORATION = { rate: 5.44e-4, flux: 5.09e-3, exponent: 0.5777, pressure: 101325 };
-export const rainCeilingHumidity = (ceiling, cover) => (ceiling == null ? 1 : ceiling + (1 - ceiling) * cover);
+export const KESSLER_EVAPORATION = { rate: 5.44e-4, flux: 5.09e-3, exponent: 0.5777, cloudsc: 0.5 };
+export const RAIN_COVER_FLOOR = 0.1;
+export const rainCeilingHumidity = (ceiling, clear, cover = 0) => (ceiling == null ? 1 : Math.min(1, ceiling + (1 - ceiling) * clear / Math.max(1e-14, 1 - cover)));
+export const rainShareBelow = (share, cover, above) => Math.max(RAIN_COVER_FLOOR, 1 - (1 - share) * (1 - Math.max(cover, above)) / (1 - Math.min(above, 1 - 1e-6)));
+
+/*
+ * What of the stratiform rain falling into a layer (kg/m² over dt) it
+ * evaporates under the options o (see createMoistPhysics' header): the
+ * layer of air mass `mass` holds q against a saturation humidity qs whose
+ * latent-heat factor is gamma = L/cp dqs/dT, at sigma p/p_s; under rainCover
+ * 'overlap' `share` is the rain's precipitating share a_P and `cover` the
+ * layer's cloud cover.
+ */
+export function stratiformRainEvaporation(o, rain, dt, mass, qs, q, gamma, sigma, share, cover) {
+  const deficit = Math.max(0, (qs - q) / (1 + gamma)) * mass;
+  let evaporated = Math.min(rain, o.rainEvaporation * deficit);
+  if (o.rainEvaporationLaw === 'deficit' && o.rainEvaporationCeiling === null) return evaporated;
+  const overlap = o.rainCover === 'overlap', clear = overlap ? Math.max(0, share - cover) : o.rainCover;
+  const ceiling = overlap ? rainCeilingHumidity(o.rainEvaporationCeiling, clear, cover) : rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover);
+  if (ceiling < 1) evaporated = Math.min(rain, o.rainEvaporation * Math.max(0, (ceiling * qs - q) / (1 + ceiling * gamma)) * mass);
+  if (o.rainEvaporationLaw === 'deficit') return evaporated;
+  const rate = KESSLER_EVAPORATION.rate * Math.pow(Math.sqrt(sigma) * (rain / dt) / ((overlap ? share : o.rainCover) * KESSLER_EVAPORATION.flux), KESSLER_EVAPORATION.exponent);
+  if (o.rainEvaporationLaw === 'kessler') return Math.min(evaporated, -deficit * Math.expm1(-clear * rate * (1 + gamma) * dt));
+  const shaft = KESSLER_EVAPORATION.cloudsc * rate;
+  return Math.min(evaporated, clear * shaft * Math.max(0, qs - q) * dt / (1 + shaft * dt * (1 + gamma)) * mass);
+}
 
 /*
  * The convective-scale velocity of the IFS's test parcel at the lowest
@@ -515,15 +539,21 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * it (with `iceSaturation`, of cloudSaturation's mix), latent cooling
  * included. With `rainEvaporationLaw` 'kessler' (default 'deficit', the
  * above) it takes at most what the IFS's Kessler rate evaporates over the
- * step (IFS Documentation Cy41r2 Part IV eq. 7.70), a_P α1 (q_s − q)
- * (√(p/p0) P / (a_P α2))^α3 with α1 5.44e-4 /s, α2 5.09e-3 kg m⁻² s⁻¹,
- * α3 0.5777 and p0 101325 Pa, P the flux of rain into the layer and a_P
- * `rainCover`, the share of the clear sky it falls through, integrated
- * exactly as the deficit decays under the rate and its latent cooling.
- * With `rainEvaporationCeiling` c (null: none) neither law takes a layer
- * past the relative humidity c + (1 − c) a_P, the IFS's eq. 7.77 in
- * cloud-free air (c 0.7 there). A filler removes negative humidity by
- * borrowing from the layer below.
+ * step (IFS Documentation Cy41r2 Part IV eq. 7.70), a_clr β (q_s − q) with
+ * β = α1 (√(p/p_s) P / (a_P α2))^α3, α1 5.44e-4 /s, α2 5.09e-3 kg m⁻² s⁻¹,
+ * α3 0.5777, P the flux of rain into the layer, a_P the share of the cell
+ * it falls in and a_clr = a_P − a the part of it outside the layer's cloud
+ * cover a, integrated exactly as the deficit decays under the rate and its
+ * latent cooling. 'cloudsc' takes at most the IFS code's semi-implicit
+ * step instead (cloudsc.F90, IEVAPRAIN 1), a_clr β' (q_s − q) Δt /
+ * (1 + β' Δt (1 + γ)) with β' = β/2. Under `rainCover` 'overlap' a_P is
+ * the maximum-random overlap of the cloud cover from the rain's top down
+ * (eq. 7.65), at least 0.1, reset where no rain falls and reduced in
+ * proportion to what evaporates; a number sets a_P and a_clr to it and a to
+ * 0. With `rainEvaporationCeiling` c (null: none) no law takes a layer past
+ * the relative humidity c + (1 − c) a_clr / (1 − a), the IFS's eq. 7.77 (c
+ * 0.7 there). A filler removes negative humidity by borrowing from the
+ * layer below.
  *
  * Precipitation accumulates per cell (kg/m²), and so do its two parts:
  * convective, the plumes' rain that reaches the ground; large-scale, the
@@ -540,7 +570,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
  * cloudLifetime 1 h, no upperCloudLifetime, stratiformLifetime 3 h, autoconversionFloor 'lowest',
  * fogDroplets [150, 60] /cm³, fogDeposition 1, fogDepositionLimit 0.25 m/s, rainEvaporation 1,
- * rainEvaporationLaw 'deficit', rainCover 0.1, no rainEvaporationCeiling,
+ * rainEvaporationLaw 'deficit', rainCover 'overlap', no rainEvaporationCeiling,
  * cumulusClosure 0.03 (Grant 2001), cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
  * cumulusFriction 1, cumulusOvershoot 'kinetic', cumulusAscent 'kinetic',
@@ -560,7 +590,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
-  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, bergeronAutoconversion: true, stratiformLifetime: 3 * 3600, rainEvaporation: 1, rainEvaporationLaw: 'deficit', rainCover: 0.1, rainEvaporationCeiling: null, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
+  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, bergeronAutoconversion: true, stratiformLifetime: 3 * 3600, rainEvaporation: 1, rainEvaporationLaw: 'deficit', rainCover: 'overlap', rainEvaporationCeiling: null, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
   deckVeto: true, coupledVeto: false, stratocumulusInversion: 7, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
@@ -624,11 +654,11 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   if (typeof cumulusMemory !== 'number' || !(cumulusMemory >= 0 && cumulusMemory < Infinity)) throw new Error(`cumulusMemory must be a time in seconds, 0 or more, not ${cumulusMemory}`);
   if (cumulusSource !== 'mean' && cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${cumulusSource}`);
   if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'mixingTop' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer', 'mixingTop' or 'none', not ${autoconversionFloor}`);
-  if (rainEvaporationLaw !== 'deficit' && rainEvaporationLaw !== 'kessler') throw new Error(`rainEvaporationLaw must be 'deficit' or 'kessler', not ${rainEvaporationLaw}`);
-  if (!(Number.isFinite(rainCover) && rainCover > 0 && rainCover <= 1)) throw new Error(`rainCover must be a share above 0 and at most 1, not ${rainCover}`);
+  if (rainEvaporationLaw !== 'deficit' && rainEvaporationLaw !== 'kessler' && rainEvaporationLaw !== 'cloudsc') throw new Error(`rainEvaporationLaw must be 'deficit', 'kessler' or 'cloudsc', not ${rainEvaporationLaw}`);
+  if (rainCover !== 'overlap' && !(Number.isFinite(rainCover) && rainCover > 0 && rainCover <= 1)) throw new Error(`rainCover must be 'overlap' or a share above 0 and at most 1, not ${rainCover}`);
   if (rainEvaporationCeiling !== null && !(Number.isFinite(rainEvaporationCeiling) && rainEvaporationCeiling >= 0 && rainEvaporationCeiling <= 1)) throw new Error(`rainEvaporationCeiling must be null or a relative humidity from 0 to 1, not ${rainEvaporationCeiling}`);
-  const kesslerEvaporation = rainEvaporationLaw === 'kessler', ceilingHumidity = rainCeilingHumidity(rainEvaporationCeiling, rainCover);
-  const kesslerRate = (flux, pressure) => rainCover * KESSLER_EVAPORATION.rate * Math.pow(Math.sqrt(pressure / KESSLER_EVAPORATION.pressure) * flux / (rainCover * KESSLER_EVAPORATION.flux), KESSLER_EVAPORATION.exponent);
+  const rainScheme = { rainEvaporation, rainEvaporationLaw, rainCover, rainEvaporationCeiling };
+  const rainShares = rainCover === 'overlap' && (rainEvaporationLaw !== 'deficit' || rainEvaporationCeiling !== null);
   if (cumulusOvershoot !== 'kinetic' && !(cumulusOvershoot >= 0 && cumulusOvershoot <= 1)) throw new Error(`cumulusOvershoot must be a share between 0 and 1 or 'kinetic', not ${cumulusOvershoot}`);
   if (cumulusAscent !== 'buoyant' && cumulusAscent !== 'kinetic') throw new Error(`cumulusAscent must be 'buoyant' or 'kinetic', not ${cumulusAscent}`);
   if (cumulusAscent === 'kinetic' && cumulusOvershoot !== 'kinetic') throw new Error(`cumulusAscent 'kinetic' needs cumulusOvershoot 'kinetic', whose w² carries the plume`);
@@ -776,22 +806,31 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0, frozenStream = null) {
-    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0;
+    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0, rainShare = 0, coverAbove = 0;
     falling.moved = false;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : autoconversionFloor === 'mixingTop' && (boundaryTop ?? boundaryDepth) ? (boundaryTop ?? boundaryDepth)[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
+      let layerCover = 0;
+      if (rainShares) {
+        if (!(rain > 0)) rainShare = 0;
+        if (qc[idx] > 0) {
+          const pressure = pi[i] * sigmaMid[k];
+          saturation(theta[idx] * exnerLayer[idx], pressure);
+          layerCover = uniformCover(qc[idx], halfWidth(pressure, pi[i]));
+        }
+        rainShare = rainShareBelow(rainShare, layerCover, coverAbove);
+        coverAbove = layerCover;
+      }
       if (rain > 0 && (evaporationInCloud || !(qc[idx] > CLEAR_AIR)) && rainEvaporation > 0) {
         const ex = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
         const temperature = theta[idx] * ex;
         const qs = iceSaturation ? saturation(temperature, pi[i] * sigmaMid[k]).qs : saturationHumidity(temperature, pi[i] * sigmaMid[k]);
         const slope = iceSaturation ? saturated.slope : qs * latentHeat / (R_VAPOR * temperature * temperature);
-        const deficit = Math.max(0, (qs - q[idx]) / (1 + latentHeat * slope / cp)) * mass;
-        let evaporated = Math.min(rain, rainEvaporation * deficit);
-        if (ceilingHumidity < 1) evaporated = Math.min(rain, rainEvaporation * Math.max(0, (ceilingHumidity * qs - q[idx]) / (1 + ceilingHumidity * latentHeat * slope / cp)) * mass);
-        if (kesslerEvaporation) evaporated = Math.min(evaporated, -deficit * Math.expm1(-kesslerRate(rain / dt, pi[i] * sigmaMid[k]) * (1 + latentHeat * slope / cp) * dt));
+        const evaporated = stratiformRainEvaporation(rainScheme, rain, dt, mass, qs, q[idx], latentHeat * slope / cp, sigmaMid[k], rainShare, layerCover);
         if (evaporated > 0) {
+          if (rainShares) rainShare = Math.max(RAIN_COVER_FLOOR, rainShare - Math.max(0, (rainShare - layerCover) * evaporated / rain));
           rain = Math.max(0, rain - evaporated);
           q[idx] += evaporated / mass;
           theta[idx] -= latentHeat * evaporated / (mass * cp * ex);

@@ -3,7 +3,7 @@ import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders }
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, longwaveCores, LONGWAVE_CORES, CORE_EDGES, CORE_FACTOR_POINTS, coreFactors } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -284,8 +284,8 @@ export function physicsConstants(o) {
   if (o.fogDroplets !== null && !(Array.isArray(o.fogDroplets) && o.fogDroplets.length === 2 && o.fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(o.fogDroplets)}`);
   if (!(Number.isFinite(o.fogDeposition) && o.fogDeposition >= 0)) throw new Error(`fogDeposition must be an efficiency of 0 or more, not ${o.fogDeposition}`);
   if (!(Number.isFinite(o.fogDepositionLimit) && o.fogDepositionLimit > 0)) throw new Error(`fogDepositionLimit must be a speed above 0 in m/s, not ${o.fogDepositionLimit}`);
-  if (o.rainEvaporationLaw !== 'deficit' && o.rainEvaporationLaw !== 'kessler') throw new Error(`rainEvaporationLaw must be 'deficit' or 'kessler', not ${o.rainEvaporationLaw}`);
-  if (!(Number.isFinite(o.rainCover) && o.rainCover > 0 && o.rainCover <= 1)) throw new Error(`rainCover must be a share above 0 and at most 1, not ${o.rainCover}`);
+  if (o.rainEvaporationLaw !== 'deficit' && o.rainEvaporationLaw !== 'kessler' && o.rainEvaporationLaw !== 'cloudsc') throw new Error(`rainEvaporationLaw must be 'deficit', 'kessler' or 'cloudsc', not ${o.rainEvaporationLaw}`);
+  if (o.rainCover !== 'overlap' && !(Number.isFinite(o.rainCover) && o.rainCover > 0 && o.rainCover <= 1)) throw new Error(`rainCover must be 'overlap' or a share above 0 and at most 1, not ${o.rainCover}`);
   if (o.rainEvaporationCeiling != null && !(Number.isFinite(o.rainEvaporationCeiling) && o.rainEvaporationCeiling >= 0 && o.rainEvaporationCeiling <= 1)) throw new Error(`rainEvaporationCeiling must be null or a relative humidity from 0 to 1, not ${o.rainEvaporationCeiling}`);
   if (o.traceCloudPath != null && !(Number.isFinite(o.traceCloudPath) && o.traceCloudPath > 0 && o.traceCloudPath <= VISIBLE_PATH)) throw new Error(`traceCloudPath must be null or an in-cloud water path above 0 and at most ${VISIBLE_PATH} kg/m², not ${o.traceCloudPath}`);
   const fog = fogConstants(o.fogDroplets);
@@ -377,7 +377,7 @@ const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFu
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME}; const GONE_CONC: f32 = ${seaIceRemoval(!!o.keepSmallIce).concentration}; const GONE_VOLUME: f32 = ${seaIceRemoval(!!o.keepSmallIce).volume}; const PENETRATING: bool = ${!!o.penetration};
 ${o.warmLayer || o.coolSkin ? skinConstants(o) : ''}const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
-const RAIN_EVAP: f32 = ${o.rainEvaporation}; const RAIN_KESSLER: bool = ${o.rainEvaporationLaw === 'kessler'}; const RAIN_COVER: f32 = ${o.rainCover}; const RAIN_CEILING: bool = ${rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover) < 1}; const RAIN_RH: f32 = ${rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover)}; const KE_RATE: f32 = ${KESSLER_EVAPORATION.rate}; const KE_FLUX: f32 = ${KESSLER_EVAPORATION.flux}; const KE_EXP: f32 = ${KESSLER_EVAPORATION.exponent}; const KE_P0: f32 = ${KESSLER_EVAPORATION.pressure};
+const RAIN_EVAP: f32 = ${o.rainEvaporation}; const RAIN_KESSLER: bool = ${o.rainEvaporationLaw === 'kessler'}; const RAIN_CLOUDSC: bool = ${o.rainEvaporationLaw === 'cloudsc'}; const RAIN_OVERLAP: bool = ${o.rainCover === 'overlap' && (o.rainEvaporationLaw !== 'deficit' || o.rainEvaporationCeiling != null)}; const RAIN_FLOOR: f32 = ${RAIN_COVER_FLOOR}; const RAIN_COVER: f32 = ${o.rainCover === 'overlap' ? 0 : o.rainCover}; const RAIN_CEILING: bool = ${o.rainCover === 'overlap' ? o.rainEvaporationCeiling != null : rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover) < 1}; const RAIN_RH: f32 = ${o.rainCover === 'overlap' ? o.rainEvaporationCeiling ?? 1 : rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover)}; const KE_RATE: f32 = ${KESSLER_EVAPORATION.rate}; const KE_FLUX: f32 = ${KESSLER_EVAPORATION.flux}; const KE_EXP: f32 = ${KESSLER_EVAPORATION.exponent}; const KE_SHAFT: f32 = ${KESSLER_EVAPORATION.cloudsc};
 const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = ${o.boundaryCondensation === 'uniform'}; const BL_CLOUDLAYER: bool = ${o.boundaryCondensation === 'cloudLayer' && moistTurbulence}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
 const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
 const FOG: bool = ${o.fogDroplets !== null}; const FOG_SETTLE_LAND: f32 = ${fog.settleLand}; const FOG_SETTLE_SEA: f32 = ${fog.settleSea}; const FOG_KK_LAND: f32 = ${fog.drizzleLand}; const FOG_KK_SEA: f32 = ${fog.drizzleSea}; const FOG_THIRDS: f32 = 0.6666666666666666;
@@ -1981,7 +1981,7 @@ function thomasSolve(upper, lower, rhs) {
     for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; next = ${rhs}[j] - gain[j] * next; ${rhs}[j] = next; }
   }`;
 }
-const ADJUST_FUNCTIONS = `fn kesslerRate(flux: f32, pressure: f32) -> f32 { return RAIN_COVER * KE_RATE * pow(sqrt(pressure / KE_P0) * flux / (RAIN_COVER * KE_FLUX), KE_EXP); }
+const ADJUST_FUNCTIONS = `fn rainShareBelow(share: f32, cover: f32, above: f32) -> f32 { return max(RAIN_FLOOR, 1.0 - (1.0 - share) * (1.0 - max(cover, above)) / (1.0 - min(above, 1.0 - 1e-6))); }
 fn upperInterface(i: i32, k: i32) -> f32 {
   let idx = k * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + k] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
@@ -3000,12 +3000,23 @@ fn blSeal(i: i32, pi: f32) {
   let pi = IN[S_PI + i]; let dt = P[0]; let bottom = K - 1;
   let produced = PH[PH_CURAIN + i]; let deep = PH[PH_CUDEEP + i] > 0.0; let plumeBase = i32(PH[PH_CUBASE + i]);
   // autoconversion, and the rain evaporating as it falls
-  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
+  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0; var rainShare = 0.0; var coverAbove = 0.0;
   let floor = select(PH[PH_DEPTH + i], PH[PH_MIXTOP + i], AUTO_MIX && MOIST_BL);
   let iceConc = PH[PH_CONC + i]; let iced = select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
+    var layerCover = 0.0;
+    if (RAIN_OVERLAP) {
+      if (!(rained > 0.0)) { rainShare = 0.0; }
+      let condensate = IN[S_QC + idx];
+      if (condensate > 0.0) {
+        let pressure = pi * LV[L_SM + k];
+        layerCover = uniformCover(condensate, uniformWidth(cloudSat(IN[S_TH + idx] * D[D_EXM + idx], pressure), pressure, pi));
+      }
+      rainShare = rainShareBelow(rainShare, layerCover, coverAbove);
+      coverAbove = layerCover;
+    }
     if (rained > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR)) && RAIN_EVAP > 0.0) {
       let ex = D[D_EXM + idx];
       let temperature = IN[S_TH + idx] * ex;
@@ -3014,9 +3025,19 @@ fn blSeal(i: i32, pi: f32) {
       let slope = saturated.y;
       let deficit = max(0.0, (qs - IN[S_Q + idx]) / (1.0 + LHEAT * slope / CP)) * mass;
       var evaporated = min(rained, RAIN_EVAP * deficit);
-      if (RAIN_CEILING) { evaporated = min(rained, RAIN_EVAP * max(0.0, (RAIN_RH * qs - IN[S_Q + idx]) / (1.0 + RAIN_RH * LHEAT * slope / CP)) * mass); }
-      if (RAIN_KESSLER) { evaporated = min(evaporated, deficit * relaxedFraction(kesslerRate(rained / dt, pi * LV[L_SM + k]) * (1.0 + LHEAT * slope / CP) * dt)); }
+      if (RAIN_CEILING || RAIN_KESSLER || RAIN_CLOUDSC) {
+        let gamma = LHEAT * slope / CP;
+        let clear = select(RAIN_COVER, max(0.0, rainShare - layerCover), RAIN_OVERLAP);
+        let rh = select(RAIN_RH, min(1.0, RAIN_RH + (1.0 - RAIN_RH) * clear / max(1e-14, 1.0 - layerCover)), RAIN_OVERLAP);
+        if (RAIN_CEILING && rh < 1.0) { evaporated = min(rained, RAIN_EVAP * max(0.0, (rh * qs - IN[S_Q + idx]) / (1.0 + rh * gamma)) * mass); }
+        if (RAIN_KESSLER || RAIN_CLOUDSC) {
+          let rate = KE_RATE * pow(sqrt(LV[L_SM + k]) * (rained / dt) / (select(RAIN_COVER, rainShare, RAIN_OVERLAP) * KE_FLUX), KE_EXP);
+          if (RAIN_KESSLER) { evaporated = min(evaporated, deficit * relaxedFraction(clear * rate * (1.0 + gamma) * dt)); }
+          else { let shaft = KE_SHAFT * rate; evaporated = min(evaporated, clear * shaft * max(0.0, qs - IN[S_Q + idx]) * dt / (1.0 + shaft * dt * (1.0 + gamma)) * mass); }
+        }
+      }
       if (evaporated > 0.0) {
+        if (RAIN_OVERLAP) { rainShare = max(RAIN_FLOOR, rainShare - max(0.0, (rainShare - layerCover) * evaporated / rained)); }
         rained = max(0.0, rained - evaporated);
         IN[S_Q + idx] += evaporated / mass;
         IN[S_TH + idx] -= LHEAT * evaporated / (mass * CP * ex);

@@ -1745,19 +1745,22 @@ test('the stratiform lifetime matches between the engines on random columns of e
   assert.ok(keptShared > shared / 5 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}, ${keptShared} of the ${shared} with a long share`);
 });
 
-test("the Kessler rate of the stratiform rain's evaporation and its relative-humidity ceiling match between the engines on random columns, under either law, and the rate lets more of the large-scale rain reach the ground on both", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test("the Kessler rate of the stratiform rain's evaporation, the IFS code's semi-implicit form of it, the overlap of the rain's precipitating share and the relative-humidity ceiling match between the engines on random columns, under every law, with the share overlapped or held, and the rate lets more of the large-scale rain reach the ground on both", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const instant = await parity({}), kessler = await parity({ rainEvaporationLaw: 'kessler' });
   const ceiled = await parity({ rainEvaporationLaw: 'kessler', rainCover: 0.5, rainEvaporationCeiling: 0.7 });
+  const cloudsc = await parity({ rainEvaporationLaw: 'cloudsc', rainEvaporationCeiling: 0.7 });
   await parity({ rainEvaporationCeiling: 0.7 });
+  await parity({ rainEvaporationLaw: 'cloudsc', rainCover: 0.1 });
   const sum = (a) => a.reduce((x, y) => x + y, 0);
   let wetter = 0, gpuWetter = 0;
   for (let i = 0; i < instant.largeScale.length; i++) {
     if (kessler.largeScale[i] > instant.largeScale[i] * (1 + 1e-6) + 1e-9) wetter++;
     if (kessler.gpuLargeScale[i] > instant.gpuLargeScale[i] * (1 + 1e-6) + 1e-9) gpuWetter++;
   }
-  console.log(`large-scale rain reaching the ground over the random columns: ${sum(instant.largeScale).toFixed(3)} kg/m² summed under the instant law (GPU ${sum(instant.gpuLargeScale).toFixed(3)}), ${sum(kessler.largeScale).toFixed(3)} under the Kessler rate (GPU ${sum(kessler.gpuLargeScale).toFixed(3)}), more in ${wetter} columns (GPU ${gpuWetter}); ${sum(ceiled.largeScale).toFixed(3)} (GPU ${sum(ceiled.gpuLargeScale).toFixed(3)}) with a_P 0.5 under the 0.85 ceiling`);
+  console.log(`large-scale rain reaching the ground over the random columns: ${sum(instant.largeScale).toFixed(3)} kg/m² summed under the instant law (GPU ${sum(instant.gpuLargeScale).toFixed(3)}), ${sum(kessler.largeScale).toFixed(3)} under the Kessler rate (GPU ${sum(kessler.gpuLargeScale).toFixed(3)}), more in ${wetter} columns (GPU ${gpuWetter}); ${sum(ceiled.largeScale).toFixed(3)} (GPU ${sum(ceiled.gpuLargeScale).toFixed(3)}) with a_P 0.5 under the 0.85 ceiling; ${sum(cloudsc.largeScale).toFixed(3)} (GPU ${sum(cloudsc.gpuLargeScale).toFixed(3)}) under the semi-implicit form, the share overlapped, and the 0.7 ceiling`);
   assert.ok(wetter > 0 && Math.abs(gpuWetter - wetter) <= Math.max(2, wetter / 100), `${wetter} columns wetter on the CPU, ${gpuWetter} on the GPU`);
   assert.ok(sum(kessler.largeScale) > sum(instant.largeScale) && sum(kessler.gpuLargeScale) > sum(instant.gpuLargeScale));
+  assert.ok(sum(cloudsc.largeScale) > sum(instant.largeScale) && sum(cloudsc.gpuLargeScale) > sum(instant.gpuLargeScale));
 });
 
 test("with convectionRetype a column its test parcel types deep runs the shallow plume where the deep plume's own cloud, from its base to the last interface it reaches with w² > 0, is no deeper than 200 hPa, as the IFS's code re-types after the ascent, and any other value than true or false is refused", () => {
@@ -1785,8 +1788,8 @@ test('with convectionRetype the engines agree on random columns, and the GPU ref
   assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, convectionRetype: 1 }), /convectionRetype/);
 });
 
-test("a rainEvaporationLaw other than 'deficit' or 'kessler', a rainCover outside (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
-  const refused = [{ rainEvaporationLaw: 'ifs' }, { rainCover: 0 }, { rainCover: 1.5 }, { rainCover: '0.1' }, { rainEvaporationCeiling: -0.1 }, { rainEvaporationCeiling: 1.2 }, { rainEvaporationCeiling: '0.7' }];
+test("a rainEvaporationLaw other than 'deficit', 'kessler' or 'cloudsc', a rainCover other than 'overlap' or a share in (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
+  const refused = [{ rainEvaporationLaw: 'ifs' }, { rainCover: 'maximum' }, { rainCover: 0 }, { rainCover: 1.5 }, { rainCover: '0.1' }, { rainEvaporationCeiling: -0.1 }, { rainEvaporationCeiling: 1.2 }, { rainEvaporationCeiling: '0.7' }];
   for (const options of refused) assert.throws(() => build(options), /rainEvaporationLaw|rainCover|rainEvaporationCeiling/, `CPU: ${JSON.stringify(options)}`);
   if (!gpuAvailable) return;
   const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
