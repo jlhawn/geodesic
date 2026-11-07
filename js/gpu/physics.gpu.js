@@ -2715,7 +2715,11 @@ const MID_LEVEL_PLUME = [
       let midLcl = condensationLevel((midEnv.x - GRAV * plumeZ(i, k)) / CP, midEnv.y, layerP(pi, k));
       if (!(midLcl.y > pi * LV[L_SL + 0])) { continue; }
       let midFirst = plumeState(midEnv.x, midEnv.y, plumeZ(i, k - 1), layerP(pi, k - 1), 0.0);
-      if (midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - plumeT(i, k - 1) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + (k - 1) * C + i])) > -MID_BUOYANCY) { kb = k; lcl = midLcl; break; }
+      if (!(midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - plumeT(i, k - 1) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + (k - 1) * C + i])) > -MID_BUOYANCY)) { continue; }
+      var midBase = k;
+      while (midBase > 1 && pi * LV[L_SU + midBase] > midLcl.y) { midBase -= 1; }
+      let midDrive = max(0.0, max(-D[D_PSD + midBase * C + i] / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, midBase) - ground))));
+      if (min(open * midDrive, CU_LOSS * layerDp(pi, k) / (GRAV * dt)) > CU_FLOOR) { kb = k; lcl = midLcl; break; }
     }
     if (kb < 0) { return shallowRain; }
     let env = plumeEnv(i, kb);

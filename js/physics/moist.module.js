@@ -373,7 +373,10 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * below 0), with q above MID_LEVEL.humidity (0.8) of q_s, and whose parcel
  * lifted to the next layer's midpoint holds condensate there and is less
  * than MID_LEVEL.buoyancy (0.5 K) colder in virtual temperature than the
- * air (cuascn.F90's type-3 cancellations), departs with its own s_l and q_t
+ * air, and whose closure below would give it a base flux above
+ * CUMULUS_FLOOR (a layer that fails any of these gives way to the next one
+ * up, as cuascn.F90's type-3 cancellations do), departs with its own s_l
+ * and q_t
  * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
  * with eq. 6.31's base flux max(−π σ̇/g at its cloud base, (H + L E)/(g
  * z_base)), z_base the cloud base's height above the ground. With
@@ -1387,14 +1390,17 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const shallowRain = cumulusColumn(i, pi, theta, q, qc, dt);
       if (cumulus.baseFlux > 0) return shallowRain;
       const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
-      const tv = virtualBuoyancy ? VIRTUAL_FACTOR : 0;
+      const tv = virtualBuoyancy ? VIRTUAL_FACTOR : 0, enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
       let kb = -1;
       for (let k = bottom - 1; k > 1 && z[k] - ground < MID_LEVEL.height; k--) {
         if (!(piSigmaDot[k * C + i] + piSigmaDot[(k + 1) * C + i] < 0 && Math.max(0, q[k * C + i]) > MID_LEVEL.humidity * saturation(T[k], p[k]).qs)) continue;
         lcl = liftingCondensationLevel((envS[k] - g * z[k]) / cp, envQ[k], p[k], kappa);
         if (!lcl || !(lcl.pressure > pi[i] * levels[1])) continue;
         plumeState(envS[k], envQ[k], z[k - 1], p[k - 1], 0);
-        if (plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - T[k - 1] * (1 + tv * Math.max(0, q[(k - 1) * C + i])) > -MID_LEVEL.buoyancy) { kb = k; break; }
+        if (!(plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - T[k - 1] * (1 + tv * Math.max(0, q[(k - 1) * C + i])) > -MID_LEVEL.buoyancy)) continue;
+        let j = k;
+        while (j > 1 && pi[i] * levels[j] > lcl.pressure) j--;
+        if (Math.min(open * Math.max(0, -piSigmaDot[j * C + i] / g, enthalpy / (g * (upperInterface(i, j) - ground))), cumulusBoundaryLoss * dp[k] / (g * dt)) > CUMULUS_FLOOR) { kb = k; break; }
       }
       if (kb < 0) return shallowRain;
       source = kb; stackBottom = kb; mass = dp[kb]; sourceS = envS[kb]; sourceQ = envQ[kb]; rooted = false; middle = true;
