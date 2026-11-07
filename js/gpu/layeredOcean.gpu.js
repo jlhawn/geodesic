@@ -4,7 +4,7 @@ import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
 import { oceanCells, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
-import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
+import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare, INTERIOR_SHEARS, LMD94_RICHARDSON } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
 import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval } from '../physics/ice.module.js';
 import { iceDriftOptions, iceDriftPasses, ICE_REMNANT } from '../ocean/iceDrift.module.js';
@@ -54,7 +54,7 @@ export const OCEAN_DEFAULTS = {
   minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   vorticityCentring: 0.5, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917, latentHeatFusion: 3.34e5, langmuir: 2, langmuirIce: 'tanh',
-  momentumDepth: 50, shearViscosity: 1e-2, shearCutoff: Infinity, backgroundViscosity: 1e-4, bottomDrag: 3e-3, topDrag: 2.5e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureScale: 1, everySteps: 4,
+  momentumDepth: 50, shearViscosity: 1e-2, interiorShear: 'pp81', backgroundViscosity: 1e-4, bottomDrag: 3e-3, topDrag: 2.5e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureScale: 1, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB', mixedLayerRestratification: true, eddyTracers: 'donor',
   gustiness: 3,
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
@@ -169,8 +169,8 @@ const LP1: i32 = ${L + 1};
 ${constLine('HMIN', o.minimumLayer)} ${constLine('THINEDGE', 2 * o.minimumLayer)} ${constLine('MODEDEPTH', o.modeDepth)} ${constLine('MSTAR', o.mstar)} ${constLine('EKMANF', o.ekmanFactor)} ${constLine('RH18C2', RH18_NEUTRAL.c2)} ${constLine('RH18C3', RH18_NEUTRAL.c3)} ${constLine('ICEWAVES', ICE_WAVE_DAMPING)} ${constLine('NSTAR', o.nstar)}${o.mstarScheme === 'rh18' ? ` ${Object.keys(RH18_ENERGY).map((key) => constLine(`RH${key}`, RH18_ENERGY[key])).join(' ')}` : ''}
 ${constLine('BACKKAPPA', o.backgroundDiffusivity)} ${constLine('CONVKAPPA', o.convectiveDiffusivity)} ${constLine('VONK', 0.4)} ${constLine('BLFLOOR', 0.1)} ${constLine('DZFLOOR', 1e-3)} ${constLine('HNEGLECT', 1e-6)} ${constLine('MLEXCESS', 0.03)}
 ${constLine('BLTOL', 1e-6)} const BLITER: i32 = 24;
-${o.shearCutoff < Infinity ? `${constLine('SHEARRI', o.shearCutoff)}
-fn shearTaper(ri: f32) -> f32 { let x = min(ri / SHEARRI, 1.0); let y = 1.0 - x * x; return y * y * y; }
+${o.interiorShear === 'lmd94' ? `${constLine('LMDRI', LMD94_RICHARDSON)}
+fn lmd94Shape(ri: f32) -> f32 { let x = clamp(ri / LMDRI, 0.0, 1.0); let y = 1.0 - x * x; return y * y * y; }
 ` : ''}${eosAnomalyRelative}
 fn modeWeight(k: i32, i: i32) -> f32 {
   if (GEN == 0) { return 1.0; }
@@ -605,8 +605,8 @@ ${o.shelfMeltLayer > 0 ? `    var slab = 0.0; var sumT = 0.0; var sumS = 0.0;
       var kap = CONVKAPPA; var nu = CONVKAPPA;
       if (buoyancy >= 0.0) {
         let richardson = buoyancy * dz / (dot(d, d) + 1e-12);
-        nu = ${o.shearCutoff < Infinity ? 'SHEARNU * shearTaper(richardson)' : 'SHEARNU'} / ((1.0 + 5.0 * richardson) * (1.0 + 5.0 * richardson)) + BACKNU;
-        kap = nu / (1.0 + 5.0 * richardson) + ${o.backgroundLatitude === 'uniform' ? 'BACKKAPPA' : 'OD[O_BACKK + i]'};
+        ${o.interiorShear === 'lmd94' ? 'let lmdShear = SHEARNU * lmd94Shape(richardson); nu = lmdShear + BACKNU; kap = lmdShear' : `nu = SHEARNU / ((1.0 + 5.0 * richardson) * (1.0 + 5.0 * richardson)) + BACKNU;
+        kap = nu / (1.0 + 5.0 * richardson)`} + ${o.backgroundLatitude === 'uniform' ? 'BACKKAPPA' : 'OD[O_BACKK + i]'};
       }
       CIK[j] = kap; CINU[j] = nu; CA[j] = 0.5 * (aPrev + ak); CB[j] = 0.5 * (bPrev + bk);
       if (kap > 0.0) { mixing = true; }
@@ -1383,7 +1383,7 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const restratScale = restrat ? restratificationScale(mesh, restrat) : null;
   if (!EDDY_TRACERS.includes(o.eddyTracers)) throw new Error(`eddyTracers is one of ${EDDY_TRACERS.join(', ')}, not ${o.eddyTracers}`);
   if (o.eddyTracers === 'third' && !third) throw new Error("eddyTracers 'third' reads the beyond cells of tracerAdvection 'third'");
-  if (!(o.shearCutoff > 0)) throw new Error(`shearCutoff is a positive Richardson number, or Infinity for none, not ${o.shearCutoff}`);
+  if (!INTERIOR_SHEARS.includes(o.interiorShear)) throw new Error(`interiorShear is one of ${INTERIOR_SHEARS.join(', ')}, not ${o.interiorShear}`);
   if (!BACKGROUND_LATITUDES.includes(o.backgroundLatitude)) throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${o.backgroundLatitude}`);
   if (!(o.equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${o.equatorialDiffusivity}`);
   const backgroundKappa = o.backgroundLatitude === 'uniform' ? null : backgroundDiffusivities(mesh, o.backgroundLatitude, o.backgroundDiffusivity, o.equatorialDiffusivity);

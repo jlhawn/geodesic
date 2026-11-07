@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND, restratificationScale, restratificationOptions, deformationRadii, limitedFaceValue, limitedEdgeValue, eddyDiffusivities, shearResolution, shearResolutionOptions } from '../js/ocean/layered.module.js';
-import { interiorMixing, shearTaper } from '../js/ocean/column.module.js';
+import { interiorMixing, lmd94Shape } from '../js/ocean/column.module.js';
 
 /*
  * The ocean's optional interior closures on the CPU at N = 16, each against
  * its published form and against the default it leaves alone: the
  * latitude dependence of the background diffusivity (backgroundLatitude)
- * and the Richardson-number cutoff of the interior shear mixing
- * (shearCutoff), the restratification's equatorial taper
+ * and Large, McWilliams and Doney's interior shear mixing
+ * (interiorShear), the restratification's equatorial taper
  * (mixedLayerRestratification.taperLatitude), the temperature and
  * salinity the eddy phase's layer fluxes carry (eddyTracers) and the
  * resolution function on the shear-scaled diffusion
@@ -89,54 +89,49 @@ test('one column phase under backgroundLatitude equatorial leaves every column p
   assert.ok(ratio > 0.08 && ratio < 0.12, `within 5° the column moves ${ratio} of the uniform background's heat`);
 });
 
-test('shearTaper is Large, McWilliams and Doney\'s interior shape: 1 at Ri 0, (3/4)³ at half the cutoff, 0 at and above it', () => {
-  assert.equal(shearTaper(0, 0.7), 1);
-  assert.ok(Math.abs(shearTaper(0.35, 0.7) - 0.421875) < 1e-15);
-  assert.equal(shearTaper(0.7, 0.7), 0);
-  assert.equal(shearTaper(5, 0.7), 0);
-  for (let r = 0.01; r < 0.7; r += 0.01) assert.ok(shearTaper(r, 0.7) < shearTaper(r - 0.01, 0.7));
+test('lmd94Shape is Large, McWilliams and Doney\'s interior shape: 1 at Ri 0 and below, (3/4)³ at Ri 0.35, 0 at and above 0.7', () => {
+  assert.equal(lmd94Shape(0), 1);
+  assert.equal(lmd94Shape(-2), 1);
+  assert.ok(Math.abs(lmd94Shape(0.35) - 0.421875) < 1e-15);
+  assert.equal(lmd94Shape(0.7), 0);
+  assert.equal(lmd94Shape(5), 0);
+  for (let r = 0.01; r < 0.7; r += 0.01) assert.ok(lmd94Shape(r) < lmd94Shape(r - 0.01));
 });
 
-test('under shearCutoff the interior keeps PP81\'s background and scales only its shear term by the taper, zero above the cutoff; without it the shear term is PP81\'s', () => {
+test('under interiorShear lmd94 the interior shear term is ν₀[1 − (Ri/0.7)²]³ in viscosity and diffusivity alike, over the backgrounds; pp81, the default, is Pacanowski and Philander\'s', () => {
   const K = 8, h = new Float64Array(K).fill(10), T = Float64Array.from({ length: K }, (_, k) => 293.15 - 0.5 * k), S = new Float64Array(K).fill(35);
   const u = Float64Array.of(1, 0.75, 0.55, 0.4, 0.3, 0.25, 0.24, 0.235), v = new Float64Array(K);
   const scratch = { rho: new Float64Array(K) }, nu0 = 5e-3, nub = 1e-4, kb = 1e-5;
   const run = (extra) => { const kappa = new Float64Array(K), nu = new Float64Array(K); interiorMixing({ h, T, S, u, v, K, shearViscosity: nu0, backgroundViscosity: nub, backgroundDiffusivity: kb, ...extra }, kappa, nu, scratch); return { kappa, nu }; };
-  const off = run({}), infinite = run({ shearCutoff: Infinity }), cut = run({ shearCutoff: 0.7 });
-  assert.deepEqual(Array.from(infinite.nu), Array.from(off.nu));
-  assert.deepEqual(Array.from(infinite.kappa), Array.from(off.kappa));
+  const off = run({}), pp81 = run({ interiorShear: 'pp81' }), lmd = run({ interiorShear: 'lmd94' });
+  assert.deepEqual(Array.from(pp81.nu), Array.from(off.nu));
+  assert.deepEqual(Array.from(pp81.kappa), Array.from(off.kappa));
   let below = 0, above = 0;
   for (let k = 0; k < K - 1; k++) {
-    const ri = (Math.sqrt(nu0 / (off.nu[k] - nub)) - 1) / 5;
-    if (ri >= 0.7 * (1 + 1e-9)) {
-      above++;
-      assert.equal(cut.nu[k], nub, `interface ${k} at Ri ${ri}`);
-      assert.ok(Math.abs(cut.kappa[k] - (nub / (1 + 5 * ri) + kb)) < 1e-12 * cut.kappa[k], `interface ${k} at Ri ${ri}`);
-    } else if (ri < 0.7 * (1 - 1e-6)) {
-      below++;
-      const ratio = (cut.nu[k] - nub) / (off.nu[k] - nub);
-      assert.ok(Math.abs(ratio - (1 - (ri / 0.7) ** 2) ** 3) < 1e-6, `interface ${k} at Ri ${ri}: ${ratio}`);
-      assert.ok(Math.abs(cut.kappa[k] - (cut.nu[k] / (1 + 5 * ri) + kb)) < 1e-9 * cut.kappa[k], `interface ${k}`);
-    }
+    const ri = (Math.sqrt(nu0 / (off.nu[k] - nub)) - 1) / 5, shear = nu0 * Math.max(0, 1 - (ri / 0.7) ** 2) ** 3;
+    assert.ok(Math.abs(off.kappa[k] - (off.nu[k] / (1 + 5 * ri) + kb)) < 1e-9 * off.kappa[k], `PP81 at interface ${k}`);
+    assert.ok(Math.abs(lmd.nu[k] - (shear + nub)) < 1e-9 * lmd.nu[k], `interface ${k} at Ri ${ri}: ${lmd.nu[k]} against ${shear + nub}`);
+    assert.ok(Math.abs(lmd.kappa[k] - (shear + kb)) < 1e-9 * lmd.nu[k], `interface ${k} at Ri ${ri}: ${lmd.kappa[k]} against ${shear + kb}`);
+    if (ri < 0.7) below++; else above++;
   }
-  assert.ok(below >= 2 && above >= 2, `${below} interfaces below the cutoff and ${above} above`);
-  assert.throws(() => createOcean(mesh, { shearCutoff: 0 }), /shearCutoff/);
+  assert.ok(below >= 2 && above >= 2, `${below} interfaces below Ri 0.7 and ${above} above`);
+  assert.throws(() => createOcean(mesh, { interiorShear: 'kpp' }), /interiorShear/);
 });
 
-test('shearCutoff reaches the ocean\'s column phase: under a sheared surface current every interface\'s viscosity is at most the default\'s and some are less', () => {
+test('interiorShear lmd94 reaches the ocean\'s column phase: under a sheared surface current it raises some interfaces\' viscosity and lowers others\'', () => {
   const sheared = (options) => {
     const ocean = stratified(options), L = ocean.layers;
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = 0.4 * Math.exp(-k / 3) * Math.cos(latEdge[e]) * Math.sin(3 * e);
     ocean.phases.column(DT);
     return ocean;
   };
-  const base = sheared({}), cut = sheared({ shearCutoff: 0.7 });
-  let less = 0;
+  const base = sheared({}), lmd = sheared({ interiorShear: 'lmd94' });
+  let more = 0, less = 0;
   for (let n = 0; n < base.viscosity.length; n++) {
-    assert.ok(cut.viscosity[n] <= base.viscosity[n] * (1 + 1e-12), `entry ${n}: ${cut.viscosity[n]} over ${base.viscosity[n]}`);
-    if (cut.viscosity[n] < base.viscosity[n] * (1 - 1e-6)) less++;
+    if (lmd.viscosity[n] > base.viscosity[n] * (1 + 1e-6)) more++;
+    if (lmd.viscosity[n] < base.viscosity[n] * (1 - 1e-6)) less++;
   }
-  assert.ok(less > 0, 'the cutoff changed no viscosity');
+  assert.ok(more > 0 && less > 0, `${more} viscosities raised and ${less} lowered`);
 });
 
 test('taperLatitude scales the restratification by |f|/√(f² + f_t²): none without it, 1/√2 at the taper latitude, above 0.98 at 30° and below 0.2 at 1°', () => {

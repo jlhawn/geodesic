@@ -3,7 +3,7 @@ import { createIceDrift, coverOf } from './iceDrift.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
-import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, MSTAR_SCHEMES, LANGMUIR_SCHEMES, surfaceBuoyancy, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
+import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, MSTAR_SCHEMES, LANGMUIR_SCHEMES, surfaceBuoyancy, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities, INTERIOR_SHEARS } from './column.module.js';
 import { basalMelt, baseFreezing, SHELF_MELT } from './iceShelfMelt.module.js';
 import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
 
@@ -551,7 +551,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2, langmuirIce = 'tanh',
-  momentumDepth = 50, shearViscosity = 1e-2, shearCutoff = Infinity, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureScale = 1, everySteps = 4,
+  momentumDepth = 50, shearViscosity = 1e-2, interiorShear = 'pp81', backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureScale = 1, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'rh18', langmuirScheme = 'rescale', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
@@ -584,7 +584,7 @@ export function createOcean(mesh, {
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
   if (advection === 'third' && !(shearDiffusion > 0)) throw new Error('the limited third-order tracer flux admits grid-scale noise that the shear-scaled diffusion of the surface layers damps, so tracerAdvection third needs shearDiffusivity above zero');
   const shearResolve = shearResolutionOptions(shearDiffusivityResolution), shearScale = shearResolve ? shearResolution(mesh, shearResolve) : null;
-  if (!(shearCutoff > 0)) throw new Error(`shearCutoff is a positive Richardson number, or Infinity for none, not ${shearCutoff}`);
+  if (!INTERIOR_SHEARS.includes(interiorShear)) throw new Error(`interiorShear is one of ${INTERIOR_SHEARS.join(', ')}, not ${interiorShear}`);
   if (!BACKGROUND_LATITUDES.includes(backgroundLatitude)) throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${backgroundLatitude}`);
   if (!(equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${equatorialDiffusivity}`);
   const backgroundKappa = backgroundLatitude === 'uniform' ? null : backgroundDiffusivities(mesh, backgroundLatitude, backgroundDiffusivity, equatorialDiffusivity);
@@ -1257,7 +1257,7 @@ export function createOcean(mesh, {
   }
   function columnCells(from, to) {
     const dt = params[1], { h: hCol, T: TCol, S: SCol, rho: rhoCol, shear, kappa, nu, vector } = cols, out = { kappa, nu };
-    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, mstarScheme, langmuirScheme, nstar, langmuir, shearViscosity, shearCutoff, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
+    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, mstarScheme, langmuirScheme, nstar, langmuir, shearViscosity, interiorShear, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
     for (let i = from; i < to; i++) {
       if (!cellOcean[i]) { mixedDepths[i] = 0; boundaryDepths[i] = 0; continue; }
       cellColumn(i, hCol, TCol, SCol);
