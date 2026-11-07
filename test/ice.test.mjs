@@ -383,3 +383,26 @@ for (const melt of [20]) test(`with the ice melting at ${melt} W/m² under a ste
   if (melt < 40) assert.ok(sea.brine[0] > 0.75 * inside, 'the brine keeps most of the light the ice holds');
   else assert.ok(atMelting === 64 * 30 && sea.brine[0] > (1 - 1e-9) * inside, 'the brine keeps all the light the ice holds');
 });
+
+test('a melting skin saved at single precision reloads into the same step: the brine fills from the light whether it held any or not', async () => {
+  const { encodeState, decodeState } = await import('../js/stateFile.module.js');
+  const C = model.mesh.nCells, dt = 1350, sun = 300;
+  const fresh = () => {
+    const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir: true }), surfaceT = new Float64Array(C).fill(FREEZING_POINT), ice = new Float64Array(C);
+    ice[0] = 2; ice[1] = 2; surfaceT[0] = MELTING_POINT; surfaceT[1] = MELTING_POINT;
+    return { sea, surfaceT, ice };
+  };
+  const twin = fresh();
+  twin.sea.load(twin.ice, Float64Array.from(twin.ice, (h) => (h > 0 ? 1 : 0)), Float64Array.from({ length: C }, (_, i) => (i === 1 ? 1e7 : 0)));
+  const saved = await decodeState(encodeState({ N: 16, K: model.core.K, day: 1, time: 86400, surfaceT: twin.surfaceT, ice: twin.ice, concentration: twin.sea.concentration, brine: twin.sea.brine }));
+  assert.ok(saved.surfaceT[0] < MELTING_POINT, 'the saved skin rounds below the melting point');
+  const loaded = fresh();
+  loaded.surfaceT.set(saved.surfaceT); loaded.ice.set(saved.ice);
+  loaded.sea.load(loaded.ice, saved.concentration, saved.brine);
+  for (const { sea, surfaceT, ice } of [twin, loaded]) for (const i of [0, 1]) sea.update(surfaceT, ice, new Float64Array(C).fill(50), i, dt, 0, sun, 0.5);
+  for (const i of [0, 1]) {
+    const start = i === 1 ? 1e7 : 0;
+    assert.ok(twin.sea.brine[i] > start, `cell ${i}: the brine fills`);
+    assert.ok(Math.abs(loaded.sea.brine[i] - twin.sea.brine[i]) < 1e-6 * twin.sea.brine[i], `cell ${i}: reloaded ${loaded.sea.brine[i]} against ${twin.sea.brine[i]}`);
+  }
+});

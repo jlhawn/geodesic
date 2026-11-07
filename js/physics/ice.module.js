@@ -119,6 +119,7 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * (T_f - T_m) / (3h / 4k), and the reservoir pays the difference. With no
  * heat in the ice to hold, this only approximates eq. 9.
  */
+const DEVICE_MELTING_POINT = Math.fround(MELTING_POINT);
 export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
 
 export const LEAD_CLOSURES = ['squared', 'hibler'];
@@ -276,13 +277,13 @@ export function createSeaIce(mesh, {
     if (iceLight) {
       const passed = Math.max(0, solar - (1 - A) * contrast) * (ICE_LIGHT.clear + (ICE_LIGHT.cloudy - ICE_LIGHT.clear) * diffuse) * Math.max(0, 1 - s / iceFullSnow);
       through = passed * Math.exp(-ICE_LIGHT.extinction * Math.max(0, h - ICE_LIGHT.surfaceLayer));
-      held = brine && (T >= MELTING_POINT || brine[i] > 0) ? passed - through : 0;
+      held = brine && (T >= DEVICE_MELTING_POINT || brine[i] > 0) ? passed - through : 0;
       iceFlux -= through + held;
     }
     const depth = Math.max(h, minimumThickness), insulation = s / (snowDensity * snowConductivity);
     let conduction = (FREEZING_POINT - T) / (depth / conductivity + insulation), base = conduction;
     let Q = brine ? brine[i] + dt * held : 0;
-    if (Q > 0 && T < MELTING_POINT) {
+    if (Q > 0 && T < DEVICE_MELTING_POINT) {
       const upper = (MELTING_POINT - T) / (depth / (4 * conductivity) + insulation), lower = (FREEZING_POINT - MELTING_POINT) / (3 * depth / (4 * conductivity));
       const cost = dt * (upper - lower), part = Math.min(1, Q / cost);
       conduction += part * (upper - conduction);
