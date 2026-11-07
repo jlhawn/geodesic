@@ -701,12 +701,12 @@ export function terrainKey(terrain = true) {
  * mean of its neighbors; water cells (the sea at 0, a lake at its level)
  * stay as they are and act as the boundary, so coasts slope down to the
  * sea over `passes` cells, and the height they lose goes nowhere. With
- * `conserveVolume` a pass moves volume instead, k (h_i − h_j) across each
- * edge, k the larger of its two cells' `weight` × area / edge count, so no
- * cell relaxes more slowly than without it. What a land cell loses across
- * its edges to water goes on to its land neighbors in proportion to their
- * k: each land mass keeps its area-weighted volume to rounding, and a
- * cell with no land neighbor keeps its height.
+ * `conserveVolume` a pass instead moves k (h_i − h_j) of volume across
+ * each edge between land cells, k the larger of its two cells' `weight` ×
+ * area / edge count, so a cell among land relaxes no more slowly than
+ * without it. Water never enters a land cell's mean: each land mass keeps
+ * its area-weighted volume to rounding, a coast keeps its step to the
+ * water, and a cell with no land neighbor keeps its height.
  */
 export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = TERRAIN_DEFAULTS.passes, weight = 0.5, conserveVolume = TERRAIN_DEFAULTS.conserveVolume } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
@@ -730,14 +730,10 @@ function exchangeVolume({ nCells: C, maxEdges, nEdgesOnCell, cellsOnCell, areaCe
   const rate = (i) => weight * areaCell[i] / nEdgesOnCell[i], moved = new Float64Array(C);
   for (let i = 0; i < C; i++) {
     if (!land[i]) continue;
-    let lost = 0, inland = 0;
     for (let m = 0; m < nEdgesOnCell[i]; m++) {
-      const j = cellsOnCell[maxEdges * i + m], k = Math.max(rate(i), rate(j));
-      if (land[j]) { moved[i] += k * (height[j] - height[i]); inland += k; } else lost += k * (height[i] - height[j]);
+      const j = cellsOnCell[maxEdges * i + m];
+      if (land[j]) moved[i] += Math.max(rate(i), rate(j)) * (height[j] - height[i]);
     }
-    if (!inland || !lost) continue;
-    moved[i] -= lost;
-    for (let m = 0; m < nEdgesOnCell[i]; m++) { const j = cellsOnCell[maxEdges * i + m]; if (land[j]) moved[j] += lost * Math.max(rate(i), rate(j)) / inland; }
   }
   return Float64Array.from(height, (h, i) => (land[i] ? h + moved[i] / areaCell[i] : h));
 }

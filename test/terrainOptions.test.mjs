@@ -89,25 +89,30 @@ for (const N of [64, 128]) test(`with conserveVolume each land mass of the page 
   console.log(`N=${N}: ${masses} land masses, ${islands} raised one-cell islands, each volume kept to ${worst.toExponential(1)}`);
 });
 
-test('with conserveVolume a one-cell island keeps its height, and a plateau keeps its volume while its coast slopes down to the sea: each coastal cell below its highest land neighbor, the coast below the plateau and the ring inland of it', () => {
-  const mesh = buildMesh(new Grid(16), { omega: 7.2921e-5 }), { nCells: C, latCell, lonCell, areaCell, cellsOnCell, nEdgesOnCell, maxEdges } = mesh;
+test('with conserveVolume no land cell depends on a water cell: a one-cell island keeps its height, a flat plateau stays flat to its coast, and raising the sea beside real coasts moves no land cell', () => {
+  const mesh = buildMesh(new Grid(16), { omega: 7.2921e-5 }), { nCells: C, latCell, lonCell } = mesh;
   const distance = (i, lat, lon) => Math.acos(Math.min(1, Math.sin(latCell[i]) * Math.sin(lat) + Math.cos(latCell[i]) * Math.cos(lat) * Math.cos(lonCell[i] - lon)));
   const land = Uint8Array.from({ length: C }, (_, i) => (distance(i, 0.5, 0) < 0.5 ? 1 : 0)), elevation = Float64Array.from(land, (l) => 2000 * l);
   let island = 0;
   for (let i = 0; i < C; i++) if (distance(i, -0.5, Math.PI) < distance(island, -0.5, Math.PI)) island = i;
   land[island] = 1; elevation[island] = 1000;
-  const geography = { land, elevation }, raw = surfaceGeopotential(mesh, geography, { passes: 0 }), smoothed = surfaceGeopotential(mesh, geography), kept = surfaceGeopotential(mesh, geography, { conserveVolume: true });
-  assert.equal(kept[island], raw[island], 'the island keeps its height');
-  assert.ok(smoothed[island] < raw[island], 'the default smoothing lowers it');
-  const neighbors = (i) => Array.from({ length: nEdgesOnCell[i] }, (_, m) => cellsOnCell[maxEdges * i + m]);
-  const plateau = land.reduce((cells, l, i) => (l && i !== island ? [...cells, i] : cells), []), coast = plateau.filter((i) => neighbors(i).some((j) => !land[j]));
-  const second = plateau.filter((i) => !coast.includes(i) && neighbors(i).some((j) => coast.includes(j)));
-  const mean = (cells, phi) => cells.reduce((s, i) => s + areaCell[i] * phi[i], 0) / cells.reduce((s, i) => s + areaCell[i], 0);
-  assert.ok(Math.abs(mean(plateau, kept) - mean(plateau, raw)) <= 1e-12 * mean(plateau, raw), 'the plateau keeps its volume');
-  for (const i of coast) assert.ok(kept[i] < Math.max(...neighbors(i).filter((j) => land[j]).map((j) => kept[j])), `coastal cell ${i} sits below its highest land neighbor`);
-  assert.ok(mean(coast, kept) < mean(coast, raw) && mean(coast, kept) < mean(second, kept), 'the coast sits below the plateau and the ring inland of it');
-  const g = 9.80616;
-  console.log(`a 2000 m plateau of ${plateau.length} cells: its coast ${(mean(coast, kept) / g).toFixed(0)} m (default ${(mean(coast, smoothed) / g).toFixed(0)}), the next ring ${(mean(second, kept) / g).toFixed(0)} m (default ${(mean(second, smoothed) / g).toFixed(0)}), the highest cell ${(Math.max(...plateau.map((i) => kept[i])) / g).toFixed(0)} m`);
+  const flat = { land, elevation }, raw = surfaceGeopotential(mesh, flat, { passes: 0 }), kept = surfaceGeopotential(mesh, flat, { conserveVolume: true });
+  assert.ok(surfaceGeopotential(mesh, flat)[island] < raw[island], 'the default smoothing lowers the island');
+  assert.deepEqual(Array.from(kept), Array.from(raw), 'the island and the plateau keep their heights');
+  const { geography } = createModel(new Grid(16), { topography, physics: false }), g = 9.80616;
+  const shore = Float64Array.from(surfaceGeopotential(mesh, geography, { passes: 0 }), (phi) => phi / g);
+  let seed = 7;
+  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const raised = Float64Array.from(shore, (h, i) => (geography.land[i] ? h : 500 + 1000 * random()));
+  const before = surfaceGeopotential(mesh, { ...geography, surface: shore }, { conserveVolume: true }), after = surfaceGeopotential(mesh, { ...geography, surface: raised }, { conserveVolume: true });
+  const plain = surfaceGeopotential(mesh, { ...geography, surface: raised });
+  let coasts = 0;
+  for (let i = 0; i < C; i++) {
+    if (!geography.land[i]) { assert.equal(after[i], g * raised[i], `water cell ${i} stays as it was`); continue; }
+    assert.equal(after[i], before[i], `land cell ${i} does not see the water`);
+    coasts += plain[i] !== surfaceGeopotential(mesh, { ...geography, surface: shore })[i];
+  }
+  assert.ok(coasts > 0, 'the default smoothing sees the raised water');
 });
 
 test('with conserveVolume the passes take at least as much grid-scale roughness off a random field over land without coasts as the default smoothing', () => {
