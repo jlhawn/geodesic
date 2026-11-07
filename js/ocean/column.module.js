@@ -99,9 +99,11 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * Anderson–Björck secant to a part in 10⁶ in a bracket around the
  * previous step's depth, or between the floor and the whole column, the
  * side where the work is within the energy taken; below and beside it the Pacanowski and Philander
- * (1981) interior viscosity ν = ν₀/(1 + 5Ri)² + ν_b and diffusivity
+ * (1981) interior viscosity ν = ν₀ F/(1 + 5Ri)² + ν_b and diffusivity
  * ν/(1 + 5Ri) + κ_b on the gradient Richardson number of the resolved
- * shear and stratification, a convective diffusivity where the column is
+ * shear and stratification (F is 1, or under a cutoff Ri₀, shearCutoff,
+ * the shape of Large, McWilliams and Doney's (1994) interior shear mixing:
+ * [1 − (Ri/Ri₀)²]³ below Ri₀ and 0 above), a convective diffusivity where the column is
  * still unstable; and one implicit solve (solveColumn) of the column's
  * heat and salt with the summed diffusivities, which conserves both. The
  * viscosity profile is published for the edges' solve of their normal
@@ -604,7 +606,12 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy
   return { depth, energy: available, work: done, velocity: vstar };
 }
 
-export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, rho0 = SEAWATER.rho0, gravity = GRAVITY, shearViscosity = 1e-2, backgroundViscosity = 1e-4, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1 }, kappa, nu, scratch) {
+export function shearTaper(richardson, cutoff) {
+  const x = Math.min(1, richardson / cutoff), y = 1 - x * x;
+  return y * y * y;
+}
+
+export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, rho0 = SEAWATER.rho0, gravity = GRAVITY, shearViscosity = 1e-2, shearCutoff = Infinity, backgroundViscosity = 1e-4, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1 }, kappa, nu, scratch) {
   const { rho } = scratch;
   layerDensities(T, S, K, rho);
   for (let k = 0; k < K - 1; k++) {
@@ -612,7 +619,7 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
     if (buoyancy < 0) { kappa[k] = convectiveDiffusivity; nu[k] = convectiveDiffusivity; continue; }
     const du = u ? u[k] - u[k + 1] : 0, dv = v ? v[k] - v[k + 1] : 0, squared = shear ? shear[k] : du * du + dv * dv;
     const richardson = buoyancy * dz / (squared + 1e-12);
-    const viscosity = shearViscosity / (1 + 5 * richardson) ** 2 + backgroundViscosity;
+    const viscosity = (shearCutoff < Infinity ? shearViscosity * shearTaper(richardson, shearCutoff) : shearViscosity) / (1 + 5 * richardson) ** 2 + backgroundViscosity;
     nu[k] = viscosity;
     kappa[k] = viscosity / (1 + 5 * richardson) + backgroundDiffusivity;
   }

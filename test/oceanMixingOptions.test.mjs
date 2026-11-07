@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createOcean, backgroundDiffusivities, HENYEY_RATIO, EQUATORIAL_BACKGROUND } from '../js/ocean/layered.module.js';
+import { interiorMixing, shearTaper } from '../js/ocean/column.module.js';
 
 /*
  * The ocean's optional interior closures on the CPU at N = 16, each against
  * its published form and against the default it leaves alone: the
- * latitude dependence of the background diffusivity (backgroundLatitude).
+ * latitude dependence of the background diffusivity (backgroundLatitude)
+ * and the Richardson-number cutoff of the interior shear mixing
+ * (shearCutoff).
  */
-const mesh = buildMesh(new Grid(16)), { nCells: C, latCell } = mesh;
+const mesh = buildMesh(new Grid(16)), { nCells: C, nEdges: E, latCell, latEdge } = mesh;
 const DT = 1350, DEGREE = Math.PI / 180;
 const latitudes = (degrees) => ({ nCells: degrees.length, latCell: Float64Array.from(degrees, (d) => d * DEGREE) });
 
@@ -79,4 +82,54 @@ test('one column phase under backgroundLatitude equatorial leaves every column p
   assert.ok(near > 0, 'no stratified column within 5°');
   const ratio = movedLess / moved;
   assert.ok(ratio > 0.08 && ratio < 0.12, `within 5° the column moves ${ratio} of the uniform background's heat`);
+});
+
+test('shearTaper is Large, McWilliams and Doney\'s interior shape: 1 at Ri 0, (3/4)³ at half the cutoff, 0 at and above it', () => {
+  assert.equal(shearTaper(0, 0.7), 1);
+  assert.ok(Math.abs(shearTaper(0.35, 0.7) - 0.421875) < 1e-15);
+  assert.equal(shearTaper(0.7, 0.7), 0);
+  assert.equal(shearTaper(5, 0.7), 0);
+  for (let r = 0.01; r < 0.7; r += 0.01) assert.ok(shearTaper(r, 0.7) < shearTaper(r - 0.01, 0.7));
+});
+
+test('under shearCutoff the interior keeps PP81\'s background and scales only its shear term by the taper, zero above the cutoff; without it the shear term is PP81\'s', () => {
+  const K = 8, h = new Float64Array(K).fill(10), T = Float64Array.from({ length: K }, (_, k) => 293.15 - 0.5 * k), S = new Float64Array(K).fill(35);
+  const u = Float64Array.of(1, 0.75, 0.55, 0.4, 0.3, 0.25, 0.24, 0.235), v = new Float64Array(K);
+  const scratch = { rho: new Float64Array(K) }, nu0 = 5e-3, nub = 1e-4, kb = 1e-5;
+  const run = (extra) => { const kappa = new Float64Array(K), nu = new Float64Array(K); interiorMixing({ h, T, S, u, v, K, shearViscosity: nu0, backgroundViscosity: nub, backgroundDiffusivity: kb, ...extra }, kappa, nu, scratch); return { kappa, nu }; };
+  const off = run({}), infinite = run({ shearCutoff: Infinity }), cut = run({ shearCutoff: 0.7 });
+  assert.deepEqual(Array.from(infinite.nu), Array.from(off.nu));
+  assert.deepEqual(Array.from(infinite.kappa), Array.from(off.kappa));
+  let below = 0, above = 0;
+  for (let k = 0; k < K - 1; k++) {
+    const ri = (Math.sqrt(nu0 / (off.nu[k] - nub)) - 1) / 5;
+    if (ri >= 0.7 * (1 + 1e-9)) {
+      above++;
+      assert.equal(cut.nu[k], nub, `interface ${k} at Ri ${ri}`);
+      assert.ok(Math.abs(cut.kappa[k] - (nub / (1 + 5 * ri) + kb)) < 1e-12 * cut.kappa[k], `interface ${k} at Ri ${ri}`);
+    } else if (ri < 0.7 * (1 - 1e-6)) {
+      below++;
+      const ratio = (cut.nu[k] - nub) / (off.nu[k] - nub);
+      assert.ok(Math.abs(ratio - (1 - (ri / 0.7) ** 2) ** 3) < 1e-6, `interface ${k} at Ri ${ri}: ${ratio}`);
+      assert.ok(Math.abs(cut.kappa[k] - (cut.nu[k] / (1 + 5 * ri) + kb)) < 1e-9 * cut.kappa[k], `interface ${k}`);
+    }
+  }
+  assert.ok(below >= 2 && above >= 2, `${below} interfaces below the cutoff and ${above} above`);
+  assert.throws(() => createOcean(mesh, { shearCutoff: 0 }), /shearCutoff/);
+});
+
+test('shearCutoff reaches the ocean\'s column phase: under a sheared surface current every interface\'s viscosity is at most the default\'s and some are less', () => {
+  const sheared = (options) => {
+    const ocean = stratified(options), L = ocean.layers;
+    for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = 0.4 * Math.exp(-k / 3) * Math.cos(latEdge[e]) * Math.sin(3 * e);
+    ocean.phases.column(DT);
+    return ocean;
+  };
+  const base = sheared({}), cut = sheared({ shearCutoff: 0.7 });
+  let less = 0;
+  for (let n = 0; n < base.viscosity.length; n++) {
+    assert.ok(cut.viscosity[n] <= base.viscosity[n] * (1 + 1e-12), `entry ${n}: ${cut.viscosity[n]} over ${base.viscosity[n]}`);
+    if (cut.viscosity[n] < base.viscosity[n] * (1 - 1e-6)) less++;
+  }
+  assert.ok(less > 0, 'the cutoff changed no viscosity');
 });
