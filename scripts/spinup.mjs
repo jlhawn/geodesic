@@ -279,7 +279,7 @@ const GEOGRAPHY = checkGeography({ ...(base ? savedGeography(base) : FRESH_GEOGR
 if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (GEOGRAPHY[key] !== value) throw new Error(`${saved ? file : process.env.FROM} is on ${key} ${value}, not ${GEOGRAPHY[key]}`);
 const TERRAIN = GIVEN_TERRAIN ?? (base ? savedTerrain(base) : undefined);
 if (GIVEN_TERRAIN === undefined && TERRAIN !== undefined) log(`terrain ${JSON.stringify(TERRAIN)}, as ${saved ? file : process.env.FROM} records`);
-const GIVEN_GROUPS = [['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['ocean', 'OCEAN'], ['lake', 'LAKE'], ['dynamics', 'DYNAMICS'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY']].filter(([, name]) => process.env[name] !== undefined);
+const GIVEN_GROUPS = [['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['ocean', 'OCEAN'], ['lake', 'LAKE'], ['ice', 'ICE'], ['dynamics', 'DYNAMICS'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY']].filter(([, name]) => process.env[name] !== undefined);
 const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
 const otherGroups = base?.given ? differingGroups(GIVEN, base.given) : [];
 if (otherGroups.length) log(`options other than ${saved ? file : process.env.FROM}'s header records: ${otherGroups.join(', ')}`);
