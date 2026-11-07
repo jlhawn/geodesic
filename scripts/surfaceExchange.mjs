@@ -11,7 +11,7 @@
  */
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 
-export function diagnoseExchange(model) {
+export function diagnoseExchange(model, dt) {
   const { core, state, surface, exchange, seaIce, land, boundaryLayer, geography } = model;
   if (!exchange || exchange.fixed) return;
   const { K, C, g, geopotential } = core.diagnostics, bottom = (K - 1) * C;
@@ -27,6 +27,6 @@ export function diagnoseExchange(model) {
     }
   };
   pass();
-  if (boundaryLayer) boundaryLayer.diagnose(state);
+  if (boundaryLayer) boundaryLayer.diagnose(state, 0, C, dt);
   pass();
 }

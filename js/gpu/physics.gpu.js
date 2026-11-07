@@ -2778,6 +2778,7 @@ const VIRTUAL_DENSITY = [
   ['PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * ', 'PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) / (1.0 + VIRT * IN[S_Q + (K - 1) * C + i]) * '],
   ['let rho = blDensity(K - 1, i, pi); let exchange', 'let rho = blDensity(K - 1, i, pi) / (1.0 + VIRT * IN[S_Q + (K - 1) * C + i]); let exchange'],
   ['let density = surfaceP / (RGAS * surfaceT);', 'let density = surfaceP / (RGAS * surfaceT * (1.0 + VIRT * IN[S_Q + bottom * C + i]));'],
+  ['FOG_VMAX * pressure / (RGAS * temperature))', 'FOG_VMAX * pressure / (RGAS * temperature * (1.0 + VIRT * IN[S_Q + idx])))'],
 ];
 export function virtualDensityKernels(bodies) {
   const out = {};
@@ -2786,7 +2787,7 @@ export function virtualDensityKernels(bodies) {
     const text = VIRTUAL_DENSITY.reduce((t, [from, to]) => (t.includes(from) ? replacedOnce(t, from, to) : t), body);
     if (text !== body) out[name] = text;
   }
-  for (const name of ['physics', 'physicsSurface', 'pblDiagnose', 'column', 'columnLast', 'adjustPlume']) if (typeof bodies[name] === 'string' && !out[name]) throw new Error(`virtualDensity: the ${name} kernel lays no surface density`);
+  for (const name of ['physics', 'physicsSurface', 'pblDiagnose', 'column', 'columnLast', 'adjustPlume', 'adjustRain']) if (typeof bodies[name] === 'string' && !out[name]) throw new Error(`virtualDensity: the ${name} kernel lays no surface density`);
   return out;
 }
 const K_PROFILE_ANCHORS = [
@@ -2824,6 +2825,7 @@ export function boundaryLayerDiagnosis(body, { diagnoseFirst = false, surfaceExc
   let out = profileHeight !== 'midpoint' || stableProfile !== 'flat' || prandtlCoefficient !== 7.2 ? kProfile(body, { profileHeight, stableProfile, prandtlCoefficient }) : body;
   if (surfaceExcess > 0) out = out.replace(PBL_MAIN, `${pblExcess(Number(surfaceExcess).toExponential(9))}${PBL_MAIN}`).replace(PBL_DEPTH, `  depth = blExcessDepth(i, pi, depth, zb, friction, speed, bottomWind);\n${PBL_DEPTH}`);
   if (diagnoseFirst) out = out.replace(PBL_MAIN, 'fn blColumn(i: i32) {\n') + PBL_FIRST;
+  if (out.includes('D_EXL')) throw new Error('pblDiagnose reads D_EXL, which holds the last RK stage\'s exner, not the step\'s: take it from the current π');
   return out;
 }
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];

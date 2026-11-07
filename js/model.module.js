@@ -98,6 +98,7 @@ export function createModel(gridOrMesh, {
   physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, dynamics = {}, buffers = null, levels = sigmaInterfaces(), dragEvery = 1,
 } = {}) {
   if (!(Number.isInteger(dragEvery) && dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${dragEvery}`);
+  if (oceanOptions && oceanOptions.gustiness !== undefined) throw new Error('ocean.gustiness is not an option: the ocean and the ice drift take surface.gustiness');
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;

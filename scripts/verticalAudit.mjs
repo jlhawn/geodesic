@@ -191,7 +191,7 @@ function deckGeometry(i, mixedDepth) {
 const deckSink = [0, gates.subsidenceSmoothing].map(() => new Float64Array(C).fill(NaN));
 {
   const before = ['depth', 'regime', 'mixingTop', 'buoyancyFlux'].map((name) => Float64Array.from(bl[name]));
-  bl.diagnose(state, 0, C);
+  bl.diagnose(state, 0, C, dt);
   for (let i = 0; i < C; i++) {
     const mixedDepth = bl.depth[i] - geopotential[bottom + i] / g;
     if (landMask[i] || !(1 - seaIce.cover(i, ice[i]) > 0) || !(mixedDepth > 0)) continue;

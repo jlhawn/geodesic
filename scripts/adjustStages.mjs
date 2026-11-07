@@ -137,7 +137,7 @@ for (stage = 0; stage < 4; stage++) {
 
 const adjusted = model.state.map((a) => Float64Array.from(a, Math.fround));
 model.state.forEach((a, n) => a.set(adjusted[n]));
-bl.diagnose(model.state);
+bl.diagnose(model.state, 0, C, dt);
 [bl.friction, bl.buoyancyFlux, radiation.longwave, radiation.stratiform, radiation.mlmTop].forEach(single);
 const { gpu, put, run } = await gpuCore();
 gpu.upload(adjusted);
