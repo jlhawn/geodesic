@@ -172,7 +172,9 @@
 // ETOPO 2022 with the ice sheets and their thickness from
 // data/landice_0p25.bin and the land's iceSheetBalance (LAND can turn it
 // off), on the n1024 mask with FLake in its lakes (LAKE='{"model":"off"}'
-// turns them off). TOPOGRAPHY, ICE_SHEETS, ICE_SHELVES and MASK set its parts
+// turns them off; '{"missingBed":"hydrolakes"}' gives the lakes without an
+// ETOPO bed HydroLAKES' mean depth in place of 10 m). TOPOGRAPHY,
+// ICE_SHEETS, ICE_SHELVES and MASK set its parts
 // (TOPOGRAPHY=etopo1 ICE_SHEETS=rule is the geography of the states saved
 // before it). A run continued or seeded with FROM keeps its state's
 // geography, which the states record.

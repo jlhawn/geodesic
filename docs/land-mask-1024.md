@@ -284,7 +284,7 @@ The seawater lakes:
 - no snow layer and no bottom sediments;
 - one shortwave band at 3 m⁻¹, with the ice opaque.
 
-Where ETOPO holds no bed below a lake's level (Victoria, Tanganyika, Malawi, Great Bear: 106 of the 197 lake cells at N = 128), the depth is the default GLDB v3 gives lakes without data, 10 m fresh and 5 m saline, though these lakes have measured depths.
+Where ETOPO holds no bed below a lake's level (Victoria, Tanganyika, Malawi, Great Bear: 106 of the 197 lake cells at N = 128), the depth is the default GLDB v3 gives lakes without data, 10 m fresh and 5 m saline, though these lakes have measured depths. `lake: { missingBed: 'hydrolakes' }` takes instead the mean depth (total volume over area) of HydroLAKES v1.0 (Messager et al. 2016, CC BY 4.0), from `data/lakedepth.bin` (`scripts/lakeDepths.mjs`: the 1708 lakes of at least 100 km² by their pour points). `sourceLakeDepths` matches them to groups of lake cells and leaves 3 of the 106 cells at the default (Albert, Balkhash's eastern end, Chesterfield Inlet). The lakes' area-mean depth goes from 24.3 to 37.5 m at N = 128.
 
 Coupling:
 - The atmosphere sees open sea water; the ice has FLake's albedo.
