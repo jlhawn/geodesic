@@ -197,6 +197,19 @@ test('a lead under a cold sky closes: the area rises toward full cover as the vo
   assert.ok(sea.budget.leadFrozen > 0 && sea.budget.leadFrozen < sea.budget.frozen, 'part of it in the leads, the rest under the ice');
 });
 
+test("with leadClosure 'hibler' a lead under a cold sky closes as its open area, Hibler's h0 law, and the volume still grows by what freezes", () => {
+  const sea = createSeaIce(model.mesh, { leadExchange: 0, leadClosure: 'hibler' }), dt = 900, steps = 96 * 20;
+  const surfaceT = new Float64Array([FREEZING_POINT - 10]), ice = new Float64Array([1]), flux = new Float64Array([-100]);
+  sea.concentration[0] = 0.4;
+  const volume = () => sea.concentration[0] * ice[0], start = volume(), area = model.mesh.areaCell[0];
+  for (let n = 0; n < steps; n++) sea.update(surfaceT, ice, flux, 0, dt);
+  const closing = 100 * dt / (sea.latent * sea.leadClosing), expected = 1 - 0.6 * (1 - closing) ** steps;
+  console.log(`twenty days at −100 W/m²: concentration 0.4 → ${sea.concentration[0].toFixed(4)} (${expected.toFixed(4)} for leads that close as their open area)`);
+  assert.ok(Math.abs(sea.concentration[0] - expected) < 1e-6, `concentration ${sea.concentration[0]} against ${expected}`);
+  assert.ok(Math.abs(volume() - start - sea.budget.frozen / area) < 1e-9, 'the volume grows by exactly what froze');
+  assert.throws(() => createSeaIce(model.mesh, { leadClosure: 'linear' }), /leadClosure/);
+});
+
 test('a state saved without concentration loads as full cover wherever it has ice', () => {
   const sea = createSeaIce(model.mesh), C = model.mesh.nCells;
   const ice = Float64Array.from({ length: C }, (_, i) => (i % 3 === 0 ? 0 : 0.5 + i % 2));

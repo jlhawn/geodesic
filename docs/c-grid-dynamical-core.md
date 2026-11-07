@@ -953,8 +953,10 @@ coupling (albedo and longwave emissivity of cloud) is the next step.
 
 ### M9 — Sea ice and surface albedo — done
 
-`js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model
-in the manner of Semtner (1976) on the slab ocean, with ice thickness
+`js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model,
+Fichefet and Morales Maqueda's (1997) E1 + E4 simplifications of
+Semtner's (1976) three-layer model (no brine reservoir, no sunlight
+through the ice), on the slab ocean, with ice thickness
 as the seventh state array. Open water is the mixed layer (2.1×10⁷
 J/m²/K); when it cools to the seawater freezing point (271.35 K) the
 deficit freezes into ice of latent heat ρ_i L_f. Ice has a skin of
@@ -1008,8 +1010,10 @@ area, so the two still average back to the cell's flux. The ice part
 grows and melts as above under its share; the leads' heat, with the
 ocean's flux beneath them, melts ice or freezes new ice. Melting takes
 area as Hibler (1979) does, half the relative loss of volume from the
-area; ice frozen in the leads closes them as new ice 0.3 m thick
-(`leadClosing`), and open water that cools below freezing forms ice
+area; ice frozen in the leads closes (1 − A) of its own area of new
+ice 0.3 m thick (`leadClosing`), so the open area closes as its square
+(`leadClosure` 'squared'; 'hibler' closes all of it, Hibler's 1979 h₀
+law), and open water that cools below freezing forms ice
 0.3 m thick over the area its volume covers. Ice below 1 % of its cell
 or 10⁻⁴ m of volume melts away. The snow on lost area melts into the
 water, its latent heat freezing the same mass onto the ice, and new

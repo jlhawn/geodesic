@@ -23,14 +23,14 @@ function meanTheta(model) {
   return Float64Array.from({ length: K }, (_, k) => { let s = 0, a = 0; for (let i = 0; i < C; i++) { s += model.mesh.areaCell[i] * theta[k * C + i]; a += model.mesh.areaCell[i]; } return s / a; });
 }
 
-async function oneStep(keepSmallIce, cover) {
-  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus: false }, surface: { exchange: 'roughness' }, ice: { keepSmallIce } });
+async function oneStep(keepSmallIce, cover, extra = {}) {
+  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus: false }, surface: { exchange: 'roughness' }, ice: { keepSmallIce, ...extra } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const C = model.mesh.nCells, cells = [];
   for (let i = 0; i < C && cells.length < 12; i++) if (Math.abs(model.mesh.latCell[i]) > 62 * DEG && i % 7 === 0) cells.push(i);
   for (const i of cells) { model.state[6][i] = 0.8; model.seaIce.concentration[i] = cover; model.seaIce.snow[i] = 6; model.state[3][i] = FREEZING_POINT - 3; model.seaIce.snowAlbedo[i] = 0.8; }
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: false, dragEvery: 1, keepSmallIce } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: false, dragEvery: 1, keepSmallIce, ...extra } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ concentration: model.seaIce.concentration, snow: model.seaIce.snow, snowAlbedo: model.seaIce.snowAlbedo });
   const time = model.time;
@@ -58,3 +58,18 @@ for (const keepSmallIce of [true, false]) {
     }
   });
 }
+
+test("one step of the whole model with leadClosure 'hibler': cover 0.6 under a cold sky closes as on the CPU, faster than as its open area squared", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const squared = await oneStep(false, 0.6), hibler = await oneStep(false, 0.6, { leadClosure: 'hibler' });
+  const gain = (run, n, a) => a - 0.6;
+  let faster = 0;
+  for (let n = 0; n < hibler.cells.length; n++) {
+    const i = hibler.cells[n], cpu = hibler.model.seaIce.concentration[i], gpu = hibler.concentration[i];
+    assert.ok(Math.abs(cpu - gpu) < 1e-4, `cell ${i}: cover ${cpu} vs ${gpu}`);
+    assert.ok(Math.abs(hibler.model.state[6][i] - hibler.thickness[i]) < 1e-3 * hibler.model.state[6][i], `cell ${i}: thickness ${hibler.model.state[6][i]} vs ${hibler.thickness[i]}`);
+    const sq = squared.model.seaIce.concentration[i];
+    if (gain(hibler, n, cpu) > 0) { assert.ok(Math.abs(gain(hibler, n, cpu) - gain(squared, n, sq) / 0.4) < 1e-6 + 1e-3 * gain(hibler, n, cpu), `cell ${i}: ${cpu - 0.6} against ${(sq - 0.6) / 0.4}`); faster++; }
+  }
+  console.log(`leadClosure 'hibler' on ${hibler.cells.length} cells: ${faster} closing, CPU cover ${hibler.cells.map((i) => hibler.model.seaIce.concentration[i].toFixed(6)).join(' ')}`);
+  assert.ok(faster > 0, 'some leads close');
+});
