@@ -151,7 +151,7 @@ test("under rainCover 'overlap' rain that forms beneath an ice-only layer, or a 
     const T = Array.from(sigmaMid, (s) => Math.max(200, 300 + 6.5e-3 * 7000 * Math.log(s)));
     const mix = T.findIndex((t) => t > 278), ice = mix - 1 - gap;
     T[ice] = 230;
-    if (gap) T[mix - 1] = 260;
+    if (gap) T[mix - 1] = 230;
     for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
       theta[k * C + i] = T[k] / exnerLayer[k * C + i];
       q[k * C + i] = 0.9 * saturationHumidity(T[k], pi[i] * sigmaMid[k]);
@@ -176,12 +176,12 @@ test("under rainCover 'overlap' rain that forms beneath an ice-only layer, or a 
   for (const [iceCover, mixCover] of [[0.5, 0.5], [0.3, 0.6]]) {
     const carried = 1 - (1 - iceCover) * (1 - mixCover);
     const overlap = firstClear({}, iceCover, mixCover, 1), shared = firstClear({ rainCover: carried }, iceCover, mixCover, 1);
-    assert.ok(shared > 0 && Math.abs(overlap - shared) <= 1e-9 * shared, `ice cover ${iceCover} a clear layer above liquid cover ${mixCover}, under falling ice: the first clear layer below gains ${overlap} kg/kg, and ${shared} under the random overlap ${carried}`);
+    assert.ok(shared > 0 && Math.abs(overlap - shared) <= 1e-9 * shared, `ice cover ${iceCover} a clear layer at 230 K above liquid cover ${mixCover}, under falling ice: the first clear layer below gains ${overlap} kg/kg, and ${shared} under the random overlap ${carried}`);
   }
-  for (const [iceCover, mixCover] of [[0.8, 0.4], [0.3, 0.6]]) {
+  for (const [iceCover, mixCover] of [[0.5, 0.5], [0.8, 0.4], [0.3, 0.6]]) {
     const carried = rainShareBelow(rainShareBelow(0, iceCover, 0), mixCover, iceCover);
-    const overlap = firstClear({ iceFall: null }, iceCover, mixCover), shared = firstClear({ iceFall: null, rainCover: carried }, iceCover, mixCover);
-    assert.ok(shared > 0 && Math.abs(overlap - shared) <= 1e-9 * shared, `with iceFall null, ice cover ${iceCover} over liquid cover ${mixCover}: the first clear layer below gains ${overlap} kg/kg, and ${shared} under rainCover ${carried}`);
+    const overlap = firstClear({ iceFall: 0 }, iceCover, mixCover), shared = firstClear({ iceFall: 0, rainCover: carried }, iceCover, mixCover);
+    assert.ok(shared > 0 && Math.abs(overlap - shared) <= 1e-9 * shared, `with iceFall 0, ice cover ${iceCover} over liquid cover ${mixCover}: the first clear layer below gains ${overlap} kg/kg, and ${shared} under rainCover ${carried}`);
   }
 });
 
