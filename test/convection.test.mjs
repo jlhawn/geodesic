@@ -1828,6 +1828,9 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   const shallowLcl = run({ midLevelConvection: true }, single(0.805)), shallowLclOff = run({}, single(0.805)), wet = run({ midLevelConvection: true }, single(0.97));
   assert.ok(!shallowLcl.deep.midLevel && same(shallowLcl, shallowLclOff), `a bl48 layer near 3 km at RH 0.805, whose parcel condenses above its top interface though below the next layer's midpoint, gets no mid-level plume: base flux ${shallowLcl.deep.baseFlux} from ${shallowLcl.height} m`);
   assert.ok(wet.deep.midLevel && wet.height > 2000, `the same layer at RH 0.97 departs: base flux ${wet.deep.baseFlux} from ${wet.height} m`);
+  const inversion = { column: (z, p) => { const T = z < 800 ? 290 - 6.5e-3 * z : z < 1400 ? 284.8 + 5 * (z - 800) / 600 : 289.8 - 6.5e-3 * (z - 1400); return { T, q: (z > 800 && z < 2400 ? 0.95 : 0.3) * saturationHumidity(T, p) }; } };
+  const retried = run({ midLevelConvection: true }, inversion);
+  assert.ok(retried.deep.midLevel && retried.height > 1300 && retried.deep.cape > 0, `under a 5 K inversion at 0.8-1.4 km, moist from 0.8 to 2.4 km, the inversion's layers give way to the first one above it: from ${retried.height} m with CAPE ${retried.deep.cape} J/kg`);
   assert.ok(windward.deep.midLevel && Math.abs(windward.deep.baseFlux * g / 0.2 - 1) < 1e-14, `where omega < 0 though pi sigma-dot > 0 the plume departs at -omega/g: ${windward.deep.baseFlux}`);
   const mixing = Array.from({ length: on.deep.base - on.deep.top }, (_, n) => on.deep.top + n).filter((k) => on.entrained[k] > 0);
   assert.ok(mixing.length >= 3 && mixing.every((k) => on.detrained[k] >= 0.6 * on.entrained[k] * (1 - 1e-12) && on.detrained[k] <= 1.6 * on.entrained[k] * (1 + 1e-12)), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(3)).join(' ')}`);
