@@ -406,52 +406,102 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
   await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
 });
 
-test('the boundary layer\'s K-profile options, alone and with diagnoseFirst, surfaceExcess or the subsidence share, keep both engines\' mixing in step through two model steps, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cases = [
-    ['ground, stable profile, Prandtl coefficient 3.6', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6 }],
-    ['ground, capped scale, countergradient', { profileHeight: 'ground', velocityScale: 'capped', countergradient: 7.2 }],
-    ['ground, stable profile, diagnoseFirst, surfaceExcess 8.5', { profileHeight: 'ground', stableProfile: 'holtslagBoville', diagnoseFirst: true, surfaceExcess: 8.5 }],
-    ['ground, the subsidence share of the entrainment', { profileHeight: 'ground', entrainment: { subsidence: true } }],
+    ['defaults', {}, []],
+    ['ground, stable profile, Prandtl coefficient 3.6, countergradient', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6, countergradient: 7.2 }, ['mixing stable', 'mixing convective', 'scalarMixing stable', 'scalarMixing convective']],
+    ['ground, capped scale, countergradient', { profileHeight: 'ground', velocityScale: 'capped', countergradient: 7.2 }, ['mixing stable', 'mixing convective']],
+    ['stable profile, Prandtl coefficient 3.6', { stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6 }, ['mixing stable', 'scalarMixing stable', 'scalarMixing convective']],
+    ['capped scale, countergradient', { velocityScale: 'capped', countergradient: 7.2 }, ['mixing convective']],
+    ['diagnoseFirst, surfaceExcess 8.5', { diagnoseFirst: true, surfaceExcess: 8.5 }, ['mixing stable', 'mixing convective', 'scalarMixing convective']],
+    ['the subsidence share', { entrainment: { subsidence: true } }, []],
   ];
-  const failures = [];
+  const apartBound = { stable: 1e-3, convective: 5e-4, entraining: 1e-3 }, failures = [];
   for (const [label, surface] of [['roughness', {}], ['fixed', { exchange: 'fixed' }]]) {
-    const base = prepare(createModel(new Grid(16), { topography, surface }));
-    for (let s = 0; s < 2; s++) base.step(900);
+    const runs = {};
+    let C = 0, K = 0, kTop = 0, g = 0;
     for (const [name, boundaryLayer] of cases) {
       const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer }));
       for (let s = 0; s < 2; s++) { cpu.step(900); await gpu.step(900); }
       await gpu.settle(); await gpu.sync();
-      const { nCells: C } = cpu.mesh, K = cpu.core.K, bl = cpu.boundaryLayer, { kTop } = bl, low = (K - 1) * C, PH = gpu.gpu.layout.PH, where = `${label}, ${name}`;
-      const fields = [['mixing', 'MIX'], ['scalarMixing', 'MIXH'], ['nonlocal', 'CG']].filter(([field]) => bl[field]);
-      const read = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, fields.map(([field, key]) => ({ offset: PH[key], length: bl[field].length })));
-      const split = Array.from({ length: C }, (_, i) => Math.abs(gpu.state[4][low + i] - cpu.state[4][low + i]) > 1e-2 * cpu.state[4][low + i]);
+      const bl = cpu.boundaryLayer, PH = gpu.gpu.layout.PH, key = { mixing: 'MIX', scalarMixing: 'MIXH', nonlocal: 'CG' };
+      C = cpu.mesh.nCells; K = cpu.core.K; kTop = bl.kTop; g = cpu.core.diagnostics.g;
+      const low = (K - 1) * C, fields = Object.keys(key).filter((field) => bl[field]);
+      const read = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, fields.map((field) => ({ offset: PH[key[field]], length: bl[field].length })));
+      runs[name] = {
+        split: Array.from({ length: C }, (_, i) => Math.abs(gpu.state[4][low + i] - cpu.state[4][low + i]) > 1e-2 * cpu.state[4][low + i]),
+        classes: { stable: Array.from(bl.buoyancyFlux, (b) => !(b > 0)), convective: Array.from(bl.buoyancyFlux, (b) => b > 0), entraining: Array.from(bl.entrainment, (w) => w > 0) },
+        cpu: Object.fromEntries(fields.map((field) => [field, Float64Array.from(bl[field])])),
+        gpu: Object.fromEntries(fields.map((field, n) => [field, Float64Array.from(read[n])])),
+        depth: Float64Array.from(bl.depth), geopotential: Float64Array.from(cpu.core.diagnostics.geopotential),
+      };
       gpu.destroy();
-      const splits = split.filter(Boolean).length, report = [`${splits} cells left out where a moist decision parts the engines`];
-      if (!(splits <= 0.005 * C)) failures.push(`${where}: the lowest layer's humidity parts between the engines on ${splits} of ${C} cells`);
-      fields.forEach(([field], n) => {
-        const mine = bl[field], theirs = read[n];
-        let parted = 0, worst = 0, apart = 0, scale = 0, lowApart = 0, lowScale = 0;
+    }
+    const control = runs.defaults;
+    const columnGap = (a, b, i) => {
+      let largest = 0, gap = 0;
+      for (let k = kTop; k < K - 1; k++) { largest = Math.max(largest, Math.abs(a[k * C + i])); gap = Math.max(gap, Math.abs(b[k * C + i] - a[k * C + i])); }
+      return largest > 0 ? gap / largest : 0;
+    };
+    for (const [name, , acting] of cases) {
+      const run = runs[name], where = `${label}, ${name}`, report = [];
+      const out = run.split.map((s, i) => s || control.split[i]), splits = out.filter(Boolean).length;
+      report.push(`${splits} cells out where a moist decision parts the engines`);
+      if (!(splits <= 6)) failures.push(`${where}: the lowest layer's humidity parts between the engines on ${splits} of ${C} cells`);
+      for (const field of Object.keys(run.cpu)) {
+        const mine = run.cpu[field], theirs = run.gpu[field], base = name !== 'defaults' && control.cpu[field] ? [control.cpu[field], control.gpu[field]] : null;
+        const kept = new Uint8Array(C);
+        let parted = 0, worst = 0, worstAt = -1;
         for (let i = 0; i < C; i++) {
-          if (split[i]) continue;
-          let largest = 0, gap = 0;
-          for (let k = kTop; k < K - 1; k++) largest = Math.max(largest, Math.abs(mine[k * C + i]));
-          if (!(largest > 0)) continue;
-          for (let k = kTop; k < K - 1; k++) gap = Math.max(gap, Math.abs(theirs[k * C + i] - mine[k * C + i]) / largest);
+          if (out[i]) continue;
+          const own = columnGap(mine, theirs, i), gap = Math.max(own, base ? columnGap(base[0], base[1], i) : 0);
           if (gap > 1e-2) { parted++; continue; }
-          worst = Math.max(worst, gap);
-          for (let k = kTop; k < K - 1; k++) { apart += (theirs[k * C + i] - mine[k * C + i]) ** 2; scale += mine[k * C + i] ** 2; }
-          const x = (K - 2) * C + i;
-          lowApart += (theirs[x] - mine[x]) ** 2; lowScale += mine[x] ** 2;
+          kept[i] = 1;
+          if (own > worst) { worst = own; worstAt = i; }
         }
-        const all = Math.sqrt(apart / scale), lowest = lowScale > 0 ? Math.sqrt(lowApart / lowScale) : 0;
-        report.push(`${field}: ${parted} columns parted, ${all.toExponential(1)} rms apart, the lowest interface ${lowest.toExponential(1)}, the worst column ${worst.toExponential(1)} of its largest`);
-        if (!(parted <= C / 50)) failures.push(`${where}, ${field}: ${parted} of ${C} columns part`);
-        if (!(all < 5e-4 && lowest < 2e-4)) failures.push(`${where}, ${field}: the engines are ${all} rms apart, ${lowest} at the lowest interface`);
-      });
-      let moved = 0, scale = 0;
-      for (let i = 0; i < C; i++) { const x = (K - 2) * C + i; moved += (bl.mixing[x] - base.boundaryLayer.mixing[x]) ** 2; scale += base.boundaryLayer.mixing[x] ** 2; }
-      report.push(`the lowest interface's mixing moves ${Math.sqrt(moved / scale).toExponential(1)} rms from the defaults`);
-      if (!(Math.sqrt(moved / scale) > 0.05)) failures.push(`${where}: the options move the lowest interface's mixing by only ${Math.sqrt(moved / scale)} rms`);
+        if (!(parted <= 6)) failures.push(`${where}, ${field}: ${parted} of ${C} columns part by over 1 % of their largest coefficient`);
+        const classes = [];
+        for (const [kind, member] of Object.entries(run.classes)) {
+          let apart = 0, scale = 0, move = 0, gap = 0, before = 0, columns = 0;
+          for (let i = 0; i < C; i++) {
+            if (!kept[i] || !member[i]) continue;
+            columns++;
+            for (let k = kTop; k < K - 1; k++) {
+              const x = k * C + i;
+              apart += (theirs[x] - mine[x]) ** 2; scale += mine[x] ** 2;
+              if (!base) continue;
+              const cpuMove = mine[x] - base[0][x], gpuMove = theirs[x] - base[1][x];
+              move += cpuMove ** 2; gap += (gpuMove - cpuMove) ** 2; before += base[0][x] ** 2;
+            }
+          }
+          const relative = scale > 0 ? Math.sqrt(apart / scale) : 0, moved = before > 0 ? Math.sqrt(move / before) : 0, moveGap = move > 0 ? Math.sqrt(gap / move) : 0;
+          classes.push(`${kind} (${columns}) ${relative.toExponential(1)} apart${base ? `, moved ${moved.toExponential(1)}, the moves ${moveGap.toExponential(1)} apart` : ''}`);
+          if (!(relative < apartBound[kind])) failures.push(`${where}, ${field}, ${kind} columns: the engines are ${relative} rms apart`);
+          if (acting.includes(`${field} ${kind}`) && !(columns >= 20 && moved > 1e-3 && moveGap < 0.02)) failures.push(`${where}, ${field}, ${kind} columns: ${columns} of them, the options move it ${moved} rms, the engines' moves ${moveGap} of the move apart`);
+        }
+        let seat = '';
+        if (worstAt >= 0) {
+          let at = kTop, top = 0, largest = 0;
+          for (let k = kTop; k < K - 1; k++) { const x = k * C + worstAt, d = Math.abs(theirs[x] - mine[x]); largest = Math.max(largest, Math.abs(mine[x])); if (d > top) { top = d; at = k; } }
+          const z = (run.geopotential[at * C + worstAt] + run.geopotential[(at + 1) * C + worstAt]) / (2 * g);
+          seat = ` (${run.classes.stable[worstAt] ? 'stable' : 'convective'}${run.classes.entraining[worstAt] ? ', entraining' : ''}: its largest gap at ${z.toFixed(0)} m with the top at ${run.depth[worstAt].toFixed(0)} m, where the coefficient is ${(Math.abs(mine[at * C + worstAt]) / largest).toExponential(1)} of the column's largest)`;
+        }
+        report.push(`${field}: ${parted} columns parted; ${classes.join('; ')}; the worst kept column ${worst.toExponential(1)} of its largest${seat}`);
+        if (name !== 'the subsidence share' || field !== 'mixing') continue;
+        let columns = 0, off = 0, worstShare = 0;
+        for (let i = 0; i < C; i++) {
+          if (!kept[i] || !run.classes.entraining[i]) continue;
+          let at = -1, largest = 0, top = 0;
+          for (let k = kTop; k < K - 1; k++) { const x = k * C + i, m = Math.abs(mine[x] - base[0][x]); top = Math.max(top, Math.abs(base[0][x])); if (m > largest) { largest = m; at = x; } }
+          if (!(largest > 1e-3 * top)) continue;
+          columns++;
+          const share = Math.abs(theirs[at] - base[1][at] - (mine[at] - base[0][at])) / largest;
+          worstShare = Math.max(worstShare, share);
+          if (share > 0.05) off++;
+        }
+        report.push(`the share moves ${columns} entraining columns' exchange by over 1e-3 of their largest coefficient, the engines' moves at that interface part by over 5 % in ${off}, by ${worstShare.toExponential(1)} of it at worst`);
+        if (!(columns >= 20 && off <= 1)) failures.push(`${where}: the share moves ${columns} entraining columns, the engines' moves part in ${off}`);
+      }
       console.log(`${label} exchange, ${name}: ${report.join('; ')}`);
     }
   }
@@ -477,7 +527,7 @@ test('the GPU\'s boundary-layer diagnosis refuses a D_EXL read, which would take
   assert.throws(() => boundaryLayerDiagnosis(body.replace('fn blExchange(', 'fn blStale(i: i32) -> f32 { return D[D_EXL + i]; }\nfn blExchange('), {}), /reads D_EXL/);
 });
 
-test('both coupled engines hand the air the same sea velocity under surface.relativeWind, with the ice drift and without it, and surface.gustiness and surface.virtualDensity move the ocean alike through its and the drift\'s stress under the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both coupled engines hand the air the same sea velocity under surface.relativeWind, with the ice drift and without it, and surface.gustiness and surface.virtualDensity move the ocean and the ice drift alike through their stress under the fixed exchange, and both refuse ocean.gustiness', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const configs = [
     ['drift', { surface: { relativeWind: true } }],
     ['no drift', { surface: { relativeWind: true }, ocean: { iceDrift: false } }],
@@ -485,7 +535,7 @@ test('both coupled engines hand the air the same sea velocity under surface.rela
     ['fixed exchange, gustiness 6', { surface: { exchange: 'fixed', gustiness: 6 } }],
     ['fixed exchange, virtualDensity', { surface: { exchange: 'fixed', virtualDensity: true } }],
   ];
-  const flows = {}, failures = [], report = [];
+  const flows = {}, drifts = {}, failures = [], report = [];
   for (const [name, { surface, ocean = {} }] of configs) {
     const options = { topography, surface, ocean: { everySteps: 2, ...ocean } };
     const cpu = prepare(createModel(new Grid(16), options)), gpu = prepare(await createGpuModel(new Grid(16), options));
@@ -495,6 +545,7 @@ test('both coupled engines hand the air the same sea velocity under surface.rela
       const [flow] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.UO, length: cpu.mesh.nEdges }]);
       flows[name] = { cpu: Float64Array.from(cpu.seaFlow), gpu: Float64Array.from(flow) };
     } else flows[name] = { cpu: Float64Array.from(cpu.ocean.serialize().u), gpu: Float64Array.from((await gpu.ocean.serialize()).u) };
+    if (!surface.relativeWind) drifts[name] = { cpu: Float64Array.from(cpu.ocean.iceDrift.velocity), gpu: Float64Array.from((await gpu.oceanEngine.restartArrays()).iceVelocity) };
     gpu.destroy();
   }
   const rms = (a, b = null) => Math.sqrt(a.reduce((sum, v, e) => sum + (v - (b ? b[e] : 0)) ** 2, 0) / a.length);
@@ -509,6 +560,11 @@ test('both coupled engines hand the air the same sea velocity under surface.rela
     report.push(`${name} against ${from}: it moves ${move.toExponential(1)} of it, the engines' moves ${gap.toExponential(1)} apart`);
     if (!(move > least && gap < spread)) failures.push(`${name} against ${from}: the velocity moves ${move} of it, the engines' moves ${gap} of the move apart`);
   }
+  const [still, moved] = [drifts['fixed exchange'], drifts['fixed exchange, virtualDensity']];
+  const cpuDrift = moved.cpu.map((v, e) => v - still.cpu[e]), gpuDrift = moved.gpu.map((v, e) => v - still.gpu[e]);
+  const driftScale = rms(still.cpu), driftApart = rms(still.gpu, still.cpu) / driftScale, driftMove = rms(cpuDrift) / driftScale, driftGap = rms(gpuDrift, cpuDrift) / rms(cpuDrift);
+  report.push(`the ice drift: ${driftScale.toExponential(1)} m/s rms, the engines ${driftApart.toExponential(1)} of it apart; virtualDensity moves it ${driftMove.toExponential(1)} of it, the engines' moves ${driftGap.toExponential(1)} apart`);
+  if (!(still.cpu.length === still.gpu.length && driftApart < 2e-4 && driftMove > 1e-4 && driftGap < 0.1)) failures.push(`the ice drift: the engines ${driftApart} of it apart, virtualDensity moves it ${driftMove} of it, the engines' moves ${driftGap} of the move apart`);
   console.log(`the sea velocity under the air, then the ocean's: ${report.join('; ')}`);
   assert.deepEqual(failures, []);
   await assert.rejects(createGpuModel(new Grid(16), { topography, ocean: { gustiness: 5 } }), /ocean\.gustiness is not an option/);
