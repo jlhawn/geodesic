@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, fogConstants } from '../js/physics/moist.module.js';
+import { MID_LEVEL, saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, fogConstants } from '../js/physics/moist.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
@@ -1801,8 +1801,8 @@ test('with convectionRetype the engines agree on random columns, and the GPU ref
 
 test('with midLevelConvection a column that no test parcel types deep and whose shallow plume does not rise lifts the lowest layer above the lowest below 10 km in large-scale ascent with q above 0.8 q_s whose parcel condenses at the next layer and is less than 0.5 K colder there, at a base flux of −π σ̇/g or (H + L E)/(g z_base), with enthalpy and water exact; sinking, drier air or the option off leave the column as without it', () => {
   const dt = 600;
-  const run = (options, { ascent = -0.2, humid = 0.95, sensible = 0, evaporation = 0, lapse = 6.5e-3, low = 1000, high = 3000, profile = null, column = null, buoyancy = -1e-4, depth = 500 } = {}) => {
-    const model = build(options), { moist, core } = model, { K, C, dSigma, geopotential, g, piSigmaDot } = core.diagnostics, [pi] = model.state;
+  const run = (options, { ascent = -0.2, humid = 0.95, sensible = 0, evaporation = 0, lapse = 6.5e-3, low = 1000, high = 3000, profile = null, column = null, buoyancy = -1e-4, depth = 500, ground = null } = {}) => {
+    const model = ground === null ? build(options) : createModel(new Grid(16), { topography: syntheticTopography(90, 180, () => ground), ocean: false, levels, moist: options }), { moist, core } = model, { K, C, dSigma, geopotential, g, piSigmaDot } = core.diagnostics, [pi] = model.state;
     place(model, 0, 101500, column ?? ((z, p) => { const T = 290 - lapse * Math.min(z, 11000); return { T, q: (z > low && z < high ? humid : 0.3) * saturationHumidity(T, p) }; }));
     setDepth(model, 0, depth);
     model.boundaryLayer.buoyancyFlux[0] = buoyancy; model.boundaryLayer.friction[0] = 0.25; model.radiation.mlmGate[0] = 0.3;
@@ -1812,7 +1812,7 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
     const before = budget(model, 0);
     moist.adjust(model.state, 0, 1, dt);
     const after = budget(model, 0), source = Array.from({ length: K }, (_, k) => k).find((k) => Math.abs(pi[0] * dSigma[k] - moist.deep.sourceMass) < 1e-12 * moist.deep.sourceMass);
-    return { deep: { ...moist.deep }, rain: moist.rain[0], entrained: Float64Array.from(moist.plumeEntrained), detrained: Float64Array.from(moist.plumeDetrained), before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, g };
+    return { deep: { ...moist.deep }, rain: moist.rain[0], entrained: Float64Array.from(moist.plumeEntrained), detrained: Float64Array.from(moist.plumeDetrained), before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, source, z: Float64Array.from({ length: K }, (_, k) => geopotential[k * C] / g), g };
   };
   const same = (a, b) => a.state.every((x, n) => x.every((v, j) => v === b.state[n][j]));
   const off = run({}), on = run({ midLevelConvection: true }), g = on.g;
@@ -1834,6 +1834,35 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   const deck = { column: deckColumn, buoyancy: 2e-4, depth: 900, ascent: -0.05, sensible: 10, evaporation: 4e-5 };
   const capped = run({ midLevelConvection: true }, deck), cappedOff = run({}, deck);
   assert.ok(!capped.deep.midLevel && same(capped, cappedOff), `a column under a deck that the stratocumulus cap closes gets no mid-level plume: base flux ${capped.deep.baseFlux} from ${capped.height} m`);
+  const noCap = run({ midLevelConvection: true, stratocumulusInversion: null }, deck), noCapOff = run({ stratocumulusInversion: null }, deck);
+  assert.ok(!noCap.deep.midLevel && same(noCap, noCapOff), `without the stratocumulus cap the deck column's shallow plume rises and the mid-level type is not tried: base flux ${noCap.deep.baseFlux}`);
+  const lidColumn = (z, p) => {
+    const T = z < 2200 ? 290 - 6.5e-3 * z : z < 2700 ? 275.7 + 0.01 * (z - 2200) : 280.7 - 6.5e-3 * (Math.min(z, 11000) - 2700);
+    return { T, q: (z > 1000 && z < 3000 ? 0.95 : 0.3) * saturationHumidity(T, p) };
+  };
+  const lid = run({ midLevelConvection: true }, { column: lidColumn }), lidRetyped = run({ midLevelConvection: true, convectionRetype: true }, { column: lidColumn });
+  const lidDepth = lid.state[0][0] * (levels[lid.deep.base] - levels[lid.deep.top + 1]);
+  assert.ok(lid.deep.midLevel && lidDepth < DEEP_CLOUD_DEPTH && lidRetyped.deep.midLevel && same(lidRetyped, lid), `convectionRetype leaves a mid-level plume ${lidDepth} Pa deep under an inversion as it is`);
+  const gradedOmega = run({ midLevelConvection: true }, { profile: (k) => -0.05 - 0.005 * k });
+  assert.ok(gradedOmega.deep.midLevel && Math.abs(gradedOmega.deep.baseFlux * g / (0.05 + 0.005 * (gradedOmega.deep.base - 0.5)) - 1) < 1e-14, `under omega graded in the vertical the plume departs at -omega/g of the two layers that meet at its cloud base ${gradedOmega.deep.base}: ${gradedOmega.deep.baseFlux * g} Pa/s`);
+  const rateFactor = MID_LEVEL.entrainment;
+  let singleRate;
+  try { MID_LEVEL.entrainment = 1; singleRate = run({ midLevelConvection: true }); } finally { MID_LEVEL.entrainment = rateFactor; }
+  const bothMixing = mixing.filter((k) => singleRate.entrained[k] > 0);
+  assert.ok(bothMixing.length >= 3 && bothMixing.every((k) => on.entrained[k] === 2 * singleRate.entrained[k]), `the mid-level plume entrains twice eq. 6.7's rate in each of its ${bothMixing.length} entraining layers: ${bothMixing.map((k) => on.entrained[k] / singleRate.entrained[k]).join(' ')}`);
+  const pressureColumn = (z, p) => { const T = 290 * Math.pow(p / 101500, 0.19); return { T, q: (p < 90000 && p > 75000 ? 0.95 : 0.3) * saturationHumidity(T, p) }; };
+  const driven = { column: pressureColumn, ascent: -1e-4, sensible: 20, evaporation: 2e-5 }, capHeight = MID_LEVEL.height;
+  const groundLow = run({ midLevelConvection: true }, { ...driven, ground: 300 }), departed = groundLow.source, aboveGround = (k) => groundLow.z[k] - 300;
+  let capAbove, capBelow, groundHigh;
+  try {
+    MID_LEVEL.height = 0.5 * (aboveGround(departed) + aboveGround(departed - 1));
+    capAbove = run({ midLevelConvection: true }, { ...driven, ground: 300 });
+    groundHigh = run({ midLevelConvection: true }, { ...driven, ground: 1800 });
+    MID_LEVEL.height = 0.5 * (aboveGround(departed) + aboveGround(departed + 1));
+    capBelow = run({ midLevelConvection: true }, { ...driven, ground: 300 });
+  } finally { MID_LEVEL.height = capHeight; }
+  assert.ok(groundLow.deep.midLevel && capAbove.deep.midLevel && same(capAbove, groundLow) && !capBelow.deep.midLevel, `on ground 300 m high the search stops at MID_LEVEL.height above the ground: set between the departure layer (${aboveGround(departed)} m) and the next one up the plume departs as before, set between it and the next one down there is none`);
+  assert.ok(groundHigh.deep.midLevel && groundHigh.source === departed && Math.abs(groundHigh.deep.baseFlux / groundLow.deep.baseFlux - 1) < 1e-12, `on ground 1500 m higher, under that bound, the same column departs from the same layer at the same surface-driven flux: ${groundHigh.deep.baseFlux} against ${groundLow.deep.baseFlux}`);
   assert.ok(!same(on, off), 'the mid-level plume moves the column');
   assert.ok(Math.abs(on.after.enthalpy - on.before.enthalpy) < 1e-12 * on.before.enthalpy, `enthalpy ${on.before.enthalpy} → ${on.after.enthalpy}`);
   assert.ok(Math.abs(on.after.water + on.rain - on.before.water) < 1e-12 * on.before.water, `water ${on.before.water} → ${on.after.water} + ${on.rain}`);
