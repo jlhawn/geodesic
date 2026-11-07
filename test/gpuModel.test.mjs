@@ -588,7 +588,7 @@ test('the variance cover that holds each layer\'s cloud water, and the turbulenc
 });
 
 test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}]) {
+  for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}, { deckReference: 'interpolate' }]) {
     const run = await mixedLayerPair(4, { turbulence: 'moist', ...options });
     const { K: nK } = run.model.core, keep = [];
     let coupled = 0, open = 0, parted = 0;
