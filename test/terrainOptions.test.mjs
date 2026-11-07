@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel, dragConstants } from '../js/model.module.js';
-import { topographyFromInt16, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
+import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey } from '../js/geography.module.js';
 import { orographicColumn, namedConstants, OROGRAPHY_DEFAULTS, OROGRAPHY_CONSTANTS, LOTT_MILLER } from '../js/physics/orography.module.js';
 import { orographyConstants } from '../js/gpu/orography.gpu.js';
 
@@ -65,4 +65,23 @@ for (const N of [16, 24]) test(`with conserveVolume each land mass at N=${N} kee
   for (let i = 0; i < C; i++) if (!land[i]) assert.equal(kept[i], smoothed[i], `cell ${i} off the land`);
   console.log(`N=${N}: ${masses} land masses; the default smoothing loses ${(100 * lost / total).toFixed(2)} % of the land's volume`);
   assert.ok(lost > 0, 'the default smoothing loses volume');
+});
+
+test('terrain options that make the same surface share a key', () => {
+  assert.equal(terrainKey(true), terrainKey({}));
+  assert.equal(terrainKey(true), terrainKey({ conserveVolume: false, passes: 2 }));
+  assert.equal(terrainKey({ passes: 3, conserveVolume: true }), terrainKey({ conserveVolume: true, passes: 3 }));
+  assert.notEqual(terrainKey({ conserveVolume: true }), terrainKey(true));
+  assert.notEqual(terrainKey({ passes: 1 }), terrainKey(true));
+});
+
+test('a run over terrain of other options keeps the bundled subgrid file, its σ_flt and the named drag constants', () => {
+  const plain = createModel(new Grid(16), { topography }), kept = createModel(new Grid(16), { topography, terrain: { conserveVolume: true } });
+  assert.notDeepEqual(Array.from(kept.surfaceGeopotential), Array.from(plain.surfaceGeopotential));
+  for (const model of [plain, kept]) {
+    assert.equal(model.orography.fields.raster, undefined);
+    assert.ok(model.orography.fields.filtered.some((value) => value > 0));
+    assert.deepEqual(model.orography.options, OROGRAPHY_DEFAULTS);
+  }
+  assert.deepEqual(Array.from(kept.orography.fields.deviation), Array.from(plain.orography.fields.deviation));
 });

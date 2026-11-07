@@ -94,31 +94,40 @@ ${named('FR_', L.FR)}`;
 }
 
 /*
- * The ∇⁴ closure's first Laplacian of T less the US Standard Atmosphere
- * at the layer's pressure (temperatureClosure 'standard').
+ * cellTendency with q and q_c at the layer interfaces under van Leer's
+ * limiter, as vanLeerFace in sigmaCore.module.js (verticalAdvection
+ * 'vanLeerWater').
  */
-function limitedInterfaces(body, fields) {
+function limitedInterfaces(body) {
   const at = 'let verticalT = (lowerFlow * lowerT - upperFlow * upperT - fT * (lowerFlow - upperFlow)) / layerMass;';
   const laid = 'var lowerT = 0.0; var lowerQ = 0.0; var lowerC = 0.0; var upperT = 0.0; var upperQ = 0.0; var upperC = 0.0;';
   if (!body.includes(at) || !body.includes(laid)) throw new Error('cellTendency no longer lays the interface values as the van Leer faces expect');
-  const offsets = { T: 'S_TH', Q: 'S_Q', C: 'S_QC' };
-  const faces = (side, above, flow) => fields.map((x) => `${side}${x} = vanLeerFace(${offsets[x]}, ${above}, i, ${side}${x}, ${flow});`).join(' ');
+  const offsets = { Q: 'S_Q', C: 'S_QC' };
+  const faces = (side, above, flow) => Object.entries(offsets).map(([x, off]) => `${side}${x} = vanLeerFace(${off}, ${above}, i, ${side}${x}, ${flow});`).join(' ');
   return `fn vanLeerFace(off: i32, above: i32, i: i32, centered: f32, flow: f32) -> f32 {
   let down = flow > 0.0;
-  let a = IN[off + above * C + i]; let b = IN[off + (above + 1) * C + i];
-  let upwind = select(b, a, down); let downwind = select(a, b, down);
+  let up = select(above + 1, above, down); let dn = select(above, above + 1, down);
   let far = select(above + 2, above - 1, down);
-  var beyond = upwind;
-  if (far >= 0 && far < K) { beyond = IN[off + far * C + i]; }
+  let upwind = IN[off + up * C + i]; let downwind = IN[off + dn * C + i];
   let across = downwind - upwind;
   var phi = 0.0;
-  if (across != 0.0) { let r = (upwind - beyond) / across; if (r > 0.0) { phi = 2.0 * r / (1.0 + r); } }
+  if (far >= 0 && far < K) {
+    let rise = upwind - IN[off + far * C + i];
+    let exnerUp = D[D_EXM + up * C + i];
+    let lead = rise * abs(D[D_EXM + dn * C + i] - exnerUp);
+    let sum = lead + across * abs(exnerUp - D[D_EXM + far * C + i]);
+    if (rise * across > 0.0 && sum != 0.0) { phi = 2.0 * lead / sum; }
+  }
   let face = upwind + phi * (centered - upwind);
   return select(face, downwind, (face - downwind) * across > 0.0);
 }
 ${body.replace(at, `if (k < K - 1) { ${faces('lower', 'k', 'lowerFlow')} }\n    if (k > 0) { ${faces('upper', 'k - 1', 'upperFlow')} }\n    ${at}`)}`;
 }
 
+/*
+ * The ∇⁴ closure's first Laplacian of T less the US Standard Atmosphere
+ * at the layer's pressure (temperatureClosure 'standard').
+ */
 function standardReferenceClosure(body) {
   const table = (column) => `array<f32, ${STANDARD_TEMPERATURE.length}>(${STANDARD_TEMPERATURE.map((row) => row[column].toExponential(9)).join(', ')})`;
   const here = 'let hereT = IN[S_TH + idx] * D[D_EXM + idx];', there = 'sumT += dv * (IN[S_TH + row + j] * D[D_EXM + row + j] - hereT) / dc;';
@@ -1036,7 +1045,7 @@ export async function createGpuCore(mesh, {
   if (!sponge) { delete kernelBodies.spongeMean; delete kernelBodies.spongeApply; }
   if (!hybrid) { delete kernelBodies.divergenceHybrid; delete kernelBodies.divergenceDampHybrid; }
   if (temperatureClosure === 'standard') kernelBodies.lapScalar1 = standardReferenceClosure(kernelBodies.lapScalar1);
-  if (verticalAdvection !== 'centered') kernelBodies.cellTendency = limitedInterfaces(kernelBodies.cellTendency, verticalAdvection === 'vanLeer' ? ['T', 'Q', 'C'] : ['Q', 'C']);
+  if (verticalAdvection === 'vanLeerWater') kernelBodies.cellTendency = limitedInterfaces(kernelBodies.cellTendency);
   if (phys.bergeronAutoconversion) kernelBodies.adjustRain = bergeronRain(kernelBodies.adjustRain);
   if (phys.relativeWind && !(phys.surfaceExchange === 'roughness' && phys.implicitDrag)) throw new Error('relativeWind needs the implicit drag of the roughness exchange');
   if (phys.relativeWind) Object.assign(kernelBodies, relativeWindKernels(kernelBodies));

@@ -943,7 +943,16 @@ over dry air gives virga rather than surface rain; at N=128 this cuts
 the Sahara's June large-scale rain from 1.44 to 0.13 mm/day, and over
 90 days at N=64 it raises the global cloud water from 59 to 81 g/m²
 and the planetary albedo from 0.279 to 0.303, for 0.2 % of the step's
-GPU time. Betts–Miller still rains directly. Dry
+GPU time. The law has no rate: each clear layer takes the rain up to its
+whole deficit within the step, where the IFS evaporates at a Kessler-type
+rate (Cy41r2 Part IV eq. 7.70) and none above RH_crit (eq. 7.77). Against
+such a rate (Nov 7 audit: three N=64 fixed-SST pairs over WOA23) its
+effect on the trades is inside the pairs' noise, but it carries about
+twice the rate's sensible heat at 160–100W (the rate cuts it 44–52 %),
+fogs the lowest layer (fog share 0.25–0.30 against 0.01–0.02) and
+reflects 4–8 W/m² more sunlight. Its albedo rise heads the N=64 SWCRE
+excess (−52 against CERES −42), and no June arm has retested the Sahara.
+Betts–Miller still rains directly. Dry
 adjustment mixes `qc` with `q`. The Betts–Miller reference profile uses
 Bolton's closed-form LCL and a two-substep moist ascent that stops once
 the parcel is 10 K colder than the air (87 → 5 ms per N=16 step).
@@ -953,11 +962,13 @@ coupling (albedo and longwave emissivity of cloud) is the next step.
 
 ### M9 — Sea ice and surface albedo — done
 
-`js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model,
-Fichefet and Morales Maqueda's (1997) E1, E3 and E4 simplifications of
-Semtner's (1976) three-layer model (no heat stored in the ice, no
-sunlight into it, one thickness), on the slab ocean, with ice thickness
-as the seventh state array. Open water is the mixed layer (2.1×10⁷
+`js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model
+on the slab ocean, with ice thickness as the seventh state array. It is
+the configuration Fichefet and Morales Maqueda (1997) label E1, E3 and
+E4: no heat stored in the ice, no sunlight into it, and one thickness
+for conduction. They set E1 apart from Semtner's (1976) zero-layer
+model, which keeps a reservoir for the sunlight absorbed inside the ice
+(Nov 7 audit). Open water is the mixed layer (2.1×10⁷
 J/m²/K); when it cools to the seawater freezing point (271.35 K) the
 deficit freezes into ice of latent heat ρ_i L_f. Ice has a skin of
 small heat capacity (2×10⁵ J/m²/K) whose temperature answers the
@@ -1056,10 +1067,13 @@ area, so the two still average back to the cell's flux. The ice part
 grows and melts as above under its share; the leads' heat, with the
 ocean's flux beneath them, melts ice or freezes new ice. Melting takes
 area as Hibler (1979) does, half the relative loss of volume from the
-area; ice frozen in the leads closes (1 − A) of its own area of new
-ice 0.3 m thick (`leadClosing`), so the open area closes as its square
-(`leadClosure` 'squared'; 'hibler' closes all of it, Hibler's 1979 h₀
-law, at h₀ = `leadClosing`, where Hibler and FMM97's Table 1 take 0.5 m), and open water that cools below freezing forms ice
+area; ice frozen in the leads closes (1 − A) of the area it would cover
+0.3 m thick (`leadClosing`), so the open area closes as its square,
+(1 − A)² f Δt/h₀ for growth f per unit of open water (`leadClosure`
+'squared'). 'hibler' closes all of it, (1 − A) f Δt/h₀, Hibler's (1979)
+law at h₀ = `leadClosing`, where Hibler and FMM97's Table 1 take 0.5 m;
+Fichefet and Morales Maqueda (1997, eqs. 12–13) slow Hibler's law by
+√(1 − A²) (Nov 7 audit). Open water that cools below freezing forms ice
 0.3 m thick over the area its volume covers. Ice below 1 % of its cell
 or 10⁻⁴ m of volume melts away. The snow on lost area melts into the
 water, its latent heat freezing the same mass onto the ice, and new
@@ -1468,7 +1482,10 @@ where the bulk Richardson number of the lowest layer's virtual
 potential temperature and wind, with the convective floor 100 u*² in
 the shear, first exceeds 0.5 (interpolated between layers; u* is
 √C_D times the lowest layer's wind with the gustiness floor), and lays
-the K-profile κ u* z (1 − z/h)² over the layer interfaces below it.
+the K-profile κ u* z (1 − z/h)² over the layer interfaces below it, with
+z and h measured from the lowest layer's midpoint rather than the ground:
+at N=128 K at the interfaces 43, 91 and 145 m up is 0.55, 0.81 and 0.90
+of Holtslag and Boville's (1993) profile from the ground (Nov 7 audit).
 Where the surface is warmer than the lowest layer, u* in that profile
 becomes the unstable velocity scale of Holtslag and Boville (1993),
 w_m = (u*³ + 0.6 w*³)^⅓ with w* from the bulk surface buoyancy flux
@@ -6801,10 +6818,15 @@ The work, in order:
    | 0.05 | 0.143 | 146.5 (−2.7 %) | 49.3 (+0.1 %) |
 
    (EKE from the cell-reconstructed winds less their 2° zonal means,
-   mass-weighted.) The eddy cost is nil within the runs' spread, so
-   `createModel` and `createGpuModel` default to c = 0.03
+   mass-weighted.) The cost to the eddy kinetic energy is nil within the
+   runs' spread, so `createModel` and `createGpuModel` default to c = 0.03
    (`DIVERGENCE_DAMPING`); the SE Pacific's ten-day rain was 1.01, 0.99,
    1.19 and 1.34 mm/d across the four runs, which item 3 has to watch.
+   Its cost to the trades was not measured here: over WOA23 at N=64 each
+   halving of ν_d strengthens the equatorial Pacific stress by 4–9 mN/m²
+   (two starts; Nov 7 audit), and ν_d = c d²/dt halves from N=64
+   (1.29 × 10⁶ m²/s) to N=128 (6.45 × 10⁵) at a fixed c, so N=64 runs
+   understate N=128's stress. `divergenceViscosity` sets ν_d in m²/s.
    At N=128 (the last column of the table above) it takes the global
    ω700 grid-scale share from 0.63 to 0.18 in five days, the deck-height
    sink's spread as the dynamics leaves it from 18.5 to 4.6 mm/s, and it
@@ -8913,7 +8935,10 @@ sea matches at every latitude but 0–30° in June (0.102 against
 reads 0.156–0.166 (0.12–0.15), cold snow on open land 0.71–0.81
 (0.80–0.85; matches in March), wet snow on sea ice 0.81–0.82
 (0.65–0.75), melting bare sea ice 0.481 (0.45–0.55), cold snow on sea ice
-0.83–0.84 and the ice sheets 0.80 (both match).
+0.83–0.84 and the ice sheets 0.80 (both match). Where melting ice sits in
+its range decides the Arctic's branch: a column of the ice code under the
+GCM's own fluxes melts out each summer at 0.48 and keeps a 1.72 m
+minimum at 0.55 (Nov 7 audit).
 
 Ten days from eight64_day0183, days 184–193: ASR − OLR +14.8, +3.0, −1.1,
 −2.6, −3.1, −4.9, −7.1, −7.7, −8.3, −7.5 W/m²; LWCRE 33.2, 23.1, 22.8,
@@ -10045,9 +10070,11 @@ magnitude, N/m²; lowest-layer speed, m/s): the Rockies (30–60N,
 91 + 10 (21 June–1 July): the southern winter jet at 200 hPa 44.2 m/s at
 40–45S, 40.4 at 35–40S, 29.4 at 30–35S; the lowest-layer westerly 7.5 m/s
 at 45–50S; the northern summer 200 hPa maximum 22.0 at 55–60N. References:
-ERA5 (Hersbach et al. 2020) northern-winter zonal means, the surface
-westerlies over land near 3–5 m/s at 45–55N and the subtropical jet near
-40 m/s at 200 hPa and 30N; the NCEP–NCAR reanalysis's DJF means (Kalnay
+ERA5 (Hersbach et al. 2020) northern-winter zonal means, the westerlies
+over land at 45–55N 0.95 m/s at 10 m, 1.84 at 100 m and 5.11 at 850 hPa
+(December–February, sampled at four hours of the day; Nov 7 audit), and
+the subtropical jet near 40 m/s at 200 hPa and
+30N; the NCEP–NCAR reanalysis's DJF means (Kalnay
 et al. 1996), the Aleutian low near 1000 hPa, the Icelandic low near
 997 hPa, the Siberian high near 1035 hPa at 50N 100E and the zonal-mean
 SLP near 1010 hPa at 60–70N. The signature of missing orographic drag is
@@ -10113,10 +10140,11 @@ left above 9.9 Pa between there and its top, Cy33r1 eq. 4.39).
 B = 1 − 0.18γ − 0.04γ², C = 0.48γ + 0.3γ² (Phillips 1984). Constants
 C_d 1, G 1, H_n,crit 0.5, Ri_crit 0.25, which are not LM97's: theirs are
 C_d 1, G 0.5, H_n,crit 0.5, Ri_c 1 (p. 110) with H = 2μ and no cut-off
-(eq. 18), half this stress at Z_b = 0 (0.5 against 1.0 ρUNμσD). The IFS documents
-H_n,crit 0.5 and Ri_crit 0.25 too, but C_d 2 (eq. 4.17) and H_eff doubled
-since Cy32r2 (eq. 4.8), with its own G that the chapter does not state
-(G ≈ 1.23 for the elliptical mountain of eq. 4.2); those are not taken.
+(eq. 18), half this stress at Z_b = 0 (0.5 against 1.0 ρUNμσD). The IFS
+documents H_n,crit 0.5 and Ri_crit 0.25 too, but C_d 2 (eq. 4.17) and
+H_eff doubled since Cy32r2 (eq. 4.8), with a G that the chapter does not
+state (G ≈ 1.23 for the elliptical mountain of eq. 4.2; the operational
+GKDRAG is 0.3, Part II §3.5); those are not taken.
 Each layer's wave drag in a step is at most what stops its own wind along
 the stress, the rest passing to the layer above, a limit the IFS's
 explicit tendencies do not have. An edge steps as u ← (u + Δt a)/(1 + Δt β); the kinetic energy
@@ -10248,8 +10276,9 @@ buffer (52 MB at N=128).
 
 What still misses: σ from the 0.25° raster is ×0.30–0.35 of the 5 km
 data's, so both stresses, each ∝ σ, are low by about that factor; the
-TOFD (above); C_d and G are LM97's, not the IFS's calibration; the gust
-has no deep-convective (mesoscale downdraft) part (Redelsperger et al.
+TOFD (above); C_d 1 and G 1 are neither LM97's (G 0.5) nor the IFS's
+calibration; the gust has no deep-convective (mesoscale downdraft)
+part (Redelsperger et al.
 2000), so the calm tropical sea's evaporation fell by 26 % where
 convection would gust it; z_i is the step before's diagnosed depth, so a
 column that switches its boundary-layer regime switches its gust; the
@@ -10330,7 +10359,7 @@ The review of the mountains' drag (Oct 2), on 3066df7 and the fixes after it:
   Cy32r2 (eq. 4.8), G ≈ 1.23 for the mountain of eq. 4.2, the /9 of eq.
   4.37 with H = 3μ, eqs. 4.26–4.41 as used, and gives C_d only as close to
   1 by free-streamline theory and nearer 2 with suction behind the
-  obstacle; C_d 2 as Cy47r3's value and LM97's C_d 1 and G 1 were not
+  obstacle; C_d 2 as Cy47r3's value and LM97's C_d 1 and G 0.5 were not
   checked against those texts. Its gust is |U|² = u² + v² + w*² with
   z_i 1000 m (Cy33r1 eqs. 3.17–3.18) and its Ri_b takes q_surf (eqs.
   3.24–3.25). COARE's gust from coare35vn.m and coare36vn as above.
@@ -10477,7 +10506,14 @@ the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
   own target-resolution smoothing; this model's resolved terrain and land
   mask are left as they are. Over the land off the ice sheets the
   residual's cell mean is 19.9 m at N=64 (rms 151 m) and 10.1 m at N=128
-  (rms 117 m), mostly the mesh's two smoothing passes; μ removes it. At
+  (rms 117 m), mostly the mesh's two smoothing passes. μ has that mean
+  removed, so the height reaches neither the resolved surface nor the
+  sub-grid fields: 42 m of the Maritime Continent's mean land height at
+  N=128, 96 m at N=64 (Nov 7 audit). Terrain `conserveVolume` gives each
+  land mass back the volume the two passes take from it, 29 of those
+  42 m at N=128 and 52 of the 96 m at N=64; the rest, lost where a
+  coastal cell's mean takes in the seabed, stays lost, and the bundled
+  files' μ, σ and γ stay those below the default surface. At
   0.25° GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
   over land outside Antarctica, 6.5 m (rms 76 m) over Antarctica.
 - σ_flt (§11.3.3): the 30″ orography smoothed at Δ 2 km and at Δ 20 km; the
@@ -10496,7 +10532,8 @@ without a file (or whose fetched file does not decode), a run without
 terrain (the files hold only the scales below the resolved terrain) and a
 land mask on which more than 0.5 % of the land cells would hold nothing
 compute the fields from the topography's raster, say why once in the log,
-take Lott and Miller's constants with them and have no form drag.
+take the C_d 1, G 1 set (LOTT_MILLER, not LM97's own) with them and
+have no form drag.
 
 | land | N=16 | N=32 | N=64 | N=128 |
 |---|---|---|---|---|
@@ -10564,7 +10601,8 @@ doubled H_eff enters the wave's launch amplitude δz as well as its stress.
 Eq. 4.37's remark that its /9 equals eq. 4.19's /4 at Z_blk = 0 holds only
 without the factor; taken as eq. 4.8 states it. Against `LOTT_MILLER`'s
 set the launched stress is 4 × 1.23 = 4.9 times larger for one column (9.8
-times Lott and Miller's own G 0.5 with H = 2μ), the blocking twice; by hand for μ 200 m, σ 0.02, γ 0, 10 m/s and N 0.01/s,
+times Lott and Miller's own G 0.5 with H = 2μ), the blocking twice; by
+hand for μ 200 m, σ 0.02, γ 0, 10 m/s and N 0.01/s,
 τ₀ = 4 × 1.23/3 = 1.64 N/m² (ρ 1.2) against 1/3, and the waves, launched at
 α = N δz/U = 1.0 against the critical 0.83, break just above the blocked
 layer.
@@ -10628,8 +10666,8 @@ Runs, N=64 GPU, OCEAN `{"everySteps":8}`, ten days from copies of the
 states with 8-step samples, as the diagnosis above (stresses as
 magnitudes of each sample's cell vector, the wave stress the launched
 τ₀ along its direction, the blocking the orographic stress less it):
-bd42fa5 (0.25° fields, Lott and Miller's constants) → the GMTED fields
-with Lott and Miller's constants and no form drag → the IFS's constants →
+bd42fa5 (0.25° fields, the C_d 1, G 1 set) → the GMTED fields with the
+C_d 1, G 1 set and no form drag → the IFS's constants →
 with the form drag (these commits). The twin is the last with θ perturbed
 by 10⁻⁷ (relative, random per value).
 
@@ -10671,7 +10709,10 @@ The December SLP rise at 60–85N (6–7 hPa) is 31 times the twin's rms, the
 land wind's fall 19 times, 200 hPa 5 times; the form drag alone moves the
 zonal means by 2–7 times the twin's spread. The two December twins (the
 fields of 9f1faf7 and of a8105bd) differ in spread by a factor 2.5 (SLP
-0.37 and 0.15 hPa), so these ratios carry that much uncertainty.
+0.37 and 0.15 hPa), so these ratios carry that much uncertainty. A twin
+starts from its run's state and shares its weather through the ten days,
+so its rms understates the noise and the ratios overstate the
+significance (Nov 7 audit).
 
 Stresses over land, N/m² (bd42fa5 → these commits; lowest-layer speed
 m/s; veg the turbulent surface stress):
@@ -10727,8 +10768,8 @@ was not read here (the approval covered the USGS data only), so no
 observed number is set against these. The circulation references are the
 diagnosis's above: the polar low, 9–13 hPa too deep at 60–75N in
 December, is now 2.5–6 hPa too deep against the NCEP–NCAR zonal mean near
-1010 hPa; the land westerlies at 45–55N, 2.0–3.0 m/s before against ERA5's
-3–5, are now 0.6–1.3 m/s.
+1010 hPa; the land westerlies at 45–55N, 2.0–3.0 m/s before, are now
+0.6–1.3 m/s, against ERA5's 0.95 at 10 m and 1.84 at 100 m (above).
 
 Step cost under the exclusive lock (`profileGpu`, bd42fa5 and 35c9fae on
 copies of eight64 day 183 and eight128 day 183, 128 steps after 16,
@@ -10783,12 +10824,12 @@ jobs), which passes alone (3.7×).
 What still misses: the IFS's G for its operational fields is GKDRAG 0.3
 (Cy41r2 Part II §3.5, set in SUGWD; Part IV gives no value), so G 1.23,
 the textbook mountain's, launches 4.1 times the IFS's stress (orography
-`constants` 'cy41r2' takes 0.3), and the
-doubled H_eff rests on eq. 4.8 against eq. 4.37's remark; with them the
-December land westerlies at 45–55N fall to 0.6–1.3 m/s, below ERA5's 3–5,
-while the polar SLP rises toward the reanalysis: the two references now
-pull opposite ways and ten days cannot say which constant is wrong; the
-5 km field is sampled at 2′30″ and its differences are bilinear between
+`constants` 'cy41r2' takes 0.3), and the doubled H_eff rests on eq. 4.8
+against eq. 4.37's remark; with them the December land westerlies at
+45–55N fall to 0.6–1.3 m/s, against ERA5's 0.95 at 10 m and 1.84 at
+100 m, the low end below even the 10 m wind, while the polar SLP rises
+toward the reanalysis; the 5 km field
+is sampled at 2′30″ and its differences are bilinear between
 those points (σ 2–4 % below exact 5 km offsets on six cells); σ_flt
 averages 2′30″ blocks by their centres' cells, not each 30″ point (0.2–0.8 %
 on six cells); the form drag's |U| is the cell's at the diagnosis, averaged
@@ -10826,7 +10867,7 @@ relative, heat against the sinks 7.8·10⁻⁴. With `subgrid` false the CPU
 gives 9ba8c38's state, land and ocean digests after each of nine steps
 from eight64_day0183; N=8 (no file) and N=16 and N=64 with the terrain
 off take the raster with its note and give 9ba8c38's six-step digests,
-the GPU the raster, Lott and Miller's constants and no form layers.
+the GPU the raster, the C_d 1, G 1 set and no form layers.
 Parity after 1, 4, 16 steps, lowest layer u rms (9ba8c38; fe5de7f): from
 nine64_day0091 4.8·10⁻⁵, 1.4·10⁻³, 2.7·10⁻³ m/s (4.9·10⁻⁵, 2.5·10⁻⁴,
 1.5·10⁻²; 1.9·10⁻³, 2.0·10⁻³, 3.7·10⁻³), launched stress 2.4·10⁻⁴,
@@ -11315,6 +11356,10 @@ the lower interface of its first cloudy layer to the height inside a layer
 where its w² vanishes, solved exactly for that layer's buoyancy and mixing
 and placed in ln p. Deeper than 200 hPa, the column runs the deep plume
 alone; otherwise the shallow plume alone, without the deep ascent. The
+type is not revisited after the full ascent, where the IFS's code
+re-types the column (cumastrn.F90:637–640, a step Part IV omits); at
+N=128 77–86 % of the trade and Indian Ocean columns are deep-typed,
+against 10–20 % in ECMWF Tech. Memo 725 (Nov 7 audit). The
 departure level is the 50 hPa stack's alone, unless `plumeDeparture` says
 otherwise. 'elevated' is the IFS's search (Cy41r2 Part IV §6.4: the test
 parcel is repeated from each higher model level, bottom up, until the

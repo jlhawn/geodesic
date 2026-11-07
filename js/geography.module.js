@@ -670,7 +670,9 @@ function maskedGeography(mesh, file, iceShelves, cavityDepth) {
 
 /*
  * surfaceGeopotential's options from the models' `terrain`: true for its
- * defaults, or an object of `conserveVolume` and `passes`.
+ * defaults, or an object of `conserveVolume` and `passes`. The bundled
+ * sub-grid files (scripts/subgridTerrain.mjs) hold μ, σ and γ below the
+ * default options' surface, and a run over other options keeps them.
  */
 export function terrainOptions(terrain = true) {
   if (terrain === true) return {};
@@ -679,6 +681,17 @@ export function terrainOptions(terrain = true) {
   if (conserveVolume !== undefined && typeof conserveVolume !== 'boolean') throw new Error(`conserveVolume is true or false, not ${conserveVolume}`);
   if (passes !== undefined && !(Number.isInteger(passes) && passes >= 0)) throw new Error(`passes is a whole number of smoothing passes, not ${passes}`);
   return { ...(conserveVolume !== undefined ? { conserveVolume } : {}), ...(passes !== undefined ? { passes } : {}) };
+}
+
+const TERRAIN_DEFAULTS = { conserveVolume: false, passes: 2 };
+
+/*
+ * The `terrain` options as a key, equal for options that make the same
+ * surface: those at their defaults left out, the rest in name order.
+ */
+export function terrainKey(terrain = true) {
+  const options = terrainOptions(terrain);
+  return JSON.stringify(Object.keys(options).sort().filter((name) => options[name] !== TERRAIN_DEFAULTS[name]).map((name) => [name, options[name]]));
 }
 
 /*
@@ -692,7 +705,7 @@ export function terrainOptions(terrain = true) {
  * area-weighted sum of its heights, that it had before the passes, laid
  * on its cells in proportion to their smoothed height above sea level.
  */
-export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = 2, weight = 0.5, conserveVolume = false } = {}) {
+export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = TERRAIN_DEFAULTS.passes, weight = 0.5, conserveVolume = TERRAIN_DEFAULTS.conserveVolume } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
   const { land, elevation, surface = null } = geography;
   let height = surface ? Float64Array.from(surface) : Float64Array.from(elevation, (h, i) => (land[i] ? Math.max(0, h) : 0));
@@ -917,7 +930,7 @@ export function subgridFallbackNote(mesh, reason = 'missing', fields = null, top
   const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10)), file = `data/${subgridUrl(N, topography, mask).pathname.split('/').pop()}`;
   if (fallbackSaid.has(`${file} ${reason}`)) return;
   fallbackSaid.add(`${file} ${reason}`);
-  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](file, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
+  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](file, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with C_d 1 and G 1, and no form drag`);
 }
 
 /*
