@@ -309,3 +309,7 @@ test('surface.virtualDensity lowers the evaporation alike on both engines: the f
     assert.ok(mean < 0 && largest > 0.1, `${label}: the evaporation moves by ${mean} W/m² in the mean and falls by up to ${largest}`);
   }
 });
+
+test('the GPU refuses a surface.gustiness other than 3 m/s', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const surface of [{ exchange: 'fixed', gustiness: 6 }, { gustiness: 2 }]) await assert.rejects(createGpuModel(new Grid(16), { topography, surface }), /surface\.gustiness/);
+});
