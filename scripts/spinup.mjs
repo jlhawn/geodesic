@@ -161,6 +161,9 @@
 // Fresh sea ice is SEA_ICE (a file in js/physics/seaIceStart.module.js's
 // format; data/seaice_march.bin when it exists: ERA5's March concentration
 // with GIOMAS's thickness and snow); SEA_ICE=rule lays it by latitude.
+// A fresh start's observed soil water is SOIL_SEED (a file in
+// js/geography.module.js's soil-water format, as scripts/soilWater.mjs
+// writes with --out), else data/soilwater_march.bin.
 // Without FROM, the ocean starts from the climatology CLIMATOLOGY (a file
 // in js/ocean/climatology.module.js's format; data/woa_march_1deg.bin
 // when it exists, the World Ocean Atlas's March) and the sea surface from
@@ -185,7 +188,7 @@ import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appen
 import { basename } from 'node:path';
 import { Grid } from '../js/grid.module.js';
 import { stateGrid, gridHeader, savedRelax, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
-import { createGeography, stateGeography, savedGeography, checkGeography, geographyHeader, readTopography, geographyOptions, FRESH_GEOGRAPHY } from '../js/geography.module.js';
+import { createGeography, stateGeography, savedGeography, checkGeography, geographyHeader, readTopography, geographyOptions, decodeSoilWater, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
@@ -266,7 +269,7 @@ if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (G
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}`;
 const found = base ? stateGrid(base, topography) : null;
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: process.env.SOIL_SEED ? { ...sheets.geography, soilWater: decodeSoilWater(readFileSync(process.env.SOIL_SEED)) } : sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));

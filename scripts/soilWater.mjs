@@ -61,15 +61,15 @@ function readDods(path) {
 }
 
 async function referenceScale(raw, paths) {
-  let mesh = null, geography = null, N = null;
+  let mesh = null, geography = null, N = null, relax = null, ground = null;
   const target = [];
   for (const path of paths) {
     const saved = await decodeState(new Uint8Array(readFileSync(path)));
     if (!mesh) {
       const record = savedGeography(saved);
-      N = saved.N; mesh = gridMesh(new Grid(N, { relax: savedRelax(saved) ?? undefined }));
+      N = saved.N; relax = savedRelax(saved); ground = JSON.stringify(record); mesh = gridMesh(new Grid(N, { relax: savedRelax(saved) ?? undefined }));
       geography = createGeography(mesh, readTopography(record.topography), { ...geographyOptions(record).geography, landCover: null, soilWater: raw });
-    } else if (saved.N !== N) throw new Error(`${path}: N = ${saved.N}, not ${N}`);
+    } else if (saved.N !== N || savedRelax(saved) !== relax || JSON.stringify(savedGeography(saved)) !== ground) throw new Error(`${path}: N = ${saved.N}, relax ${savedRelax(saved)}, ${JSON.stringify(savedGeography(saved))}; the first reference is N = ${N}, relax ${relax}, ${ground}`);
     saved.land.soil.forEach((v, i) => { target[i] = (target[i] ?? 0) + v / ROOT_ZONE / paths.length; });
   }
   const { land, iceSheet, wetness } = geography, cells = [];
@@ -102,6 +102,7 @@ async function referenceScale(raw, paths) {
 
 const args = process.argv.slice(2), given = (name) => { const arg = args.find((a) => a.startsWith(`--${name}=`)); return arg ? arg.slice(name.length + 3) : null; };
 const inputs = args.filter((a) => !a.startsWith('--'));
+if (given('reference') && !given('out')) throw new Error('a seed scaled to reference states goes to its own file (--out); data/soilwater_march.bin stays the observed fill');
 if (inputs.length !== 1 || args.some((a) => a.startsWith('--') && !/^--(reference|out)=/.test(a))) throw new Error('usage: node scripts/soilWater.mjs soilw.dods [--reference=a.bin,b.bin] [--out=file.bin]');
 const references = given('reference') ? given('reference').split(',') : [], outUrl = given('out') ? pathToFileURL(given('out')) : soilWaterUrl;
 const { soilw, time, lat, lon } = readDods(inputs[0]);
