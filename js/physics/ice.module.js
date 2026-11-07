@@ -23,9 +23,10 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
 
 /*
  * The slab ocean and its sea ice, a zero-layer thermodynamic model: the
- * E1 + E4 simplifications of Fichefet and Morales Maqueda (1997, JGR 102,
- * 12609) to Semtner's (1976) three-layer model, by default with no brine
- * reservoir and no sunlight through the ice. Open water is a mixed layer of heat
+ * E1, E3 and E4 simplifications of Fichefet and Morales Maqueda (1997, JGR
+ * 102, 12609; their Table 2: no heat stored in the ice, no sunlight into
+ * it, one thickness) to Semtner's (1976) three-layer model, by default with
+ * no brine reservoir; iceLight lifts E3. Open water is a mixed layer of heat
  * capacity slabHeatCapacity; when it cools to the freezing point the
  * deficit freezes into ice of that latent heat. Ice has a skin of small
  * heat capacity whose temperature answers the surface flux and the
@@ -63,7 +64,8 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * Hibler (1979) does, half the relative loss of volume from the area;
  * ice frozen in the leads closes them as (1 − A) of new ice leadClosing
  * thick, so the open area closes as its square, or with leadClosure
- * 'hibler' as all of it, Hibler's (1979) h₀ law. Open
+ * 'hibler' as all of it, Hibler's (1979) h₀ law with h₀ = leadClosing
+ * (Hibler and FMM97's Table 1 take 0.5 m). Open
  * water that cools below freezing forms ice leadClosing thick over the
  * area its volume covers. Ice below the floors of seaIceRemoval melts
  * away, and open water forms ice only from MINIMUM_CONCENTRATION and

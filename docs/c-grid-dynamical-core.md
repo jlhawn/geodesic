@@ -954,12 +954,12 @@ coupling (albedo and longwave emissivity of cloud) is the next step.
 ### M9 — Sea ice and surface albedo — done
 
 `js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model,
-Fichefet and Morales Maqueda's (1997) E1 + E4 simplifications of
-Semtner's (1976) three-layer model (by default no brine reservoir and
-no sunlight through the ice: `ice.iceLight` passes FMM97's share
+Fichefet and Morales Maqueda's (1997) E1, E3 and E4 simplifications of
+Semtner's (1976) three-layer model (no heat stored in the ice, no
+sunlight into it, one thickness; by default also no brine reservoir: `ice.iceLight` passes FMM97's share
 i0 = 0.18 (1 − c) + 0.35 c of the ice's absorbed sunlight, with c the
 diffuse share at the surface, none under snow, and `ice.brineReservoir`
-holds what the ice absorbs of it in Semtner's reservoir), on the slab
+holds what the ice absorbs of it in Semtner's reservoir, lifting E3), on the slab
 ocean, with ice thickness
 as the seventh state array. Open water is the mixed layer (2.1×10⁷
 J/m²/K); when it cools to the seawater freezing point (271.35 K) the
@@ -1017,7 +1017,7 @@ area as Hibler (1979) does, half the relative loss of volume from the
 area; ice frozen in the leads closes (1 − A) of its own area of new
 ice 0.3 m thick (`leadClosing`), so the open area closes as its square
 (`leadClosure` 'squared'; 'hibler' closes all of it, Hibler's 1979 h₀
-law), and open water that cools below freezing forms ice
+law, at h₀ = `leadClosing`, where Hibler and FMM97's Table 1 take 0.5 m), and open water that cools below freezing forms ice
 0.3 m thick over the area its volume covers. Ice below 1 % of its cell
 or 10⁻⁴ m of volume melts away. The snow on lost area melts into the
 water, its latent heat freezing the same mass onto the ice, and new

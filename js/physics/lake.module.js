@@ -101,9 +101,10 @@ export function readLakeDepths() {
  * point lies within `reach` cell spacings plus half the square root of the
  * lake's area of one of its cells. A long lake the grid splits at its
  * narrows leaves its far basins without its pour point, so a group that
- * reaches none takes instead the lakes within `extent` square roots of their area plus a cell
- * spacing of one of its cells whose area the groups that reach their pour
- * point leave unclaimed by at least half the group's. Each of its cells
+ * reaches none takes instead the lakes within `extent` square roots of
+ * their area plus a cell spacing of one of its cells whose area the groups
+ * that reach their pour point leave unclaimed by at least half the
+ * group's. Each of its cells
  * takes the largest candidate whose pour point lies within that extent,
  * since a lake's outlet may lie at its far end, else the candidate nearest
  * it in units of the square root of its area.
