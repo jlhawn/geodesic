@@ -451,13 +451,14 @@ test('with traceCloudPath a trace of cloud water between two cloudy runs of laye
   traced.core.diagnose(pi, theta, q, qc);
   const { exnerLayer, sigmaMid } = traced.core.diagnostics;
   let gaps = 0;
+  const traceCells = [];
   for (let i = 0; i < C; i += 2) {
     let highest = -1, lowest = -1;
     for (let k = 0; k < K; k++) if (qc[k * C + i] > 0) { if (highest < 0) highest = k; lowest = k; }
     for (let k = highest + 1; k < lowest; k++) {
       const x = k * C + i;
       if (qc[x] > 0) continue;
-      q[x] = 0.97 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]); qc[x] = Math.fround(1e-12); gaps++;
+      q[x] = 0.97 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]); qc[x] = Math.fround(1e-12); gaps++; traceCells.push(x);
     }
   }
   const plain = await physicsHeating(traced, {}), trace = await physicsHeating(traced, { traceCloudPath: 1e-6 });
@@ -477,6 +478,20 @@ test('with traceCloudPath a trace of cloud water between two cloudy runs of laye
   assert.ok(gaps > 0 && moved > 0.01, `${gaps} trace layers; the option moves the OLR by ${moved} W/m2`);
   assert.ok(engines < 1e-5 * scale && change < 1e-5 * scale, `layer heating differs by ${engines} K/day, its change by ${change}, against ${scale}`);
   assert.ok(olr < 2e-5 * 300 && olrChange < 2e-5 * 300, `OLR apart by ${olr}, its change by ${olrChange} W/m2`);
+  for (const x of traceCells) qc[x] = Math.fround(1e-22);
+  const floored = await physicsHeating(traced, { traceCloudPath: 1e-6 });
+  let flooredOlr = 0, flooredHeating = 0;
+  for (let i = 0; i < C; i++) {
+    flooredOlr = Math.max(flooredOlr, Math.abs(floored.cpuOutgoing[i] - floored.gpuOutgoing[i]));
+    for (let k = 0; k < K - 1; k++) flooredHeating = Math.max(flooredHeating, Math.abs(floored.cpu[k * C + i] - floored.gpu[k * C + i]));
+  }
+  for (const x of traceCells) qc[x] = 0;
+  const bare = await physicsHeating(traced, { traceCloudPath: 1e-6 });
+  let cpuShift = 0, gpuShift = 0;
+  for (let i = 0; i < C; i++) { cpuShift += floored.cpuOutgoing[i] - bare.cpuOutgoing[i]; gpuShift += floored.gpuOutgoing[i] - bare.gpuOutgoing[i]; }
+  console.log(`floored trace: the OLR summed over the columns shifts by ${cpuShift.toExponential(3)} W/m2 on the CPU and ${gpuShift.toExponential(3)} on the GPU`);
+  assert.ok(cpuShift > 0 && gpuShift > 0 && gpuShift < 100 * cpuShift, `a 1e-22 kg/kg trace, its chain cover floored at TRACE_CHAIN_FLOOR, shifts the OLR summed over the columns by ${cpuShift} W/m2 on the CPU and ${gpuShift} on the GPU, where a chain cover of W/t leaves the GPU bit for bit as without the trace`);
+  assert.ok(flooredOlr < 2e-5 * 300 && flooredHeating < 1e-5 * scale, `with 1e-22 kg/kg in the gaps, where the chain cover W/t stops at TRACE_CHAIN_FLOOR, the engines' OLR differs by ${flooredOlr} W/m2 and their heating by ${flooredHeating} K/day`);
 });
 
 test('the shortwave\'s independent columns of the overlap, with the water inside each cloud uniform or spread, heat the layers, absorb the sunlight and emit alike in both engines, and the columns absorb more than the pooled column', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
