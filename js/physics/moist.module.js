@@ -847,7 +847,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
             const speed = (continental[i] ? settleLand : settleSea) * Math.pow(pressure / (R * temperature) * liquid, 2 / 3);
             courant = speed * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]);
           }
-          if (depositing && k === K - 1) courant += Math.min(fogDeposition * surfaceDrag[i], fogDepositionLimit * pressure / (R * temperature)) * dt * g / (pi[i] * dSigma[k]);
+          if (depositing && k === K - 1) courant += Math.min(fogDeposition * surfaceDrag[i], fogDepositionLimit * pressure / (R * temperature * (virtualDensity && q ? 1 + VIRTUAL_FACTOR * q[idx] : 1))) * dt * g / (pi[i] * dSigma[k]);
           const leaving = liquid * courant / (1 + courant);
           qc[idx] -= leaving;
           if (k === K - 1) {

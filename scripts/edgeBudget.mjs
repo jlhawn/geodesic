@@ -20,7 +20,7 @@ STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 model.time = saved.time;
 ocean.load(saved.ocean, state[3], state[6]);
-core.phaseFlux(state, 0, core.K); core.phaseColumn(state, [new Float64Array(mesh.nCells)], 0, mesh.nCells); diagnoseExchange(model);
+core.phaseFlux(state, 0, core.K); core.phaseColumn(state, [new Float64Array(mesh.nCells)], 0, mesh.nCells); diagnoseExchange(model, 1350 * 16 / N);
 ocean.setStress(surface.stress(state, new Float64Array(mesh.nEdges)), state[6], seaIce.concentration);
 const C = mesh.nCells, E = mesh.nEdges, L = ocean.layers, rho = ocean.densities, g = 9.81, rho0 = 1025, dtOcean = OCEAN.everySteps * 1350 * 16 / N;
 new Float64Array(ocean.shared.params)[1] = dtOcean;

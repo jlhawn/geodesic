@@ -354,16 +354,16 @@ test('surface.gustiness moves the first step alike on both engines: the evaporat
   }
 });
 
-test('surface.virtualDensity takes the moist density alike on both engines in the implicit drag, the explicit drag and the boundary layer\'s kinematic surface fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const boundaryLayer = { countergradient: 7.2 };
+test('surface.virtualDensity takes the moist density alike on both engines in the implicit drag, the explicit drag, the fog deposition\'s cap and the boundary layer\'s kinematic surface fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const boundaryLayer = { countergradient: 7.2 }, moist = { fogDroplets: null, fogDepositionLimit: 1e-3 };
   for (const [label, exchange] of [['roughness', {}], ['fixed', { exchange: 'fixed' }]]) {
-    const names = label === 'roughness' ? ['SDRAG', 'CGH', 'CGW'] : ['CGH', 'CGW'], runs = [];
+    const names = label === 'roughness' ? ['SDRAG', 'CGH', 'CGW', 'FOG'] : ['CGH', 'CGW'], runs = [];
     for (const surface of [{ ...exchange, virtualDensity: true }, exchange]) {
-      const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer }));
+      const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer, moist })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer, moist }));
       cpu.step(900); await gpu.step(900); await gpu.settle(); await gpu.sync();
       const { nCells: C, nEdges: E } = cpu.mesh, PH = gpu.gpu.layout.PH, lowest = (cpu.core.K - 1) * E, bl = cpu.boundaryLayer;
       const read = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, names.map((name) => ({ offset: PH[name], length: C })));
-      const mine = { SDRAG: bl.surfaceDrag, CGH: bl.kinematicHeat, CGW: bl.kinematicWater }, low = (cpu.core.K - 1) * C;
+      const mine = { SDRAG: bl.surfaceDrag, CGH: bl.kinematicHeat, CGW: bl.kinematicWater, FOG: cpu.moist.fogPrecipitation }, low = (cpu.core.K - 1) * C;
       runs.push({
         split: Array.from({ length: C }, (_, i) => Math.abs(gpu.state[4][low + i] - cpu.state[4][low + i]) > 1e-2 * cpu.state[4][low + i]), cellsOnEdge: cpu.mesh.cellsOnEdge,
         flux: { CGH: Float64Array.from(cpu.radiation.sensibleHeat), CGW: Float64Array.from(cpu.radiation.evaporation) },
@@ -387,8 +387,8 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
       }
       const relative = Math.sqrt(apart / scale), moved = Math.sqrt(move / scale), moveApart = move > 0 ? Math.sqrt(gap / move) : 0;
       report.push(`${name} apart ${relative.toExponential(1)}, moved ${moved.toExponential(1)}, moves apart ${moveApart.toExponential(1)}`);
-      assert.ok(relative < 1e-4, `${label} ${name}: the engines are apart by ${relative} of it`);
-      if (name === 'SDRAG' || name === 'u') assert.ok(moved > (name === 'u' ? 1e-5 : 1e-3) && moveApart < 0.02, `${label} ${name}: the option moves it by ${moved} of it, the engines' moves apart by ${moveApart}`);
+      assert.ok(relative < (name === 'FOG' ? 2e-3 : 1e-4), `${label} ${name}: the engines are apart by ${relative} of it`);
+      if (name === 'SDRAG' || name === 'u' || name === 'FOG') assert.ok(moved > (name === 'u' ? 1e-5 : 1e-3) && moveApart < (name === 'FOG' ? 1e-2 : 0.02), `${label} ${name}: the option moves it by ${moved} of it, the engines' moves apart by ${moveApart}`);
       else assert.ok(moveApart < 0.05, `${label} ${name}: the engines' moves apart by ${moveApart}`);
       if (label === 'roughness' && (name === 'CGH' || name === 'CGW')) {
         let kinematic = 0, flux = 0, cells = 0;
@@ -458,6 +458,25 @@ test('the boundary layer\'s K-profile options, alone and with diagnoseFirst, sur
   assert.deepEqual(failures, []);
 });
 
+test('the offline surface exchange diagnoses a diagnoseFirst layer at the run\'s step, and where nothing is deposited as the plain layer does', async () => {
+  const { diagnoseExchange } = await import('../scripts/surfaceExchange.mjs');
+  const [first, plain] = [{ diagnoseFirst: true }, {}].map((boundaryLayer) => prepare(createModel(new Grid(16), { topography, boundaryLayer })));
+  diagnoseExchange(first, 900); diagnoseExchange(plain, 900);
+  for (const name of ['depth', 'regime', 'friction', 'buoyancyFlux']) assert.deepEqual(first.boundaryLayer[name], plain.boundaryLayer[name], name);
+  first.step(900);
+  assert.throws(() => diagnoseExchange(first), /diagnoseFirst withholds/);
+  diagnoseExchange(first, 900);
+  assert.ok(first.boundaryLayer.depth.every(Number.isFinite));
+});
+
+test('the GPU\'s boundary-layer diagnosis refuses a D_EXL read, which would take the last RK stage\'s exner, and its options leave none', async () => {
+  const { PHYSICS_KERNELS, boundaryLayerDiagnosis } = await import('../js/gpu/physics.gpu.js');
+  const body = PHYSICS_KERNELS.pblDiagnose;
+  assert.equal(boundaryLayerDiagnosis(body, {}), body);
+  for (const options of [{ profileHeight: 'ground' }, { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6, diagnoseFirst: true, surfaceExcess: 8.5 }]) assert.ok(boundaryLayerDiagnosis(body, options).includes('blLift'));
+  assert.throws(() => boundaryLayerDiagnosis(body.replace('fn blExchange(', 'fn blStale(i: i32) -> f32 { return D[D_EXL + i]; }\nfn blExchange('), {}), /reads D_EXL/);
+});
+
 test('both coupled engines hand the air the same sea velocity under surface.relativeWind, with the ice drift and without it, and surface.gustiness and surface.virtualDensity move the ocean alike through its and the drift\'s stress under the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const configs = [
     ['drift', { surface: { relativeWind: true } }],
@@ -493,4 +512,5 @@ test('both coupled engines hand the air the same sea velocity under surface.rela
   console.log(`the sea velocity under the air, then the ocean's: ${report.join('; ')}`);
   assert.deepEqual(failures, []);
   await assert.rejects(createGpuModel(new Grid(16), { topography, ocean: { gustiness: 5 } }), /ocean\.gustiness is not an option/);
+  assert.throws(() => createModel(new Grid(16), { topography, ocean: { gustiness: 5 } }), /ocean\.gustiness is not an option/);
 });
