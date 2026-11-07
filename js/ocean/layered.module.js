@@ -1174,12 +1174,13 @@ export function createOcean(mesh, {
    * barotropic sub-stepping with each RK4 stage's trial state written to
    * alternating buffers and the stage, sub-step and averaging weight in
    * params[4..6]; the columns are then rescaled to the sub-step mean of
-   * the free surface and shifted to the mean transport, which lags the
-   * barotropic mode by half a step but is the only
-   * filter the split has, the end-of-window state alone running to the
-   * speed limit within months) reading the step's relax from params[2]
-   * and dt from
-   * params[1], so a column runner (setColumnRunner) can hand the ranges
+   * the free surface and shifted to the mean transport, which moves the
+   * barotropic mode each step by (1 + 1/M)/2 of its change over the M
+   * sub-steps (0.52 at M = 21), so it evolves at about half its rate, but
+   * is the only filter the split has, the end-of-window state alone
+   * running to the speed limit within months) reading the step's relax
+   * from params[2] and dt from params[1], so a column runner
+   * (setColumnRunner) can hand the ranges
    * to worker threads that adopt the shared arrays; counts holds the dried
    * and clamped tallies.
    */
