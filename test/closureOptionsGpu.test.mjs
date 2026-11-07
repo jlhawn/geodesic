@@ -21,7 +21,7 @@ const { mesh } = model, { spacing } = model.core, C = mesh.nCells, E = mesh.nEdg
 const start = initializeState(model, {});
 const nu4 = (spacing / Math.PI) ** 4 / (3 * 3600);
 const closureOnly = { levels, nu4, nu4Theta: nu4, spongeRates: null, spongeMeanRates: null, surfaceGeopotential: model.surfaceGeopotential };
-const apart = (a, b) => { let diff = 0, scale = 0; for (let n = 0; n < b.length; n++) { diff = Math.max(diff, Math.abs(a[n] - b[n])); scale = Math.max(scale, Math.abs(b[n])); } return { diff, scale, relative: diff / scale }; };
+const apart = (a, b, c = b) => { let diff = 0, scale = 0; for (let n = 0; n < b.length; n++) { diff = Math.max(diff, Math.min(Math.abs(a[n] - b[n]), Math.abs(a[n] - c[n]))); scale = Math.max(scale, Math.abs(b[n])); } return { diff, scale, relative: diff / scale }; };
 const minus = (a, b) => Float64Array.from(a, (x, n) => x - b[n]);
 const noise = (n) => { const x = Math.sin(12.9898 * n + 78.233) * 43758.5453; return x - Math.floor(x) - 0.5; };
 const said = ({ diff, scale, relative }) => `${diff.toExponential(2)} of ${scale.toExponential(2)} (${relative.toExponential(2)})`;
@@ -39,9 +39,9 @@ async function closureStep(options, initial) {
   return { cpu: state, gpu: await gpu.download(), exner };
 }
 
-function prepare(m) {
+function prepare(m, f32 = false) {
   const init = initializeState(m, {});
-  for (let a = 0; a < init.length; a++) m.state[a].set(init[a]);
+  for (let a = 0; a < init.length; a++) m.state[a].set(f32 ? Array.from(init[a], Math.fround) : init[a]);
   m.seaIce.load(m.state[6]);
   if (m.load) m.load();
   m.ocean.initialize(m.state[3], m.state[6]);
@@ -83,20 +83,22 @@ test(`one closure step with temperatureClosure 'standard' on the GPU matches the
   assert.equal(apart(runs.standard.gpu[2], runs.sigma.gpu[2]).diff, 0, 'the wind does not see the temperature closure');
 });
 
-test(`the GPU model takes terrain { conserveVolume } and orography { constants: 'cy41r2' }: the CPU model's surface geopotential on the device, and the same blocking, wave drag and stress after a step`, { skip }, async () => {
+test(`the GPU model takes terrain { conserveVolume } and orography { constants: 'cy41r2' }: the CPU model's surface geopotential on the device, and after a step the blocking, wave drag and stress the CPU lays from the same start or from that start rounded to f32, the GPU's own, which part only in the few columns whose blocking integral ends at H_n,crit`, { skip }, async () => {
   const options = { topography, levels: sigmaInterfaces('bl34'), terrain: { conserveVolume: true }, orography: { constants: 'cy41r2' } };
-  const cpu = prepare(createModel(new Grid(N), options));
+  const cpu = prepare(createModel(new Grid(N), options)), rounded = prepare(createModel(new Grid(N), options), true);
   const gpu = prepare(await createGpuModel(new Grid(N), options));
   assert.equal(cpu.orography.options.waveDrag, 0.3);
   assert.notDeepEqual(Array.from(cpu.surfaceGeopotential), Array.from(model.surfaceGeopotential));
   assert.deepEqual(Array.from(gpu.surfaceGeopotential), Array.from(cpu.surfaceGeopotential));
   const [phis] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.MF, [{ offset: gpu.gpu.layout.MF.PHIS, length: C }]);
   assert.deepEqual(Array.from(phis), Array.from(cpu.surfaceGeopotential, Math.fround));
-  cpu.step(dt); await gpu.step(dt); await gpu.settle();
-  const PH = gpu.gpu.layout.PH, Kc = cpu.core.K, o = cpu.orography;
+  cpu.step(dt); rounded.step(dt); await gpu.step(dt); await gpu.settle();
+  const PH = gpu.gpu.layout.PH, Kc = cpu.core.K, o = cpu.orography, r = rounded.orography;
   const [beta, wave, stress, launch] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [['OBETA', Kc * C], ['OWAVE', Kc * C], ['OSTRESS', E], ['OLAUNCH', C]].map(([name, length]) => ({ offset: PH[name], length })));
-  const report = { beta: apart(beta, o.beta), wave: apart(wave, o.wave), stress: apart(stress, o.stress), launch: apart(launch, o.launch) };
-  console.log(`engines apart with cy41r2 over the volume-kept terrain: ${Object.entries(report).map(([k, v]) => `${k} ${v.relative.toExponential(1)}`).join(', ')}`);
+  const report = { beta: apart(beta, o.beta, r.beta), wave: apart(wave, o.wave, r.wave), stress: apart(stress, o.stress, r.stress), launch: apart(launch, o.launch, r.launch) };
+  const parted = Array.from(o.blocking).filter((height, i) => Math.abs(height - r.blocking[i]) > 1).length;
+  console.log(`engines apart with cy41r2 over the volume-kept terrain, each value against the nearer of the CPU's two starts: ${Object.entries(report).map(([k, v]) => `${k} ${v.relative.toExponential(1)}`).join(', ')}; the starts' blocking heights part by more than 1 m in ${parted} of ${C} columns`);
+  assert.ok(parted <= 0.01 * C, `the f32 start moves the blocking height in ${parted} columns`);
   for (const [k, v] of Object.entries(report)) assert.ok(v.scale > 0 && v.relative < 1e-3, `${k} ${v.relative} of ${v.scale}`);
 });
 
