@@ -365,7 +365,7 @@ test('over ten years a perennial column with the brine reservoir ends thicker th
   assert.ok(stored.mean > alone.mean + 0.5, 'the brine thickens the perennial ice');
 });
 
-for (const melt of [20]) test(`with the ice melting at ${melt} W/m² under a steady sun the brine stores ${melt < 40 ? 'most of' : 'all'} the light the ice holds, a skin at the melting point releasing none of it, as eq. 9 stores its source term`, () => {
+for (const melt of [20, 60]) test(`with the ice melting at ${melt} W/m² under a steady sun the brine stores ${melt < 40 ? 'most of' : 'all'} the light the ice holds, a skin at the melting point releasing none of it, as eq. 9 stores its source term`, () => {
   const dt = 1350, sun = 150, i0 = 0.18 + (0.35 - 0.18) * 0.5, h0 = 2;
   const sea = createSeaIce(model.mesh, { iceLight: true, brineReservoir: true });
   const surfaceT = new Float64Array([MELTING_POINT]), ice = new Float64Array([h0]), flux = new Float64Array(1);
