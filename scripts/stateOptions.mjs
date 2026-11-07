@@ -2,7 +2,7 @@ import { DEFAULT_SHORTWAVE } from '../js/physics/radiation.module.js';
 import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { DEFAULT_SOIL } from '../js/physics/land.module.js';
 import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
-import { terrainKey, terrainOptions, surfaceGeopotential, rebalanceSurfacePressure } from '../js/geography.module.js';
+import { terrainKey, terrainOptions, terrainCache, surfaceGeopotential, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { savedTerrain } from '../js/stateFile.module.js';
 
 const SOIL_OPTIONS = ['soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity'];
@@ -59,6 +59,17 @@ export { savedTerrain };
 export function terrainMove(header, terrain = true) {
   const from = savedTerrain(header) ?? true;
   return header.terrain && terrainKey(from) !== terrainKey(terrain) ? from : null;
+}
+
+/*
+ * Throws for a run over terrain of other options than the default whose
+ * orography the bundled sub-grid files would serve: their fields lie below
+ * the default terrain's surface, and orographyFields rebuilds them below
+ * the run's own only from the fine grids of terrainCache().
+ */
+export function requireOwnSubgrid(terrain, orography) {
+  if (terrain === false || orography === false || terrainKey(terrain ?? true) === terrainKey(true) || terrainCache()) return;
+  throw new Error(`terrain ${JSON.stringify(terrain)} needs its sub-grid orography rebuilt below its own surface from fine_h5.f32 and fine_flt2.f32, which neither TERRAIN_CACHE nor a geodesic-terrain-cache beside the repository or above it holds; run on the default terrain, or give the grids`);
 }
 
 /*

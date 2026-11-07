@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey } from '../js/geography.module.js';
+import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, terrainCache } from '../js/geography.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
-import { recordedOptions, givenOptions, headerOptions, differingGroups, runTerrain, moveOntoTerrain } from '../scripts/stateOptions.mjs';
+import { recordedOptions, givenOptions, headerOptions, differingGroups, runTerrain, moveOntoTerrain, requireOwnSubgrid } from '../scripts/stateOptions.mjs';
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 
@@ -58,4 +58,16 @@ test("a state saved over terrain of other options keeps its options, given and t
   const again = resume(await save(once.moved, records), undefined);
   assert.equal(again.from, null);
   assert.deepEqual(Array.from(again.moved), Array.from(once.moved, Math.fround));
+});
+
+test('a run over terrain of other options than the default refuses to start with the fine grids out of reach, and starts with them in reach, on the default terrain or without orography', () => {
+  const before = process.env.TERRAIN_CACHE, other = [{ conserveVolume: true }, { passes: 1 }];
+  try {
+    if (terrainCache()) for (const terrain of other) assert.doesNotThrow(() => requireOwnSubgrid(terrain, {}));
+    process.env.TERRAIN_CACHE = 'none';
+    for (const terrain of other) assert.throws(() => requireOwnSubgrid(terrain, {}), /rebuilt below its own surface/);
+    for (const [terrain, orography] of [[undefined, {}], [true, {}], [{ passes: 2 }, {}], [{ conserveVolume: false }, {}], [false, {}], [{ conserveVolume: true }, false]]) assert.doesNotThrow(() => requireOwnSubgrid(terrain, orography));
+  } finally {
+    if (before === undefined) delete process.env.TERRAIN_CACHE; else process.env.TERRAIN_CACHE = before;
+  }
 });

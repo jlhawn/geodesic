@@ -10469,12 +10469,19 @@ the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
   sharper than the default's; 1097 cells at N=128 stand over 50 m above
   both their unsmoothed and their default heights, up to 531 m. The rest,
   lost where a coastal cell's mean takes in the seabed at its depth,
-  stays lost. The bundled files' μ, σ and γ stay those below the default
-  surface; against this one μ differs by over 10 % in 274 of the 11,860
-  land cells at N=64 and 660 of the 47,482 at N=128. Under `passes` 0, 1
-  and 3, which keep the files too, μ differs by over 10 % in 4399, 1356
-  and 857 of the N=64 land cells, σ in 1017, 284 and 173. At 0.25°
-  GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
+  stays lost. The bundled files' μ, σ and γ lie below the default
+  surface. A run over terrain of other options takes them rebuilt below
+  its own surface: the files' pipeline run in memory (`rebuiltSubgrid`)
+  on the fine grids of a `geodesic-terrain-cache` beside the repository
+  or above it (or `TERRAIN_CACHE`), quantized as the files are, 3–5 s
+  once a process; below the default surface it reproduces the files bit
+  for bit. The rebuilt μ differs from the files' by over 10 % in 277 of
+  the 11,860 land cells at N=64 and 667 of the 47,482 at N=128 under
+  `conserveVolume`, and in 4397, 1356 and 863 of the N=64 land cells
+  under `passes` 0, 1 and 3. Out of the grids' reach (the page, a
+  machine without them) a run keeps the files and says so in the log;
+  `scripts/spinup.mjs` and `fixedSst.mjs` refuse to start instead. At
+  0.25° GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
   over land outside Antarctica, 6.5 m (rms 76 m) over Antarctica.
 - σ_flt (§11.3.3): the 30″ orography smoothed at Δ 2 km and at Δ 20 km; the
   square of the difference averaged over each 2′30″ block (5 × 5 points),
