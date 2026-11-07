@@ -405,3 +405,55 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
   assert.throws(() => createModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
   await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
 });
+
+test('the boundary layer\'s K-profile options, alone and with diagnoseFirst, surfaceExcess or the subsidence share, keep both engines\' mixing in step through two model steps, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const cases = [
+    ['ground, stable profile, Prandtl coefficient 3.6', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6 }],
+    ['ground, capped scale, countergradient', { profileHeight: 'ground', velocityScale: 'capped', countergradient: 7.2 }],
+    ['ground, stable profile, diagnoseFirst, surfaceExcess 8.5', { profileHeight: 'ground', stableProfile: 'holtslagBoville', diagnoseFirst: true, surfaceExcess: 8.5 }],
+    ['ground, the subsidence share of the entrainment', { profileHeight: 'ground', entrainment: { subsidence: true } }],
+  ];
+  const failures = [];
+  for (const [label, surface] of [['roughness', {}], ['fixed', { exchange: 'fixed' }]]) {
+    const base = prepare(createModel(new Grid(16), { topography, surface }));
+    for (let s = 0; s < 2; s++) base.step(900);
+    for (const [name, boundaryLayer] of cases) {
+      const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer }));
+      for (let s = 0; s < 2; s++) { cpu.step(900); await gpu.step(900); }
+      await gpu.settle(); await gpu.sync();
+      const { nCells: C } = cpu.mesh, K = cpu.core.K, bl = cpu.boundaryLayer, { kTop } = bl, low = (K - 1) * C, PH = gpu.gpu.layout.PH, where = `${label}, ${name}`;
+      const fields = [['mixing', 'MIX'], ['scalarMixing', 'MIXH'], ['nonlocal', 'CG']].filter(([field]) => bl[field]);
+      const read = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, fields.map(([field, key]) => ({ offset: PH[key], length: bl[field].length })));
+      const split = Array.from({ length: C }, (_, i) => Math.abs(gpu.state[4][low + i] - cpu.state[4][low + i]) > 1e-2 * cpu.state[4][low + i]);
+      gpu.destroy();
+      const splits = split.filter(Boolean).length, report = [`${splits} cells left out where a moist decision parts the engines`];
+      if (!(splits <= 0.005 * C)) failures.push(`${where}: the lowest layer's humidity parts between the engines on ${splits} of ${C} cells`);
+      fields.forEach(([field], n) => {
+        const mine = bl[field], theirs = read[n];
+        let parted = 0, worst = 0, apart = 0, scale = 0, lowApart = 0, lowScale = 0;
+        for (let i = 0; i < C; i++) {
+          if (split[i]) continue;
+          let largest = 0, gap = 0;
+          for (let k = kTop; k < K - 1; k++) largest = Math.max(largest, Math.abs(mine[k * C + i]));
+          if (!(largest > 0)) continue;
+          for (let k = kTop; k < K - 1; k++) gap = Math.max(gap, Math.abs(theirs[k * C + i] - mine[k * C + i]) / largest);
+          if (gap > 1e-2) { parted++; continue; }
+          worst = Math.max(worst, gap);
+          for (let k = kTop; k < K - 1; k++) { apart += (theirs[k * C + i] - mine[k * C + i]) ** 2; scale += mine[k * C + i] ** 2; }
+          const x = (K - 2) * C + i;
+          lowApart += (theirs[x] - mine[x]) ** 2; lowScale += mine[x] ** 2;
+        }
+        const all = Math.sqrt(apart / scale), lowest = lowScale > 0 ? Math.sqrt(lowApart / lowScale) : 0;
+        report.push(`${field}: ${parted} columns parted, ${all.toExponential(1)} rms apart, the lowest interface ${lowest.toExponential(1)}, the worst column ${worst.toExponential(1)} of its largest`);
+        if (!(parted <= C / 50)) failures.push(`${where}, ${field}: ${parted} of ${C} columns part`);
+        if (!(all < 5e-4 && lowest < 2e-4)) failures.push(`${where}, ${field}: the engines are ${all} rms apart, ${lowest} at the lowest interface`);
+      });
+      let moved = 0, scale = 0;
+      for (let i = 0; i < C; i++) { const x = (K - 2) * C + i; moved += (bl.mixing[x] - base.boundaryLayer.mixing[x]) ** 2; scale += base.boundaryLayer.mixing[x] ** 2; }
+      report.push(`the lowest interface's mixing moves ${Math.sqrt(moved / scale).toExponential(1)} rms from the defaults`);
+      if (!(Math.sqrt(moved / scale) > 0.05)) failures.push(`${where}: the options move the lowest interface's mixing by only ${Math.sqrt(moved / scale)} rms`);
+      console.log(`${label} exchange, ${name}: ${report.join('; ')}`);
+    }
+  }
+  assert.deepEqual(failures, []);
+});

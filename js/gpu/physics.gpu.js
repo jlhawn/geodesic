@@ -2772,7 +2772,7 @@ const K_PROFILE_ANCHORS = [
 function kProfile(body, { profileHeight, stableProfile, prandtlCoefficient }) {
   const calls = body.split('blNonlocal(i, pi, zb, h, scale / prandtl, buoyancy, friction); }');
   if (calls.length !== 3) throw new Error('pblDiagnose kernel text moved: the countergradient is not laid twice');
-  const helpers = `fn blLift(i: i32) -> f32 { ${profileHeight === 'ground' ? 'let base = (K - 1) * C + i; return CP * D[D_THV + base] * (D[D_EXL + base] - D[D_EXM + base]) / GRAV;' : 'return 0.0;'} }
+  const helpers = `fn blLift(i: i32) -> f32 { ${profileHeight === 'ground' ? 'let base = (K - 1) * C + i; return CP * D[D_THV + base] * (pow(IN[S_PI + i] / P0, KAPPA) * LV[L_CL + K - 1] - D[D_EXM + base]) / GRAV;' : 'return 0.0;'} }
 fn blProfile(z: f32, h: f32, scale: f32, buoyancy: f32, friction: f32) -> f32 {
   let diffusivity = KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h);${stableProfile === 'holtslagBoville' ? `
   if (!STABILITY || !(buoyancy < 0.0) || !(friction > 0.0)) { return diffusivity; }
@@ -2853,7 +2853,7 @@ fn blExchange(kE: i32, i: i32, rho: f32, velocity: f32) -> f32 {
   var flux = 0.0;
   if (BL_SUBSIDENCE) { flux = max(0.0, D[D_PSD + (kE + 1) * C + i]) / GRAV; }
   if (!(flux > 0.0)) { return rho * velocity; }
-  let idx = kE * C + i; let t = (D[D_EXL + idx] - D[D_EXM + idx]) / (D[D_EXM + idx + C] - D[D_EXM + idx]);
+  let idx = kE * C + i; let t = (pow(IN[S_PI + i] / P0, KAPPA) * LV[L_CL + kE] - D[D_EXM + idx]) / (D[D_EXM + idx + C] - D[D_EXM + idx]);
   return max(0.0, rho * velocity - flux) + t * flux;
 }
 fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheared: f32) -> f32 {

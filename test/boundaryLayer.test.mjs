@@ -240,11 +240,16 @@ function profileColumns(extra) {
 
 test('the K-profile options: profileHeight \'ground\' takes the profile\'s z and h from the ground, stableProfile \'holtslagBoville\' divides a stable column\'s profile by 1 + 5 z/L (5 + z/L above z/L = 1), and prandtlCoefficient is the a of Pr', () => {
   const base = profileColumns({}), ground = profileColumns({ profileHeight: 'ground' }), stable = profileColumns({ stableProfile: 'holtslagBoville' }), plain = profileColumns({ prandtlCoefficient: 0 });
+  const counter = profileColumns({ countergradient: 7.2 }), counterGround = profileColumns({ countergradient: 7.2, profileHeight: 'ground' }), capped = profileColumns({ velocityScale: 'capped' }), cappedGround = profileColumns({ velocityScale: 'capped', profileHeight: 'ground' });
   const { core: c, boundaryLayer: layer } = base, { K: nK, C: nC, g: grav, cp, geopotential: phi, exnerLayer, exnerLower } = c.diagnostics, thetaV = c.arrays.thetaV;
   const shape = (z, h) => z * (1 - z / h) ** 2, mixed = (B0, ustar, h) => Math.cbrt(ustar ** 3 + 0.6 * B0 * h);
   const prandtl = (B0, ustar, h, a) => Math.pow(1 + 1.5 * 0.4 * B0 * h / ustar ** 3, -1 / 6) + a * 0.4 * 0.1 * Math.cbrt(B0 * h) / mixed(B0, ustar, h);
+  const outer = (z, h, B0, ustar) => shape(z, h) * Math.cbrt(B0 * h) / (prandtl(B0, ustar, h, 7.2) * mixed(B0, ustar, h) * h);
+  const cappedScale = (B0, ustar, h) => (B0 > 0 ? ustar * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * 0.4 * B0 / ustar ** 3), 0.25) : ustar);
   for (const other of [ground, stable, plain]) assert.deepEqual(other.boundaryLayer.depth, layer.depth);
-  const columns = { stable: 0, unstable: 0 }, worst = { ground: 0, stable: 0, prandtl: 0, untouched: 0 };
+  assert.deepEqual(counterGround.boundaryLayer.depth, counter.boundaryLayer.depth);
+  assert.deepEqual(cappedGround.boundaryLayer.depth, capped.boundaryLayer.depth);
+  const columns = { stable: 0, unstable: 0 }, worst = { ground: 0, stable: 0, prandtl: 0, untouched: 0, groundScalar: 0, counter: 0, capped: 0 }, checked = { counter: 0, capped: 0 };
   let strongest = 1, lifted = 0;
   for (let i = 0; i < nC; i++) {
     const b = (nK - 1) * nC + i, zb = phi[b] / grav, h = layer.depth[i] - zb, B0 = layer.buoyancyFlux[i], ustar = layer.friction[i];
@@ -257,6 +262,7 @@ test('the K-profile options: profileHeight \'ground\' takes the profile\'s z and
       if (z >= h) continue;
       const expected = shape(z + lift, h + lift) / shape(z, h) * (B0 > 0 ? mixed(B0, ustar, h + lift) / mixed(B0, ustar, h) : 1);
       worst.ground = Math.max(worst.ground, Math.abs(ground.boundaryLayer.mixing[x] / m / expected - 1));
+      worst.groundScalar = Math.max(worst.groundScalar, Math.abs(ground.boundaryLayer.scalarMixing[x] / layer.scalarMixing[x] / expected * (B0 > 0 ? prandtl(B0, ustar, h + lift, 7.2) / prandtl(B0, ustar, h, 7.2) : 1) - 1));
       if (B0 < 0) {
         const zeta = -0.4 * z * B0 / ustar ** 3, phiStable = zeta <= 1 ? 1 + 5 * zeta : 5 + zeta;
         strongest = Math.max(strongest, phiStable);
@@ -272,6 +278,22 @@ test('the K-profile options: profileHeight \'ground\' takes the profile\'s z and
   assert.ok(columns.stable > 20 && columns.unstable > 20 && lifted > 5 && strongest > 1.5, JSON.stringify({ columns, lifted, strongest }));
   assert.equal(worst.untouched, 0, 'stableProfile leaves unstable columns alone and prandtlCoefficient the momentum and the stable columns');
   assert.ok(worst.ground < 1e-9 && worst.stable < 1e-9 && worst.prandtl < 1e-9, JSON.stringify(worst));
+  for (let i = 0; i < nC; i++) {
+    const b = (nK - 1) * nC + i, zb = phi[b] / grav, lift = cp * thetaV[b] * (exnerLower[b] - exnerLayer[b]) / grav;
+    for (const [run, framed, name] of [[counter, counterGround, 'counter'], [capped, cappedGround, 'capped']]) {
+      const { depth, buoyancyFlux, friction, kTop } = run.boundaryLayer, h = depth[i] - zb, B0 = buoyancyFlux[i], ustar = friction[i], field = name === 'counter' ? 'nonlocal' : 'mixing';
+      if (!(h > 0) || (name === 'counter' && !(B0 > 0))) continue;
+      for (let k = kTop; k < nK - 1; k++) {
+        const x = k * nC + i, z = 0.5 * (phi[x] / grav + phi[x + nC] / grav) - zb;
+        if (!(z < h) || !(run.boundaryLayer[field][x] > 0) || (name === 'counter' && !(z > 0.1 * h))) continue;
+        const expected = name === 'counter' ? outer(z + lift, h + lift, B0, ustar) / outer(z, h, B0, ustar) : shape(z + lift, h + lift) / shape(z, h) * cappedScale(B0, ustar, h + lift) / cappedScale(B0, ustar, h);
+        worst[name] = Math.max(worst[name], Math.abs(framed.boundaryLayer[field][x] / run.boundaryLayer[field][x] / expected - 1));
+        checked[name]++;
+      }
+    }
+  }
+  console.log(`ground frame against the formula: the scalars ${worst.groundScalar.toExponential(1)}, the countergradient's outer layer over ${checked.counter} interfaces ${worst.counter.toExponential(1)}, the capped scale over ${checked.capped} ${worst.capped.toExponential(1)}`);
+  assert.ok(checked.counter > 100 && checked.capped > 100 && worst.groundScalar < 1e-9 && worst.counter < 1e-9 && worst.capped < 1e-9, JSON.stringify({ worst, checked }));
 });
 
 test('momentum mixing brings wind down to the surface layer and changes each edge column\'s momentum by the surface stress alone', () => {
