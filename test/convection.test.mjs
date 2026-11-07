@@ -1679,7 +1679,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     const plumed = moist.cumulusBaseFlux[i] > 0 && pi[i] * sigmaMid[k] >= moist.cumulusTop[i];
     if (!plumed && Math.max(below ? (regime[i] === COUPLED_REGIME ? 1 : 0) : stratiform[i], iced) > 0) shared[k * C + i] = 1;
   }
-  return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared };
+  return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared, largeScale: Float64Array.from(moist.largeScalePrecipitation), gpuLargeScale: Float64Array.from(ph.COND.subarray(0, C)) };
 }
 
 test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, carried through non-buoyant layers by its w² and entraining at 1/z, shut where the EIS of its column passes stratocumulusInversion, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -1743,6 +1743,30 @@ test('the stratiform lifetime matches between the engines on random columns of e
   }
   console.log(`after one step the 3 h stratiform lifetime keeps more cloud than the 1 h lifetime alone in ${kept} of ${cloudy} cloudy layers (GPU ${gpuKept}), ${keptShared} of the ${shared} whose long share is positive (outside a plume's layers, below the mixing top of a coupled or ice-covered column or above it under an EIS share)`);
   assert.ok(keptShared > shared / 5 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}, ${keptShared} of the ${shared} with a long share`);
+});
+
+test("the Kessler rate of the stratiform rain's evaporation and its relative-humidity ceiling match between the engines on random columns, under either law, and the rate lets more of the large-scale rain reach the ground on both", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const instant = await parity({}), kessler = await parity({ rainEvaporationLaw: 'kessler' });
+  const ceiled = await parity({ rainEvaporationLaw: 'kessler', rainCover: 0.5, rainEvaporationCeiling: 0.7 });
+  await parity({ rainEvaporationCeiling: 0.7 });
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  let wetter = 0, gpuWetter = 0;
+  for (let i = 0; i < instant.largeScale.length; i++) {
+    if (kessler.largeScale[i] > instant.largeScale[i] * (1 + 1e-6) + 1e-9) wetter++;
+    if (kessler.gpuLargeScale[i] > instant.gpuLargeScale[i] * (1 + 1e-6) + 1e-9) gpuWetter++;
+  }
+  console.log(`large-scale rain reaching the ground over the random columns: ${sum(instant.largeScale).toFixed(3)} kg/m² summed under the instant law (GPU ${sum(instant.gpuLargeScale).toFixed(3)}), ${sum(kessler.largeScale).toFixed(3)} under the Kessler rate (GPU ${sum(kessler.gpuLargeScale).toFixed(3)}), more in ${wetter} columns (GPU ${gpuWetter}); ${sum(ceiled.largeScale).toFixed(3)} (GPU ${sum(ceiled.gpuLargeScale).toFixed(3)}) with a_P 0.5 under the 0.85 ceiling`);
+  assert.ok(wetter > 0 && Math.abs(gpuWetter - wetter) <= Math.max(2, wetter / 100), `${wetter} columns wetter on the CPU, ${gpuWetter} on the GPU`);
+  assert.ok(sum(kessler.largeScale) > sum(instant.largeScale) && sum(kessler.gpuLargeScale) > sum(instant.gpuLargeScale));
+});
+
+test("a rainEvaporationLaw other than 'deficit' or 'kessler', a rainCover outside (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
+  const refused = [{ rainEvaporationLaw: 'ifs' }, { rainCover: 0 }, { rainCover: 1.5 }, { rainCover: '0.1' }, { rainEvaporationCeiling: -0.1 }, { rainEvaporationCeiling: 1.2 }, { rainEvaporationCeiling: '0.7' }];
+  for (const options of refused) assert.throws(() => build(options), /rainEvaporationLaw|rainCover|rainEvaporationCeiling/, `CPU: ${JSON.stringify(options)}`);
+  if (!gpuAvailable) return;
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  for (const options of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), /rainEvaporationLaw|rainCover|rainEvaporationCeiling/, `GPU: ${JSON.stringify(options)}`);
 });
 
 test('a cumulusMemory other than a finite time of 0 s or more is refused on both engines', async () => {

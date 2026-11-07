@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { saturationHumidity, LATENT_HEAT, createMoistPhysics, cloudSaturation, criticalHumidityAt, LIQUID_TEMPERATURE, ICE_TEMPERATURE } from '../js/physics/moist.module.js';
+import { saturationHumidity, LATENT_HEAT, createMoistPhysics, cloudSaturation, criticalHumidityAt, LIQUID_TEMPERATURE, ICE_TEMPERATURE, KESSLER_EVAPORATION } from '../js/physics/moist.module.js';
 
 const model = createModel(new Grid(16));
 const { core, moist } = model;
@@ -127,6 +127,63 @@ test('rain evaporates into the dry layers it falls through, conserving water and
     const idx = k * C, T = r.theta[idx] * exnerLayer[idx], qs = saturationHumidity(T, r.pi[0] * sigmaMid[k]);
     if (k <= cloudAt) assert.equal(r.q[idx], r.qBefore[idx], `no evaporation at or above the cloud (layer ${k})`);
     assert.ok(r.q[idx] <= qs * (1 + 1e-9), `layer ${k} oversaturated`);
+  }
+});
+
+test("under rainEvaporationLaw 'kessler' each cloud-free layer takes the IFS's Kessler rate of the rain falling into it, integrated exactly over the step, conserving water and moist enthalpy: rain the instant law evaporates whole reaches the ground, in nearly the same share at half the step, and rainEvaporationCeiling holds every layer it reaches below c + (1 − c) a_P under either law", () => {
+  const cloudAt = K - 12, cover = 0.3;
+  const run = (options, humidity, dt = 900) => {
+    const m = createModel(new Grid(16), { moist: options }), d = m.core.diagnostics;
+    const [pi, theta, q, qc] = column(300, humidity);
+    q[(K - 2) * C] = 0.9 * saturationHumidity(theta[(K - 2) * C] * exnerLayer[(K - 2) * C], pi[0] * sigmaMid[K - 2]);
+    qc[cloudAt * C] = 2e-3;
+    m.core.diagnoseColumn(0, pi, theta, q, qc);
+    const before = { theta: Float64Array.from(theta), q: Float64Array.from(q) };
+    const water = m.moist.columnWater(pi, q, 0) + m.moist.columnWater(pi, qc, 0), enthalpy = moistEnthalpy(pi, theta, q, 0);
+    const rain = m.moist.autoconvertColumn(0, pi, theta, q, qc, dt);
+    return { pi, theta, q, qc, before, rain, water, enthalpy, exner: d.exnerLayer };
+  };
+  const law = { rainEvaporationLaw: 'kessler', rainCover: cover }, dt = 900;
+  const made = run({ rainEvaporation: 0 }, 0.8), instant = run({}, 0.8), kessler = run(law, 0.8);
+  assert.ok(made.before.theta[cloudAt * C] * made.exner[cloudAt * C] > LIQUID_TEMPERATURE && made.rain > 1e-3, `the cloud layer is warm and converts ${made.rain} kg/m²`);
+  let rain = made.rain, worst = 0, taken = 0;
+  const saturated = { qs: 0, slope: 0, liquid: 1 };
+  for (let k = cloudAt + 1; k < K; k++) {
+    const idx = k * C, mass = kessler.pi[0] * dSigma[k] / g, p = kessler.pi[0] * sigmaMid[k];
+    const { qs, slope } = cloudSaturation(kessler.before.theta[idx] * kessler.exner[idx], p, true, LIQUID_TEMPERATURE, ICE_TEMPERATURE, saturated);
+    const gamma = LATENT_HEAT * slope / cp, deficit = Math.max(0, (qs - kessler.before.q[idx]) / (1 + gamma)) * mass;
+    const rate = cover * KESSLER_EVAPORATION.rate * Math.pow(Math.sqrt(p / KESSLER_EVAPORATION.pressure) * rain / dt / (cover * KESSLER_EVAPORATION.flux), KESSLER_EVAPORATION.exponent);
+    const evaporated = Math.min(rain, deficit, -deficit * Math.expm1(-rate * (1 + gamma) * dt));
+    rain = Math.max(0, rain - evaporated);
+    worst = Math.max(worst, Math.abs(kessler.q[idx] - kessler.before.q[idx] - evaporated / mass) / (evaporated / mass || 1));
+    if (deficit > 0) taken = Math.max(taken, evaporated / deficit);
+  }
+  const half = { made: run({ rainEvaporation: 0 }, 0.8, dt / 2), kessler: run(law, 0.8, dt / 2) };
+  const share = kessler.rain / made.rain, halfShare = half.kessler.rain / half.made.rain;
+  console.log(`a ${(1e3 * made.rain).toFixed(1)} g/m² shower over ${dt} s through air at 80 % relative humidity: ${(1e3 * instant.rain).toFixed(1)} g/m² reaches the ground under the instant law, ${(1e3 * kessler.rain).toFixed(1)} (${share.toFixed(3)} of it) under the Kessler rate with a_P ${cover}, its humidity within ${worst.toExponential(1)} of the formula's, each layer taking at most ${taken.toFixed(3)} of its deficit; over ${dt / 2} s ${halfShare.toFixed(3)} of a ${(1e3 * half.made.rain).toFixed(1)} g/m² shower`);
+  assert.ok(worst < 1e-9, `the layers' humidity departs from the Kessler formula by ${worst} of what evaporated`);
+  assert.ok(Math.abs(kessler.rain - rain) < 1e-12 * made.rain, `rain reaching the ground ${kessler.rain} against ${rain}`);
+  assert.ok(taken > 0 && taken < 0.5, `the rate takes ${taken} of a layer's deficit in one step`);
+  assert.ok(instant.rain < 1e-3 * made.rain && share > 0.2, `${kessler.rain} reaches the ground under the Kessler rate, ${instant.rain} under the instant law, of ${made.rain}`);
+  assert.ok(Math.abs(share - halfShare) < 0.05, `the share reaching the ground is ${share} over ${dt} s and ${halfShare} over ${dt / 2} s`);
+  for (const r of [instant, kessler]) {
+    assert.ok(Math.abs(r.water - (moist.columnWater(r.pi, r.q, 0) + moist.columnWater(r.pi, r.qc, 0) + r.rain)) < 1e-12 * r.water);
+    assert.ok(Math.abs(moistEnthalpy(r.pi, r.theta, r.q, 0) - r.enthalpy) < 1e-12 * r.enthalpy);
+  }
+  const ceiling = 0.7, limit = ceiling + (1 - ceiling) * cover;
+  for (const kind of ['deficit', 'kessler']) {
+    const r = run({ rainEvaporationLaw: kind, rainCover: cover, rainEvaporationCeiling: ceiling }, 0.72);
+    let reached = 0, highest = 0, above = 0;
+    for (let k = cloudAt + 1; k < K; k++) {
+      const idx = k * C, p = r.pi[0] * sigmaMid[k];
+      const humidity = r.q[idx] / cloudSaturation(r.theta[idx] * r.exner[idx], p, true, LIQUID_TEMPERATURE, ICE_TEMPERATURE, saturated).qs;
+      const start = r.before.q[idx] / cloudSaturation(r.before.theta[idx] * r.exner[idx], p, true, LIQUID_TEMPERATURE, ICE_TEMPERATURE, saturated).qs;
+      if (start >= limit) { above++; assert.equal(r.q[idx], r.before.q[idx], `${kind}: layer ${k} starts at relative humidity ${start}, above the ceiling ${limit}, and takes no rain`); }
+      else { assert.ok(humidity <= limit * (1 + 1e-9), `${kind}: layer ${k} reaches relative humidity ${humidity}, past the ceiling ${limit}`); highest = Math.max(highest, humidity); if (humidity > limit - 5e-3) reached++; }
+    }
+    console.log(`  ${kind} under rainEvaporationCeiling ${ceiling} through air at 72 %: the moistest layer below the cloud reaches relative humidity ${highest.toFixed(4)} against the ceiling ${limit.toFixed(2)}, ${reached} within 5e-3 of it, ${above} starting above it untouched; ${(1e3 * r.rain).toFixed(1)} g/m² reaches the ground`);
+    assert.ok(above >= 1, `${above} layers start above the ceiling`);
+    if (kind === 'deficit') assert.ok(reached >= 1, `the instant law takes ${reached} layers to the ceiling`);
   }
 });
 

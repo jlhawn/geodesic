@@ -21,6 +21,8 @@ export const TEST_PARCEL = { entrainment: 0.4, removal: 0.5 };
 export const DEPARTURE = { depth: 350e2, temperature: 0.2, humidity: 1e-4, reference: 'lowest' };
 export const IFS_PRECIPITATION = { conversion: 1.4e-3, liquidFactor: 1.3, critical: 5e-4, seaThreshold: 3e-4, landThreshold: 5e-4, bergeron: 268.16, ice: 250.16, speed: 10, velocityScale: 0.75 };
 export const SOURCE_EXCESS = { coefficient: 1.5, temperature: 3, humidity: 2e-3, scale: 1.2, layer: 1.5, karman: 0.4, friction: 0.1, virtual: 0.61 };
+export const KESSLER_EVAPORATION = { rate: 5.44e-4, flux: 5.09e-3, exponent: 0.5777, pressure: 101325 };
+export const rainCeilingHumidity = (ceiling, cover) => (ceiling == null ? 1 : ceiling + (1 - ceiling) * cover);
 
 /*
  * The convective-scale velocity of the IFS's test parcel at the lowest
@@ -506,7 +508,16 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * step and evaporates into each cloud-free (at most CLEAR_AIR of cloud
  * water) subsaturated one up to `rainEvaporation` of what would saturate
  * it (with `iceSaturation`, of cloudSaturation's mix), latent cooling
- * included. A filler removes negative humidity by
+ * included. With `rainEvaporationLaw` 'kessler' (default 'deficit', the
+ * above) it takes at most what the IFS's Kessler rate evaporates over the
+ * step (IFS Documentation Cy41r2 Part IV eq. 7.70), a_P α1 (q_s − q)
+ * (√(p/p0) P / (a_P α2))^α3 with α1 5.44e-4 /s, α2 5.09e-3 kg m⁻² s⁻¹,
+ * α3 0.5777 and p0 101325 Pa, P the flux of rain into the layer and a_P
+ * `rainCover`, the share of the clear sky it falls through, integrated
+ * exactly as the deficit decays under the rate and its latent cooling.
+ * With `rainEvaporationCeiling` c (null: none) neither law takes a layer
+ * past the relative humidity c + (1 − c) a_P, the IFS's eq. 7.77 in
+ * cloud-free air (c 0.7 there). A filler removes negative humidity by
  * borrowing from the layer below.
  *
  * Precipitation accumulates per cell (kg/m²), and so do its two parts:
@@ -524,6 +535,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
  * cloudLifetime 1 h, no upperCloudLifetime, stratiformLifetime 3 h, autoconversionFloor 'lowest',
  * fogDroplets [150, 60] /cm³, fogDeposition 1, fogDepositionLimit 0.25 m/s, rainEvaporation 1,
+ * rainEvaporationLaw 'deficit', rainCover 0.1, no rainEvaporationCeiling,
  * cumulusClosure 0.03 (Grant 2001), cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
  * cumulusFriction 1, cumulusOvershoot 'kinetic', cumulusAscent 'buoyant', no
@@ -543,7 +555,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
-  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, bergeronAutoconversion: true, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
+  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, bergeronAutoconversion: true, stratiformLifetime: 3 * 3600, rainEvaporation: 1, rainEvaporationLaw: 'deficit', rainCover: 0.1, rainEvaporationCeiling: null, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
   deckVeto: true, coupledVeto: false, stratocumulusInversion: 7, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
@@ -558,7 +570,7 @@ export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep'
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, boundaryCloudLayer = null, stratiform = null, deckGate = null, stabilityLayer = null, surfaceBuoyancy = null, frictionVelocity = null, land = null, iceSheet = null, surfaceDrag = null, surfaceSensible = null, surfaceEvaporation = null, buffers = null, ...options } = {}) {
   for (const retired of RETIRED_OPTIONS) if (retired in options) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   const {
-    latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, bergeronAutoconversion, stratiformLifetime, rainEvaporation, autoconversionFloor, fogDroplets, fogDeposition, fogDepositionLimit,
+    latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, bergeronAutoconversion, stratiformLifetime, rainEvaporation, rainEvaporationLaw, rainCover, rainEvaporationCeiling, autoconversionFloor, fogDroplets, fogDeposition, fogDepositionLimit,
     deckVeto, coupledVeto, stratocumulusInversion, evaporationInCloud, virtualBuoyancy,
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusAscent, cumulusEntrainmentHeight, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeDeparture, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
@@ -605,6 +617,11 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   if (typeof cumulusMemory !== 'number' || !(cumulusMemory >= 0 && cumulusMemory < Infinity)) throw new Error(`cumulusMemory must be a time in seconds, 0 or more, not ${cumulusMemory}`);
   if (cumulusSource !== 'mean' && cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${cumulusSource}`);
   if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'mixingTop' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer', 'mixingTop' or 'none', not ${autoconversionFloor}`);
+  if (rainEvaporationLaw !== 'deficit' && rainEvaporationLaw !== 'kessler') throw new Error(`rainEvaporationLaw must be 'deficit' or 'kessler', not ${rainEvaporationLaw}`);
+  if (!(Number.isFinite(rainCover) && rainCover > 0 && rainCover <= 1)) throw new Error(`rainCover must be a share above 0 and at most 1, not ${rainCover}`);
+  if (rainEvaporationCeiling !== null && !(Number.isFinite(rainEvaporationCeiling) && rainEvaporationCeiling >= 0 && rainEvaporationCeiling <= 1)) throw new Error(`rainEvaporationCeiling must be null or a relative humidity from 0 to 1, not ${rainEvaporationCeiling}`);
+  const kesslerEvaporation = rainEvaporationLaw === 'kessler', ceilingHumidity = rainCeilingHumidity(rainEvaporationCeiling, rainCover);
+  const kesslerRate = (flux, pressure) => rainCover * KESSLER_EVAPORATION.rate * Math.pow(Math.sqrt(pressure / KESSLER_EVAPORATION.pressure) * flux / (rainCover * KESSLER_EVAPORATION.flux), KESSLER_EVAPORATION.exponent);
   if (cumulusOvershoot !== 'kinetic' && !(cumulusOvershoot >= 0 && cumulusOvershoot <= 1)) throw new Error(`cumulusOvershoot must be a share between 0 and 1 or 'kinetic', not ${cumulusOvershoot}`);
   if (cumulusAscent !== 'buoyant' && cumulusAscent !== 'kinetic') throw new Error(`cumulusAscent must be 'buoyant' or 'kinetic', not ${cumulusAscent}`);
   if (cumulusAscent === 'kinetic' && cumulusOvershoot !== 'kinetic') throw new Error(`cumulusAscent 'kinetic' needs cumulusOvershoot 'kinetic', whose w² carries the plume`);
@@ -764,7 +781,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         const qs = iceSaturation ? saturation(temperature, pi[i] * sigmaMid[k]).qs : saturationHumidity(temperature, pi[i] * sigmaMid[k]);
         const slope = iceSaturation ? saturated.slope : qs * latentHeat / (R_VAPOR * temperature * temperature);
         const deficit = Math.max(0, (qs - q[idx]) / (1 + latentHeat * slope / cp)) * mass;
-        const evaporated = Math.min(rain, rainEvaporation * deficit);
+        let evaporated = Math.min(rain, rainEvaporation * deficit);
+        if (ceilingHumidity < 1) evaporated = Math.min(rain, rainEvaporation * Math.max(0, (ceilingHumidity * qs - q[idx]) / (1 + ceilingHumidity * latentHeat * slope / cp)) * mass);
+        if (kesslerEvaporation) evaporated = Math.min(evaporated, -deficit * Math.expm1(-kesslerRate(rain / dt, pi[i] * sigmaMid[k]) * (1 + latentHeat * slope / cp) * dt));
         if (evaporated > 0) {
           rain = Math.max(0, rain - evaporated);
           q[idx] += evaporated / mass;
