@@ -681,6 +681,17 @@ export function terrainOptions(terrain = true) {
   return { ...(conserveVolume !== undefined ? { conserveVolume } : {}), ...(passes !== undefined ? { passes } : {}) };
 }
 
+const TERRAIN_DEFAULTS = { conserveVolume: false, passes: 2 };
+
+/*
+ * The `terrain` options as a key, equal for options that make the same
+ * surface: those at their defaults left out, the rest in name order.
+ */
+export function terrainKey(terrain = true) {
+  const options = terrainOptions(terrain);
+  return JSON.stringify(Object.keys(options).sort().filter((name) => options[name] !== TERRAIN_DEFAULTS[name]).map((name) => [name, options[name]]));
+}
+
 /*
  * The surface geopotential for the dynamical core: the land elevation,
  * clamped at sea level and smoothed on the mesh so that nothing sits at
@@ -692,7 +703,7 @@ export function terrainOptions(terrain = true) {
  * area-weighted sum of its heights, that it had before the passes, laid
  * on its cells in proportion to their smoothed height above sea level.
  */
-export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = 2, weight = 0.5, conserveVolume = false } = {}) {
+export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = TERRAIN_DEFAULTS.passes, weight = 0.5, conserveVolume = TERRAIN_DEFAULTS.conserveVolume } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
   const { land, elevation, surface = null } = geography;
   let height = surface ? Float64Array.from(surface) : Float64Array.from(elevation, (h, i) => (land[i] ? Math.max(0, h) : 0));
@@ -911,6 +922,7 @@ const SUBGRID_FALLBACK = {
   terrain: () => 'the terrain is off, and the files hold only the scales below the resolved terrain',
   land: (file) => `${file} was made for another land mask`,
   relax: (file, mesh, fields) => `${file} was made for the mesh of ${fields.relax} Lloyd passes, not this one of ${mesh.relax}`,
+  surface: (file) => `${file} holds the scales below the default terrain's surface, and this run's terrain options make another`,
 };
 const fallbackSaid = new Set();
 export function subgridFallbackNote(mesh, reason = 'missing', fields = null, topography = 'etopo1', mask = 'raster') {

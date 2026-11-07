@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
-import { createModel, dragConstants } from '../js/model.module.js';
-import { topographyFromInt16, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
+import { createModel, dragConstants, orographyFields } from '../js/model.module.js';
+import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, SUBGRID_FIELDS } from '../js/geography.module.js';
 import { orographicColumn, namedConstants, OROGRAPHY_DEFAULTS, OROGRAPHY_CONSTANTS, LOTT_MILLER } from '../js/physics/orography.module.js';
 import { orographyConstants } from '../js/gpu/orography.gpu.js';
 
@@ -65,4 +65,25 @@ for (const N of [16, 24]) test(`with conserveVolume each land mass at N=${N} kee
   for (let i = 0; i < C; i++) if (!land[i]) assert.equal(kept[i], smoothed[i], `cell ${i} off the land`);
   console.log(`N=${N}: ${masses} land masses; the default smoothing loses ${(100 * lost / total).toFixed(2)} % of the land's volume`);
   assert.ok(lost > 0, 'the default smoothing loses volume');
+});
+
+test('terrain options that make the same surface share a key', () => {
+  assert.equal(terrainKey(true), terrainKey({}));
+  assert.equal(terrainKey(true), terrainKey({ conserveVolume: false, passes: 2 }));
+  assert.equal(terrainKey({ passes: 3, conserveVolume: true }), terrainKey({ conserveVolume: true, passes: 3 }));
+  assert.notEqual(terrainKey({ conserveVolume: true }), terrainKey(true));
+  assert.notEqual(terrainKey({ passes: 1 }), terrainKey(true));
+});
+
+test('a subgrid file is refused over terrain of other options than its own, and the raster\'s fields are computed against the run\'s surface', () => {
+  const model = createModel(new Grid(16), { topography, physics: false }), { mesh, geography } = model, g = 9.80616;
+  const file = Object.fromEntries(SUBGRID_FIELDS.map(([name]) => [name, new Float64Array(mesh.nCells).fill(0.5)]));
+  const kept = surfaceGeopotential(mesh, geography, { conserveVolume: true });
+  assert.equal(orographyFields(mesh, topography, geography, model.surfaceGeopotential, file, g).raster, undefined);
+  assert.equal(orographyFields(mesh, topography, geography, model.surfaceGeopotential, file, g, { conserveVolume: false, passes: 2 }).raster, undefined);
+  const refused = orographyFields(mesh, topography, geography, kept, file, g, { conserveVolume: true });
+  assert.equal(refused.raster, true);
+  const computed = orographyFields(mesh, topography, geography, kept, false, g, { conserveVolume: true });
+  assert.deepEqual(Array.from(refused.deviation), Array.from(computed.deviation));
+  assert.equal(orographyFields(mesh, topography, geography, kept, { ...file, terrain: { conserveVolume: true } }, g, { conserveVolume: true }).raster, undefined);
 });
