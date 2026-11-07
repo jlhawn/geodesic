@@ -369,7 +369,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * test parcel types deep and whose shallow plume does not rise tries the
  * mid-level type (IFS Cy41r2 Part IV §6.4.3): the lowest layer, from the
  * second lowest up, whose midpoint lies within MID_LEVEL.height (10 km) of
- * the ground, in large-scale ascent (π σ̇ summed over its two interfaces
+ * the ground, in large-scale ascent (the core's ω = σ (∂π/∂t + v·∇π) + π σ̇
  * below 0), with q above MID_LEVEL.humidity (0.8) of q_s, and whose parcel
  * lifted to the next layer's midpoint holds condensate there and is less
  * than MID_LEVEL.buoyancy (0.5 K) colder in virtual temperature than the
@@ -379,7 +379,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * and q_t
  * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
  * detraining that rate times (1.6 − RH) as the IFS code's types 2 and 3 do,
- * with eq. 6.31's base flux max(−π σ̇/g at its cloud base, (H + L E)/(g
+ * with eq. 6.31's base flux max(−ω/g at its cloud base (the mean of the
+ * two layers that meet there), (H + L E)/(g
  * z_base)), z_base the cloud base's height above the ground, and does not
  * depart where the stratocumulus cap closes the shallow plume. With
  * `plumeDeparture` 'elevated' (IFS Cy41r2 Part IV
@@ -702,7 +703,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   if (!(Number.isFinite(fogDepositionLimit) && fogDepositionLimit > 0)) throw new Error(`fogDepositionLimit must be a speed above 0 in m/s, not ${fogDepositionLimit}`);
   const foggy = fogDroplets !== null, depositing = fogDeposition > 0 && surfaceDrag !== null;
   const { settleLand, settleSea, drizzleLand, drizzleSea } = fogConstants(fogDroplets);
-  const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
+  const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential, omega: layerOmega } = core.diagnostics;
   const continental = Uint8Array.from({ length: C }, (_, i) => (land && land[i] && !(iceSheet && iceSheet[i]) ? 1 : 0));
   const thetaV = core.arrays.thetaV;
   const KL = Math.min(SUBCLOUD_LAYERS, K), subcloudBuffer = buffers && buffers.subcloudVirtual ? buffers.subcloudVirtual : new SharedArrayBuffer(8 * KL * C);
@@ -1395,14 +1396,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const tv = virtualBuoyancy ? VIRTUAL_FACTOR : 0, enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
       let kb = -1;
       for (let k = bottom - 1; k > 1 && z[k] - ground < MID_LEVEL.height; k--) {
-        if (!(piSigmaDot[k * C + i] + piSigmaDot[(k + 1) * C + i] < 0 && Math.max(0, q[k * C + i]) > MID_LEVEL.humidity * saturation(T[k], p[k]).qs)) continue;
+        if (!(layerOmega[k * C + i] < 0 && Math.max(0, q[k * C + i]) > MID_LEVEL.humidity * saturation(T[k], p[k]).qs)) continue;
         lcl = liftingCondensationLevel((envS[k] - g * z[k]) / cp, envQ[k], p[k], kappa);
         if (!lcl || !(lcl.pressure > pi[i] * levels[1])) continue;
         plumeState(envS[k], envQ[k], z[k - 1], p[k - 1], 0);
         if (!(plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - T[k - 1] * (1 + tv * Math.max(0, q[(k - 1) * C + i])) > -MID_LEVEL.buoyancy)) continue;
         let j = k;
         while (j > 1 && pi[i] * levels[j] > lcl.pressure) j--;
-        if (Math.min(open * Math.max(0, -piSigmaDot[j * C + i] / g, enthalpy / (g * (upperInterface(i, j) - ground))), cumulusBoundaryLoss * dp[k] / (g * dt)) > CUMULUS_FLOOR) { kb = k; break; }
+        if (Math.min(open * Math.max(0, -0.5 * (layerOmega[(j - 1) * C + i] + layerOmega[j * C + i]) / g, enthalpy / (g * (upperInterface(i, j) - ground))), cumulusBoundaryLoss * dp[k] / (g * dt)) > CUMULUS_FLOOR) { kb = k; break; }
       }
       if (kb < 0) return shallowRain;
       source = kb; stackBottom = kb; mass = dp[kb]; sourceS = envS[kb]; sourceQ = envQ[kb]; rooted = false; middle = true;
@@ -1624,7 +1625,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (middle) {
       const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
       const enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
-      drive = Math.max(0, -piSigmaDot[base * C + i] / g, enthalpy / (g * (upperInterface(i, base) - ground)));
+      drive = Math.max(0, -0.5 * (layerOmega[(base - 1) * C + i] + layerOmega[base * C + i]) / g, enthalpy / (g * (upperInterface(i, base) - ground)));
     }
     let baseFlux = Math.min(open * drive, cumulusBoundaryLoss * mass / (g * dt));
     for (let k = top; k <= bottom; k++) {

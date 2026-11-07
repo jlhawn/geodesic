@@ -111,7 +111,7 @@ export function createModel(gridOrMesh, {
   const sigmaMid = Float64Array.from({ length: levels.length - 1 }, (_, k) => 0.5 * (levels[k] + levels[k + 1]));
   const sponge = physics ? spongeRates(sigmaMid, surfaceOptions.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surfaceOptions.spongeDays ?? SPONGE.days) : null;
   const lidFriction = physics ? lidFrictionRates(levels, surfaceOptions.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : surfaceOptions.lidFriction) : null;
-  const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, spongeMeanRates: lidFriction, ...coreOptions });
+  const core = createSigmaCore(mesh, { levels, storeOmega: !!moistOptions.midLevelConvection, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, spongeMeanRates: lidFriction, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const openSea = new Float64Array(C);
   const subgridFields = physics && geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, subgrid, core.diagnostics.g) : null;

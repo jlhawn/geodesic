@@ -2710,7 +2710,7 @@ const MID_LEVEL_PLUME = [
     var kb = -1;
     for (var k = bottom - 1; k > 1; k--) {
       if (!(plumeZ(i, k) - ground < MID_HEIGHT)) { break; }
-      if (!(D[D_PSD + k * C + i] + D[D_PSD + (k + 1) * C + i] < 0.0 && max(0.0, IN[S_Q + k * C + i]) > MID_RH * cloudSat(plumeT(i, k), layerP(pi, k)).x)) { continue; }
+      if (!(D[D_OMG + k * C + i] < 0.0 && max(0.0, IN[S_Q + k * C + i]) > MID_RH * cloudSat(plumeT(i, k), layerP(pi, k)).x)) { continue; }
       let midEnv = plumeEnv(i, k);
       let midLcl = condensationLevel((midEnv.x - GRAV * plumeZ(i, k)) / CP, midEnv.y, layerP(pi, k));
       if (!(midLcl.y > pi * LV[L_SL + 0])) { continue; }
@@ -2718,7 +2718,7 @@ const MID_LEVEL_PLUME = [
       if (!(midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - plumeT(i, k - 1) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + (k - 1) * C + i])) > -MID_BUOYANCY)) { continue; }
       var midBase = k;
       while (midBase > 1 && pi * LV[L_SU + midBase] > midLcl.y) { midBase -= 1; }
-      let midDrive = max(0.0, max(-D[D_PSD + midBase * C + i] / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, midBase) - ground))));
+      let midDrive = max(0.0, max(-0.5 * (D[D_OMG + (midBase - 1) * C + i] + D[D_OMG + midBase * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, midBase) - ground))));
       if (min(open * midDrive, CU_LOSS * layerDp(pi, k) / (GRAV * dt)) > CU_FLOOR) { kb = k; lcl = midLcl; break; }
     }
     if (kb < 0) { return shallowRain; }
@@ -2731,7 +2731,7 @@ const MID_LEVEL_PLUME = [
   ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
   if (middle) {
     let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
-    drive = max(0.0, max(-D[D_PSD + base * C + i] / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, base) - ground))));
+    drive = max(0.0, max(-0.5 * (D[D_OMG + (base - 1) * C + i] + D[D_OMG + base * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, base) - ground))));
   }
   var baseFlux = min(open * drive, CU_LOSS * mass / (GRAV * dt));
 `],
@@ -3489,3 +3489,5 @@ fn mixEdge(e: i32, a: i32, b: i32) {
   for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
 }`,
 };
+
+export const omegaStore = (body) => replaceOnce([['    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);\n', '    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);\n    D[D_OMG + idx] = omega;\n']], body, 'omega store');

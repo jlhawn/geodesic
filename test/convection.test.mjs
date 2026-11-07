@@ -1497,6 +1497,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     let ascentSeed = 777;
     const ascentRandom = () => { ascentSeed = (ascentSeed * 1103515245 + 12345) % 2147483648; return ascentSeed / 2147483648; };
     for (let k = 1; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.piSigmaDot[k * C + i] = Math.fround(0.6 * ascentRandom() - 0.4);
+    if (core.diagnostics.omega) for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.omega[k * C + i] = Math.fround(0.6 * ascentRandom() - 0.4);
   }
   let cloudSeed = 4242;
   const cloudRandom = () => { cloudSeed = (cloudSeed * 1103515245 + 12345) % 2147483648; return cloudSeed / 2147483648; };
@@ -1521,6 +1522,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   model.boundaryLayer.surfaceDrag.set(Float64Array.from({ length: C }, () => (momentum ? 0 : Math.fround(0.08 * dragRandom()))));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SDRAG, Float32Array.from(model.boundaryLayer.surfaceDrag));
   if (ascent) device.queue.writeBuffer(buffers.D, 4 * layout.D.PSD, Float32Array.from(core.diagnostics.piSigmaDot));
+  if (ascent && core.diagnostics.omega) device.queue.writeBuffer(buffers.D, 4 * layout.D.OMG, Float32Array.from(core.diagnostics.omega));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.adjustMix.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
@@ -1805,7 +1807,8 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
     setDepth(model, 0, depth);
     model.boundaryLayer.buoyancyFlux[0] = buoyancy; model.boundaryLayer.friction[0] = 0.25; model.radiation.mlmGate[0] = 0.3;
     model.radiation.sensibleHeat[0] = sensible; model.radiation.evaporation[0] = evaporation;
-    for (let k = 1; k < K; k++) piSigmaDot[k * C] = profile ? profile(k) : ascent;
+    for (let k = 1; k < K; k++) piSigmaDot[k * C] = ascent;
+    if (core.diagnostics.omega) for (let k = 0; k < K; k++) core.diagnostics.omega[k * C] = profile ? profile(k) : ascent;
     const before = budget(model, 0);
     moist.adjust(model.state, 0, 1, dt);
     const after = budget(model, 0), source = Array.from({ length: K }, (_, k) => k).find((k) => Math.abs(pi[0] * dSigma[k] - moist.deep.sourceMass) < 1e-12 * moist.deep.sourceMass);
@@ -1817,8 +1820,11 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   assert.ok(!off.deep.deep && !off.deep.midLevel && off.deep.baseFlux === 0, 'nothing convects without the option');
   assert.ok(on.deep.deep && on.deep.midLevel && Math.abs(on.deep.baseFlux * g / 0.2 - 1) < 1e-14, `base flux ${on.deep.baseFlux}`);
   assert.ok(on.height > 800 && on.height < 3000 && on.deep.cape > 0 && on.rain > 0, `the plume departs ${on.height} m above the lowest layer with CAPE ${on.deep.cape} J/kg and rain ${on.rain} kg/m²`);
-  const lifted = run({ midLevelConvection: true }, { profile: (k) => (k === on.deep.base ? 0.05 : -0.2) });
+  const lifted = run({ midLevelConvection: true }, { profile: (k) => (k === on.deep.base - 1 ? 0.45 : -0.2) });
   assert.ok(lifted.deep.midLevel && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14 && lifted.height > on.height, `with no ascent at its cloud base the lowest candidate gives way to the next one up: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
+  const lee = run({ midLevelConvection: true }, { profile: () => 0.2 }), windward = run({ midLevelConvection: true }, { ascent: 0.2, profile: () => -0.2 });
+  assert.ok(!lee.deep.midLevel && same(lee, off), 'no mid-level plume where omega > 0 though pi sigma-dot < 0');
+  assert.ok(windward.deep.midLevel && Math.abs(windward.deep.baseFlux * g / 0.2 - 1) < 1e-14, `where omega < 0 though pi sigma-dot > 0 the plume departs at -omega/g: ${windward.deep.baseFlux}`);
   const mixing = Array.from({ length: on.deep.base - on.deep.top }, (_, n) => on.deep.top + n).filter((k) => on.entrained[k] > 0);
   assert.ok(mixing.length >= 3 && mixing.every((k) => on.detrained[k] >= 0.6 * on.entrained[k] * (1 - 1e-12) && on.detrained[k] <= 1.6 * on.entrained[k] * (1 + 1e-12)), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(3)).join(' ')}`);
   const deckColumn = (z, p) => {
