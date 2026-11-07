@@ -2705,7 +2705,7 @@ const MID_LEVEL_PLUME = [
   ['  if (!typed) { return cumulusColumn(i, pi, dt); }\n', `  var middle = false;
   if (!typed) {
     let shallowRain = cumulusColumn(i, pi, dt);
-    if (PH[PH_CUMF + i] > 0.0) { return shallowRain; }
+    if (PH[PH_CUMF + i] > 0.0 || (SC_SWITCH && cloudBaseFound(i, pi) && stratocumulusTopped(i, pi))) { return shallowRain; }
     let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
     var kb = -1;
     for (var k = bottom - 1; k > 1; k--) {

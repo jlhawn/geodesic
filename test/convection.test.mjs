@@ -1821,6 +1821,13 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   assert.ok(lifted.deep.midLevel && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14 && lifted.height > on.height, `with no ascent at its cloud base the lowest candidate gives way to the next one up: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
   const mixing = Array.from({ length: on.deep.base - on.deep.top }, (_, n) => on.deep.top + n).filter((k) => on.entrained[k] > 0);
   assert.ok(mixing.length >= 3 && mixing.every((k) => on.detrained[k] >= 0.6 * on.entrained[k] * (1 - 1e-12) && on.detrained[k] <= 1.6 * on.entrained[k] * (1 + 1e-12)), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(3)).join(' ')}`);
+  const deckColumn = (z, p) => {
+    const T = (z < 900 ? 290 : 304 + 5e-3 * (z - 900)) * Math.pow(p / 1e5, 0.2857);
+    return { T, q: z < 900 ? Math.min(0.0105, saturationHumidity(T, p)) : Math.min(0.003, 0.3 * saturationHumidity(T, p)) };
+  };
+  const deck = { column: deckColumn, buoyancy: 2e-4, depth: 900, ascent: -0.05, sensible: 10, evaporation: 4e-5 };
+  const capped = run({ midLevelConvection: true }, deck), cappedOff = run({}, deck);
+  assert.ok(!capped.deep.midLevel && same(capped, cappedOff), `a column under a deck that the stratocumulus cap closes gets no mid-level plume: base flux ${capped.deep.baseFlux} from ${capped.height} m`);
   assert.ok(!same(on, off), 'the mid-level plume moves the column');
   assert.ok(Math.abs(on.after.enthalpy - on.before.enthalpy) < 1e-12 * on.before.enthalpy, `enthalpy ${on.before.enthalpy} → ${on.after.enthalpy}`);
   assert.ok(Math.abs(on.after.water + on.rain - on.before.water) < 1e-12 * on.before.water, `water ${on.before.water} → ${on.after.water} + ${on.rain}`);

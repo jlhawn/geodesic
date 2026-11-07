@@ -380,7 +380,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
  * detraining that rate times (1.6 − RH) as the IFS code's types 2 and 3 do,
  * with eq. 6.31's base flux max(−π σ̇/g at its cloud base, (H + L E)/(g
- * z_base)), z_base the cloud base's height above the ground. With
+ * z_base)), z_base the cloud base's height above the ground, and does not
+ * depart where the stratocumulus cap closes the shallow plume. With
  * `plumeDeparture` 'elevated' (IFS Cy41r2 Part IV
  * §6.4; Bechtold et al. 2014, JAS 71, 734) a column whose surface test
  * parcel is not deep tries the layers above the 50 hPa stack one at a time,
@@ -1389,7 +1390,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       if (!midLevel) return cumulusColumn(i, pi, theta, q, qc, dt);
       const shallowRain = cumulusColumn(i, pi, theta, q, qc, dt);
-      if (cumulus.baseFlux > 0) return shallowRain;
+      if (cumulus.baseFlux > 0 || (capped && cloudBaseFound(i, pi, theta, q) && stratocumulusTopped(i, pi, theta, q))) return shallowRain;
       const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
       const tv = virtualBuoyancy ? VIRTUAL_FACTOR : 0, enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
       let kb = -1;
