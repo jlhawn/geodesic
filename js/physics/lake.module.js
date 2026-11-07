@@ -325,7 +325,7 @@ export const MISSING_BEDS = ['default', 'hydrolakes'];
 export const lakeModelOf = (geography, { model } = {}) => model ?? (geography?.lake ? LAKE_DEFAULTS.model : 'off');
 export const lakeStateName = (name) => `lake${name[0].toUpperCase()}${name.slice(1)}`;
 export const lakeArrays = (serialized) => Object.fromEntries(Object.entries(serialized).map(([name, values]) => [lakeStateName(name), Float64Array.from(values)]));
-export const savedLake = (saved) => (saved?.lakeMean ? Object.fromEntries([...LAKE_FIELDS, 'passed'].map((name) => [name, saved[lakeStateName(name)]]).filter(([, values]) => values)) : null);
+export const savedLake = (saved) => (saved?.lakeMean ? Object.fromEntries([...LAKE_FIELDS, 'passed', 'depth'].map((name) => [name, saved[lakeStateName(name)]]).filter(([, values]) => values)) : null);
 export const LAKE_FIELDS = ['mixed', 'mean', 'bottom', 'shape', 'mixedDepth', 'ice', 'iceT'];
 
 /*
@@ -384,8 +384,10 @@ export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, fresh
     },
     evaporate(i, evaporation, dt) { passed[i] -= evaporation * dt; },
     enthalpy(i) { return lakeEnthalpy(read(i), depth[i]); },
-    serialize() { return { ...Object.fromEntries(LAKE_FIELDS.map((name) => [name, Float64Array.from(fields[name])])), passed: Float64Array.from(passed) }; },
+    serialize() { return { ...Object.fromEntries(LAKE_FIELDS.map((name) => [name, Float64Array.from(fields[name])])), passed: Float64Array.from(passed), depth: Float64Array.from(depth) }; },
     load(saved) {
+      const other = saved.depth ? cells.find((i) => Math.abs(saved.depth[i] - depth[i]) > 1e-9 * depth[i]) : undefined;
+      if (other !== undefined) throw new Error(`the saved lakes have other depths than this run's (cell ${other}: ${saved.depth[other]} m saved, ${depth[other]} m here): give the lake options they were made with`);
       for (const name of [...LAKE_FIELDS, 'passed']) if (saved[name]) (name === 'passed' ? passed : fields[name]).set(saved[name]);
       seen.set(passed);
     },
