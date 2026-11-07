@@ -82,11 +82,12 @@
 // js/physics/orography.module.js, e.g. '{"constants":"cy41r2"}' for the
 // IFS's operational G, GKDRAG 0.3, or false),
 // TERRAIN (JSON options for the surface geopotential, see terrainOptions in
-// js/geography.module.js, e.g. '{"conserveVolume":true}' to give each land
-// mass back the volume the smoothing takes from it; without it a run keeps
-// the terrain its state records, and a state saved over other terrain has
-// its surface pressure moved onto this one; the bundled sub-grid files,
-// whose μ, σ and γ lie below the default terrain's surface, are kept),
+// js/geography.module.js, e.g. '{"conserveVolume":true}' to smooth by
+// trading volume between land neighbors, so each land mass keeps its own;
+// without it a run keeps the terrain its state records, and a state saved
+// over other terrain has its surface pressure moved onto this one; the
+// bundled sub-grid files, whose μ, σ and γ lie below the default terrain's
+// surface, are kept),
 // LAND (JSON options for the land surface, e.g. '{"treeMoisture":false}';
 // a fresh start's land is 'observed' by default: its cover is the observed
 // annual maximum of the green fraction and its trees the observed tree

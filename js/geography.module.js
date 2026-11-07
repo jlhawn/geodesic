@@ -698,19 +698,22 @@ export function terrainKey(terrain = true) {
  * The surface geopotential for the dynamical core: the land elevation,
  * clamped at sea level and smoothed on the mesh so that nothing sits at
  * the grid scale, times g. Each pass relaxes every land cell toward the
- * mean of its neighbours; ocean cells stay at sea level and act as the
- * boundary, so coasts slope down to the sea over `passes` cells, and the
- * height they lose goes nowhere. With `conserveVolume` each land mass
- * (land cells joined through land neighbors) gets back the volume, the
- * area-weighted sum of its heights, that it had before the passes, laid
- * on its cells in proportion to their smoothed height above sea level.
+ * mean of its neighbors; water cells (the sea at 0, a lake at its level)
+ * stay as they are and act as the boundary, so coasts slope down to the
+ * sea over `passes` cells, and the height they lose goes nowhere. With
+ * `conserveVolume` a pass moves volume instead, k (h_i − h_j) across each
+ * edge, k the larger of its two cells' `weight` × area / edge count, so no
+ * cell relaxes more slowly than without it. What a land cell loses across
+ * its edges to water goes on to its land neighbors in proportion to their
+ * k: each land mass keeps its area-weighted volume to rounding, and a
+ * cell with no land neighbor keeps its height.
  */
 export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = TERRAIN_DEFAULTS.passes, weight = 0.5, conserveVolume = TERRAIN_DEFAULTS.conserveVolume } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
   const { land, elevation, surface = null } = geography;
   let height = surface ? Float64Array.from(surface) : Float64Array.from(elevation, (h, i) => (land[i] ? Math.max(0, h) : 0));
-  const unsmoothed = conserveVolume ? Float64Array.from(height) : null;
   for (let pass = 0; pass < passes; pass++) {
+    if (conserveVolume) { height = exchangeVolume(mesh, land, height, weight); continue; }
     const next = new Float64Array(C);
     for (let i = 0; i < C; i++) {
       if (!land[i]) { next[i] = height[i]; continue; }
@@ -720,21 +723,23 @@ export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = TER
     }
     height = next;
   }
-  if (conserveVolume) {
-    const { areaCell } = mesh, seen = new Uint8Array(C), members = [];
-    for (let seed = 0; seed < C; seed++) {
-      if (!land[seed] || seen[seed]) continue;
-      members.length = 0; members.push(seed); seen[seed] = 1;
-      for (let n = 0; n < members.length; n++) {
-        const i = members[n];
-        for (let m = 0; m < nEdgesOnCell[i]; m++) { const j = cellsOnCell[maxEdges * i + m]; if (land[j] && !seen[j]) { seen[j] = 1; members.push(j); } }
-      }
-      let before = 0, after = 0, raised = 0;
-      for (const i of members) { before += areaCell[i] * unsmoothed[i]; after += areaCell[i] * height[i]; raised += areaCell[i] * Math.max(0, height[i]); }
-      if (raised > 0) for (const i of members) height[i] += Math.max(0, height[i]) * (before - after) / raised;
-    }
-  }
   return Float64Array.from(height, (h) => g * h);
+}
+
+function exchangeVolume({ nCells: C, maxEdges, nEdgesOnCell, cellsOnCell, areaCell }, land, height, weight) {
+  const rate = (i) => weight * areaCell[i] / nEdgesOnCell[i], moved = new Float64Array(C);
+  for (let i = 0; i < C; i++) {
+    if (!land[i]) continue;
+    let lost = 0, inland = 0;
+    for (let m = 0; m < nEdgesOnCell[i]; m++) {
+      const j = cellsOnCell[maxEdges * i + m], k = Math.max(rate(i), rate(j));
+      if (land[j]) { moved[i] += k * (height[j] - height[i]); inland += k; } else lost += k * (height[i] - height[j]);
+    }
+    if (!inland || !lost) continue;
+    moved[i] -= lost;
+    for (let m = 0; m < nEdgesOnCell[i]; m++) { const j = cellsOnCell[maxEdges * i + m]; if (land[j]) moved[j] += lost * Math.max(rate(i), rate(j)) / inland; }
+  }
+  return Float64Array.from(height, (h, i) => (land[i] ? h + moved[i] / areaCell[i] : h));
 }
 
 /*
