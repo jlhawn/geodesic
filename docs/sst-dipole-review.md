@@ -61,7 +61,7 @@ The panel averages days 336–365. Day 0 is the March equinox, so that is
 | 2a | Tropical instability waves are damped | Resolved at N=128 since the third-order tracer flux (10–12°, 40 cm/s) | Does not apply |
 | 2b | GM is untapered at the equator | κ = 1000/(1 + (L_d/Δx)²) is 76 m²/s on the equator and 185 at 5°, with mode weights and a 200 m taper (`js/ocean/layered.module.js`) | Does not apply |
 | 2c | No shortwave penetration, or κ_v too large | Two-band Jerlov IB light to 300 m (`js/ocean/column.module.js`). κ_b = 10⁻⁵ m²/s everywhere, where MOM025 (Holmes et al. 2019) falls to 10⁻⁶ within 5° of the equator; PP81's ν₀ is 10⁻², twice theirs; shear mixing runs above Ri 0.7, where KPP stops (Large et al. 1994). Explicit vertical mixing carries the most heat across 20 °C at the equator: 31–53 W/m² at N=64, 38–65 at N=128 (Nov 7 audit). | Shortwave: does not apply; second order, one water type everywhere (type II in the upwelling zones would keep about 9 W/m² more in a 25 m layer). κ_v: open, the leading candidate for the too-diffuse thermocline. |
-| 2d | The trades are too strong, amplified by the Bjerknes feedback | Over observed SST the trades are 1.3–2.2 times observed (`docs/equatorial-wind-bias.md`, findings 1–2). At 0.6 times the stress, the ocean-only hybrid matches WOA. | Already diagnosed, and the leading cause (finding 3) |
+| 2d | The trades are too strong, amplified by the Bjerknes feedback | Over observed SST the atmosphere's own excess is about 1.2 times ERA5's stress and lies east of 150° W only (160–100° W 1.21 times, 150° E–180 0.5 times; N=64, nine members over WOA23). Coupled at N=128 it is 1.21–1.35 times at 160–100° W and 1.43–1.64 times at 130° E–100° W (`docs/equatorial-wind-bias.md`, findings 1–2; Nov 7 audit). The 0.6× ocean-only match does not clear the ocean: 0.6 of the recording is 0.84 of ERA5's stress, and the current errors persist at ERA5's stress. | Real, but not the leading cause alone: the Nov 7 audit finds three causes acting together, this atmospheric excess east of 150° W, an ocean whose thermocline and undercurrent are wrong at every stress, and surface-flux offsets that cool the whole tropics (finding 3) |
 | 3a | December mixed layers are over-mixed at 15–45° S | December–March mixed layers are 24–29 m at 20–30° S and 25–54 m at 30–40° S, and the band is cold in every season | Refuted |
 | 3b | The warm ring around Antarctica comes from missing supercooled cloud or early melt | SWCRE is −49 W/m² at 60–65° S, the ring persists through winter, and September mixed layers are 370–980 m deep | Does not apply: open-ocean convection (finding 5) |
 | 3c | The −1.56 K global mean implies a 15–25 W/m² surface heat loss | Net TOA is +7 W/m², and the ocean gains 9 W/m² of ocean area (finding 2) | Refuted |
@@ -311,9 +311,12 @@ Sea cells at 60–75° S deeper than 500 m, in fifteen's first winter:
 
 ### 6. The Indonesian throughflow excess
 
-- **Size:** both runs carry 2–2.5 times the observed throughflow. That
-  is 30 Sv (fourteen) and 42 Sv (fifteen) through all exits, against
-  about 15 Sv (INSTANT; Gordon et al. 2010).
+- **Size:** the current states carry 1.8–2.1 times the observed
+  throughflow: 26.6 ± 1.9 Sv (ctl) and 31.1 ± 2.6 (A) through the exits
+  of a sealed Indonesian box, from 12 saves at 12 UTC in the N=128
+  pair's coupled year (days 1490–1825), against about 15 Sv (INSTANT;
+  Gordon et al. 2010; Nov 7 audit). Fourteen and fifteen, not
+  re-measured, carried 30 and 42 Sv through all exits.
 - **Not wind-driven:**
   - The island rule (Godfrey 1989) on each run's own stress gives 18
     and 21 Sv, against about 16 from observed winds.

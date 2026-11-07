@@ -1,9 +1,14 @@
 # The equatorial Pacific wind bias
 
-Why the coupled model's trade winds over the equatorial Pacific are 1.5 to
-3 times too strong, measured on 2026-10-18 and 19 after the hybrid ocean's
-gate campaign (ocean-hybrid-coordinate.md, row 5) had shown the ocean's
-equatorial state to be the forced response to those winds.
+Why the coupled model's trade winds over the equatorial Pacific are too
+strong. Like for like, in the coupled N=128 year of each arm of the
+closure-floor pair, the stress is 1.21 (control) and 1.35 (A, the
+current default) times ERA5's hourly mean at 160W–100W and 1.43 and 1.64
+times at 130E–100W, trapped at the equator (Nov 7 audit). The findings
+below were measured on 2026-10-18 and 19, after the hybrid ocean's gate
+campaign (ocean-hybrid-coordinate.md, row 5); of the ocean's equatorial
+state, only the thermocline's tilt is the forced response to those
+winds (Nov 7 audit).
 
 ## The question
 
@@ -15,9 +20,16 @@ by month and, at 140E–160E, −0.011 to −0.019 in ERA5's hourly mean at
 which same-year ASCAT and the TAO buoys' COARE stress match within about
 5 % at 160W–100W (Nov 7 audit).
 Replaying the recording on the ocean at 0.6 of its stress puts the
-tropics, the 140W thermocline and the undercurrent on the World Ocean
-Atlas; nothing in the ocean moves them. The stress is the atmosphere's,
-and the question is which part of the atmosphere.
+tropics and the 140W thermocline near the World Ocean Atlas, but it does
+not clear the ocean (Nov 7 audit). 0.6 of the recording is 0.84 of
+ERA5's stress, cut uniformly where the excess is trapped within 4° of
+the equator. The SST match rests on the recording's surface flux: with
+the model's own flux at WOA SST, the SST matches at 1.0–1.1 times ERA5's
+stress. Restoring the tropics to WOA hides any tropic-wide offset. The
+surface jet, −0.9 m/s at 0.6 times, is still 3–6 times TAO's, and the
+current errors persist at ERA5's stress (finding 3). Part of the stress
+is the atmosphere's own (finding 2), and the question is which part of
+the atmosphere makes it.
 
 ## Instruments
 
