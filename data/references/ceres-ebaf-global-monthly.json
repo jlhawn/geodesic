@@ -6,7 +6,7 @@
   "url": "https://esgf-node.ornl.gov/thredds/catalog/user_pub_work/obs4MIPs/NASA-LaRC/CERES-EBAF-4-2-1/mon/catalog.html",
   "references": [
    "Loeb et al. 2018, J. Climate 31, 895–918",
-   "Loeb et al. 2020, J. Climate 33, 685–706"
+   "Loeb et al. 2020, J. Climate 33, 61–75, doi:10.1175/JCLI-D-19-0381.1"
   ],
   "license": "CC BY 4.0; acknowledge per https://ceres.larc.nasa.gov/"
  },
