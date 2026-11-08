@@ -57,7 +57,7 @@ import { decodeForcing, forcingDay } from '../js/forcing.module.js';
 import { COUPLED_ICE_DRIFT } from '../js/ocean/iceDrift.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
-import { loadSavedLand, loadSavedLake } from './savedLand.mjs';
+import { loadSavedLand, loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
 refuseUnreadOptions(import.meta.url);
@@ -94,7 +94,7 @@ if (saved.N !== N) throw new Error(`${from} is N=${saved.N}`);
 const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const airStress = !!(await decodeForcing(new Uint8Array(readFileSync(`${FORCING}/${days[0]}`)))).fields.airStress;
 OCEAN.iceDrift = OCEAN.iceDrift !== false && airStress ? { ...(OCEAN.iceDrift || COUPLED_ICE_DRIFT), airStress: 'given' } : false;
-const model = await createGpuModel(stateGrid(saved, topography).mesh, { topography, geography, land: landOptions, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
+const model = await createGpuModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), topography, geography, land: landOptions, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
 const { mesh, core, state, gpu } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), everySteps = model.oceanEngine.everySteps, oceanDt = everySteps * dt;
 const doneBefore = existing.length ? saved.oceanDays ?? (saved.oceanYears ?? 0) * DAYS_PER_YEAR : 0;

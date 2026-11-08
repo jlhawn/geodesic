@@ -409,6 +409,14 @@ async function loadSoilWater() {
   return (soilWater = decodeSoilWater(await response.arrayBuffer()));
 }
 
+let lakeDepthsRead = null;
+async function loadLakeDepths() {
+  if (lakeDepthsRead) return lakeDepthsRead;
+  const response = await fetch(lakeDepthsUrl);
+  if (!response.ok) throw new Error(`HydroLAKES lake depths data/lakedepth.bin: ${response.status}`);
+  return (lakeDepthsRead = decodeLakeDepths(await response.arrayBuffer()));
+}
+
 let aerosolBytes = null;
 async function loadAerosolFile() {
   if (aerosolBytes) return aerosolBytes;
@@ -695,7 +703,7 @@ async function start(message) {
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const lakeGiven = saved ? savedLakeOptions(saved) : {};
   const given = runOptions(saved ? { ...saved.options, ...(Object.keys(lakeGiven).length ? { lake: lakeGiven } : {}) } : null, message.options), options = { ...given };
-  if (options.lake?.missingBed === 'hydrolakes') options.lake = { ...options.lake, lakeDepths: decodeLakeDepths(await (await fetch(lakeDepthsUrl)).arrayBuffer()) };
+  if (options.lake?.missingBed === 'hydrolakes') options.lake = { ...options.lake, lakeDepths: await loadLakeDepths() };
   const geography = message.land === false ? { ...LEGACY_GEOGRAPHY } : saved ? savedGeography(saved) : checkGeography({ ...FRESH_GEOGRAPHY, ...(message.geography ?? {}) });
   if (message.land !== false) {
     status('loading the topography…', 0.52);

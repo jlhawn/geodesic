@@ -21,7 +21,7 @@
 //   --out FILE   also writes the report to FILE;  env FLAGS sets Dawn toggles for the GPU adapter,
 //                env OCEAN a JSON object of ocean options for both models, env RADIATION one of
 //                radiation options, env MOIST one of moist options, env SURFACE one of surface options and
-//                env LAND one of land options
+//                env LAND one of land options; env LAKE, lake options over those the save records (savedLakeOptions)
 //   The default runs the clear-sky pass, which the page does not: RADIATION='{"clearSkyPass":false}' compares the page's shader.
 // Run it with the GPU free (CLAUDE.md): one GPU model at a time.
 import { readFileSync, writeFileSync } from 'node:fs';

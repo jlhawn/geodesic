@@ -10,7 +10,7 @@ import { decodeState, savedLevels, stateTerrain, stateName } from '../../js/stat
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../../js/physics/regrid.module.js';
 import { placeCumulus } from '../../js/physics/moist.module.js';
 import { stateGrid } from '../../js/stateGrid.module.js';
-import { loadSavedLand, loadSavedLake } from '../savedLand.mjs';
+import { loadSavedLand, loadSavedLake, lakeOptionsFor } from '../savedLand.mjs';
 
 export const readGeography = (saved) => stateGeography(saved);
 export const readState = async (file) => decodeState(new Uint8Array(readFileSync(file)));
@@ -44,7 +44,7 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
 export async function gpuModelFrom(saved) {
   const env = (name) => JSON.parse(process.env[name] ?? '{}'), { topography, geography, land } = stateGeography(saved);
   const model = await createGpuModel(stateGrid(saved, topography).mesh, {
-    topography, geography, levels: savedLevels(saved), terrain: stateTerrain(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
+    lake: lakeOptionsFor(saved), topography, geography, levels: savedLevels(saved), terrain: stateTerrain(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
     moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: { ...land, ...env('LAND') },
   });
   const { state } = model;
