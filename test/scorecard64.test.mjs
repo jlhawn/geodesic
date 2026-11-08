@@ -4,7 +4,8 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, linkSync, symlinkS
 import { spawnSync, execSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ROWS, BOXES, SIGMA_FILE, logDays, undercurrentCore, dayWeighted, monthAt, windowDays, windowMeans, calibrate, twoSidedTail, studentTail, studentCritical, sigmaDof, designProblems, compareScores, identityCheck, formatTable, fingerprint, sameFile, runSegments, inMooringWindow, mooringProfile, PROFILE_DEPTHS } from '../scripts/scorecard64.mjs';
+import { fileURLToPath } from 'node:url';
+import { ROWS, BOXES, SIGMA_FILE, logDays, undercurrentCore, dayWeighted, monthAt, windowDays, windowMeans, calibrate, twoSidedTail, studentTail, studentCritical, sigmaDof, designProblems, compareScores, identityCheck, formatTable, fingerprint, sameFile, runSegments, withoutGitEnv, inMooringWindow, mooringProfile, PROFILE_DEPTHS } from '../scripts/scorecard64.mjs';
 
 test('the log parser reads the day-mean TOA line and the index-grid sea-ice cut, and keeps the older all-sea-cell cut apart', () => {
   const text = [
@@ -141,24 +142,58 @@ test('a base from another start, other leads or no recorded start is refused unl
   assert.throws(() => compareScores({ means }, base, {}), /not the same gate design/);
 });
 
-const SCRIPT = new URL('../scripts/scorecard64.mjs', import.meta.url).pathname;
-const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
+const SCRIPT = fileURLToPath(new URL('../scripts/scorecard64.mjs', import.meta.url));
+const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env: withoutGitEnv() });
+const linked = (from, to, t) => {
+  try { linkSync(from, to); return true; } catch (error) {
+    if (['EXDEV', 'EPERM', 'ENOTSUP'].includes(error.code)) { t.skip(`no hard links here (${error.code})`); return false; }
+    throw error;
+  }
+};
 
-test('the command line refuses a --json that is the --base file, by path, hard link or case, and --run arguments it does not take, before reading a save or a start', () => {
+async function gateSaves(dir) {
+  const { Grid } = await import('../js/grid.module.js');
+  const { gridHeader, stateGrid } = await import('../js/stateGrid.module.js');
+  const { stateGeography, createGeography, FRESH_GEOGRAPHY } = await import('../js/geography.module.js');
+  const { encodeState } = await import('../js/stateFile.module.js');
+  const header = { N: 16, ...gridHeader(new Grid(16)), ...FRESH_GEOGRAPHY }, { topography, geography } = stateGeography(header);
+  const { mesh } = stateGrid(header, topography), land = createGeography(mesh, topography, geography).land, C = mesh.nCells, L = 58;
+  const fill = (v) => new Float32Array(C).fill(v), h = new Float64Array(L * C);
+  for (let i = 0; i < C; i++) if (!land[i]) for (let k = 0; k < L; k++) h[k * C + i] = 10;
+  const means = { fields: ['sst', 'surfaceT', 'gridBoxSkin', 'temperature', 'precipitation', 'zonalStress', 'mslp', 'concentration'], sst: fill(300), surfaceT: fill(290), gridBoxSkin: fill(288), temperature: fill(280), precipitation: fill(3), zonalStress: fill(-0.05), mslp: fill(101000), concentration: fill(0) };
+  const saves = [395, 425].map((day) => join(dir, `p64_day0${day}.bin`));
+  for (const [k, day] of [395, 425].entries()) writeFileSync(saves[k], encodeState({ ...header, day, time: day * 86400, means, ocean: { h, u: new Float64Array(L * mesh.nEdges) } }));
+  writeFileSync(join(dir, 'p64.log'), Array.from({ length: 60 }, (_, j) => 366 + j).flatMap((d) => [
+    `day ${d} (1.0 min): Ts 15.00 °C, ASR 240.0 (atmosphere 70.0) OLR 238.0 W/m², ps 500–1040 hPa, albedo 0.300, SWCRE -45.0 LWCRE 25.0, clear-sky reflectance 0.15`,
+    `sea ice on day ${d}'s mean concentration, sea cells on the index's grids, 15 %: N extent 10.00 area 8.00, S extent 3.00 area 2.00 Mkm²`,
+  ]).join('\n'));
+  return saves;
+}
+
+test('the command line refuses a --json that is the --base file, by path spelling, symlink, hard link or case, on both paths, and --run arguments it does not take', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'scorecard64-cli-'));
   try {
-    const base = join(dir, 'Base.json'), saves = [join(dir, 'p64_day0395.bin'), join(dir, 'p64_day0425.bin')];
-    writeFileSync(base, '{"means":{}}');
-    linkSync(base, join(dir, 'linked.json'));
-    const overwrite = /is the --base file; it would overwrite the base/;
-    for (const json of [base, join(dir, '.', 'Base.json'), join(dir, 'linked.json')]) {
+    const saves = await gateSaves(dir), base = join(dir, 'Base.json'), original = '{"start":null,"means":{}}', overwrite = /is the --base file; it would overwrite the base/;
+    writeFileSync(base, original);
+    mkdirSync(join(dir, 'sub'));
+    symlinkSync(base, join(dir, 'symlink.json'));
+    const spellings = [base, `${dir}/./Base.json`, `${dir}/sub/../Base.json`, join(dir, 'symlink.json')];
+    if (linked(base, join(dir, 'hardlink.json'), t)) spellings.push(join(dir, 'hardlink.json'));
+    for (const json of spellings) {
       const r = cli('--json', json, '--base', base, ...saves);
       assert.ok(r.status !== 0 && overwrite.test(r.stderr), `--json ${json}: ${r.stderr.slice(-300)}`);
+      assert.equal(readFileSync(base, 'utf8'), original, `--json ${json} wrote the base`);
     }
-    if (existsSync(join(dir, 'base.json'))) assert.match(cli('--json', join(dir, 'base.json'), '--base', base, ...saves).stderr, overwrite);
-    assert.equal(readFileSync(base, 'utf8'), '{"means":{}}');
-    const other = cli('--json', join(dir, 'out.json'), '--base', base, ...saves);
-    assert.ok(other.status !== 0 && !overwrite.test(other.stderr) && /ENOENT/.test(other.stderr), other.stderr.slice(-300));
+    await t.test('a case variant of the base\x27s name', (t) => {
+      if (!existsSync(join(dir, 'base.json'))) return t.skip('a case-sensitive volume: base.json is another file');
+      assert.match(cli('--json', join(dir, 'base.json'), '--base', base, ...saves).stderr, overwrite);
+      assert.equal(readFileSync(base, 'utf8'), original);
+    });
+    const run = cli('--run', join(dir, 'missing-start.bin'), join(dir, 'out'), '--json', join(dir, 'symlink.json'), '--base', base);
+    assert.ok(run.status !== 0 && overwrite.test(run.stderr) && !existsSync(join(dir, 'out')), run.stderr.slice(-300));
+    const other = cli('--json', join(dir, 'out.json'), ...saves);
+    assert.equal(other.status, 0, other.stderr.slice(-300));
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'out.json'), 'utf8')).days, [395, 425]);
     for (const extra of [['--commit', 'abcdef1'], ['--log', 'x.log'], ['--identicl'], ['third']]) {
       const r = cli('--run', join(dir, 'missing-start.bin'), join(dir, 'out'), ...extra);
       assert.ok(r.status !== 0 && /usage: --run START OUT/.test(r.stderr) && !existsSync(join(dir, 'out')), `${extra}: ${r.stderr.slice(-300)}`);
@@ -166,41 +201,64 @@ test('the command line refuses a --json that is the --base file, by path, hard l
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('the tree fingerprint sees untracked files, their contents and a symlink\x27s target, survives a directory symlink and a nested repository, and a run takes it before each segment', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'scorecard64-fp-')), git = (cmd) => execSync(`git -c user.name=t -c user.email=t@t ${cmd}`, { cwd: dir, stdio: 'ignore' });
+test('the tree fingerprint sees tracked edits, untracked files and their contents and a symlink\x27s target, not ignored files, survives a directory symlink and a nested repository, and ignores GIT_DIR and GIT_INDEX_FILE', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'scorecard64-fp-')), repo = join(dir, 'repo'), decoy = join(dir, 'decoy');
+  const git = (cwd, cmd) => execSync(`git -c user.name=t -c user.email=t@t ${cmd}`, { cwd, stdio: 'ignore', env: withoutGitEnv() });
+  const saved = { GIT_DIR: process.env.GIT_DIR, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE };
   try {
-    git('init -q');
-    for (const sub of ['js', 'scripts', 'data']) mkdirSync(join(dir, sub));
-    writeFileSync(join(dir, 'scripts/tracked.mjs'), 'a');
-    git('add -A'); git('commit -q -m base');
-    const clean = fingerprint(dir);
+    mkdirSync(decoy); git(decoy, 'init -q'); writeFileSync(join(decoy, 'd.txt'), 'decoy'); git(decoy, 'add -A'); git(decoy, 'commit -q -m decoy');
+    const decoyState = () => [readFileSync(join(decoy, '.git/config'), 'utf8'), execSync('git rev-parse HEAD', { cwd: decoy, env: withoutGitEnv(), encoding: 'utf8' }), readFileSync(join(decoy, '.git/index')).toString('hex')];
+    const before = decoyState();
+    process.env.GIT_DIR = join(decoy, '.git'); process.env.GIT_INDEX_FILE = join(decoy, '.git/index');
+    mkdirSync(repo); git(repo, 'init -q');
+    for (const sub of ['js', 'scripts', 'data']) mkdirSync(join(repo, sub));
+    writeFileSync(join(repo, 'scripts/tracked.mjs'), 'a'); writeFileSync(join(repo, '.gitignore'), 'scripts/*.log\n');
+    git(repo, 'add -A'); git(repo, 'commit -q -m base');
+    const clean = fingerprint(repo);
     assert.ok(clean.tree && clean.scoredOn && !clean.scoredOn.endsWith('with changes'));
-    writeFileSync(join(dir, 'scripts/new.mjs'), 'x');
-    const added = fingerprint(dir);
-    writeFileSync(join(dir, 'scripts/new.mjs'), 'y');
-    const edited = fingerprint(dir);
-    symlinkSync('../js', join(dir, 'data/to-js'));
-    const linked = fingerprint(dir);
-    mkdirSync(join(dir, 'js/nested'));
-    execSync('git init -q', { cwd: join(dir, 'js/nested'), stdio: 'ignore' });
-    const nested = fingerprint(dir);
-    const trees = [clean, added, edited, linked, nested].map((x) => x.tree);
-    assert.ok(trees.every(Boolean) && new Set(trees).size === trees.length && added.scoredOn.endsWith('with changes'), JSON.stringify(trees));
-    rmSync(join(dir, 'data/to-js')); symlinkSync('../scripts', join(dir, 'data/to-js'));
-    assert.notEqual(fingerprint(dir).tree, nested.tree, 'a symlink is hashed by its target');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-  let reading = 0;
-  const ran = [], segments = runSegments([395, 425, 455], (d) => ran.push(d), { first: 'start', take: () => `reading ${++reading}` });
-  assert.deepEqual(segments, [{ day: 395, tree: 'start' }, { day: 425, tree: 'reading 1' }, { day: 455, tree: 'reading 2' }]);
-  assert.deepEqual(ran, [395, 425, 455]);
+    assert.equal(clean.scoredOn, execSync('git rev-parse --short=12 HEAD', { cwd: repo, env: withoutGitEnv(), encoding: 'utf8' }).trim(), 'the fingerprint reads the repository it is given, not GIT_DIR');
+    writeFileSync(join(repo, 'scripts/run.log'), 'ignored');
+    assert.deepEqual(fingerprint(repo), clean, 'an ignored file is not part of the tree');
+    writeFileSync(join(repo, 'scripts/tracked.mjs'), 'b');
+    const trackedEdit = fingerprint(repo);
+    writeFileSync(join(repo, 'scripts/tracked.mjs'), 'a');
+    writeFileSync(join(repo, 'scripts/new.mjs'), 'x');
+    const added = fingerprint(repo);
+    writeFileSync(join(repo, 'scripts/new.mjs'), 'y');
+    const edited = fingerprint(repo);
+    symlinkSync('../js', join(repo, 'data/to-js'));
+    const symlinked = fingerprint(repo);
+    mkdirSync(join(repo, 'js/nested'));
+    git(join(repo, 'js/nested'), 'init -q');
+    const nested = fingerprint(repo);
+    const trees = [clean, trackedEdit, added, edited, symlinked, nested].map((x) => x.tree);
+    assert.ok(trees.every(Boolean) && new Set(trees).size === trees.length && trackedEdit.scoredOn.endsWith('with changes') && added.scoredOn.endsWith('with changes'), JSON.stringify(trees));
+    rmSync(join(repo, 'data/to-js')); symlinkSync('../scripts', join(repo, 'data/to-js'));
+    assert.notEqual(fingerprint(repo).tree, nested.tree, 'a symlink is hashed by its target');
+    assert.deepEqual(decoyState(), before, 'the decoy GIT_DIR repository was touched');
+  } finally {
+    for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
-test('sameFile compares device and inode when both exist, else the resolved paths', () => {
+test('a run takes its fingerprint reading before each segment, the tree\x27s own by default', () => {
+  const events = [];
+  let reading = 0;
+  const segments = runSegments([395, 425, 455], (d) => events.push(`run ${d}`), { first: 'start', take: () => { events.push('take'); return `reading ${++reading}`; } });
+  assert.deepEqual(segments, [{ day: 395, tree: 'start' }, { day: 425, tree: 'reading 1' }, { day: 455, tree: 'reading 2' }]);
+  assert.deepEqual(events, ['run 395', 'take', 'run 425', 'take', 'run 455']);
+  const tree = fingerprint().tree;
+  assert.deepEqual(runSegments([1, 2], () => {}, { first: 'start' }).map((x) => x.tree), ['start', tree]);
+});
+
+test('sameFile compares device and inode when both exist, following symlinks, else the resolved paths', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'scorecard64-same-'));
   try {
     const a = join(dir, 'a.json');
-    writeFileSync(a, '{}'); linkSync(a, join(dir, 'b.json')); writeFileSync(join(dir, 'c.json'), '{}');
-    assert.deepEqual([sameFile(a, join(dir, 'b.json')), sameFile(a, join(dir, 'c.json')), sameFile(join(dir, 'x.json'), join(dir, '.', 'x.json')), sameFile(a, join(dir, 'y.json'))], [true, false, true, false]);
+    writeFileSync(a, '{}'); writeFileSync(join(dir, 'c.json'), '{}'); symlinkSync(a, join(dir, 's.json'));
+    assert.deepEqual([sameFile(a, join(dir, 's.json')), sameFile(a, join(dir, 'c.json')), sameFile(join(dir, 'x.json'), `${dir}/./x.json`), sameFile(a, join(dir, 'y.json'))], [true, false, true, false]);
+    if (linked(a, join(dir, 'b.json'), t)) assert.ok(sameFile(a, join(dir, 'b.json')));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -258,11 +316,18 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
     for (let k = 0; k < L; k++) u[k * E + e] = amplitude(Math.atan2(z, r) / rad, Math.atan2(y, x) / rad) * core(10 * k + 5) * across;
   }
   const days = Array.from({ length: 30 }, (_, j) => D - 29 + j);
+  const oldIce = (d) => `sea ice on day ${d}'s mean concentration, sea cells, 15 %: N extent 20.00 area 18.00, S extent 9.00 area 7.00 Mkm²`;
   const log = days.flatMap((d, j) => [
+    oldIce(d),
     `day ${d} (1.0 min): Ts 15.00 °C, ASR ${(230 + j).toFixed(1)} (atmosphere 70.0) OLR ${(238 - j / 2).toFixed(1)} W/m², ps 500–1040 hPa, albedo 0.300, SWCRE ${(-40 - j / 2).toFixed(1)} LWCRE ${(20 + j / 4).toFixed(2)}, clear-sky reflectance 0.15`,
     `sea ice on day ${d}'s mean concentration, sea cells on the index's grids, 15 %: N extent ${(10 + j / 10).toFixed(2)} area ${(8 + j / 20).toFixed(2)}, S extent ${(3 - j / 20).toFixed(2)} area ${(2 - j / 50).toFixed(2)} Mkm²`,
   ]).join('\n');
   const { rows } = reduceState({ ...header, day: D, means, ocean: { h, u } }, log);
+  const iceRows = ['iceNExtent', 'iceNArea', 'iceSExtent', 'iceSArea'], lines = log.split('\n'), toa = lines.filter((line) => line.startsWith('day ')), indexCut = lines.filter((line) => line.includes("index's grids"));
+  const oldOnly = reduceState({ ...header, day: D, means, ocean: { h, u } }, [...days.map(oldIce), ...toa].join('\n')).rows;
+  assert.ok(iceRows.every((key) => Number.isNaN(oldOnly[key].model) && Number.isFinite(oldOnly[key].proxy)), 'a log with only the all-sea-cell cut has no ice rows');
+  const mixed = reduceState({ ...header, day: D, means, ocean: { h, u } }, [oldIce(D - 10), ...toa, ...indexCut.filter((line) => !line.includes(`day ${D - 10}'s`))].join('\n')).rows;
+  assert.ok(iceRows.every((key) => Number.isNaN(mixed[key].model)), 'an all-sea-cell line does not fill a day the index cut lacks');
   const { t2m: _, ...withoutT2m } = means;
   const gap = reduceState({ ...header, day: D, means: { ...withoutT2m, fields: means.fields.filter((name) => name !== 't2m') }, ocean: { h, u } }, log.split('\n').filter((line) => !line.includes(`day ${D - 10}`)).join('\n')).rows;
   assert.ok(Number.isNaN(gap.landT2m.model) && Number.isFinite(gap.landT.model) && gap.landT2m.ref === rows.landT2m.ref, 'a save without t2m means has no 2 m row');

@@ -393,8 +393,9 @@ async function startOf(path) {
 }
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const GIT = { cwd: ROOT, maxBuffer: 1 << 30, stdio: ['ignore', 'pipe', 'ignore'] };
-const git = (cmd, cwd = ROOT) => execSync(cmd, { ...GIT, cwd, encoding: 'utf8' }).trim();
+export const withoutGitEnv = (env = process.env) => Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
+const gitOptions = (cwd) => ({ cwd, maxBuffer: 1 << 30, stdio: ['ignore', 'pipe', 'ignore'], env: withoutGitEnv() });
+const git = (cmd, cwd = ROOT) => execSync(cmd, { ...gitOptions(cwd), encoding: 'utf8' }).trim();
 
 function untrackedEntry(root, path) {
   const full = join(root, path);
@@ -408,8 +409,8 @@ function untrackedEntry(root, path) {
 
 export function fingerprint(root = ROOT) {
   try {
-    const head = git('git rev-parse --short=12 HEAD', root), diff = execSync('git diff HEAD -- js scripts data', { ...GIT, cwd: root });
-    const untracked = execSync('git ls-files -z --others --exclude-standard -- js scripts data', { ...GIT, cwd: root }).toString().split('\0').filter(Boolean);
+    const head = git('git rev-parse --short=12 HEAD', root), diff = execSync('git diff HEAD -- js scripts data', gitOptions(root));
+    const untracked = execSync('git ls-files -z --others --exclude-standard -- js scripts data', gitOptions(root)).toString().split('\0').filter(Boolean);
     const hash = createHash('sha256').update(head).update(diff);
     for (const path of untracked) hash.update(`\0${path}\0`).update(untrackedEntry(root, path));
     return { scoredOn: `${head}${diff.length || untracked.length ? ' with changes' : ''}`, tree: hash.digest('hex').slice(0, 16) };
