@@ -141,14 +141,15 @@ test(`one tendency with verticalAdvection 'vanLeerWater' on the GPU matches the 
   assert.ok(theta.relative < 1e-6);
 });
 
-test(`one tendency with dynamics.thetaFace 'arakawaSuarez' on the GPU matches the CPU at N=${N} on bl48 over the terrain, and only θ's tendency sees the face`, { skip }, async () => {
-  const rates = {};
+test(`one tendency with dynamics.thetaFace 'arakawaSuarez' on the GPU matches the CPU at N=${N} on bl48 over the terrain, and in moist air only θ's tendency sees the face`, { skip }, async () => {
+  const wet = start.map((a) => Float64Array.from(a)), rates = {};
+  for (let n = 0; n < K * C; n++) wet[5][n] = 0.01 * wet[4][n];
   for (const thetaFace of THETA_FACES) {
     const options = { levels, surfaceGeopotential: model.surfaceGeopotential, thetaFace };
-    const out = start.map((a) => new Float64Array(a.length));
-    createSigmaCore(mesh, options).tendency(start, out);
+    const out = wet.map((a) => new Float64Array(a.length));
+    createSigmaCore(mesh, options).tendency(wet, out);
     const gpu = await createGpuCore(mesh, { ...options, dragCoefficient: 0, topDragDays: 0, spongeRates: null, spongeMeanRates: null, gravityWaves: false });
-    gpu.upload(start);
+    gpu.upload(wet);
     await gpu.tendency();
     rates[thetaFace] = { cpu: out, gpu: await gpu.download(gpu.buffers.K1) };
     for (const buffer of Object.values(gpu.buffers)) buffer.destroy();
@@ -162,6 +163,7 @@ test(`one tendency with dynamics.thetaFace 'arakawaSuarez' on the GPU matches th
   for (const [s, name] of [[0, 'π'], [2, 'the wind'], [4, 'q'], [5, 'q_c']]) {
     const moved = apart(arakawaSuarez.gpu[s], exner.gpu[s]);
     console.log(`thetaFace on the GPU: ${name} against 'exner' ${said(moved)}`);
+    assert.ok(moved.scale > 0, `${name} moves`);
     assert.equal(moved.diff, 0, `${name} does not see it`);
   }
 });

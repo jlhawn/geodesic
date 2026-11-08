@@ -161,7 +161,7 @@ test(`over a sharp step in water at N=${N} over the terrain the centered faces d
   assert.deepEqual(Array.from(rates.vanLeerWater[1]), Array.from(rates.centered[1]), 'vanLeerWater leaves θ centered');
 });
 
-test(`thetaFace takes 'exner' or 'arakawaSuarez'; at N=${N} on bl48 over the terrain c_p θ ΔΠ at the 'arakawaSuarez' face is the hydrostatic step between two dry layers, which the 'exner' face misses, and only θ's tendency sees the face`, () => {
+test(`thetaFace takes 'exner' or 'arakawaSuarez'; at N=${N} on bl48 over the terrain c_p θ ΔΠ at the 'arakawaSuarez' face is the hydrostatic step between two dry layers, which the 'exner' face misses, and in moist air only θ's tendency sees the face`, () => {
   assert.deepEqual(dynamicsOptions({ thetaFace: 'arakawaSuarez' }), { divergenceSurfaces: 'sigma', thetaFace: 'arakawaSuarez' });
   assert.throws(() => dynamicsOptions({ thetaFace: 'linear' }), /not linear$/);
   assert.throws(() => core({ thetaFace: 'upwind' }), /upwind/);
@@ -169,7 +169,8 @@ test(`thetaFace takes 'exner' or 'arakawaSuarez'; at N=${N} on bl48 over the ter
   const state = start.map((a) => Float64Array.from(a));
   state[4].fill(0);
   state[5].fill(0);
-  const misses = {}, rates = {};
+  const wet = start.map((a) => Float64Array.from(a)), misses = {}, rates = {};
+  for (let n = 0; n < K * C; n++) wet[5][n] = 0.01 * wet[4][n];
   for (const thetaFace of THETA_FACES) {
     const c = core({ thetaFace }), out = state.map((a) => new Float64Array(a.length));
     c.tendency(state, out);
@@ -180,11 +181,13 @@ test(`thetaFace takes 'exner' or 'arakawaSuarez'; at N=${N} on bl48 over the ter
       miss = Math.max(miss, Math.abs(cp * face[n] * (exnerLayer[n + C] - exnerLayer[n]) - rise) / Math.abs(rise));
     }
     misses[thetaFace] = miss;
-    rates[thetaFace] = out;
+    rates[thetaFace] = wet.map((a) => new Float64Array(a.length));
+    c.tendency(wet, rates[thetaFace]);
   }
   console.log(`c_p θ ΔΠ against the hydrostatic step: 'exner' ${misses.exner.toExponential(2)} at most, 'arakawaSuarez' ${misses.arakawaSuarez.toExponential(2)}`);
   assert.ok(misses.arakawaSuarez < 1e-12, `'arakawaSuarez' ${misses.arakawaSuarez}`);
   assert.ok(misses.exner > 1e-2, `'exner' ${misses.exner}`);
+  for (const s of [4, 5]) assert.ok(largest(rates.exner[s]) > 0, `field ${s} moves`);
   for (const s of [0, 2, 4, 5]) assert.deepEqual(Array.from(rates.arakawaSuarez[s]), Array.from(rates.exner[s]), `field ${s} does not see it`);
   assert.ok(largest(rates.arakawaSuarez[1].map((x, n) => x - rates.exner[1][n])) > 0, 'θ does');
 });

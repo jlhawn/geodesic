@@ -56,7 +56,9 @@ const isGroup = (value) => !!value && typeof value === 'object' && !Array.isArra
  * header records under `given`, or `standIn`'s for a header without them,
  * with each group of `groups` over the recorded one, key by key, and one
  * given as false or as no object in its place. Throws when neither holds
- * a record, and when both do and differ.
+ * a record, and when both do and `standIn` is not the header's record
+ * group for group: the record holds the radiation, moist and land groups
+ * with their defaults filled in, and the ocean's when the run had one.
  */
 export function rebuiltOptions(header, groups = {}, standIn) {
   if (header.given !== undefined && standIn !== undefined) {

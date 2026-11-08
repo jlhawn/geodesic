@@ -447,27 +447,30 @@ In dry air the two cancel only at
 face `'arakawaSuarez'`. Under `'exner'`, the default, θ's face is linear
 in Exner, `θ_k + t (θ_{k+1} − θ_k)` with `t = (Π_{k+½} − Π_k)/ΔΠ`: it
 swaps the two weights and differs from the balanced face by
-`(2t − 1)(θ_{k+1} − θ_k)`. At N=16 `|2t − 1|` reaches 0.443 on bl48 and
-0.208 on bl36, and `c_p θ̂ ΔΠ` at the `'exner'` face misses the
-hydrostatic step by up to 6.5 % on bl48. One core tendency of the dry
-N=16 aquaplanet 32 steps from initializeState changes `c_p T` plus the
-kinetic energy by −3.34×10⁻³ W/m² on bl48 and +7.07×10⁻³ on bl36, the
-`'exner'` face's mismatch but for about 10⁻⁶ W/m² in the horizontal
-pressure-gradient pairing; at the `'arakawaSuarez'` face the vertical
-pairing is exact to roundoff (`test/atmosphereConservation.test.mjs`).
-The residual has no fixed sign. q and q_c, which do no pressure work,
+`(2t − 1)(θ_{k+1} − θ_k)`. Over the terrain at initializeState on bl48,
+`c_p θ̂ ΔΠ` misses the hydrostatic step between two dry layers by up to
+7.15 % at the `'exner'` face and by 2×10⁻¹⁴ at the `'arakawaSuarez'`
+face (`test/closureOptions.test.mjs`). The conservation test takes the
+N=16 aquaplanet 16 steps from initializeState, makes its air dry with
+θ_v as θ, and finds that one core tendency changes `c_p T` plus the
+kinetic energy by −6.25×10⁻³ W/m² on bl48 and +4.59×10⁻³ on bl36 at the
+`'exner'` face, where `|2t − 1|` reaches 0.443 and 0.208, and by less
+than 10⁻⁶ W/m² at the `'arakawaSuarez'` face
+(`test/atmosphereConservation.test.mjs`). The residual has no fixed
+sign. q and q_c, which do no pressure work,
 keep the linear weights. The option is off by default; the WGSL takes
 it through `hydrostaticThetaFaces`, and the kernels are otherwise
 exactly the `'exner'` ones.
 
 θ is never limited. A limited θ face adds
 `c_p F ΔΠ (θ_exner − θ_limited)` to the `'exner'` face's own mismatch
-at every interface, and a diffusive limiter makes that increment
-one-signed: a source of `c_p T`, 0.13 W/m² every step on the N=16
-aquaplanet, against 0.008 W/m² on average from the dynamics under the
-centered faces over the slab (the conservation test bounds it at 0.02).
-Balancing a limited face would need the geopotential and the pressure
-gradient to take a flow-dependent θ face.
+at every interface, and a diffusive limiter makes that term one-signed,
+a source of `c_p T`: with θ limited, the whole dynamics of one RK4 step
+on the N=16 aquaplanet changed `c_p T` plus the kinetic energy by
+0.13 W/m², against 0.008 W/m² on average under the centered faces over
+the slab (the conservation test bounds that at 0.02). Balancing a
+limited face would need the geopotential and the pressure gradient to
+take a flow-dependent θ face.
 
 **Temperature closure** (`dynamics.temperatureClosure`). The ∇⁴ closure
 of θ acts on T = θΠ with fluxes weighted by the edge's π. Under `'sigma'`,

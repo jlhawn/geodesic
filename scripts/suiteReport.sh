@@ -11,8 +11,8 @@
 #   scripts/suiteReport.sh runs/suite.txt
 #   FILES="test/grid.test.mjs test/mesh.test.mjs" JOBS=4 scripts/suiteReport.sh /tmp/r.txt
 # Environment: FILES (test/*.test.mjs), JOBS, TIMEOUT_MIN, DIR (REPORT less
-# its .txt). Option groups in it (values that start with '{') are unset, so
-# each test file sees only the groups it gives.
+# its .txt). Option groups in it (values whose first non-blank character
+# is '{') are unset, so each test file sees only the groups it gives.
 cd "$(dirname "$0")/.."
 REPORT=${1:-runs/suite.txt}
 DIR=${DIR:-${REPORT%.txt}}

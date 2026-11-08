@@ -283,9 +283,9 @@ test('a coupled run split inside a day ends the day with the uninterrupted run\'
   assert.deepEqual(apart(a, b, means), []);
 });
 
-test('the asynchronous driver alternates coupled and ocean-only phases, each given only the option groups it reads, hands the ocean over and picks up where it stands', { skip }, async () => {
+test('the asynchronous driver alternates coupled and ocean-only phases, each given only the option groups it reads, a value with a leading blank among them, hands the ocean over and picks up where it stands', { skip }, async () => {
   const out = outDir('driver', 'async16_day0000.bin');
-  assert.equal(driver({ OUT: out, CYCLES: '2', OCEAN_YEARS: '2', OCEAN_ONLY: '{}', MOIST: '{}' }), 0);
+  assert.equal(driver({ OUT: out, CYCLES: '2', OCEAN_YEARS: '2', OCEAN_ONLY: '{}', MOIST: ' {}' }), 0);
   assert.deepEqual(readdirSync(out).filter((f) => f.endsWith('.bin')).sort(), ['async16_c01_year0002.bin', 'async16_c02_year0002.bin', 'async16_day0000.bin', 'async16_day0002.bin', 'async16_day0004.bin']);
   assert.ok(!existsSync(join(out, 'async16_c01_forcing')) && !existsSync(join(out, 'async16_c02_forcing')), 'the records are deleted once used');
   assert.equal(text(join(out, 'async16_cycles.txt')), 'start=0\ndone=1\ndone=2\n');
