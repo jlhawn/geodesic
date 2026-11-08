@@ -2310,11 +2310,9 @@ ${core.fieldConstants}
   async function serialize() { return serializeFrom(await download()); }
   /*
    * What upload needs beside serialize()'s fields to put the device back
-   * exactly as it stands between two ocean steps: the heat and salt
-   * contents as stored, Qref and Wref (upload also takes a Q of h·T and a
-   * W of h·S), the surface's last temperature and the ice volume it
-   * last saw, the freshwater not yet taken, the land's ice not yet
-   * melted, `calved`, the heat flux and capacity
+   * exactly as it stands between two ocean steps: the surface's last
+   * temperature and the ice volume it last saw, the freshwater not yet
+   * taken, the land's ice not yet melted, `calved`, the heat flux and capacity
    * the surface update is using, the sunlight not yet deposited,
    * `penetrated`, the mixed-layer and boundary-layer depths the column
    * physics left, and with penetration the share of the sunlight that
@@ -2322,7 +2320,9 @@ ${core.fieldConstants}
    * `transmission`. A saved ocean that carries all of them at this mesh's
    * sizes, the last two and `calved` optional, its columns within a meter of this
    * bathymetry and dry on land, is uploaded as it is, without fitting its
-   * columns.
+   * columns. From T, S and h its heat and salt stores come back to the last
+   * bit except within about 3e-6 K of 273.15 K or 4e-7 of 35 psu, where one
+   * can miss by an ulp unless the save carries Qref and Wref.
    */
   async function restartArrays() {
     const PHL = core.layout.PH;
