@@ -894,9 +894,11 @@ export const FINE_ROWS = 4320, FINE_COLS = 8640, GRADIENT_SPACING = 5000;
  * The directory of the 2′30″ grids scripts/subgridTerrain.py's `filter`
  * writes (fine_h5.f32, fine_flt2.f32): TERRAIN_CACHE, else the nearest
  * geodesic-terrain-cache beside the checkout (`checkout`, by default this
- * repository) or a directory above it, else beside or above the repository
- * whose git worktree the checkout is; null off node, with TERRAIN_CACHE
- * 'none', or with none found.
+ * repository) or a directory above it, else, for a checkout whose .git is
+ * a file, beside or above the git directory its gitdir's commondir names
+ * (the gitdir itself without one): a repository's .git, or a bare
+ * repository; null off node, with TERRAIN_CACHE 'none', or with none
+ * found.
  */
 export function terrainCache(checkout = null) {
   const node = globalThis.process, fs = node?.getBuiltinModule?.('node:fs');
@@ -909,15 +911,17 @@ export function terrainCache(checkout = null) {
     if (!holds(given)) throw new Error(`TERRAIN_CACHE ${given} holds no fine_h5.f32 and fine_flt2.f32`);
     return given;
   }
-  const near = (repository) => {
-    for (let dir = path.dirname(repository); ; dir = path.dirname(dir)) {
+  const near = (from) => {
+    for (let dir = path.dirname(from); ; dir = path.dirname(dir)) {
       if (holds(path.join(dir, 'geodesic-terrain-cache'))) return path.join(dir, 'geodesic-terrain-cache');
       if (path.dirname(dir) === dir) return null;
     }
   };
   const root = checkout ?? fileURLToPath(new URL('../', import.meta.url)), link = path.join(root, '.git');
   const gitdir = fs.existsSync(link) && fs.statSync(link).isFile() ? /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(link, 'utf8'))?.[1].trim() : null;
-  return near(root) ?? (gitdir ? near(path.dirname(path.dirname(path.dirname(path.resolve(root, gitdir))))) : null);
+  if (!gitdir) return near(root);
+  const own = path.resolve(root, gitdir), common = path.join(own, 'commondir');
+  return near(root) ?? near(fs.existsSync(common) ? path.resolve(own, fs.readFileSync(common, 'utf8').trim()) : own);
 }
 
 export function readFine(cache, name, rows = FINE_ROWS, cols = FINE_COLS) {
