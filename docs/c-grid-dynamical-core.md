@@ -447,14 +447,16 @@ In dry air the two cancel only at
 face `'arakawaSuarez'`. Under `'exner'`, the default, θ's face is linear
 in Exner, `θ_k + t (θ_{k+1} − θ_k)` with `t = (Π_{k+½} − Π_k)/ΔΠ`: it
 swaps the two weights and differs from the balanced face by
-`(2t − 1)(θ_{k+1} − θ_k)`. Over the terrain at initializeState on bl48,
-`c_p θ̂ ΔΠ` misses the hydrostatic step between two dry layers by up to
-7.15 % at the `'exner'` face and by 2×10⁻¹⁴ at the `'arakawaSuarez'`
-face (`test/closureOptions.test.mjs`). The conservation test takes the
-N=16 aquaplanet 16 steps from initializeState, makes its air dry with
-θ_v as θ, and finds that one core tendency changes `c_p T` plus the
-kinetic energy by −6.25×10⁻³ W/m² on bl48 and +4.59×10⁻³ on bl36 at the
-`'exner'` face, where `|2t − 1|` reaches 0.443 and 0.208, and by less
+`(2t − 1)(θ_{k+1} − θ_k)`. At N=16 over the terrain at initializeState
+on bl48, `c_p θ̂ ΔΠ` misses the hydrostatic step between two dry layers
+by up to 7.15 % at the `'exner'` face and by 2×10⁻¹⁴ at the
+`'arakawaSuarez'` face (`test/closureOptions.test.mjs`). The
+conservation test takes the N=16 aquaplanet 16 steps from
+initializeState, gives its air ten times the state's water (`WETTER` =
+10), and builds a dry twin in single precision whose θ is that air's
+θ_v and whose q and q_c are zero. One core tendency of the twin changes
+`c_p T` plus the kinetic energy by −6.25×10⁻³ W/m² on bl48 and
++4.59×10⁻³ on bl36 at the `'exner'` face, where `|2t − 1|` reaches 0.443 and 0.208, and by less
 than 10⁻⁶ W/m² at the `'arakawaSuarez'` face
 (`test/atmosphereConservation.test.mjs`). The residual has no fixed
 sign. q and q_c, which do no pressure work,
@@ -465,12 +467,13 @@ exactly the `'exner'` ones.
 θ is never limited. A limited θ face adds
 `c_p F ΔΠ (θ_exner − θ_limited)` to the `'exner'` face's own mismatch
 at every interface, and a diffusive limiter makes that term one-signed,
-a source of `c_p T`: with θ limited, the whole dynamics of one RK4 step
-on the N=16 aquaplanet changed `c_p T` plus the kinetic energy by
-0.13 W/m², against 0.008 W/m² on average under the centered faces over
-the slab (the conservation test bounds that at 0.02). Balancing a
-limited face would need the geopotential and the pressure gradient to
-take a flow-dependent θ face.
+a source of `c_p T`. At f83c292 the conservation test's row over a slab
+with `verticalAdvection` `'vanLeer'`, which limited θ, q and q_c until
+23e8253 dropped it, measured the dynamics' energy rate over the spun-up
+N=16 slab at 0.13 W/m² (its bound was 0.2), against 0.008 W/m² under
+the centered faces (the `'over a slab'` row, bounded at 0.02).
+Balancing a limited face would need the geopotential and the pressure
+gradient to take a flow-dependent θ face.
 
 **Temperature closure** (`dynamics.temperatureClosure`). The ∇⁴ closure
 of θ acts on T = θΠ with fluxes weighted by the edge's π. Under `'sigma'`,

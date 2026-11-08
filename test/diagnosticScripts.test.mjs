@@ -60,8 +60,9 @@ test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid
   for (const name of ['Coriolis', 'baroclinic', '-grad K', 'bottom drag', 'nu4']) assert.ok([...active.values()].some((line) => term(line, name) !== 0), `${name} is zero on every row`);
   assert.ok(open.some((e) => term(active.get(`${e}:0`), 'stress') !== 0), 'the wind is zero on the open edges');
   const params = new Float64Array(ocean.shared.params);
+  params[0] = 0;
   for (let n = 0; n < ocean.everySteps; n++) model.step(1350);
-  assert.ok(params[1] > 0, 'the ocean has not stepped');
+  assert.ok(params[0] > 0, 'the ocean has not stepped');
   assert.match(budget.stdout, new RegExp(`pinned rows relax at 1/${(1 / params[0]).toFixed(0)} s`));
 });
 
