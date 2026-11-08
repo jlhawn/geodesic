@@ -84,9 +84,19 @@ export const MAY_BE_ZERO = new Set(['OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'OSTRESS
 export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001, COND: 0.001, MIXH: 0.0078, STRESS: 0.0165, DRAG: 0.0066, HEATX: 0.0048, DECKF: 0.001, MLMCOVER: 0.001, MLMENT: 0.001, OBETA: 0.001, OBLOCK: 0.001, OLAUNCH: 0.00156, OSTRESS: 0.00126, CONC: 0.001, STRAT: 0.001, USTAR: 0.001 };
 // f32 rounding of the soil store: eight spacings at 300 kg/m²
 const ABSOLUTE_FLOOR = { RUNOFF: 2.5e-4, DISCHARGE: 2.5e-4 };
+// judged in kelvin, by the rms gap and the share of cells parting past `over`: about ten times the parity of seventeen64 day 365 and combined128 day 1460 through 2 steps
+export const ABSOLUTE_BOUNDS = { T2M: { rms: 0.01, over: 0.05, share: 5e-4 } };
+const absoluteGap = (g, c, over) => {
+  const n = Math.min(g.length, c.length);
+  let dd = 0, past = 0;
+  for (let x = 0; x < n; x++) { const d = g[x] - c[x]; dd += d * d; if (Math.abs(d) > over) past++; }
+  return { rms: Math.sqrt(dd / n), past, share: past / n };
+};
 for (const name of (process.env.DECISION_EXTRA ?? '').split(',').filter(Boolean)) DECISION_BOUNDS[name] ??= 1e-3;
 export const DECISION_ROWS = new Set(Object.keys(DECISION_BOUNDS));
 const NO_CLEAR_SKY = JSON.parse(process.env.RADIATION ?? '{}').clearSkyPass === false, CLEAR_SKY_ROWS = new Set(['ABSCLRSUM', 'OLRCLRSUM', 'RADCLROLR', 'RADCLRSW', 'RADTC']);
+const drags = (model) => !!model.boundaryLayer?.implicitDrag;
+const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags] };
 const decisionBound = (name) => (process.env.SHARE ? Number(process.env.SHARE) : DECISION_BOUNDS[name]);
 
 const typed = (v) => ArrayBuffer.isView(v) && !(v instanceof DataView);
@@ -193,6 +203,7 @@ function mappedReport(phNames, phArray, step) {
   for (const [name, region] of phNames.map((n) => [n, phArray(n)])) {
     const path = PH_MAP[name];
     if (NO_CLEAR_SKY && CLEAR_SKY_ROWS.has(name)) { lines.push(`| ${name} | ${path} | | | | | n/a (no clear-sky pass) |`); continue; }
+    if (ROW_NEEDS[name] && !ROW_NEEDS[name][1](cpu)) { lines.push(`| ${name} | ${path} | | | | | n/a (${ROW_NEEDS[name][0]}) |`); continue; }
     if (!path) { const bad = region ? nonFinite(region) : null; lines.push(`| ${name} | (input: ${PH_INPUT[name] ?? 'unmapped'}) | | | | | ${bad ?? 'ok'} |`); if (bad) failures++; continue; }
     const found = cpuArray(cpu, path);
     if (!found && path.startsWith('boundaryLayer.form') && !cpu.boundaryLayer.formDrag) { lines.push(`| ${name} | ${path} | | | | | n/a (form drag is off on this grid) |`); continue; }
@@ -204,13 +215,14 @@ function mappedReport(phNames, phArray, step) {
     if (!region) { lines.push(`| ${name} | ${path} | | | | ${cNonzero ? '' : '0'} | ${cNonzero ? 'cpu nonzero' : 'CPU ALL ZERO'} |`); if (!cNonzero && !MAY_BE_ZERO.has(name) && !landless) failures++; continue; }
     const s = stats(region, c, null, Math.min(region.length, c.length));
     let gNonzero = false; for (let x = 0; x < region.length; x++) if (region[x] !== 0) { gNonzero = true; break; }
-    let verdict = 'ok';
+    let verdict = 'ok', note = '';
     if (s.nan) verdict = `NON-FINITE (${s.nan} of ${Math.min(region.length, c.length)})`; else if (!gNonzero && cNonzero) verdict = 'GPU ALL ZERO'; else if (gNonzero && !cNonzero) verdict = 'CPU ALL ZERO'; else if (!gNonzero && !cNonzero) verdict = MAY_BE_ZERO.has(name) ? 'zero on both (listed)' : 'ZERO ON BOTH (not exercised)';
+    else if (ABSOLUTE_BOUNDS[name]) { const b = ABSOLUTE_BOUNDS[name], a = absoluteGap(region, c, b.over); note = ` (rms ${fmt(a.rms)}, ${a.past} cells past ${b.over})`; verdict = a.rms > b.rms ? `OFF (rms > ${b.rms})` : a.share > b.share ? `OFF (share past ${b.over} > ${b.share})` : 'ok'; }
     else if (DECISION_ROWS.has(name)) verdict = s.share > decisionBound(name) ? `OFF (share > ${decisionBound(name)})` : s.rest > 3 * TOL ? `OFF (rms under the threshold > ${3 * TOL})` : 'ok';
     else if (!(s.rms <= TOL) && !(s.max * s.scale <= ABSOLUTE_FLOOR[name])) verdict = `OFF (> ${TOL})`;
     if (verdict !== 'ok' && verdict !== 'zero on both (listed)' && !((MAY_BE_ZERO.has(name) || landless) && verdict.startsWith('ZERO'))) failures++;
     if (DECISION_ROWS.has(name) && gNonzero && cNonzero) decisions.push(`| ${name} | ${path} | ${fmt(s.share)} | ${decisionBound(name)} | ${fmt(s.rms)} | ${fmt(s.rest)} | ${fmt(s.max)} | ${fmt(s.scale)} | ${verdict} |`);
-    else lines.push(`| ${name} | ${path} | ${fmt(s.rms)} | ${fmt(s.max)} | ${(100 * s.gz).toFixed(0)}/${(100 * s.cz).toFixed(0)} | ${fmt(s.scale)} | ${verdict} |`);
+    else lines.push(`| ${name} | ${path} | ${fmt(s.rms)} | ${fmt(s.max)} | ${(100 * s.gz).toFixed(0)}/${(100 * s.cz).toFixed(0)} | ${fmt(s.scale)} | ${verdict}${note} |`);
   }
   lines.push(`\n### decision divergence: share of cells\n\n| PH | CPU array | share > TOL | bound | rel rms | rel rms under TOL | rel max | max abs cpu | verdict |\n|---|---|---|---|---|---|---|---|---|`, ...decisions);
 }
