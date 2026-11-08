@@ -40,13 +40,14 @@ export function refuseUnreadOptions(url) {
 }
 
 /*
- * `node scripts/optionEnvironment.mjs SCRIPT` prints `-u NAME` for each
- * option group in the environment SCRIPT does not read, for a driver's
- * `env` to give a stage only the groups its script reads.
+ * `node scripts/optionEnvironment.mjs SCRIPT…` prints `-u NAME` for each
+ * option group in the environment that none of the SCRIPTs reads, for a
+ * driver's `env` to give a stage only the groups its script reads.
  */
 let self = null;
 try { self = realpathSync(process.argv[1]); } catch {}
 if (self === fileURLToPath(import.meta.url)) {
-  if (!process.argv[2]) throw new Error('usage: node scripts/optionEnvironment.mjs SCRIPT');
-  console.log(unreadOptions(pathToFileURL(realpathSync(process.argv[2]))).map((name) => `-u ${name}`).join(' '));
+  const unread = process.argv.slice(2).map((file) => unreadOptions(pathToFileURL(realpathSync(file))));
+  if (!unread.length) throw new Error('usage: node scripts/optionEnvironment.mjs SCRIPT…');
+  console.log(unread[0].filter((name) => unread.every((names) => names.includes(name))).map((name) => `-u ${name}`).join(' '));
 }

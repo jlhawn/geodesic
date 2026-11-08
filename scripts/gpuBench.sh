@@ -21,17 +21,22 @@
 # (32), FRESH_DAYS (0.25), FRESH_OCEAN ('{"everySteps":4}'), PACE_DAYS (1;
 # 2 at N=64), BATCH (8), SITE
 # (https://gcm.echorelay.net), and whatever scripts/spinup.mjs and
-# scripts/figures/figureState.mjs read (OCEAN, RADIATION, MOIST, ...); each
-# stage is given only the option groups its own script reads.
+# scripts/figures/figureState.mjs read (OCEAN, RADIATION, MOIST, ...). Each
+# stage is given only the option groups its own script reads, the report
+# names the groups each script runs without, and a group no stage reads
+# is refused before anything runs.
 cd "$(dirname "$0")/.."
 OUT=${OUT:-runs/bench} NS=${NS-"64 128"} FRESH=${FRESH-"256"} FRESH_STEPS=${FRESH_STEPS:-32} FRESH_DAYS=${FRESH_DAYS:-0.25}
 BATCH=${BATCH:-8} SITE=${SITE:-https://gcm.echorelay.net} FRESH_OCEAN=${FRESH_OCEAN-'{"everySteps":4}'}
+export -n FRESH_OCEAN
+unread() { node scripts/optionEnvironment.mjs "$@"; }
+nowhere=$(unread scripts/spinup.mjs scripts/profileGpu.mjs scripts/paceGpu.mjs) || exit 1
+[ -z "$nowhere" ] || { echo "gpuBench.sh: no stage reads these option groups, so the bench would run without them: ${nowhere//-u /}; unset or rename them" >&2; exit 1; }
 mkdir -p "$OUT/start"
 OUT=$(cd "$OUT" && pwd)
 REPORT=$OUT/report.txt
 : > "$REPORT"
 say() { echo "$*" | tee -a "$REPORT"; }
-unread() { node scripts/optionEnvironment.mjs "$1"; }
 
 stage() {
   local name=$1 start=$SECONDS; shift
@@ -70,6 +75,10 @@ timed() {
 
 say "GPU benchmark at $(git rev-parse --short HEAD 2> /dev/null || echo '?') on $(hostname), $(date -u +%Y-%m-%dT%H:%M:%SZ), node $(node --version), $(nproc 2> /dev/null || sysctl -n hw.ncpu) cores"
 command -v nvidia-smi > /dev/null && say "$(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader)"
+for script in spinup profileGpu paceGpu; do
+  dropped=$(unread scripts/$script.mjs)
+  [ -z "$dropped" ] || say "$script.mjs runs without the option groups it does not read: ${dropped//-u /}"
+done
 
 for N in $NS; do
   say "N=$N from eleven${N}_day1825"
