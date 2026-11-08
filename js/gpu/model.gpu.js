@@ -111,9 +111,10 @@ export async function createGpuModel(gridOrMesh, {
   if (gpuOcean) gpuOcean.useSeaIce(seaIce.concentration);
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;
   if (landCpu) gpu.hooks.landWeights = landCpu.weights;
+  let oceanCounter = 0;
   if (gpuOcean) gpu.hooks.beforePhysics = async (dt) => {
     gpuOcean.accumulateFreshwater(dt);
-    if (!gpuOcean.tick()) return;
+    if (++oceanCounter % gpuOcean.everySteps !== 0) return;
     await gpuOcean.advanceCoupled(gpuOcean.everySteps * dt, model.time + dt);
   };
   const lengths = [C, K * C, K * E, C, K * C, K * C, C];
