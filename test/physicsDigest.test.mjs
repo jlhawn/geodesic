@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
 import { areaMean, bandMask, hemisphereArea, compareDigests, runDigest } from '../scripts/physicsDigest.mjs';
@@ -49,4 +50,13 @@ test('one step of the default-physics digest gives every row a finite value, the
   assert.ok(a.rows.length >= 30 && a.rows.every((r) => Number.isFinite(r.value)), a.rows.filter((r) => !Number.isFinite(r.value)).map((r) => r.name).join(', '));
   assert.equal(a.stateHash, b.stateHash);
   assert.equal(compareDigests(a, b).moved.length, 0);
+});
+
+test('the 16-step digest reproduces the digest of record: the same state, no row moved, added or dropped', async () => {
+  const record = JSON.parse(readFileSync(new URL('./helpers/physicsDigest.json', import.meta.url), 'utf8'));
+  const now = await runDigest({ steps: record.steps }), { moved, added, removed, sameState } = compareDigests(record, now);
+  const made = `the record was made on ${record.commit} under Node ${record.node}; this run is ${now.commit} under Node ${now.node}`;
+  assert.deepEqual([moved.map((m) => `${m.name} ${m.before} → ${m.after}`), added, removed], [[], [], []], made);
+  assert.ok(sameState, `state ${now.stateHash} against the record's ${record.stateHash}; ${made}`);
+  assert.deepEqual(now.hashed, record.hashed);
 });
