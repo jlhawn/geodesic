@@ -10525,7 +10525,8 @@ the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
   surface. A run over terrain of other options takes them rebuilt below
   its own surface: the files' pipeline run in memory (`rebuiltSubgrid`)
   on the fine grids of a `geodesic-terrain-cache` beside the repository
-  or above it (or `TERRAIN_CACHE`), quantized as the files are, 3–5 s
+  or above it, or beside or above the repository a git worktree belongs
+  to (or `TERRAIN_CACHE`), quantized as the files are, 3–5 s
   once a process; below the default surface it reproduces the files bit
   for bit. The rebuilt μ differs from the files' by over 10 % in 277 of
   the 11,860 land cells at N=64 and 667 of the 47,482 at N=128 under

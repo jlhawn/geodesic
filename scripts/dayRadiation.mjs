@@ -8,14 +8,14 @@
 import { readFileSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
-import { decodeState, savedLevels, savedTerrain } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2];
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: savedTerrain(saved) ?? true, topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } });
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } });
 const { mesh, core, state, radiation, boundaryLayer: bl, seaIce, land, geography } = model;
 const { K, C, g } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));

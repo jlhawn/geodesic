@@ -69,7 +69,7 @@ export function terrainMove(header, terrain = true) {
  */
 export function requireOwnSubgrid(terrain, orography) {
   if (terrain === false || orography === false || terrainKey(terrain ?? true) === terrainKey(true) || terrainCache()) return;
-  throw new Error(`terrain ${JSON.stringify(terrain)} needs its sub-grid orography rebuilt below its own surface from fine_h5.f32 and fine_flt2.f32, which neither TERRAIN_CACHE nor a geodesic-terrain-cache beside the repository or above it holds; run on the default terrain, or give the grids`);
+  throw new Error(`terrain ${JSON.stringify(terrain)} needs its sub-grid orography rebuilt below its own surface from fine_h5.f32 and fine_flt2.f32, which neither TERRAIN_CACHE nor a geodesic-terrain-cache beside or above the repository or the one this worktree belongs to holds; run on the default terrain, or give the grids`);
 }
 
 /*

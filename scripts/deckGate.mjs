@@ -32,7 +32,7 @@
 import { readFileSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
-import { decodeState, savedLevels, savedTerrain } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, ringMean } from '../js/physics/radiation.module.js';
@@ -48,7 +48,7 @@ const RADIATION = env('RADIATION'), MOIST = env('MOIST'), EIS_SWITCH = MOIST.str
 const STEPS = Number(process.env.STEPS ?? 4);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: savedTerrain(saved) ?? true, topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land } = model;
 const { K, C, sigmaMid, R, g, cp, p0, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;

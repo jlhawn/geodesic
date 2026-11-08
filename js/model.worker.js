@@ -10,7 +10,7 @@ import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, ter
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { initialHumidity } from './physics/init.module.js';
-import { fetchState, stateName, savedLevels, groupHeader, groupArrays, savedTerrain } from './stateFile.module.js';
+import { fetchState, stateName, savedLevels, groupHeader, groupArrays, savedTerrain, stateTerrain } from './stateFile.module.js';
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
@@ -314,18 +314,29 @@ function savedCumulus(model) {
  * and land that follow the state, until the start is done. The saved
  * state keeps the grid found for it.
  */
-let sourceModel = null;
+let sourceModel = null, sourceGround = null;
 const startTerrain = (message, saved) => (message.terrain === false ? false : savedTerrain(saved ?? {}) ?? true);
 const sameLevels = (a, b) => a.length === b.length && a.every((sigma, k) => sigma === b[k]);
 function sourceFor(saved) {
-  const levels = savedLevels(saved);
-  const terrain = savedTerrain(saved) ?? true;
-  if (!sourceModel || sourceModel.N !== saved.N || sourceModel.relax !== savedRelax(saved) || sourceModel.topography !== currentTopography || sourceModel.terrain !== terrainKey(terrain) || !sameLevels(sourceModel.model.core.levels, levels)) {
-    const { mesh, relax } = stateGrid(saved, currentTopography);
+  const levels = savedLevels(saved), terrain = stateTerrain(saved);
+  if (!sourceModel || sourceModel.N !== saved.N || sourceModel.relax !== savedRelax(saved) || sourceModel.ground !== sourceGround || sourceModel.terrain !== terrainKey(terrain) || !sameLevels(sourceModel.model.core.levels, levels)) {
+    const { mesh, relax } = stateGrid(saved, sourceGround?.topography ?? null);
     saved.grid = { relax };
-    sourceModel = { N: saved.N, relax, topography: currentTopography, terrain: terrainKey(terrain), model: createModel(mesh, { physics: false, levels, terrain, ...(currentTopography ? { topography: currentTopography } : {}) }) };
+    sourceModel = { N: saved.N, relax, ground: sourceGround, terrain: terrainKey(terrain), model: createModel(mesh, { physics: false, levels, terrain, ...(sourceGround ?? {}) }) };
   }
   return sourceModel.model;
+}
+
+/*
+ * The topography and geography options of the model a state was saved
+ * from, with its land mask at its own N, for the model sourceFor regrids
+ * it from.
+ */
+async function savedGround(saved) {
+  const record = savedGeography(saved);
+  const topography = await loadTopography(topographyUrl(record.topography).href, record.topography);
+  const { geography } = geographyOptions(record, record.iceSheets === 'rule' ? null : await loadLandIce());
+  return { topography, geography: { ...geography, ...(record.mask && record.mask !== 'raster' ? { maskData: await loadMask(saved.N, record.mask) } : {}) } };
 }
 
 /*
@@ -657,7 +668,7 @@ async function restore(snapshot) {
   serving = true;
   self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   await sendFrame();
-  sourceModel = null;
+  sourceModel = sourceGround = null;
 }
 
 async function start(message) {
@@ -686,6 +697,7 @@ async function start(message) {
   }
   if (climatologyOn(options.radiation)) options.radiation = { ...options.radiation, aerosolData: await loadAerosolFile() };
   options.terrain = startTerrain(message, saved);
+  sourceGround = saved && saved.N !== N ? await savedGround(saved) : null;
   if (saved?.ocean?.generator) options.ocean = { ...(options.ocean ?? {}), generator: saved.ocean.generator };
   if (saved) options.levels = savedLevels(saved);
   else if (message.levels) options.levels = sigmaInterfaces(message.levels);
@@ -731,7 +743,7 @@ async function start(message) {
   serving = true;
   self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   refresh();
-  sourceModel = null;
+  sourceModel = sourceGround = null;
 }
 
 export function placeBoundaryLayer(model, saved) {
