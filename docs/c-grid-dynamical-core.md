@@ -960,6 +960,45 @@ Column cloud water (TCW) is a diagnostic and a page overlay; the step
 costs 126 ms serial at N=16 against 98 ms dry. Cloud–radiation
 coupling (albedo and longwave emissivity of cloud) is the next step.
 
+Three options of the moist physics set the rain's evaporation, on both
+engines. Their defaults give the law above.
+- `rainEvaporationLaw` 'deficit' (the default) is that law.
+- 'kessler' takes at most what the IFS's Kessler rate evaporates over
+  the step (Cy41r2 Part IV eq. 7.70), integrated exactly as the deficit
+  decays under the rate and its latent cooling. The rate is
+  a_clr β (q_s − q_e) with β = α1 (√(p/p_s) P / (a_P α2))^α3: α1
+  5.44·10⁻⁴ s⁻¹, α2 5.09·10⁻³ kg m⁻² s⁻¹ and α3 0.5777. P is the rain
+  flux into the layer and a_P the share of the cell it falls in. a_clr
+  = a_P − a is the part of a_P outside the layer's cloud cover a, and
+  q_e = (q − a q_s)/(1 − a) is the humidity outside the cloud.
+- 'cloudsc' takes at most the IFS code's semi-implicit step: a_clr β′
+  (q_s − q_e) Δt / (1 + β′ Δt (1 + γ)), with γ = L/c_p dq_s/dT and β′ =
+  β/2. The code read is the cloudsc.F90 of ECMWF's CLOUDSC dwarf
+  (dwarf-p-cloudsc, whose modification history ends in 2015 and whose
+  default is IEVAPRAIN 2, Abel and Boutle); the step is its IEVAPRAIN 1
+  (Sundqvist) branch, lines 2128–2196. The halving is that branch's own:
+  line 2160 multiplies the rain's rate by 0.5 (`RG*RPECONS` is α1). Eq.
+  7.70 has no such factor, and neither does the snow sublimation's
+  Sundqvist branch (IEVAPSNOW 1, line 2323), which the documentation says
+  uses the same formula. So 'cloudsc' runs at half the documented rate
+  because the code does.
+- `rainCover` 'overlap' (the default) makes a_P the maximum-random
+  overlap of the cloud cover from the rain's top down (eq. 7.65), at
+  least 0.1 (RCOVPMIN). It is reduced in proportion to what evaporates,
+  and reset only where nothing precipitates into the layer. A number
+  sets a_P and a_clr to it and a to 0. The share acts only under 'kessler',
+  'cloudsc' or a ceiling.
+- `rainEvaporationCeiling` c (default none) stops every law, 'deficit'
+  included, at the relative humidity c + (1 − c) a_clr/(1 − a): eq. 7.77,
+  with c = 0.7 (RPRECRHMAX) in the IFS. It caps the amount where cloudsc
+  gates the process, and it uses the documentation's a_clr where the
+  code uses its running maximum share (ZCOVPMAX).
+
+The IFS's default law, IEVAPRAIN 2 (Abel and Boutle 2012), is not built.
+`test/moist.test.mjs` replays every law against its formula layer by
+layer, and `test/convection.test.mjs` runs the engines' parity at N=16
+under each.
+
 ### M9 — Sea ice and surface albedo — done
 
 `js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model
@@ -9798,6 +9837,23 @@ b913e99; over the treeline test's 48 GPU steps the lowest air parts by
 7.7·10⁻² K (2.3·10⁻² under 'random') and the tree cover by 1.2·10⁻⁴
 (2.5·10⁻⁵), above its 10⁻⁴.
 
+**A trace of cloud in the chain (Nov 7).** The chain takes a layer's
+cover f whatever its water, so a layer whose cloud water is a rounding
+trace joins the overlap of the cloud around it as fully as a real one.
+In a CPU test column a 10⁻¹⁵ kg/kg trace moved the OLR by 0.043 W/m².
+In the model's states the audit put the cliff below 0.15 W/m² of
+reflected sunlight, and its check, zeroing the traces in an N=64 state,
+moved the shortwave and longwave cloud effects by under 0.05 W/m².
+`traceCloudPath` t (a radiation option in kg/m², default none, on both
+engines) gives a layer whose in-cloud path W/f is under t the cover W/t,
+with the same mean emissivity. The cover stops at TRACE_CHAIN_FLOOR
+(10⁻⁶, or the layer's chain cover if that is less), below which the
+GPU's f32 joint covers lose it. At t = 10⁻⁶ the trace's 0.043 W/m²
+becomes 4.3·10⁻⁶ W/m² in `test/longwaveOverlap.test.mjs`'s row. In
+`test/gpuModel.test.mjs`'s row on 4214 layers near half the trace path,
+the option moves the OLR by up to 0.148 W/m², and the engines' changes
+differ by 6.7·10⁻⁵ W/m².
+
 **Independent checks of the Q1 metric and the overlap (Oct 2).** The
 longwave's chain against the expectation over every sub-column pattern
 (each an overcast or clear column, weighted by the chain's pair
@@ -11459,6 +11515,41 @@ subsidence warming, and the bl34 layers there (789, 850, 893 hPa) are
 element stays on: it is the IFS's procedure, and the wrong-way move of the
 trades' firing (+0.04) comes from the sounding it is given, not from the
 test; 'cloudDepth' gives the previous type.
+
+**Re-typing and the mid-level type (Nov 7).** Three options of the
+moist physics, off by default, act only under `convectionType`
+'testParcel' (both engines).
+- `convectionRetype` re-types after the full ascent, as cumastrn.F90
+  does at 637–640. A deep column runs the shallow plume after all where
+  the deep plume's own cloud is no deeper than 200 hPa, measured from its
+  base interface to the last interface it reaches with w² > 0 (cuascn's
+  KCTOP). On the random N=16 columns of the parity test it re-types 146
+  of 480 deep columns.
+- `shallowRetype` is the other half. A column the test parcel leaves
+  shallow runs the deep plume from the shallow plume's own source parcel
+  where that parcel, lifted past `shallowTop` without tendencies, finds a
+  cloud deeper than 200 hPa. Its w² starts at the shallow closure's
+  velocity scale, as in Part IV §6.4.1's shallow test. Under the default
+  1/z entrainment the shallow parcel does not pass 200 hPa on the random
+  N=16 columns, so the option acts only under a lighter shallow plume.
+- `midLevelConvection` adds the IFS's type 3 (Part IV §6.4.3, cuascn.F90
+  with KLAB 3). It applies to a column that no test parcel types deep and
+  whose shallow plume does not rise. Its source is the first layer, from
+  the second lowest up and within 10 km of the ground, that is in
+  large-scale ascent (ω < 0), holds q above 0.8 q_s, and whose parcel
+  holds condensate at the layer's upper interface while less than 0.5 K
+  colder there in virtual temperature than the air. It departs with
+  the source layer's s_l and q_t (cuascn's KCBOT) and mixes in every
+  layer above as cuascn's type 3 does. It ends where its diluted parcel
+  condenses nothing, as cuascn's CUADJTQ does, or at cuascn's overshoot
+  limit. Its base flux is eq. 6.31's, held to the mass of the layer above
+  its source per step, and every interface is held to the mass of the
+  layer above it (ZMFMAX with RMFCFL 1). The constants are `MID_LEVEL` in
+  `js/physics/moist.module.js`, whose header gives the scheme in full.
+
+`test/convection.test.mjs` runs the three options alone and together in
+the engines' parity at N=16. Its rows count the columns re-typed, the
+mid-level plumes, and the plumes the dry end and the overshoot limit end.
 
 **Ice in the plumes and the melting of their frozen rain (Oct 2).**
 `plumePhase` 'mixed' (the default; 'liquid' the previous plumes bit for bit
