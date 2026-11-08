@@ -4,7 +4,8 @@
  "dt": 1350,
  "hours": 6,
  "node": "v22.22.2",
- "commit": "30e02fa2c556",
+ "commit": "9c49a8d048c6",
+ "data": "d57dd802b062",
  "stateHash": "34526f664c90da8be95e2ebd2e547a2e",
  "hashed": [
   "atmosphere 7",
@@ -15,6 +16,15 @@
   "boundary layer 17",
   "decks 3"
  ],
+ "groupHashes": {
+  "atmosphere": "f077c2bca50b2716",
+  "sea ice": "c0f851e059551f58",
+  "land": "81a2932192fbf886",
+  "ocean": "30f559692f9880ee",
+  "lakes": "1a6b96286b1c15fc",
+  "boundary layer": "e5d99d8c8beda289",
+  "decks": "df7bbed83d95d407"
+ },
  "rows": [
   {
    "name": "global surface temperature",
