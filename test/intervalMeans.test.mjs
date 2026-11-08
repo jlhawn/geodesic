@@ -99,6 +99,14 @@ test('gridBoxSkin is the mean of each sample\'s c·surfaceT + (1 − c)·sst ove
   for (let i = 0; i < 4; i++) assert.ok(Math.abs(means.gridBoxSkin[i] - expected[i]) < 1e-4 && Math.abs(day.values.gridBoxSkin[i] - expected[i]) < 1e-4, `cell ${i}: ${means.gridBoxSkin[i]} against ${expected[i]}`);
   assert.deepEqual(Array.from(means.surfaceT), [252, 261, 301, 291]);
   assert.deepEqual(meansFields('["gridBoxSkin"]'), ['gridBoxSkin']);
+  const sparse = createIntervalMeans(counting(4), { fields: ['a'], every: 5 });
+  sparse.step(); sparse.step(); sparse.day();
+  assert.equal(await sparse.latest(), null, 'a day without a sample of its own has no latest day');
+  for (let n = 0; n < 4; n++) sparse.step();
+  sparse.day();
+  assert.equal((await sparse.latest()).samples, 1);
+  sparse.step(); sparse.day();
+  assert.equal(await sparse.latest(), null, 'nor does the next empty day hand back the one before');
 });
 
 const topography = topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer);

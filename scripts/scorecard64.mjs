@@ -27,6 +27,7 @@ import { stateGeography, createGeography } from '../js/geography.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { climatologyAt } from '../js/ocean/climatology.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
+import { indexCells, seaIceIndexCut } from '../js/seaIceIndex.module.js';
 import { windowMonths } from './woaSstBias.mjs';
 import * as R from './references.mjs';
 
@@ -63,7 +64,7 @@ export function logDays(text) {
       const g = (re) => { const x = line.match(re); return x ? Number(x[1]) : NaN; };
       days.set(+m[1], { asr: +m[2], olr: +m[3], swcre: g(/SWCRE ([-\d.]+)/), lwcre: g(/LWCRE ([-\d.]+)/) });
     }
-    m = line.match(/sea ice on day (\d+)'s mean concentration, sea cells, 15 %: N extent ([\d.]+) area ([\d.]+), S extent ([\d.]+) area ([\d.]+)/);
+    m = line.match(/sea ice on day (\d+)'s mean concentration, sea cells(?: on the index's grids)?, 15 %: N extent ([\d.]+) area ([\d.]+), S extent ([\d.]+) area ([\d.]+)/);
     if (m) ice.set(+m[1], { nExtent: +m[2], nArea: +m[3], sExtent: +m[4], sArea: +m[5] });
   }
   return { days, ice };
@@ -84,7 +85,7 @@ export function undercurrentCore(profile) {
 const meshes = new Map();
 function meshOf(saved) {
   const { topography, geography } = stateGeography(saved), key = `${saved.N} ${JSON.stringify(saved.grid ?? null)} ${JSON.stringify(geography)}`;
-  if (!meshes.has(key)) { const { mesh } = stateGrid(saved, topography); meshes.set(key, { mesh, land: createGeography(mesh, topography, geography).land }); }
+  if (!meshes.has(key)) { const { mesh } = stateGrid(saved, topography), made = createGeography(mesh, topography, geography); meshes.set(key, { mesh, land: made.land, geography: made }); }
   return meshes.get(key);
 }
 
@@ -133,12 +134,7 @@ export function reduceState(saved, logText) {
   row('net', fromLog(days, (x) => x.asr - x.olr), cer((m) => ceres.rsdt[m] - ceres.rsut[m] - ceres.rlut[m]));
   row('swcre', fromLog(days, (x) => x.swcre), cer((m) => ceres.rstcre[m]));
   row('lwcre', fromLog(days, (x) => x.lwcre), cer((m) => ceres.rltcre[m]));
-  const meanCut = (north) => {
-    let e = 0, a = 0;
-    for (let i = 0; i < C; i++) { const c = M.concentration[i]; if (land[i] || !sea[i] || !(c >= 0.15) || (lat(i) >= 0) !== north) continue; e += area[i]; a += c * area[i]; }
-    return { extent: e / 1e12, area: a / 1e12 };
-  };
-  const [cutN, cutS] = [meanCut(true), meanCut(false)], nsidc = (k, h) => dayWeighted(D, (m) => iceRef[k][h][m - 1]);
+  const { N: cutN, S: cutS } = seaIceIndexCut(mesh, indexCells(mesh, meshOf(saved).geography), M.concentration), nsidc = (k, h) => dayWeighted(D, (m) => iceRef[k][h][m - 1]);
   row('iceNExtent', fromLog(ice, (x) => x.nExtent), nsidc('extent', 'N'), { proxy: cutN.extent });
   row('iceNArea', fromLog(ice, (x) => x.nArea), nsidc('area', 'N'), { proxy: cutN.area });
   row('iceSExtent', fromLog(ice, (x) => x.sExtent), nsidc('extent', 'S'), { proxy: cutS.extent });

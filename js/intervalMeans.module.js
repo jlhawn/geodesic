@@ -75,7 +75,7 @@ export function createIntervalMeans(model, { fields = MEANS, every = 1, depth = 
   const missing = fields.filter((name) => !availableMeans(model, [name]).length);
   if (missing.length) throw new Error(`the model's frames give no ${missing.join(', ')}`);
   const sampled = !!model.sampleFrame;
-  let sums = {}, daySamples = 0, days = [], partial = offset > 0 && !from, counted = offset, landed = Promise.resolve();
+  let sums = {}, daySamples = 0, days = [], partial = offset > 0 && !from, counted = offset, landed = Promise.resolve(), closedOne = false;
   const asked = sampledFields(fields);
   const add = (got) => {
     for (const name of fields) {
@@ -89,7 +89,8 @@ export function createIntervalMeans(model, { fields = MEANS, every = 1, depth = 
     daySamples++;
   };
   const close = () => {
-    if (daySamples && !partial) {
+    closedOne = !!daySamples && !partial;
+    if (closedOne) {
       days.push({ samples: daySamples, values: Object.fromEntries(fields.map((name) => [name, Float32Array.from(sums[name], (s) => s / daySamples)])) });
       if (days.length > depth) days.shift();
     }
@@ -121,7 +122,7 @@ export function createIntervalMeans(model, { fields = MEANS, every = 1, depth = 
     },
     async latest() {
       await landed;
-      return days.length ? days[days.length - 1] : null;
+      return closedOne ? days[days.length - 1] : null;
     },
     async checkpoint() {
       await landed;
