@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { decodeState } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { createGeography, stateGeography } from '../js/geography.module.js';
-import { edgeSills } from '../js/ocean/layered.module.js';
+import { oceanCells, restingColumns } from '../js/ocean/layered.module.js';
 const KELVIN = 273.15, deg = 180 / Math.PI, RHO_CP = 1025 * 3990;
 const LATS = [-60, -50, -40, -30, -20, -10, 0, 10, 20, 26.5, 30, 40, 50, 60];
 const rows = new Map(); const push = (la, g, atl) => { if (!rows.has(la)) rows.set(la, []); rows.get(la).push([g.V, g.H, atl ? atl.H : NaN]); };
@@ -24,12 +24,12 @@ const f = (x, d = 2, w = 7) => (Number.isFinite(x) ? x.toFixed(d) : '—').padSt
 for (const path of process.argv.slice(2)) {
   const st = await decodeState(new Uint8Array(readFileSync(path)));
   const hybrid = st.ocean.vertical === 'hybrid', ground = stateGeography(st), mesh = stateGrid(st, ground.topography).mesh, C = mesh.nCells, E = mesh.nEdges;
-  const geo = createGeography(mesh, ground.topography, ground.geography), land = geo.land, oc = st.ocean, L = oc.densities.length, { h, u, T } = oc, at = (k, i) => k * C + i;
-  const sea = new Uint8Array(C); for (let i = 0; i < C; i++) { let col = 0; for (let k = 0; k < L; k++) col += h[at(k, i)]; sea[i] = !land[i] && col > 1 ? 1 : 0; }
+  const { water, cellOcean, draft } = oceanCells(C, createGeography(mesh, ground.topography, ground.geography)), oc = st.ocean, L = oc.densities.length, { h, u, T } = oc, at = (k, i) => k * C + i;
+  const sea = new Uint8Array(C); for (let i = 0; i < C; i++) { let col = 0; for (let k = 0; k < L; k++) col += h[at(k, i)]; sea[i] = cellOcean[i] && col > 1 ? 1 : 0; }
   const lat = (i) => mesh.latCell[i] * deg, lon = (i) => mesh.lonCell[i] * deg, { cellsOnEdge, dvEdge } = mesh;
   const D = new Float64Array(C); for (let i = 0; i < C; i++) { let col = 0; for (let k = 0; k < L; k++) col += h[at(k, i)]; D[i] = col - (oc.eta ? oc.eta[i] : 0); }
-  const edgeOcean = new Uint8Array(E); for (let e = 0; e < E; e++) edgeOcean[e] = sea[cellsOnEdge[2 * e]] && sea[cellsOnEdge[2 * e + 1]] ? 1 : 0;
-  const sillEdge = hybrid ? edgeSills(mesh, D, edgeOcean, process.env.SILLS ? geo.edgeSill : null, 50) : null;
+  const edgeOcean = new Uint8Array(E); for (let e = 0; e < E; e++) edgeOcean[e] = water.edgeOcean[e] && sea[cellsOnEdge[2 * e]] && sea[cellsOnEdge[2 * e + 1]] ? 1 : 0;
+  const sillEdge = hybrid ? restingColumns(mesh, Float64Array.from(D, (d, i) => d + draft[i]), draft, edgeOcean, process.env.SILLS ? water.edgeSill : null, 50).sillEdge : null;
   const column = new Float64Array(L);
   const edgeColumn = (e, a, b) => {
     column[0] = 0.5 * (h[a] + h[b]); for (let k = 1; k < L; k++) column[k] = Math.min(h[at(k, a)], h[at(k, b)]);
@@ -42,7 +42,7 @@ for (const path of process.argv.slice(2)) {
   const section = (lat0, west, east) => {
     let V = 0, H = 0, A = 0, TA = 0;
     for (let e = 0; e < E; e++) {
-      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1]; if (!sea[a] || !sea[b]) continue;
+      if (!edgeOcean[e]) continue; const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
       if (!inLon(0.5 * (lon(a) + lon(b)), west, east)) continue;
       const la = lat(a), lb = lat(b); if ((la < lat0) === (lb < lat0)) continue;
       const sign = lb > la ? 1 : -1, col = edgeColumn(e, a, b);
