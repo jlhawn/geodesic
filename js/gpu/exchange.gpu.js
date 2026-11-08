@@ -39,7 +39,7 @@ fn xProfiles(zeta: f32, z: f32, z0m: f32, z0h: f32) -> vec2<f32> {
   let top = zeta * (1.0 + z0m / z);
   return vec2<f32>(log((z + z0m) / z0m) - xPsiM(top) + xPsiM(zeta * z0m / z), log((z + z0m) / z0h) - xPsiH(top) + xPsiH(zeta * z0h / z));
 }
-fn xTransfer(ri: f32, z: f32, z0m: f32, z0h: f32) -> vec2<f32> {
+fn xTransfer(ri: f32, z: f32, z0m: f32, z0h: f32) -> vec3<f32> {
   var f = xProfiles(0.0, z, z0m, z0h);
   var zeta = ri * f.x * f.x / f.y;
   if (ri > 0.0) {
@@ -57,8 +57,9 @@ fn xTransfer(ri: f32, z: f32, z0m: f32, z0h: f32) -> vec2<f32> {
     for (var n = 0; n < X_ITER; n++) { f = xProfiles(zeta, z, z0m, z0h); zeta = ri * f.x * f.x / f.y; }
   }
   f = xProfiles(zeta, z, z0m, z0h);
-  return vec2<f32>(XKARMAN * XKARMAN / (f.x * f.x), XKARMAN * XKARMAN / (f.x * f.y));
+  return vec3<f32>(XKARMAN * XKARMAN / (f.x * f.x), XKARMAN * XKARMAN / (f.x * f.y), zeta);
 }
+fn xHeatProfile(h: f32, zeta: f32, z: f32, z0m: f32, z0h: f32) -> f32 { return log((h + z0m) / z0h) - xPsiH(zeta * (h + z0m) / z) + xPsiH(zeta * z0h / z); }
 fn xAndreas(z0: f32, ustar: f32, viscosity: f32) -> f32 {
   let reynolds = ustar * z0 / viscosity; let l = log(min(1000.0, reynolds));
   var b = AND2;
@@ -89,7 +90,7 @@ fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, sn
   let airQ = IN[S_Q + b];
   let surfaceQ = select(qsat(skin, pi) * (1.0 - X_SEA_REDUCTION * (1.0 - concentration)), select(airQ, airQ + wetness * max(0.0, qsat(skin, pi) - airQ), X_WET_SURFACE), onLand);
   let surfaceV = skin / exS * (1.0 + VIRT * surfaceQ);
-  var ri = 0.0; var c = vec2<f32>(0.0, 0.0);
+  var ri = 0.0; var c = vec3<f32>(0.0, 0.0, 0.0); var z0m = 0.0; var z0h = 0.0;
   var passes = 1;
   if (X_GUSTY) { passes = X_GUST_ITER + 1; }
   for (var sweep = 0; sweep < passes; sweep++) {
@@ -124,11 +125,13 @@ fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, sn
       }
     }
     let lm = XKARMAN / sqrt(blend.drag);
-    let z0m = X_BLEND * exp(-lm); let z0h = X_BLEND * exp(-XKARMAN * XKARMAN / (blend.heat * lm));
+    z0m = X_BLEND * exp(-lm); z0h = X_BLEND * exp(-XKARMAN * XKARMAN / (blend.heat * lm));
     ri = GRAV * z * (airV - surfaceV) / (0.5 * (airV + surfaceV) * speed * speed);
     c = xTransfer(ri, z, z0m, z0h);
   }
   PH[PH_XWIND + i] = speed;
+  let airT = IN[S_TH + b] * D[D_EXM + b];
+  PH[PH_T2M + i] = skin + (airT + GRAV * z / CP - skin) * xHeatProfile(2.0, c.z, z, z0m, z0h) / xHeatProfile(z, c.z, z, z0m, z0h) - GRAV * 2.0 / CP;
   let d = 2.0 / 3.0 * REF_CROP; let rm = 0.123 * REF_CROP; let rh = 0.1 * rm;
   return vec3<f32>(c.x, c.y, REF_KARMAN * REF_KARMAN / (log((z - d) / rm) * log((z - d) / rh)));
 }

@@ -7,7 +7,7 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN } from '../js/physics/exchange.module.js';
+import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN, heatProfile, profileTemperature } from '../js/physics/exchange.module.js';
 import { PREVIOUS_LEVELS, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
@@ -36,6 +36,19 @@ test('the stability functions are the IFS\'s Paulson and Holtslag–De Bruin for
   close(psiHeat(2), -8.020764957086806, 1e-12, 'Ψh(2)');
   close((psiMomentum(1e-6) - psiMomentum(0)) / 1e-6, -5, 1e-4, 'stable slope at neutral');
   assert.ok(Math.abs(psiMomentum(0)) < 1e-12 && Math.abs(psiHeat(0)) < 1e-12);
+});
+
+test('the 2 m temperature\'s profile of dry static energy meets the surface\'s at h + z0m = z0h and the lowest layer\'s air at its height, and lies between them at 2 m', () => {
+  const g = 9.80616, cp = 1004.64, z = 21;
+  for (const [zeta, z0m, z0h, surfaceT, airT] of [[-2, 0.1, 1e-3, 302, 299], [-0.05, 2e-4, 3e-5, 300.5, 299.8], [0, 2, 2, 290, 289], [0.4, 0.013, 1.3e-4, 271, 274], [3, 1.3e-3, 2e-5, 250, 258]]) {
+    const where = `ζ ${zeta}, z0m ${z0m}, z0h ${z0h}`, surface = z0h - z0m;
+    assert.ok(Math.abs(heatProfile(surface, zeta, z, z0m, z0h)) < 1e-12, where);
+    close(profileTemperature(surface, surfaceT, airT, z, zeta, z0m, z0h, g, cp) + g * surface / cp, surfaceT, 1e-12, `${where}: the surface's dry static temperature`);
+    close(profileTemperature(z, surfaceT, airT, z, zeta, z0m, z0h, g, cp), airT, 1e-12, `${where}: the lowest layer's air`);
+    const s2 = profileTemperature(2, surfaceT, airT, z, zeta, z0m, z0h, g, cp) + 2 * g / cp, s1 = airT + g * z / cp;
+    assert.ok((s2 - surfaceT) * (s1 - s2) > 0, `${where}: 2 m at ${s2} between ${surfaceT} and ${s1}`);
+    if (zeta === 0) close(s2, surfaceT + (s1 - surfaceT) * Math.log((2 + z0m) / z0h) / Math.log((z + z0m) / z0h), 1e-12, `${where}: the neutral log profile`);
+  }
 });
 
 test('the bulk Richardson number gives back the Obukhov length it came from, and its coefficients', () => {
@@ -123,17 +136,19 @@ for (const [name, levels] of [['cam26', PREVIOUS_LEVELS], ['bl48', sigmaInterfac
   const gpu = prepare(await createGpuModel(new Grid(16), { topography, levels }));
   cpu.step(900); await gpu.step(900); await gpu.settle();
   const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells;
-  const [drag, heat, reference, evaporation, surfaceFlux] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['DRAG', 'HEATX', 'REFX', 'EVAP', 'SFLUX'].map((name) => ({ offset: PH[name], length: C })));
+  const [drag, heat, reference, evaporation, surfaceFlux, t2m] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['DRAG', 'HEATX', 'REFX', 'EVAP', 'SFLUX', 'T2M'].map((name) => ({ offset: PH[name], length: C })));
   const { land, iceSheet } = cpu.geography;
   const classOf = (i) => (land[i] ? (iceSheet[i] ? 'ice sheet' : cpu.land.snow[i] > 30 ? 'snow' : cpu.land.canopy[i] > 0.5 ? 'forest' : 'other land') : cpu.state[6][i] > 0 ? 'sea ice' : 'open sea');
   const worst = {};
   for (let i = 0; i < C; i++) {
-    const k = classOf(i), w = (worst[k] ??= { cells: 0, drag: 0, heat: 0, reference: 0, evaporation: 0, flux: 0, cd: 0 });
+    const k = classOf(i), w = (worst[k] ??= { cells: 0, drag: 0, heat: 0, reference: 0, evaporation: 0, flux: 0, cd: 0, t2m: 0, finite: 0 });
     w.cells++;
     w.cd += cpu.exchange.drag[i];
     w.drag = Math.max(w.drag, Math.abs(drag[i] - cpu.exchange.drag[i]) / Math.max(cpu.exchange.drag[i], 1e-5));
     w.heat = Math.max(w.heat, Math.abs(heat[i] - cpu.exchange.heat[i]) / Math.max(cpu.exchange.heat[i], 1e-5));
     w.reference = Math.max(w.reference, Math.abs(reference[i] / cpu.exchange.reference[i] - 1));
+    w.t2m = Math.max(w.t2m, Math.abs(t2m[i] - cpu.exchange.temperature2m[i]));
+    if (Number.isFinite(t2m[i]) && Number.isFinite(cpu.exchange.temperature2m[i])) w.finite++;
     w.evaporation = Math.max(w.evaporation, (Math.abs(evaporation[i] - cpu.radiation.evaporation[i]) * 2.5e6 - 1e-5 * Math.abs(cpu.radiation.evaporation[i]) * 2.5e6));
     w.flux = Math.max(w.flux, Math.abs(surfaceFlux[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
   }
@@ -141,6 +156,8 @@ for (const [name, levels] of [['cam26', PREVIOUS_LEVELS], ['bl48', sigmaInterfac
     console.log(`${k}: ${w.cells} cells, mean C_D ${(w.cd / w.cells * 1e3).toFixed(3)}e-3; engines apart: C_D ${w.drag.toExponential(1)} and C_H ${w.heat.toExponential(1)} relative to the coefficient or 1e-5 if larger, reference ${w.reference.toExponential(1)} relative; latent heat ${w.evaporation.toExponential(1)}, net surface flux ${w.flux.toExponential(1)} W/m² beyond 1e-5 of each cell's own`);
     assert.ok(w.drag < bound && w.heat < bound && w.reference < bound / 20, `${k} coefficients against ${bound.toExponential(1)}`);
     assert.ok(w.evaporation < 0.05 && w.flux < 0.1, `${k} fluxes`);
+    console.log(`${k}: the 2 m temperature ${w.t2m.toExponential(1)} K apart, ${w.finite} of ${w.cells} finite on both`);
+    assert.ok(w.finite === w.cells && w.t2m < 2e-3, `${k} 2 m temperature`);
   }
   for (const k of ['ice sheet', 'snow', 'forest', 'other land', 'sea ice', 'open sea']) assert.ok(worst[k] && worst[k].cells > 0, `the grid has ${k}`);
 });

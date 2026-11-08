@@ -71,6 +71,13 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  * z0m = 0.123 h, z0h = 0.1 z0m, κ 0.41), which the radiation's reference
  * evapotranspiration takes.
  *
+ * `temperature2m` is the air's temperature 2 m above the ground as the IFS
+ * diagnoses its 2 m temperature: the dry static energy cp T + g h runs
+ * from the surface's, cp T_s, to the lowest layer's at h = z along the heat
+ * profile ln((h + z0m)/z0h) − ψh(ζ (h + z0m)/z) + ψh(ζ z0h/z) of the step's
+ * ζ and the cell's blended roughness, which reaches the surface's value at
+ * h + z0m = z0h. It is NaN under 'fixed', which has no profile.
+ *
  * exchange 'fixed' gives constant coefficients: the sea's dragCoefficient
  * (SEA_DRAG) and the land's (LAND_DRAG) for momentum, heat and vapour
  * alike. An option set that names either coefficient and no `exchange` is
@@ -154,6 +161,14 @@ export function transfer(ri, z, z0m, z0h, iterations = EXCHANGE_DEFAULTS.iterati
   return out;
 }
 
+export function heatProfile(height, zeta, z, z0m, z0h) {
+  return Math.log((height + z0m) / z0h) - psiHeat(zeta * (height + z0m) / z) + psiHeat(zeta * z0h / z);
+}
+
+export function profileTemperature(height, surfaceT, airT, z, zeta, z0m, z0h, g, cp) {
+  return surfaceT + (airT + g * z / cp - surfaceT) * heatProfile(height, zeta, z, z0m, z0h) / heatProfile(z, zeta, z, z0m, z0h) - g * height / cp;
+}
+
 export function andreasScalar(z0, ustar, viscosity) {
   const reynolds = ustar * z0 / viscosity, l = Math.log(Math.min(1000, reynolds));
   const [, b0, b1, b2] = ANDREAS.find(([limit]) => reynolds <= limit) ?? ANDREAS[2];
@@ -219,10 +234,12 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
   const fixed = mode === 'fixed';
   const heatBuffer = fixed ? dragBuffer : shared('heat'), referenceBuffer = fixed ? dragBuffer : shared('reference');
   const heat = fixed ? drag : new Float64Array(heatBuffer), reference = fixed ? drag : new Float64Array(referenceBuffer);
+  const temperature2mBuffer = shared('temperature2m'), temperature2m = new Float64Array(temperature2mBuffer);
   const o = exchangeOptions(options);
   const { roughness: { forest, grass, bare, snow: snowRoughness }, snowCover, iterations, convectiveGust, gustIterations } = o;
   const gusty = !fixed && !!convectiveGust, wetSurface = o.landHumidity === 'wetness', seaReduction = 1 - o.seaHumidity;
   if (!(buffers && buffers.drag)) {
+    temperature2m.fill(NaN);
     for (let i = 0; i < C; i++) {
       drag[i] = landMask && landMask[i] ? landDrag : seaDrag;
       if (!fixed) { heat[i] = drag[i]; reference[i] = drag[i]; }
@@ -285,9 +302,10 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
     drag[i] = coefficients.drag;
     heat[i] = coefficients.heat;
     reference[i] = referenceCoefficient(z, o.referenceCrop);
+    temperature2m[i] = profileTemperature(2, skin, theta[b] * exnerLayer[b], z, coefficients.zeta, blend.momentum, blend.heat, g, cp);
     last.z = z; last.ri = ri; last.momentum = blend.momentum; last.heat = blend.heat;
     return last;
   }
 
-  return { mode, fixed, gusty, drag, heat, reference, wind, cell, options: o, shared: { drag: dragBuffer, heat: heatBuffer, reference: referenceBuffer, wind: windBuffer } };
+  return { mode, fixed, gusty, drag, heat, reference, wind, temperature2m, cell, options: o, shared: { drag: dragBuffer, heat: heatBuffer, reference: referenceBuffer, wind: windBuffer, temperature2m: temperature2mBuffer } };
 }

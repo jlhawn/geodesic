@@ -55,6 +55,7 @@ export const FIELDS = {
   precipitation: 'precipitation over the model\'s last step as a rate, mm/d',
   latentHeat: 'surface latent heat flux, the evaporation times the latent heat of vaporization, W/m², positive upward',
   sensibleHeat: 'surface sensible heat flux, W/m², positive upward',
+  t2m: 'air temperature 2 m above the ground, from the surface layer\'s profile between the skin and the lowest layer as the IFS diagnoses its 2 m temperature (NaN under the fixed exchange), K',
   zonalStress: 'eastward surface stress of the air on the surface, reconstructed at the cell from the edges\' as the wind is, N/m²',
   meridionalStress: 'northward surface stress of the air on the surface, reconstructed at the cell from the edges\' as the wind is, N/m²',
 };

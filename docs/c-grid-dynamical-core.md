@@ -9365,6 +9365,14 @@ FAO-56's own reference grass at z₁ (eq. 4: h 0.12 m, d 2/3 h, z₀m
 0.123 h, z₀h 0.1 z₀m and FAO-56's κ 0.41; 2.45·10⁻³ at 20 m, 208/u₂ at
 2 m).
 
+The 2 m temperature (`t2m`, a frame field and one of the interval
+means) is diagnosed as the IFS diagnoses ERA5's: the dry static energy
+c_p T + g h, interpolated at h = 2 m between the skin's and the lowest
+layer's along the heat profile ln((h + z₀m)/z₀h) − ψh(ζ (h + z₀m)/z₁) +
+ψh(ζ z₀h/z₁) of the step's ζ and the cell's blended z₀m and z₀h. Both
+engines compute it in the exchange; under the fixed exchange, which has
+no profile, it is NaN.
+
 Three consequences built with it, on both engines:
 - The surface drag is the lower boundary of the boundary layer's
   implicit edge solve (`implicitDrag`, the default under roughness): a
