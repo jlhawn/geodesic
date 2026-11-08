@@ -3,7 +3,7 @@ import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FAC
 import { sunDirection, sunDistance, DEFAULT_ORBIT, DEFAULT_SHORTWAVE, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { createAerosolSampler, loadAerosol, AEROSOL_FIELDS, DEFAULT_AEROSOL } from '../aerosol.module.js';
-import { physicsConstants, physicsFunctions, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, boundaryLayerDiagnosis, relativeWindKernels, virtualDensityKernels, bergeronRain, deepStoreRain, midLevelPlume, omegaStore, rainEvaporationOptions, plumeRetype, shallowPlumeRetype, PHYSICS_PASSES, LAYERED_PASSES, layeredPass, LAYERED_SLOTS, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
+import { physicsConstants, physicsFunctions, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, boundaryLayerDiagnosis, relativeWindKernels, virtualDensityKernels, bergeronRain, deepStoreRain, midLevelPlume, sentBackMidLevel, omegaStore, rainEvaporationOptions, plumeRetype, shallowPlumeRetype, PHYSICS_PASSES, LAYERED_PASSES, layeredPass, LAYERED_SLOTS, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS, LATENT_HEAT } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, SURFACE_VERTICAL_SIGMA } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
@@ -1056,6 +1056,7 @@ export async function createGpuCore(mesh, {
   kernelBodies.pblDiagnose = boundaryLayerDiagnosis(kernelBodies.pblDiagnose, phys);
   if (deepOn) kernelBodies.adjustRain = deepStoreRain(kernelBodies.adjustRain);
   if (phys.midLevelConvection && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = midLevelPlume(kernelBodies[name], !!phys.convectionRetype);
+  if (phys.midLevelConvection && phys.shallowRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = sentBackMidLevel(kernelBodies[name], !!phys.convectionRetype);
   if (phys.midLevelConvection && phys.convectionType === 'testParcel') kernelBodies.cellTendency = omegaStore(kernelBodies.cellTendency);
   if (lake) Object.assign(kernelBodies, lakeKernels(kernelBodies, { held: heldRadiation, skin: skinOn }));
   for (const [name, raw] of Object.entries(kernelBodies)) {

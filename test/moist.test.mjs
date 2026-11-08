@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { saturationHumidity, LATENT_HEAT, createMoistPhysics, cloudSaturation, criticalHumidityAt, LIQUID_TEMPERATURE, ICE_TEMPERATURE, MOIST_DEFAULTS, rainShareBelow } from '../js/physics/moist.module.js';
+import { saturationHumidity, LATENT_HEAT, createMoistPhysics, cloudSaturation, criticalHumidityAt, LIQUID_TEMPERATURE, ICE_TEMPERATURE, MOIST_DEFAULTS, rainShareBelow, stratiformRainEvaporation, KESSLER_EVAPORATION } from '../js/physics/moist.module.js';
 
 const model = createModel(new Grid(16));
 const { core, moist } = model;
@@ -139,18 +139,19 @@ test('the rain\'s precipitating share is the maximum-random overlap of the cloud
   assert.ok(Math.abs(rainShareBelow(0.6, 0, 0) - 0.6) < 1e-15 && Math.abs(rainShareBelow(1, 0, 1) - 1) < 1e-15);
 });
 
-test("under rainCover 'overlap' rain that forms beneath an ice-only layer carries the share of the cloud above it, as cloudsc, which counts the layer's ice in ZQPRETOT, does", () => {
+test("under rainCover 'overlap' rain that forms beneath an ice-only layer, or a clear layer below one under falling ice, carries the share of the cloud above it with or without iceFall, as cloudsc, which counts the layer's ice in ZQPRETOT, does", () => {
   const saturated = { qs: 0, slope: 0, liquid: 1 }, D = MOIST_DEFAULTS, dt = 900;
   let mesh = null;
-  const firstClear = (options, iceCover, mixCover) => {
+  const firstClear = (options, iceCover, mixCover, gap = 0) => {
     const m = createModel(mesh ?? new Grid(16), { ocean: false, moist: { rainEvaporationLaw: 'kessler', ...options } });
     mesh = m.mesh;
     const { K, C, sigmaMid, exnerLayer, cp } = m.core.diagnostics;
     const pi = new Float64Array(C).fill(101325), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
     m.core.diagnose(pi, theta);
     const T = Array.from(sigmaMid, (s) => Math.max(200, 300 + 6.5e-3 * 7000 * Math.log(s)));
-    const mix = T.findIndex((t) => t > 278), ice = mix - 1;
+    const mix = T.findIndex((t) => t > 278), ice = mix - 1 - gap;
     T[ice] = 230;
+    if (gap) T[mix - 1] = 230;
     for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
       theta[k * C + i] = T[k] / exnerLayer[k * C + i];
       q[k * C + i] = 0.9 * saturationHumidity(T[k], pi[i] * sigmaMid[k]);
@@ -171,6 +172,61 @@ test("under rainCover 'overlap' rain that forms beneath an ice-only layer carrie
     const carried = rainShareBelow(rainShareBelow(0, iceCover, 0), mixCover, iceCover);
     const overlap = firstClear({}, iceCover, mixCover), shared = firstClear({ rainCover: carried }, iceCover, mixCover);
     assert.ok(shared > 0 && Math.abs(overlap - shared) <= 1e-9 * shared, `ice cover ${iceCover} over liquid cover ${mixCover}: the first clear layer below gains ${overlap} kg/kg, and ${shared} under rainCover ${carried}`);
+  }
+  for (const [iceCover, mixCover] of [[0.5, 0.5], [0.3, 0.6]]) {
+    const carried = 1 - (1 - iceCover) * (1 - mixCover);
+    const overlap = firstClear({}, iceCover, mixCover, 1), shared = firstClear({ rainCover: carried }, iceCover, mixCover, 1);
+    assert.ok(shared > 0 && Math.abs(overlap - shared) <= 1e-9 * shared, `ice cover ${iceCover} a clear layer at 230 K above liquid cover ${mixCover}, under falling ice: the first clear layer below gains ${overlap} kg/kg, and ${shared} under the random overlap ${carried}`);
+  }
+  for (const [iceCover, mixCover] of [[0.5, 0.5], [0.8, 0.4], [0.3, 0.6]]) {
+    const carried = rainShareBelow(rainShareBelow(0, iceCover, 0), mixCover, iceCover);
+    const overlap = firstClear({ iceFall: 0 }, iceCover, mixCover), shared = firstClear({ iceFall: 0, rainCover: carried }, iceCover, mixCover);
+    assert.ok(shared > 0 && Math.abs(overlap - shared) <= 1e-9 * shared, `with iceFall 0, ice cover ${iceCover} over liquid cover ${mixCover}: the first clear layer below gains ${overlap} kg/kg, and ${shared} under rainCover ${carried}`);
+  }
+});
+
+test("under rainCover 'overlap' a cloud beneath a clear layer in which all the rain falling into it evaporated resets the share to max(0.1, a), as cloudsc resets ZCOVPTOT where ZQPRETOT, the flux into the layer, is zero", () => {
+  const saturated = { qs: 0, slope: 0, liquid: 1 }, D = MOIST_DEFAULTS, dt = 900;
+  let mesh = null;
+  const lowerClear = (options, upperCover, lowerCover) => {
+    const m = createModel(mesh ?? new Grid(16), { ocean: false, moist: { rainEvaporationLaw: 'kessler', ...options } });
+    mesh = m.mesh;
+    const { K, C, sigmaMid, exnerLayer, cp } = m.core.diagnostics;
+    const pi = new Float64Array(C).fill(101325), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
+    m.core.diagnose(pi, theta);
+    const T = Array.from(sigmaMid, (s) => Math.max(200, 300 + 6.5e-3 * 7000 * Math.log(s)));
+    const low = T.findIndex((t) => t > 288), gap = low - 1, high = low - 2;
+    for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
+      theta[k * C + i] = T[k] / exnerLayer[k * C + i];
+      q[k * C + i] = (k === gap ? 0.05 : 0.9) * saturationHumidity(T[k], pi[i] * sigmaMid[k]);
+    }
+    const width = (k) => {
+      const p = pi[0] * sigmaMid[k];
+      cloudSaturation(T[k], p, D.iceSaturation, D.liquidTemperature, D.iceTemperature, saturated);
+      return (1 - criticalHumidityAt(p, pi[0], D.surfaceCriticalHumidity, D.topCriticalHumidity, D.criticalExponent)) * saturated.qs / (1 + LATENT_HEAT * saturated.slope / cp);
+    };
+    qc[high * C] = upperCover * upperCover * width(high);
+    qc[low * C] = lowerCover * lowerCover * width(low);
+    m.core.diagnoseColumn(0, pi, theta, q, qc);
+    const gapBefore = q[gap * C], before = q[(low + 1) * C];
+    m.moist.autoconvertColumn(0, pi, theta, q, qc, dt);
+    return { gap: q[gap * C] - gapBefore, gained: q[(low + 1) * C] - before };
+  };
+  for (const [upperCover, lowerCover] of [[0.2, 0.5], [0.2, 0.3]]) {
+    const reset = Math.max(0.1, lowerCover);
+    const overlap = lowerClear({}, upperCover, lowerCover), shared = lowerClear({ rainCover: reset }, upperCover, lowerCover);
+    assert.ok(overlap.gap > 0 && shared.gained > 0 && Math.abs(overlap.gained - shared.gained) <= 1e-9 * shared.gained, `upper cover ${upperCover}, its rain evaporated in the clear layer above lower cover ${lowerCover}: the first clear layer below gains ${overlap.gained} kg/kg, and ${shared.gained} under rainCover ${reset}`);
+  }
+});
+
+test('under evaporationInCloud rain over a partly cloudy layer evaporates from the clear-sky humidity q_e = (q - a q_s)/(1 - a), floored at 0 and capped at q_s, over the clear share, with 1/(1 - a) in the Kessler exponent', () => {
+  const law = (rainEvaporationLaw) => ({ rainEvaporation: 1, rainEvaporationLaw, rainEvaporationCeiling: null, rainCover: 'overlap' });
+  const rain = 0.05, dt = 900, mass = 300, qs = 0.01, gamma = 1.5, sigma = 0.8, share = 0.7, cover = 0.5, clear = share - cover;
+  const rate = KESSLER_EVAPORATION.rate * Math.pow(Math.sqrt(sigma) * (rain / dt) / (share * KESSLER_EVAPORATION.flux), KESSLER_EVAPORATION.exponent), shaft = KESSLER_EVAPORATION.cloudsc * rate;
+  for (const [q, clearQ] of [[0.008, 0.006], [0.004, 0], [0.012, qs]]) {
+    const kessler = stratiformRainEvaporation(law('kessler'), rain, dt, mass, qs, q, gamma, sigma, share, cover), cloudsc = stratiformRainEvaporation(law('cloudsc'), rain, dt, mass, qs, q, gamma, sigma, share, cover);
+    const kesslerExpected = (qs - clearQ) * (1 - cover) / (1 + gamma) * mass * -Math.expm1(-clear * rate * (1 + gamma) * dt / (1 - cover)), cloudscExpected = clear * shaft * (qs - clearQ) * dt / (1 + shaft * dt * (1 + gamma)) * mass;
+    assert.ok(clearQ < qs ? kesslerExpected < rain && Math.abs(kessler / kesslerExpected - 1) < 1e-12 && Math.abs(cloudsc / cloudscExpected - 1) < 1e-12 : kessler === 0 && cloudsc === 0, `q ${q} under cover ${cover} (q_e ${clearQ}): 'kessler' ${kessler} against ${kesslerExpected}, 'cloudsc' ${cloudsc} against ${cloudscExpected}`);
   }
 });
 

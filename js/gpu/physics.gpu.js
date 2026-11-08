@@ -2852,12 +2852,10 @@ const MID_LEVEL_PLUME = [
       let midEnv = plumeEnv(i, k);
       let midLcl = condensationLevel((midEnv.x - GRAV * plumeZ(i, k)) / CP, midEnv.y, layerP(pi, k));
       if (!(midLcl.y > pi * LV[L_SL + 0])) { continue; }
-      let midFirst = plumeState(midEnv.x, midEnv.y, plumeZ(i, k - 1), layerP(pi, k - 1), 0.0);
-      if (!(midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - plumeT(i, k - 1) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + (k - 1) * C + i])) > -MID_BUOYANCY)) { continue; }
-      var midBase = k;
-      while (midBase > 1 && pi * LV[L_SU + midBase] > midLcl.y) { midBase -= 1; }
-      let midDrive = max(0.0, max(-0.5 * (D[D_OMG + (midBase - 1) * C + i] + D[D_OMG + midBase * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, midBase) - ground))));
-      if (min(open * midDrive, CU_LOSS * layerDp(pi, k) / (GRAV * dt)) > CU_FLOOR) { kb = k; lcl = midLcl; break; }
+      let midZh = upperInterface(i, k); let midPh = pi * LV[L_SU + k]; let midQsAbove = qsat(plumeT(i, k - 1), layerP(pi, k - 1));
+      let midTh = saturatedTemperature(max(CP * plumeT(i, k - 1) + GRAV * plumeZ(i, k - 1), CP * plumeT(i, k) + GRAV * plumeZ(i, k)) - GRAV * midZh + LHEAT * midQsAbove, midPh, plumeT(i, k - 1));
+      let midFirst = plumeState(midEnv.x, midEnv.y, midZh, midPh, 0.0);
+      if (midFirst.y > 0.0 && midFirst.x * (1.0 + PARCEL_VIRT * (midEnv.y - midFirst.y)) - midTh * (1.0 + PARCEL_VIRT * max(0.0, min(max(0.0, IN[S_Q + (k - 1) * C + i]), midQsAbove) + qsat(midTh, midPh) - midQsAbove)) > -MID_BUOYANCY) { kb = k; lcl = midLcl; break; }
     }
     if (kb < 0) { return shallowRain; }
     let env = plumeEnv(i, kb);
@@ -2865,11 +2863,12 @@ const MID_LEVEL_PLUME = [
   }
 `],
   ['epsilon = IFS_EPS * (IFS_RH - rh) * ratio * ratio * ratio; }\n', 'epsilon = IFS_EPS * select(1.0, MID_FE, middle) * (IFS_RH - rh) * ratio * ratio * ratio; }\n      if (middle) { detrained = select(0.0, epsilon * (IFS_DRH - rh), mixes); }\n'],
+  ['      else if (buoyancy > 0.0) { flux[k] = flux[k + 1] * exp((epsilon - detrained) * depth); }', '      else if (buoyancy > 0.0 || (middle && k == base - 1)) { flux[k] = flux[k + 1] * exp((epsilon - detrained) * depth); }'],
   ['PL_BY_DEPTH))) { return cumulusColumn(i, pi, dt); }', 'PL_BY_DEPTH))) { if (middle) { return 0.0; } return cumulusColumn(i, pi, dt); }'],
   ['  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));\n', `  var drive = max(shallowBase, gate * relaxed);
   if (middle) {
     let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
-    drive = max(0.0, max(-0.5 * (D[D_OMG + (base - 1) * C + i] + D[D_OMG + base * C + i]) / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, base) - ground))));
+    drive = max(0.0, max(-D[D_OMG + source * C + i] / GRAV, (PH[PH_SH + i] + LHEAT * PH[PH_EVAP + i]) / (GRAV * (upperInterface(i, source) - ground))));
   }
   var baseFlux = min(open * drive, CU_LOSS * mass / (GRAV * dt));
 `],
@@ -2949,7 +2948,10 @@ fn shallowCloudDepth(i: i32, pi: f32) -> f32 {
   if (!(sourceQ > 0.0)) { return 0.0; }
   let lcl = condensationLevel((sourceS - GRAV * plumeZ(i, bottom)) / CP, sourceQ, layerP(pi, bottom));
   if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
-  var s = sourceS; var w = sourceQ; var cloudy = false; var guess = 0.0; var w2 = PL_W0 * PL_W0; var share = 1.0; var reached = 1;
+  let lift = PH[PH_BUOY + i] * max(0.0, PH[PH_DEPTH + i] - plumeZ(i, bottom));
+  let velocity = max(select(0.0, pow(lift, 1.0 / 3.0), lift > 0.0), CU_FRIC * PH[PH_USTAR + i]);
+  if (!(velocity > 0.0)) { return 0.0; }
+  var s = sourceS; var w = sourceQ; var base = 0; var guess = 0.0; var w2 = velocity * velocity; var share = 1.0; var reached = 1;
   let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
   for (var k = source - 1; k >= 1; k--) {
     let pk = layerP(pi, k);
@@ -2963,8 +2965,12 @@ fn shallowCloudDepth(i: i32, pi: f32) -> f32 {
     guess = mid.x;
     let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
     let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - plumeT(i, k) * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * layerDp(pi, k) / pk;
-    if (mid.y > 0.0) { cloudy = true; }
-    if (cloudy) {
+    if (base == 0 && mid.y > 0.0) { base = k + 1; w2 = PL_W0 * PL_W0; }
+    if (base == 0) {
+      let rise = 2.0 * PL_DRAG * epsilon * (above - below);
+      w2 = w2 * exp(-rise) + 2.0 * PL_ACC * work * select(1.0, relaxedFraction(rise) / rise, rise > 0.0);
+      if (!(w2 > 0.0)) { return 0.0; }
+    } else {
       if (!(work > 0.0)) {
         if (CU_KINETIC) {
           if (!(work < 0.0)) { share = 1.0; }
@@ -2997,9 +3003,7 @@ fn shallowCloudDepth(i: i32, pi: f32) -> f32 {
       }
     }
   }
-  if (!cloudy) { return 0.0; }
-  var base = source;
-  while (base > 1 && !(pi * LV[L_SU + base] <= lcl.y)) { base--; }
+  if (base == 0) { return 0.0; }
   return pi * (LV[L_SU + base] - LV[L_SU + reached]);
 }
 `;
@@ -3011,8 +3015,15 @@ const SHALLOW_RETYPE = [['  if (!typed) { return cumulusColumn(i, pi, dt); }\n',
     lcl = condensationLevel((sourceS - GRAV * surfaceZ) / CP, sourceQ, surfaceP);
   }
   if (!typed) { return cumulusColumn(i, pi, dt); }
-`], ['  if (!cloudy || top < 1 || !(PL_PARCEL ||', '  if (deepened && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||']];
+`], ['  if (!cloudy || top < 1 || !(PL_PARCEL ||', '  if (deepened && cloudy && top >= 1 && !(pi * (LV[L_SU + base] - LV[L_SU + top + 1]) > DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||'],
+  ['upS = select(belowS / belowMass, sourceS, PL_LOWEST); upQ = select(belowQ / belowMass, sourceQ, PL_LOWEST);', 'upS = select(belowS / belowMass, sourceS, select(PL_LOWEST, CU_LOWEST, deepened)); upQ = select(belowQ / belowMass, sourceQ, select(PL_LOWEST, CU_LOWEST, deepened));']];
 export const shallowPlumeRetype = (body) => SHALLOW_DEPTH_WGSL + replaceOnce(SHALLOW_RETYPE, body, 'shallow re-typing');
+const SENT_BACK = [
+  ['  var deepened = false;\n  if (!typed && lcl.y', '  for (var retypePass = 0; retypePass < 2; retypePass++) {\n  var deepened = false;\n  if (retypePass == 0 && !typed && lcl.y'],
+  ['DEEP_DEPTH)) { return cumulusColumn(i, pi, dt); }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||', 'DEEP_DEPTH)) { typed = false; continue; }\n  if (!cloudy || top < 1 || !(PL_PARCEL ||'],
+  ['  cuShallowRain = shallowRain;\n  return fallen;\n}\nfn staticEnergy(', '  cuShallowRain = shallowRain;\n  return fallen;\n  }\n  return 0.0;\n}\nfn staticEnergy('],
+];
+export const sentBackMidLevel = (body, retype = false) => replaceOnce(retype ? [...SENT_BACK, ['if (PL_RETYPE && !middle && cloudy && top >= 1', 'if (PL_RETYPE && !middle && !deepened && cloudy && top >= 1']] : SENT_BACK, body, 'mid-level after the depth rule');
 export function midLevelPlume(body, retype = false) {
   const text = replaceOnce(MID_LEVEL_PLUME, body, 'mid-level');
   return `const MID_FE: f32 = ${wgslFloat(MID_LEVEL.entrainment)}; const MID_RH: f32 = ${wgslFloat(MID_LEVEL.humidity)}; const MID_HEIGHT: f32 = ${wgslFloat(MID_LEVEL.height)}; const MID_BUOYANCY: f32 = ${wgslFloat(MID_LEVEL.buoyancy)};\n` + (retype ? replaceOnce([[RETYPE_TEST, 'if (PL_RETYPE && !middle && cloudy && top >= 1']], text, 'mid-level retype exemption') : text);

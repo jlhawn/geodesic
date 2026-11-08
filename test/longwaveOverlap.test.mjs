@@ -8,7 +8,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { STEFAN_BOLTZMANN } from '../js/physics/radiation.module.js';
+import { STEFAN_BOLTZMANN, TRACE_CHAIN_FLOOR } from '../js/physics/radiation.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { encodeState } from '../js/stateFile.module.js';
 import { PREVIOUS_RADIATION, PREVIOUS_MOIST } from './helpers/previousDefaults.mjs';
@@ -131,5 +131,17 @@ test('with traceCloudPath a layer whose cloud water is a trace enters the longwa
   assert.ok(untouched === C, `${C - untouched} columns with no trace changed`);
   assert.ok(cliff > 0.01 && kept < 1e-3 * cliff, `the trace moves the OLR by ${cliff} W/m² without the option, ${kept} with it`);
   assert.ok(traced.trace.closure < 1e-11 * traced.trace.scale, `closure ${traced.trace.closure} W/m²`);
+  for (const x of gaps) qc[x] = 1e-19;
+  const deeper = columns(model, trace);
+  let floored = 0, flooredDeeper = 0;
+  for (let i = 0; i < C; i++) { floored += Math.abs(traced.trace.outgoing[i] - zero.trace.outgoing[i]); flooredDeeper += Math.abs(deeper.outgoing[i] - zero.trace.outgoing[i]); }
+  assert.ok(floored > 0 && Math.abs(flooredDeeper / floored - 1) < 1e-2, `below TRACE_CHAIN_FLOOR the chain cover stops at 1e-6, so the trace's OLR effect no longer shrinks with W: summed over the columns ${floored} W/m² at 1e-15 kg/kg and ${flooredDeeper} at 1e-19`);
   assert.throws(() => columns(model, { traceCloudPath: 2e-3 }), /traceCloudPath must be null or an in-cloud water path/);
+});
+
+test('the GPU kernels carry the trace-chain floor as one literal that rounds to TRACE_CHAIN_FLOOR in f32', async () => {
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  const literals = [...physicsConstants({ ...PHYSICS_DEFAULTS, R: 287 }).matchAll(/const TRACE_FLOOR: f32 = ([^;]+);/g)].map((m) => m[1]);
+  assert.ok(literals.length === 1 && Math.fround(Number(literals[0])) === Math.fround(TRACE_CHAIN_FLOOR), `TRACE_FLOOR literals ${JSON.stringify(literals)} against TRACE_CHAIN_FLOOR ${TRACE_CHAIN_FLOOR}, ${Math.fround(TRACE_CHAIN_FLOOR)} in f32`);
 });

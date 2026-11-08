@@ -451,13 +451,14 @@ test('with traceCloudPath a trace of cloud water between two cloudy runs of laye
   traced.core.diagnose(pi, theta, q, qc);
   const { exnerLayer, sigmaMid } = traced.core.diagnostics;
   let gaps = 0;
+  const traceCells = [];
   for (let i = 0; i < C; i += 2) {
     let highest = -1, lowest = -1;
     for (let k = 0; k < K; k++) if (qc[k * C + i] > 0) { if (highest < 0) highest = k; lowest = k; }
     for (let k = highest + 1; k < lowest; k++) {
       const x = k * C + i;
       if (qc[x] > 0) continue;
-      q[x] = 0.97 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]); qc[x] = Math.fround(1e-12); gaps++;
+      q[x] = 0.97 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]); qc[x] = Math.fround(1e-12); gaps++; traceCells.push(x);
     }
   }
   const plain = await physicsHeating(traced, {}), trace = await physicsHeating(traced, { traceCloudPath: 1e-6 });
@@ -477,6 +478,20 @@ test('with traceCloudPath a trace of cloud water between two cloudy runs of laye
   assert.ok(gaps > 0 && moved > 0.01, `${gaps} trace layers; the option moves the OLR by ${moved} W/m2`);
   assert.ok(engines < 1e-5 * scale && change < 1e-5 * scale, `layer heating differs by ${engines} K/day, its change by ${change}, against ${scale}`);
   assert.ok(olr < 2e-5 * 300 && olrChange < 2e-5 * 300, `OLR apart by ${olr}, its change by ${olrChange} W/m2`);
+  for (const x of traceCells) qc[x] = Math.fround(1e-22);
+  const floored = await physicsHeating(traced, { traceCloudPath: 1e-6 });
+  let flooredOlr = 0, flooredHeating = 0;
+  for (let i = 0; i < C; i++) {
+    flooredOlr = Math.max(flooredOlr, Math.abs(floored.cpuOutgoing[i] - floored.gpuOutgoing[i]));
+    for (let k = 0; k < K - 1; k++) flooredHeating = Math.max(flooredHeating, Math.abs(floored.cpu[k * C + i] - floored.gpu[k * C + i]));
+  }
+  for (const x of traceCells) qc[x] = 0;
+  const bare = await physicsHeating(traced, { traceCloudPath: 1e-6 });
+  let cpuShift = 0, gpuShift = 0;
+  for (let i = 0; i < C; i++) { cpuShift += floored.cpuOutgoing[i] - bare.cpuOutgoing[i]; gpuShift += floored.gpuOutgoing[i] - bare.gpuOutgoing[i]; }
+  console.log(`floored trace: the OLR summed over the columns shifts by ${cpuShift.toExponential(3)} W/m2 on the CPU and ${gpuShift.toExponential(3)} on the GPU`);
+  assert.ok(cpuShift > 0 && gpuShift > 0 && gpuShift < 100 * cpuShift, `a 1e-22 kg/kg trace, its chain cover floored at TRACE_CHAIN_FLOOR, shifts the OLR summed over the columns by ${cpuShift} W/m2 on the CPU and ${gpuShift} on the GPU, where a chain cover of W/t leaves the GPU bit for bit as without the trace`);
+  assert.ok(flooredOlr < 2e-5 * 300 && flooredHeating < 1e-5 * scale, `with 1e-22 kg/kg in the gaps, where the chain cover W/t stops at TRACE_CHAIN_FLOOR, the engines' OLR differs by ${flooredOlr} W/m2 and their heating by ${flooredHeating} K/day`);
 });
 
 test('the shortwave\'s independent columns of the overlap, with the water inside each cloud uniform or spread, heat the layers, absorb the sunlight and emit alike in both engines, and the columns absorb more than the pooled column', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -587,8 +602,9 @@ test('the variance cover that holds each layer\'s cloud water, and the turbulenc
   console.log(report.join('; '));
 });
 
-test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}, { deckReference: 'interpolate' }]) {
+test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines, the gates of both engines answering deckReference interpolate alike', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const gates = new Map(), gpuGates = new Map();
+  for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}, { deckReference: 'interpolate' }, { height: 1436 }, { deckReference: 'interpolate', height: 1436 }]) {
     const run = await mixedLayerPair(4, { turbulence: 'moist', ...options });
     const { K: nK } = run.model.core, keep = [];
     let coupled = 0, open = 0, parted = 0;
@@ -609,7 +625,24 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
     assert.ok(gateFlips <= run.C / 50, `${gateFlips} gates part`);
     assert.ok(parted <= run.C / 20, `${parted} columns part`);
     assert.ok(theta.rmsRel < 1e-5 && q.rmsRel < 1e-3 && run.olr.rmsRel < 1e-2, `θ ${theta.rmsRel}, q ${q.rmsRel}, OLR ${run.olr.rmsRel}`);
+    gates.set(JSON.stringify(options), Float64Array.from(run.model.radiation.mlmGate));
+    gpuGates.set(JSON.stringify(options), Float64Array.from(run.gpuGate));
   }
+  const layered = gates.get(JSON.stringify({ height: 1436 })), interpolated = gates.get(JSON.stringify({ deckReference: 'interpolate', height: 1436 }));
+  let moved = 0;
+  for (let i = 0; i < layered.length; i++) if (Math.abs(layered[i] - interpolated[i]) > 1e-3) moved++;
+  console.log(`with the deck height seeded at 1436 m, half a layer above the inversion, deckReference interpolate moves the gate on ${moved} columns`);
+  assert.ok(moved > layered.length / 50, `with the deck height seeded at 1436 m, half a layer above the inversion, deckReference interpolate moves the gate on ${moved} columns, against the engines' limit of ${layered.length / 50}, so a GPU that ignored the option would part from the CPU`);
+  const gpuLayered = gpuGates.get(JSON.stringify({ height: 1436 })), gpuInterpolated = gpuGates.get(JSON.stringify({ deckReference: 'interpolate', height: 1436 }));
+  let gpuMoved = 0, oneEngine = 0, unequal = 0;
+  for (let i = 0; i < layered.length; i++) {
+    const cpuShift = interpolated[i] - layered[i], gpuShift = gpuInterpolated[i] - gpuLayered[i];
+    if (Math.abs(gpuShift) > 1e-3) gpuMoved++;
+    if ((Math.abs(cpuShift) > 1e-3) !== (Math.abs(gpuShift) > 1e-3)) oneEngine++;
+    else if (Math.abs(cpuShift) > 1e-3 && Math.abs(gpuShift - cpuShift) > 0.1 * Math.abs(cpuShift)) unequal++;
+  }
+  console.log(`the GPU's own gate moves under deckReference interpolate on ${gpuMoved} columns; ${oneEngine} move on one engine only and ${unequal} on both by shifts more than 10 percent apart`);
+  assert.ok(gpuMoved > layered.length / 50 && oneEngine + unequal <= layered.length / 100, `the GPU's gate moves on ${gpuMoved} columns, ${oneEngine} on one engine only, ${unequal} by shifts more than 10 percent apart`);
 });
 
 for (const [label, transmission] of [['', null], [', with open water passing a share of its sunlight to the ocean below', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
