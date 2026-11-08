@@ -14,9 +14,10 @@
 // DECISION_ROWS below, differs in a larger share of cells than the row's bound. The rows in ABSOLUTE_BOUNDS
 // (T2M) are judged in their own units instead, by the rms gap and the share of cells past a gap, whatever
 // TOL is. A row reads n/a, and cannot fail, where the model does not compute it: ROW_NEEDS gives T2M n/a
-// without the roughness exchange and STRESS and SDRAG without the implicit drag, and the clear-sky,
-// form-drag and held-radiation rows read n/a without the clear-sky pass, the form drag or the held
-// radiation. The state arrays are only reported, with each engine's own rms change since the last report.
+// without the roughness exchange, STRESS and SDRAG without the implicit drag, WARM without the warm
+// layer and COOL without the cool skin, and the clear-sky, form-drag and held-radiation rows read n/a
+// without the clear-sky pass, the form drag or the held radiation. The state arrays are only reported,
+// with each engine's own rms change since the last report.
 //   --cpu-only   builds only the CPU model (no GPU is imported), steps it, and checks that every
 //                mapped CPU array exists and is not all zero: the dry run of this tool
 //   --gpu-dump P builds only the GPU model, steps it and writes its states at 0 and at each count in STEPS to
@@ -24,7 +25,8 @@
 //   --against P  builds only the CPU model and compares it at each count in STEPS with P.step<n> from a
 //                --gpu-dump run of the same state, options and STEPS: the CPU half, which needs no GPU
 //   --out FILE   also writes the report to FILE;  env FLAGS sets Dawn toggles for the GPU adapter,
-//                env OCEAN a JSON object of ocean options for both models, env RADIATION one of
+//                env OCEAN a JSON object of ocean options for both models, env BOUNDARY_LAYER one of
+//                boundary-layer options, env RADIATION one of
 //                radiation options, env MOIST one of moist options, env SURFACE one of surface options and
 //                env LAND one of land options
 //   The default runs the clear-sky pass, which the page does not: RADIATION='{"clearSkyPass":false}' compares the page's shader.
@@ -51,6 +53,7 @@ export const PH_MAP = {
   RAIN: 'moist.precipitation', STEPRAIN: 'moist.rain', CONV: 'moist.convectivePrecipitation', COND: 'moist.largeScalePrecipitation', FOG: 'moist.fogPrecipitation',
   SH: 'radiation.sensibleHeat', EVAP: 'radiation.evaporation', SWDN: 'radiation.surfaceShortwave', BUOY: 'boundaryLayer.buoyancyFlux', USTAR: 'boundaryLayer.friction',
   STRESS: 'boundaryLayer.surfaceStress', SDRAG: 'boundaryLayer.surfaceDrag', HEATX: 'exchange.heat', REFX: 'exchange.reference', DRAG: 'exchange.drag', XWIND: 'exchange.wind', T2M: 'exchange.temperature2m',
+  UO: 'seaFlow', WARM: 'skin.warm', COOL: 'skin.cool',
   REGIME: 'boundaryLayer.regime', ENTRAIN: 'boundaryLayer.entrainment', VRAD: 'boundaryLayer.radiativeVelocity', CTCOOL: 'boundaryLayer.cloudTopCooling',
   DECK: 'radiation.stratus', DECKF: 'radiation.stratusFraction', STRAT: 'radiation.stratiform', MLMCOVER: 'radiation.mlmCover', MLMWATER: 'radiation.mlmWater', MLMENT: 'radiation.mlmEntrainment',
   MLMTOP: 'radiation.mlmTop', MLMH: 'radiation.mlmHeight', MLMSUB: 'radiation.mlmSubsidence', MLMGATE: 'radiation.mlmGate', LWH: 'radiation.longwave',
@@ -79,7 +82,7 @@ export const PH_INPUT = {
 };
 // mapped regions that may legitimately be all zero in a configuration (env MAY_BE_ZERO_EXTRA adds names, comma separated); the land
 // regions are exempt on a planet without land and the radiation.held ones where held radiation is off (no CPU array, no GPU region)
-export const MAY_BE_ZERO = new Set(['OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'OSTRESS', 'OLAUNCH', 'OWAVE', 'OBETA', 'OBLOCK', 'ODIR', 'GWE', 'GWN', 'RUNOFF', 'DISCHARGE', 'ICELOSS', 'MLMK', 'MLMM', 'SNOW', 'SNOWALB', 'FOG', 'FOGMEAN', ...(process.env.MAY_BE_ZERO_EXTRA ?? '').split(',').filter(Boolean)]);
+export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'OSTRESS', 'OLAUNCH', 'OWAVE', 'OBETA', 'OBLOCK', 'ODIR', 'GWE', 'GWN', 'RUNOFF', 'DISCHARGE', 'ICELOSS', 'MLMK', 'MLMM', 'SNOW', 'SNOWALB', 'FOG', 'FOGMEAN', ...(process.env.MAY_BE_ZERO_EXTRA ?? '').split(',').filter(Boolean)]);
 // mapped regions set by a threshold decision in each column (mixing regime, cumulus trigger, rain, fog, launch): f32 and
 // f64 part at a few columns near the threshold, so these are judged by the share of cells that differ by more than TOL of
 // the row's largest CPU value and fail past their bound here, max(3 × the worst share measured on
@@ -101,7 +104,7 @@ for (const name of (process.env.DECISION_EXTRA ?? '').split(',').filter(Boolean)
 export const DECISION_ROWS = new Set(Object.keys(DECISION_BOUNDS));
 const NO_CLEAR_SKY = JSON.parse(process.env.RADIATION ?? '{}').clearSkyPass === false, CLEAR_SKY_ROWS = new Set(['ABSCLRSUM', 'OLRCLRSUM', 'RADCLROLR', 'RADCLRSW', 'RADTC']);
 const drags = (model) => !!model.boundaryLayer?.implicitDrag;
-const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags] };
+const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin] };
 const decisionBound = (name) => (process.env.SHARE ? Number(process.env.SHARE) : DECISION_BOUNDS[name]);
 
 const typed = (v) => ArrayBuffer.isView(v) && !(v instanceof DataView);
@@ -145,6 +148,7 @@ async function build(file) {
     if (saved.boundaryRegime) model.boundaryLayer.regime.set(saved.boundaryRegime);
     if (saved.boundaryBuoyancy) model.boundaryLayer.buoyancyFlux.set(saved.boundaryBuoyancy);
     if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
+    if (model.seaFlow && saved.seaFlow?.length === model.seaFlow.length) model.seaFlow.set(saved.seaFlow);
     if (saved.evaporation) model.radiation.evaporation.set(saved.evaporation);
     if (saved.exchangeHeat && model.exchange && !model.exchange.fixed) model.exchange.heat.set(saved.exchangeHeat);
     if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
@@ -163,6 +167,7 @@ async function build(file) {
     if (saved.land) model.land.load(saved.land, state[6], saved.time, state[3]);
     return model;
   };
+  if (process.env.BOUNDARY_LAYER) options.boundaryLayer = JSON.parse(process.env.BOUNDARY_LAYER);
   const cpu = GPU_DUMP ? null : load(createModel(mesh, { ...options, ...subgrid }));
   const gpu = NO_GPU ? null : load(await createGpuModel(mesh, { ...options, ...subgrid }));
   return { cpu, gpu, dt, label: `${file.replace(/.*\//, '')} N=${saved.N}` };
