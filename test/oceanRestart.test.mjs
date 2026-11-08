@@ -8,6 +8,7 @@ import { createGeography, decodeLandIce, geographyOptions, landIceUrl, readTopog
 import { zonalWindOnEdges } from './helpers/layered.mjs';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { thinTopLayers } from './helpers/thinLayers.mjs';
 
 const N = 16;
 
@@ -62,3 +63,43 @@ test(`at N=${N} a model's ocean loaded from a GPU save, whose contents are store
   const at = (n) => [Qref[n] + HEAT_REFERENCE * h[n], Wref[n] + SALT_REFERENCE * h[n]];
   for (let n = 0; n < Q.length; n++) assert.deepEqual([resumed.ocean.Q[n], resumed.ocean.W[n]], at(n), `layer cell ${n}`);
 });
+
+test(`at N=${N} a CPU ocean loads a save with T and S and no Q or W, a top layer thinner than EPS included, with the heat and salt the save's layers hold`, () => {
+  const options = { ocean: { everySteps: 1 } };
+  const prepare = (model) => { initializeState(model, {}).forEach((values, a) => model.state[a].set(values)); model.ocean.initialize(model.state[3], model.state[6]); return model; };
+  const run = prepare(createModel(new Grid(N), options)), C = run.mesh.nCells, column = new Float64Array(C);
+  run.ocean.serialize().h.forEach((v, n) => { column[n % C] += v; });
+  const thin = column.indexOf(Math.max(...column)), { Q, W, state } = thinTopLayers(run.ocean, run.state[6], [[thin, 0.005]]);
+  const resumed = createModel(new Grid(N), options);
+  resumed.state.forEach((array, a) => array.set(run.state[a]));
+  resumed.ocean.load(state, resumed.state[3], resumed.state[6]);
+  for (const [name, saved, loaded] of [['Q', Q, resumed.ocean.Q], ['W', W, resumed.ocean.W]]) {
+    const at = saved.findIndex((v, n) => !(Math.abs(loaded[n] - v) <= 1e-15 * Math.abs(v)));
+    assert.equal(at, -1, `${name}[${at}]${at % C === thin ? ', in the thin column,' : ''} loads as ${loaded[at]}, saved as ${saved[at]}`);
+  }
+});
+
+test(`at N=${N} a CPU ocean converts a save on other labels with the heat and salt its layers hold: from Q and W when it carries them, a top layer thinner than EPS included, and from h·T and h·S when it does not`, () => {
+  const options = { ocean: { everySteps: 1 } };
+  const prepare = (model) => { initializeState(model, {}).forEach((values, a) => model.state[a].set(values)); model.ocean.initialize(model.state[3], model.state[6]); return model; };
+  const run = prepare(createModel(new Grid(N), options)), C = run.mesh.nCells, column = new Float64Array(C);
+  run.ocean.serialize().h.forEach((v, n) => { column[n % C] += v; });
+  const thin = column.indexOf(Math.max(...column)), { Q, W, state } = thinTopLayers(run.ocean, run.state[6], [[thin, 0.005]]);
+  const other = { ...state, densities: state.densities.slice(1) }, hT = Float64Array.from(state.h, (h, n) => h * state.T[n]), hS = Float64Array.from(state.h, (h, n) => h * state.S[n]);
+  for (const [saved, heat, salt] of [[{ ...other, Q, W }, Q, W], [other, hT, hS]]) {
+    const resumed = createModel(new Grid(N), options), { ocean } = resumed, L = ocean.layers;
+    resumed.state.forEach((array, a) => array.set(run.state[a]));
+    ocean.load(saved, resumed.state[3], resumed.state[6]);
+    for (let i = 0; i < C; i++) {
+      if (!(column[i] > 0)) continue;
+      let depth = 0;
+      for (let k = 0; k < L; k++) depth += ocean.h[k * C + i];
+      for (const [name, held, loaded] of [['heat', heat, ocean.Q], ['salt', salt, ocean.W]]) {
+        let before = 0, after = 0;
+        for (let k = 0; k < L; k++) { before += held[k * C + i] * depth / column[i]; after += loaded[k * C + i]; }
+        assert.ok(Math.abs(after - before) <= 1e-9 * before, `column ${i}${i === thin ? ', the thin one,' : ''} ${saved.Q ? 'with' : 'without'} Q and W: ${name} ${after} loaded, ${before} saved`);
+      }
+    }
+  }
+});
+

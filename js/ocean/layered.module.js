@@ -594,6 +594,12 @@ export function topLayerDensity(saved, i, classDensity) {
   return h > 1e-6 ? seawaterDensity(scale * saved.T[i], scale * saved.S[i]) : classDensity;
 }
 
+export function layerMeans(saved, layers, C) {
+  const stores = saved.Q && saved.Q.length === layers * C && saved.W && saved.W.length === layers * C;
+  const mean = (store, value) => (n) => (stores && saved.h[n] > 0 ? store[n] / saved.h[n] : value[n]);
+  return [mean(saved.Q, saved.T), mean(saved.W, saved.S)];
+}
+
 export function createOcean(mesh, {
   minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
@@ -1821,7 +1827,7 @@ export function createOcean(mesh, {
   function convertSlab(saved, classes) {
     const Ls = classes.length + 1;
     if (saved.h.length !== Ls * C) throw new Error(`a slab state on ${classes.length} classes holds ${Ls * C} thicknesses, not ${saved.h.length}`);
-    const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), { z: zCol, hNew, amount } = cols;
+    const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), { z: zCol, hNew, amount } = cols, [meanT, meanS] = layerMeans(saved, Ls, C);
     eta.set(saved.eta);
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } continue; }
@@ -1831,10 +1837,10 @@ export function createOcean(mesh, {
       if (!(sum > 0)) { for (let k = 0; k < L; k++) { const n = at(k, i), hk = zCol[k + 1] - zCol[k]; h[n] = hk; Q[n] = hk * surfaceTAt(i); W[n] = hk * referenceS; } continue; }
       for (let j = 0; j < Ls; j++) hs[j] *= H / sum;
       for (let k = 0; k < L; k++) hNew[k] = zCol[k + 1] - zCol[k];
-      for (let j = 0; j < Ls; j++) qs[j] = saved.T[j * C + i];
+      for (let j = 0; j < Ls; j++) qs[j] = meanT(j * C + i);
       remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
       for (let k = 0; k < L; k++) Q[at(k, i)] = amount[k];
-      for (let j = 0; j < Ls; j++) qs[j] = saved.S[j * C + i];
+      for (let j = 0; j < Ls; j++) qs[j] = meanS(j * C + i);
       remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
       for (let k = 0; k < L; k++) { W[at(k, i)] = amount[k]; h[at(k, i)] = hNew[k]; }
     }

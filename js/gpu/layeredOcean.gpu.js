@@ -2,7 +2,7 @@ import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReductio
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, NEUTRAL_STRATIFICATION, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, topLayerDensity, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, NEUTRAL_STRATIFICATION, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, topLayerDensity, layerMeans, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare, INTERIOR_SHEARS, LMD94_RICHARDSON, LMD94_VISCOSITY } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -2236,7 +2236,7 @@ ${core.fieldConstants}
     } else {
       const Ls = classes ? classes.length + 1 : Math.round(saved.h.length / C);
       if (saved.h.length !== Ls * C) throw new Error(`a saved ocean on ${Ls} layers holds ${Ls * C} thicknesses, not ${saved.h.length}`);
-      const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), hNew = new Float64Array(L), amount = new Float64Array(L);
+      const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), hNew = new Float64Array(L), amount = new Float64Array(L), [meanT, meanS] = layerMeans(saved, Ls, C);
       for (let i = 0; i < C; i++) {
         if (!cellOcean[i]) continue;
         const H = hybridGrid(i, eta, zCol);
@@ -2245,10 +2245,10 @@ ${core.fieldConstants}
         if (!(sum > 0)) { for (let k = 0; k < L; k++) { const n = at(k, i), hk = zCol[k + 1] - zCol[k]; h[n] = hk; Q[n] = hk * surfaceAt(i); W[n] = hk * o.referenceS; } continue; }
         for (let j = 0; j < Ls; j++) hs[j] *= H / sum;
         for (let k = 0; k < L; k++) hNew[k] = zCol[k + 1] - zCol[k];
-        for (let j = 0; j < Ls; j++) qs[j] = saved.T[j * C + i];
+        for (let j = 0; j < Ls; j++) qs[j] = meanT(j * C + i);
         remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
         for (let k = 0; k < L; k++) Q[at(k, i)] = amount[k];
-        for (let j = 0; j < Ls; j++) qs[j] = saved.S[j * C + i];
+        for (let j = 0; j < Ls; j++) qs[j] = meanS(j * C + i);
         remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
         for (let k = 0; k < L; k++) { W[at(k, i)] = amount[k]; h[at(k, i)] = hNew[k]; }
       }
@@ -2290,15 +2290,17 @@ ${core.fieldConstants}
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); T[n] = (Qraw[n] + HEAT_REFERENCE * h[n]) / hh; S[n] = (Wraw[n] + SALT_REFERENCE * h[n]) / hh; }
     const eta = Float64Array.from(etaRange);
     const shelfFields = hasShelves ? await readSections(['MELTSUM', 'DRAW']) : null;
-    const h1 = Float64Array.from((await readSections(['MIXED']))[0]), T1 = T.subarray(0, C), S1 = S.subarray(0, C), u1 = u.subarray(0, E);
+    const h1 = Float64Array.from((await readSections(['MIXED']))[0]), u1 = u.subarray(0, E);
+    const top = (store, reference, label) => Float64Array.from({ length: C }, (_, i) => (h[i] > 1e-6 ? (store[i] + reference * h[i]) / h[i] : label));
+    const T1 = top(Qraw, HEAT_REFERENCE, labelT[0]), S1 = top(Wraw, SALT_REFERENCE, labelS[0]);
     const thermoclineDepth = new Float64Array(C);
-    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermoclineOf(h, T, S, i) : NaN;
+    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermoclineOf(h, Qraw, Wraw, i) : NaN;
     return { h, u, T, S, eta, h1, T1, S1, u1, thermoclineDepth, layers: L, ...(shelfFields ? { shelfMelted: Float64Array.from(shelfFields[0]), shelfDraw: Float64Array.from(shelfFields[1]) } : {}) };
   }
-  function thermoclineOf(h, T, S, i) {
+  function thermoclineOf(h, Qraw, Wraw, i) {
     let z = 0, previous = -Infinity, center = 0;
     for (let k = 0; k < L; k++) {
-      const n = k * C + i, hv = h[n], rk = Math.max(previous, hv > 1e-6 ? eos(T[n], S[n]) : rho[k]), c = z + 0.5 * hv;
+      const n = k * C + i, hv = h[n], rk = Math.max(previous, hv > 1e-6 ? eos((Qraw[n] + HEAT_REFERENCE * hv) / hv, (Wraw[n] + SALT_REFERENCE * hv) / hv) : rho[k]), c = z + 0.5 * hv;
       if (rk >= THERMOCLINE_DENSITY) return k === 0 ? 0 : center + (THERMOCLINE_DENSITY - previous) / Math.max(rk - previous, 1e-12) * (c - center);
       previous = rk; center = c; z += hv;
     }
