@@ -23,8 +23,8 @@
  * ice, the land, the ocean, the lakes, the boundary layer, the sea skin and the decks (the groups it hashed are listed).
  * Six hours from rest and a dry initial atmosphere are a transient, not a climate: the rows detect a change to the
  * physics and size it; the N = 64 scorecard is what judges the model against observation.
- * test/helpers/physicsDigest.json is the digest of record, with the Node version, the commit and the data/ tree it was
- * made on and a hash per group;
+ * test/helpers/physicsDigest.json is the digest of record, with the Node version, the commit and the data/ tree (all of
+ * it, not only what the digest reads) it was made on and a hash per group;
  * test/physicsDigest.test.mjs runs the digest and fails on any moved row or state, and a change that moves it re-pins
  * it (--out) and cites the rows --compare lists.
  */
