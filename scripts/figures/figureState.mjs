@@ -35,10 +35,11 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
 /*
  * A GPU model on the state's grid, level set, terrain and ice sheets with
  * the run's options
- * (OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND as JSON in the
- * environment; the radiation's clear-sky pass on unless RADIATION turns
- * it off, and the cadences of js/cadence.module.js at the state's dt,
- * the drags' unless DRAG_EVERY gives it in steps),
+ * (OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND, LAKE as JSON in
+ * the environment, LAKE over the save's lake options; the radiation's
+ * clear-sky pass on unless RADIATION turns it off, and the cadences of
+ * js/cadence.module.js at the state's dt, the drags' unless DRAG_EVERY
+ * gives it in steps),
  * loaded with everything a whole-day snapshot carries.
  */
 export async function gpuModelFrom(saved) {

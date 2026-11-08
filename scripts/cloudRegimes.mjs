@@ -25,8 +25,8 @@
 // liquid and ice by the optics' phase ramp, and the high class's
 // condensate colder than 235 K is given apart. The saved day means of
 // the cloud effects are printed where the state carries them.
-// RADIATION, MOIST, BOUNDARY_LAYER and SURFACE (JSON) pass options as to
-// scripts/verticalAudit.mjs. Earth's values are printed beside each regime
+// RADIATION, MOIST, BOUNDARY_LAYER, SURFACE and LAKE (JSON) pass options as
+// to scripts/verticalAudit.mjs. Earth's values are printed beside each regime
 // with their sources; "from memory" marks a value not looked up for this
 // table.
 import { readFileSync } from 'node:fs';

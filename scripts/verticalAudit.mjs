@@ -6,7 +6,8 @@
 // RADIATION (JSON) passes options to the model's radiation, e.g.
 // '{"subsidenceSmoothing":0}' for a deck that reads the flux unsmoothed,
 // MOIST (JSON) to its moist physics, BOUNDARY_LAYER (JSON) to its
-// boundary layer and SURFACE (JSON) to its surface.
+// boundary layer, SURFACE (JSON) to its surface and LAKE (JSON) to its
+// lakes, over the save's lake options.
 // Signs: omega (Pa/s) > 0 and sink (mm/s) > 0 are descent.
 //
 // From the state's own winds (stage 0 of the next step): omega at the

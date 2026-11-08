@@ -32,10 +32,10 @@ function checkSavedLake(lake, columns) {
  * device, so the result is a promise there. Without them each lake starts
  * a fresh column at its first step and drops the ice the save holds.
  */
-export function loadSavedLake(model, saved) {
+export function loadSavedLake(model, saved, { quiet = false } = {}) {
   const columns = savedLake(saved);
   if (!holdsLake(columns)) {
-    if (model.lake?.cells.length) console.error(`the save holds no lake columns: the ${model.lake.cells.length} lake cells start from fresh columns at their first step`);
+    if (model.lake?.cells.length && !quiet) console.error(`the save's lake columns are absent or never stepped: the ${model.lake.cells.length} lake cells start from fresh columns at their first step`);
     return model.lake && model.lake.read ? Promise.resolve(0) : 0;
   }
   if (!model.lake?.cells.length) throw new Error('the save holds lakes and the model has none');

@@ -30,8 +30,8 @@
 // the radiation's shortwave uses (cloudScattering times the path when that
 // is set, else the sum of each layer's (1 - g) tau), in-cloud.
 // Regions: global, 30S-30N, 30-60N, 30-60S, 60-90N, 60-90S, land, sea
-// (sea ice included). RADIATION, MOIST, BOUNDARY_LAYER and SURFACE (JSON)
-// pass options as to scripts/verticalAudit.mjs.
+// (sea ice included). RADIATION, MOIST, BOUNDARY_LAYER, SURFACE and LAKE
+// (JSON) pass options as to scripts/verticalAudit.mjs.
 //
 // Earth (annual means): total cloud 0.65-0.68 (ISCCP, MODIS, CALIPSO);
 // high cloud 0.2-0.3 by passive sensors (ISCCP 0.20, MODIS ~0.27); liquid

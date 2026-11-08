@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { encodeState, decodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
 import { decodeMask, pickGeography } from '../js/geography.module.js';
-import { toSnapshot, restoreMessage, exportState } from '../js/snapshots.module.js';
+import { messageState, toSnapshot, restoreMessage, exportState } from '../js/snapshots.module.js';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
@@ -104,7 +104,7 @@ test(`at N=${N} a save whose lake arrays hold no lake loads as none, and a save 
   assert.throws(() => loadSavedLake(prepare(createModel(new Grid(N), setup({ model: 'off' })), null), saved), /the save holds lakes and the model has none/);
 });
 
-const LAKES = [303, 933];
+const LAKES = [190, 303, 933];
 
 function lakeMask(bytes) {
   const mask = decodeMask(bytes), { flags, landFraction, elevation, wetDepth, edgeSill, ice, sea, lakes } = mask;
@@ -117,9 +117,14 @@ function lakeMask(bytes) {
   return Buffer.concat(parts.map((part) => new Uint8Array(part.buffer, part.byteOffset, part.byteLength)));
 }
 
-test("the page's worker runs a spin-up save made with HydroLAKES depths with its lake options, loads its lakes at those depths, and its store, restore and export keep the options", async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'lake-options-')), messages = [], fetched = globalThis.fetch;
+test("the page's worker fetches HydroLAKES depths with no node read, starts a spin-up save with the lake options it records and loads its columns, and restores in place unless the run lacks a stored import's options", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lake-options-')), messages = [], fetched = globalThis.fetch, builtin = process.getBuiltinModule;
   let depthReads = 0;
+  process.getBuiltinModule = (name) => {
+    const module = builtin.call(process, name);
+    if (name !== 'node:fs' && name !== 'fs') return module;
+    return { ...module, readFileSync: (file, ...rest) => { if (String(file).endsWith('/data/lakedepth.bin')) throw new Error('data/lakedepth.bin read through node: the page has no such fallback'); return module.readFileSync(file, ...rest); } };
+  };
   globalThis.self = { postMessage: (message) => messages.push(message) };
   globalThis.fetch = async (url, init) => {
     if (!String(url).startsWith('file:')) return fetched(url, init);
@@ -153,14 +158,18 @@ test("the page's worker runs a spin-up save made with HydroLAKES depths with its
       writeFileSync(file, encodeState(saved, { f64: f64Names(saved) }));
       return file;
     };
+    const rebuilt = () => messages.some((m) => m.type === 'status' && /^building the N=/.test(m.text));
     await start();
     const plain = await snapshot(), plainDepth = new Float64Array(plain.arrays.lakeDepth);
-    assert.deepEqual(LAKES.map((i) => plainDepth[i]), [10, 10], 'the default depth of a lake without a bed');
+    assert.deepEqual(LAKES.map((i) => plainDepth[i]), [10, 10, 10], 'the default depth of a lake without a bed');
+    const page = toSnapshot(messageState(structuredClone(plain)));
+    await send({ type: 'restore', snapshot: restoreMessage(page.meta, page.data) }, 'ready');
+    assert.equal(rebuilt(), false, 'a restore of the unchanged run places the snapshot in the running model');
     const unlaked = write(plain, 'unlaked', (saved) => { for (const key of Object.keys(saved)) if (/^lake[A-Z]/.test(key)) delete saved[key]; });
     assert.deepEqual((await start(unlaked)).options.lake, LAKE, 'the run takes the lake options the save records under given');
     assert.equal(depthReads, 1, 'HydroLAKES read once');
     const depth = new Float64Array((await snapshot()).arrays.lakeDepth);
-    assert.deepEqual(LAKES.map((i) => depth[i]), [20, 20], 'the lakes take the depths of the save\x27s options');
+    assert.deepEqual(LAKES.map((i) => depth[i]), [Math.fround(41.1), 20, 20], 'Lake Victoria takes its HydroLAKES depth, the others freshDepth');
     const frozen = write(plain, 'frozen', (saved) => {
       for (const i of LAKES) Object.assign(saved, Object.fromEntries(Object.entries({ lakeMixed: 273.15, lakeMean: 276.8, lakeBottom: 277.1, lakeShape: 0.6, lakeMixedDepth: 0, lakeIce: 0.5, lakeIceT: 270.5, lakeDepth: depth[i] }).map(([key, v]) => { saved[key][i] = Math.fround(v); return [key, saved[key]]; })));
     });
@@ -172,11 +181,18 @@ test("the page's worker runs a spin-up save made with HydroLAKES depths with its
     assert.deepEqual(meta.options.lake, LAKE, 'the store keeps the lake options');
     assert.deepEqual(restoreMessage(meta, data).options.lake, LAKE);
     assert.deepEqual(savedLakeOptions(exportState(meta, data).saved), LAKE, 'an export keeps them');
+    await start();
     const restored = await send({ type: 'restore', snapshot: restoreMessage(meta, structuredClone(data)) }, 'ready');
+    assert.ok(rebuilt(), 'a run started without the import\x27s lake options restarts with them');
     assert.deepEqual(restored.options.lake, LAKE, 'a restore from the store runs with them');
+    const placed = await snapshot(), placedIce = new Float64Array(placed.arrays.lakeIce), placedDepth = new Float64Array(placed.arrays.lakeDepth);
+    assert.deepEqual(LAKES.map((i) => [placedIce[i], placedDepth[i]]), LAKES.map((i) => [0.5, depth[i]]));
+    await send({ type: 'restore', snapshot: restoreMessage(meta, structuredClone(data)) }, 'ready');
+    assert.equal(rebuilt(), false, 'a second restore runs in place');
     assert.equal(depthReads, 1, 'the decoded depths are kept across restarts');
   } finally {
     globalThis.fetch = fetched;
+    process.getBuiltinModule = builtin;
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -19,8 +19,8 @@
 // longwave cloud effect and the
 // downward longwave at the surface under each overlap, global, 30S-30N and in
 // the tropical boxes of scripts/tropicalHeating.mjs.
-// RADIATION, MOIST, BOUNDARY_LAYER and SURFACE (JSON) pass options as to
-// scripts/verticalAudit.mjs; the radiation must use longwaveScheme
+// RADIATION, MOIST, BOUNDARY_LAYER, SURFACE and LAKE (JSON) pass options as
+// to scripts/verticalAudit.mjs; the radiation must use longwaveScheme
 // 'correlated'.
 import { readFileSync } from 'node:fs';
 import { stateGeography } from '../js/geography.module.js';

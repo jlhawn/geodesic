@@ -38,8 +38,8 @@
 // ('recorded', or 'woa' to restore toward WOA23's monthly SST on the
 // forcing day's date, the recorded SST where WOA23 has none), TAG
 // (ocean<N>), OUT (runs/), KEEP (2), SNAPSHOT_DAYS (30; 0 saves at the
-// years' ends alone), OCEAN and RADIATION (JSON options as in spinup.mjs;
-// OCEAN's everySteps sets the ocean step, by default from
+// years' ends alone), OCEAN, RADIATION and LAKE (JSON options as in
+// spinup.mjs; OCEAN's everySteps sets the ocean step, by default from
 // js/cadence.module.js), SYNC_CMD and STOP_AFTER_STEPS
 // (as in spinup.mjs).
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync } from 'node:fs';

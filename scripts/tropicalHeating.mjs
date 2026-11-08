@@ -1,8 +1,8 @@
 // The heating and the rain of the tropical rain bands by process and layer,
 // on the single-thread CPU engine with the ocean off:
 //   node scripts/tropicalHeating.mjs <state.bin>
-// STEPS (one day) steps from the state; RADIATION, MOIST, BOUNDARY_LAYER and
-// SURFACE (JSON) pass options as to scripts/verticalAudit.mjs. Boxes
+// STEPS (one day) steps from the state; RADIATION, MOIST, BOUNDARY_LAYER,
+// SURFACE and LAKE (JSON) pass options as to scripts/verticalAudit.mjs. Boxes
 // (TROPICAL_BOXES of js/audit.module.js): the Pacific ITCZ (5-12N 160E-100W,
 // all cells, the audit's), the warm pool (10S-10N 120-170E sea), the SPCZ
 // (20-5S 160E-150W sea), the north Pacific trades (15-25N 170-130W sea) and
