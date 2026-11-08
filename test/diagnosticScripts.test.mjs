@@ -53,3 +53,10 @@ test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid
   assert.ok(upper.some((line) => / layer 0 /.test(line) && term(line, 'stress') !== 0), 'the wind is zero on every edge');
 });
 
+test('radiationProfiles runs the defaults against OTHER\'s gray longwave and Lacis–Hansen gases on the sequential shortwave, on a state at N=16', () => {
+  const profiles = run('radiationProfiles', { TIMES: '2' });
+  assert.equal(profiles.status, 0, profiles.stderr);
+  assert.match(profiles.stdout, /second \{"longwaveScheme":"gray","solarGases":"lacisHansen","aerosol":"flat","shortwave":"sequential"\}/);
+  const rows = profiles.stdout.split('\n').filter((line) => /^\s+\d+(\s+-?\d+\.\d+){5}\s*$/.test(line));
+  assert.ok(rows.length > 0, profiles.stdout.slice(0, 400));
+});

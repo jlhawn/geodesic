@@ -4,7 +4,7 @@
 //   node scripts/radiationProfiles.mjs <state.bin>
 // One model step is taken under RADIATION (JSON, the defaults if unset), and
 // the stepped state, cumulus, boundary layer and deck are copied into a second
-// model under OTHER (JSON, '{"longwaveScheme":"gray","solarGases":"lacisHansen","aerosol":"flat"}'
+// model under OTHER (JSON, '{"longwaveScheme":"gray","solarGases":"lacisHansen","aerosol":"flat","shortwave":"sequential"}'
 // if unset); every box column's radiation then runs in both at TIMES (24)
 // instants of the day (dt 0, so the deck's carried state does not move). The
 // layer heating is the radiation's own: its longwave record, and the rest of
@@ -21,7 +21,7 @@ import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/radiationProfiles.mjs <state.bin>'); process.exit(1); }
-const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), OTHER = JSON.parse(process.env.OTHER ?? '{"longwaveScheme":"gray","solarGases":"lacisHansen","aerosol":"flat"}'), TIMES = Number(process.env.TIMES ?? 24);
+const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), OTHER = JSON.parse(process.env.OTHER ?? '{"longwaveScheme":"gray","solarGases":"lacisHansen","aerosol":"flat","shortwave":"sequential"}'), TIMES = Number(process.env.TIMES ?? 24);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
 const stateMesh = stateGrid(saved, topography).mesh;
