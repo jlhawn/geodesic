@@ -11,13 +11,16 @@
 // missing on the CPU, is all zero on one side only, is all zero on the GPU without being listed in
 // MAY_BE_ZERO, holds a non-finite value, differs from its CPU array by more than TOL (env, relative rms,
 // default 1e-3; a row in ABSOLUTE_FLOOR passes too while its largest gap is under the floor), or, for the
-// DECISION_ROWS below, differs in a larger share of cells than the row's bound. The rows in ABSOLUTE_BOUNDS
+// DECISION_ROWS below, differs by more than TOL in a larger share of cells than the row's bound, or by a
+// relative rms above 3·TOL over the cells under that threshold. The rows in ABSOLUTE_BOUNDS
 // (T2M) are judged in their own units instead, by the rms gap and the share of cells past a gap, whatever
 // TOL is. A row reads n/a, and cannot fail, where the model does not compute it: ROW_NEEDS gives T2M n/a
 // without the roughness exchange, STRESS and SDRAG without the implicit drag, WARM without the warm
 // layer and COOL without the cool skin, and the clear-sky, form-drag and held-radiation rows read n/a
-// without the clear-sky pass, the form drag or the held radiation. The state arrays are only reported,
-// with each engine's own rms change since the last report.
+// without the clear-sky pass, the form drag or the held radiation. The run also exits 1 when the CPU model
+// takes the raster sub-grid orography, which has no form drag and is not the configuration a saved state
+// runs; env NO_SUBGRID builds both models without sub-grid orography and lifts this. The state arrays are
+// only reported, with each engine's own rms change since the last report.
 //   --cpu-only   builds only the CPU model (no GPU is imported), steps it, and checks that every
 //                mapped CPU array exists and is not all zero: the dry run of this tool
 //   --gpu-dump P builds only the GPU model, steps it and writes its states at 0 and at each count in STEPS to
