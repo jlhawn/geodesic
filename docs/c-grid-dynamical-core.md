@@ -980,7 +980,18 @@ the mixed layer. The surface energy — mixed-layer heat over the freezing
 point, skin heat, minus the ice's latent heat — changes by exactly the
 surface flux through every transition (`test/ice.test.mjs`).
 `surfaceT` is the skin temperature the atmosphere sees in both states.
-Albedo is 0.07 for open water, rising linearly to 0.6 at 0.5 m of ice.
+Bare ice reflects 0.62 (`iceAlbedo`) while its skin is colder than
+−1 °C, falling linearly to 0.48 (`meltingIceAlbedo`) at the melting
+point, and ice thinner than 0.5 m blends toward the water's albedo
+(the zenith-angle form of Briegleb et al. 1986, 0.06 diffuse). The 0.48
+has no source read for it: it was set (e7812042, Oct 1) between CCSM3's
+melting bare ice, about 0.50 from memory of Briegleb et al. (2004), and
+SHEBA's ponded July ice, 0.45–0.55 as Perovich et al. (2002) were quoted
+(the snow and ice albedo review below). The Arctic's summer depends on
+it: the Nov 7 audit's 60-year column of this code under
+Maykut–Untersteiner forcing melts out every August at 0.48 (volume
+minimum 0) and keeps 1.72 m at 0.55 (its report's table; its sea-ice
+coverage notes find 0.55–0.64 restores a perennial pack).
 Snow lies on the ice: precipitation that falls on an iced cell from air
 below the melting point accumulates in water equivalent in the ocean
 cells of the land surface's snow array (one field of snow on the
