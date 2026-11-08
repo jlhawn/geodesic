@@ -6,7 +6,9 @@
  * layer the fill times its own, and the deep store, when the state carries one, the fill times DEEP_CAPACITY. Everything
  * else in the state is kept but the header's soilSeed, which names the file and its sha256. The capacities are those the
  * state's header records among its land options (given, as scripts/stateOptions.mjs writes them, then options), else
- * the defaults, and the mesh is the state's own (stateGrid).
+ * the defaults, and the mesh is the state's own (stateGrid). The page rebuilds a saved state's land at the default
+ * capacities (runOptions passes the header's land through soilOptions), so only a spin-up given the same LAND honors
+ * recorded capacities other than the defaults; the command line warns when the state records any.
  *
  *   node scripts/reseedSoil.mjs state.bin seed.bin out.bin
  */
@@ -38,14 +40,17 @@ export function reseedLand(saved, soilWater, soilSeed = null) {
   if (soilSeed) saved.soilSeed = soilSeed;
   else delete saved.soilSeed;
   const mean = (soil) => { let a = 0, s = 0; for (let i = 0; i < mesh.nCells; i++) if (geography.land[i] && !(geography.iceSheet && geography.iceSheet[i])) { a += mesh.areaCell[i]; s += mesh.areaCell[i] * soil[i] / rootZone; } return s / a; };
-  return { cells, before: mean(before), after: mean(land.soil), deep: !!land.deep };
+  const defaults = { rootZoneCapacity: ROOT_ZONE, bucketCapacity: BUCKET, surfaceCapacity: SURFACE, deepCapacity: vegetated ? DEEP_CAPACITY : 0 };
+  const nonDefault = Object.entries(defaults).filter(([key, value]) => option(key) !== undefined && option(key) !== value).map(([key]) => `${key} ${option(key)}`);
+  return { cells, before: mean(before), after: mean(land.soil), deep: !!land.deep, nonDefault };
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const [input, seed, output] = process.argv.slice(2);
   if (!output) throw new Error('usage: node scripts/reseedSoil.mjs state.bin seed.bin out.bin');
   const saved = await decodeState(new Uint8Array(readFileSync(input)));
-  const { cells, before, after, deep } = reseedLand(saved, decodeSoilWater(readFileSync(seed)), soilSeedRecord(seed));
+  const { cells, before, after, deep, nonDefault } = reseedLand(saved, decodeSoilWater(readFileSync(seed)), soilSeedRecord(seed));
+  if (nonDefault.length) console.warn(`warning: ${input} records ${nonDefault.join(', ')}; the page loads its land at the default capacities, so only a spin-up given the same LAND keeps this fill`);
   writeFileSync(output, encodeState(saved, { f64: f64Names(saved) }));
   console.log(`N=${saved.N}: re-seeded ${cells} open land cells from ${seed}; mean root-zone fill ${before.toFixed(3)} → ${after.toFixed(3)}${deep ? ', the deep store with it' : '; no deep store saved, so a load starts it from the root zone\'s fill'}; wrote ${output}`);
 }
