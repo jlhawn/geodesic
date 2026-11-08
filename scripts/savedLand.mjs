@@ -1,4 +1,4 @@
-import { LAKE_FIELDS, savedLake } from '../js/physics/lake.module.js';
+import { LAKE_FIELDS, holdsLake, savedLake } from '../js/physics/lake.module.js';
 
 /*
  * The land of a saved state onto a model whose arrays are loaded. The ice
@@ -32,7 +32,8 @@ function checkSavedLake(lake, columns) {
  */
 export function loadSavedLake(model, saved) {
   const columns = savedLake(saved);
-  if (!model.lake || !columns) return model.lake && model.lake.read ? Promise.resolve(0) : 0;
+  if (!holdsLake(columns)) return model.lake && model.lake.read ? Promise.resolve(0) : 0;
+  if (!model.lake?.cells.length) throw new Error('the save holds lakes and the model has none');
   model.lake.load(columns);
   return model.lake.read ? model.lake.read().then(() => checkSavedLake(model.lake, columns)) : checkSavedLake(model.lake, columns);
 }

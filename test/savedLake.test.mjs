@@ -5,7 +5,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
-import { LAKE_FIELDS, lakeArrays } from '../js/physics/lake.module.js';
+import { LAKE_FIELDS, lakeArrays, savedLakeOptions, holdsLake, savedLake } from '../js/physics/lake.module.js';
 import { loadSavedLake, savedLakeOff } from '../scripts/savedLand.mjs';
 
 let gpuAvailable = true;
@@ -14,7 +14,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 
 const N = 32, DT = 1350 * 16 / N, topography = readTopography('etopo2022');
 const sheets = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'n1024' });
-const setup = () => ({ topography, geography: sheets.geography, land: sheets.land, lake: { model: 'flake' } });
+const setup = (lake = { model: 'flake' }) => ({ topography, geography: sheets.geography, land: sheets.land, lake });
 
 function savedColumns(lake) {
   const C = lake.depth.length, columns = Object.fromEntries([...LAKE_FIELDS, 'passed'].map((name) => [name, new Float64Array(C)]));
@@ -71,6 +71,35 @@ test(`at N=${N} both engines take a save's frozen lakes whole: the columns read 
     assert.ok(ice < 1e-4, `step ${n}: frozen-lake ice differs by ${ice} of its thickness`);
   }
   gpu.destroy();
+});
+
+test(`at N=${N} a save's lake options come from its given record over its options, and a model built with them takes a save of other depths that a default model refuses`, () => {
+  assert.deepEqual(savedLakeOptions({ options: { lake: { freshDepth: 20, salineDepth: 4 } }, given: { lake: { freshDepth: 30 } } }), { freshDepth: 30, salineDepth: 4 });
+  assert.deepEqual(savedLakeOptions({ options: { radiation: {} } }), {});
+  const deeper = createModel(new Grid(N), setup({ model: 'flake', freshDepth: 20 }));
+  const saved = { ...savedColumns(deeper.lake), given: { lake: { freshDepth: 20 } } };
+  assert.ok(deeper.lake.cells.some((i) => deeper.lake.depth[i] === 20), 'a lake at the fresh depth');
+  assert.throws(() => loadSavedLake(prepare(createModel(new Grid(N), setup()), saved), saved), /give the lake options they were made with/);
+  const matched = prepare(createModel(new Grid(N), setup(savedLakeOptions(saved))), saved);
+  assert.equal(loadSavedLake(matched, saved), matched.lake.cells.length);
+});
+
+test(`at N=${N} a save whose lake arrays hold no lake loads as none, and a save that holds lakes refuses a model without them`, () => {
+  const model = prepare(createModel(new Grid(N), setup()), null), C = model.mesh.nCells;
+  const empty = lakeArrays(Object.fromEntries([...LAKE_FIELDS, 'passed', 'depth'].map((name) => [name, new Float64Array(C)])));
+  assert.ok(savedLake(empty) && !holdsLake(savedLake(empty)) && !holdsLake(null));
+  assert.equal(loadSavedLake(model, empty), 0);
+  assert.ok(model.lake.mean.every((v) => v === 0));
+  const saved = savedColumns(model.lake);
+  assert.throws(() => loadSavedLake(prepare(createModel(new Grid(N), setup({ model: 'off' })), null), saved), /the save holds lakes and the model has none/);
+});
+
+test('the page and compareEngines build their lakes with the save\x27s lake options', () => {
+  const worker = readFileSync('js/model.worker.js', 'utf8'), engines = readFileSync('scripts/compareEngines.mjs', 'utf8');
+  assert.match(worker, /const lakeGiven = saved \? savedLakeOptions\(saved\) : \{\};\n\s*const given = runOptions\(saved \? \{ \.\.\.saved\.options, \.\.\.\(Object\.keys\(lakeGiven\)\.length \? \{ lake: lakeGiven \} : \{\}\) \}/);
+  assert.match(worker, /missingBed === 'hydrolakes'\) options\.lake = \{ \.\.\.options\.lake, lakeDepths: decodeLakeDepths\(await \(await fetch\(lakeDepthsUrl\)\)\.arrayBuffer\(\)\) \}/);
+  assert.match(engines, /const lakeOptions = \{ \.\.\.savedLakeOptions\(saved\), \.\.\.JSON\.parse\(process\.env\.LAKE \?\? '\{\}'\) \};\n\s*if \(Object\.keys\(lakeOptions\)\.length\) options\.lake = lakeOptions;/);
+  assert.match(engines, /lake options: /);
 });
 
 const READ_ONLY = ['adjustStages', 'armMetrics', 'cellColumn', 'clearSkyBudget', 'compareStates', 'edgeBudget', 'equatorialMomentum', 'shortwaveBudget', 'snowIceAlbedo'];
