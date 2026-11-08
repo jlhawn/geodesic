@@ -62,6 +62,95 @@ export const lakeIceAlbedo = (T) => { const blue = Math.exp(-95.6 * (FLAKE.freez
 export const lakeDepth = (depth) => Math.min(FLAKE.maximumDepth, Math.max(FLAKE.minimumDepth, depth));
 
 /*
+ * data/lakedepth.bin, which scripts/lakeDepths.mjs writes from HydroLAKES
+ * v1.0 (Messager et al. 2016): after an 8-byte header ('LKD1', the count),
+ * per lake its pour point's longitude and latitude (°), its area (km²),
+ * mean depth (m) and the source of its volume (1 reported, 2 GRanD,
+ * 3 estimated), float32, largest lake first.
+ */
+export const lakeDepthsUrl = new URL('../../data/lakedepth.bin', import.meta.url);
+const LAKE_RECORD = ['lon', 'lat', 'area', 'depth', 'source'];
+
+export function encodeLakeDepths(lakes) {
+  const out = new ArrayBuffer(8 + 4 * LAKE_RECORD.length * lakes.length), head = new DataView(out), values = new Float32Array(out, 8);
+  [76, 75, 68, 49].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, lakes.length, true);
+  lakes.forEach((lake, n) => LAKE_RECORD.forEach((name, k) => { values[n * LAKE_RECORD.length + k] = lake[name]; }));
+  return out;
+}
+
+export function decodeLakeDepths(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  if (bytes.byteLength < 8 || String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'LKD1') throw new Error('not a lake-depth file');
+  const count = new DataView(bytes).getUint32(4, true), values = new Float32Array(bytes, 8);
+  if (values.length !== count * LAKE_RECORD.length) throw new Error('lake-depth file of the wrong size');
+  return Array.from({ length: count }, (_, n) => Object.fromEntries(LAKE_RECORD.map((name, k) => [name, values[n * LAKE_RECORD.length + k]])));
+}
+
+let lakeDepthsFile = null;
+export function readLakeDepths() {
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+  if (!fs) throw new Error('data/lakedepth.bin is read under node only; pass the decoded lakes as lakeDepths');
+  return (lakeDepthsFile ??= decodeLakeDepths(fs.readFileSync(lakeDepthsUrl)));
+}
+
+/*
+ * The mean depth (m) of the lake each lake cell lies in, by the lakes'
+ * pour points (NaN where none is found). A group of lake cells, connected
+ * across gaps of at most one cell, takes as candidates the lakes of at least `share` of its area whose pour
+ * point lies within `reach` cell spacings plus half the square root of the
+ * lake's area of one of its cells. A long lake the grid splits at its
+ * narrows leaves its far basins without its pour point, so a group that
+ * reaches none takes instead the lakes within `extent` square roots of
+ * their area plus a cell spacing of one of its cells whose area the groups
+ * that reach their pour point leave unclaimed by at least half the
+ * group's. Each of its cells
+ * takes the largest candidate whose pour point lies within that extent,
+ * since a lake's outlet may lie at its far end, else the candidate nearest
+ * it in units of the square root of its area.
+ */
+export function sourceLakeDepths(mesh, lake, lakes, { share = 0.05, reach = 2, extent = 2.5 } = {}) {
+  const C = mesh.nCells, depth = new Float64Array(C).fill(NaN), group = new Int32Array(C).fill(-1);
+  const unit = (i) => [Math.cos(mesh.latCell[i]) * Math.cos(mesh.lonCell[i]), Math.cos(mesh.latCell[i]) * Math.sin(mesh.lonCell[i]), Math.sin(mesh.latCell[i])];
+  const toUnit = (lon, lat) => { const a = lon * Math.PI / 180, b = lat * Math.PI / 180; return [Math.cos(b) * Math.cos(a), Math.cos(b) * Math.sin(a), Math.sin(b)]; };
+  const km = (p, q) => 6371 * Math.acos(Math.min(1, Math.max(-1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2])));
+  const spacing = Math.sqrt(4 * Math.PI * 6371 ** 2 / C), points = lakes.map((l) => toUnit(l.lon, l.lat));
+  const edges = mesh.cellsOnCell.length / C, groups = [], claimed = new Float64Array(lakes.length);
+  const size = (n) => Math.sqrt(lakes[n].area);
+  for (let start = 0; start < C; start++) {
+    if (!lake[start] || group[start] >= 0) continue;
+    const members = [start];
+    group[start] = start;
+    for (let k = 0; k < members.length; k++) {
+      const i = members[k];
+      for (let e = 0; e < mesh.nEdgesOnCell[i]; e++) {
+        const j = mesh.cellsOnCell[i * edges + e];
+        if (j < 0) continue;
+        for (let f = -1; f < mesh.nEdgesOnCell[j]; f++) {
+          const k = f < 0 ? j : mesh.cellsOnCell[j * edges + f];
+          if (k >= 0 && lake[k] && group[k] < 0) { group[k] = start; members.push(k); }
+        }
+      }
+    }
+    const area = members.reduce((sum, i) => sum + mesh.areaCell[i] * 1e-6, 0), centers = members.map(unit);
+    const candidates = lakes.map((l, n) => n).filter((n) => lakes[n].area >= share * area && centers.some((p) => km(p, points[n]) <= reach * spacing + 0.5 * size(n)));
+    for (const n of candidates) claimed[n] += area;
+    groups.push({ members, area, centers, candidates });
+  }
+  for (const { members, area, centers, candidates: reached } of groups) {
+    const candidates = reached.length ? reached : lakes.map((l, n) => n).filter((n) => lakes[n].area >= share * area && lakes[n].area - claimed[n] >= 0.5 * area && centers.some((p) => km(p, points[n]) <= extent * size(n) + spacing));
+    if (!candidates.length) continue;
+    members.forEach((i, k) => {
+      let best = -1, score = Infinity;
+      for (const n of candidates) if (km(centers[k], points[n]) <= extent * size(n) + spacing && (best < 0 || lakes[n].area > lakes[best].area)) best = n;
+      if (best < 0) for (const n of candidates) { const s = km(centers[k], points[n]) / size(n); if (s < score) { score = s; best = n; } }
+      depth[i] = lakes[best].depth;
+    });
+  }
+  return depth;
+}
+
+/*
  * A new lake column at temperature T (K): mixed to the bottom, no ice.
  */
 export function lakeColumn(T, depth) {
@@ -232,44 +321,51 @@ export function lakeEnthalpy(c, D) {
   return k.rhoWater * k.cWater * D * (c.mean - k.freezing) - k.rhoIce * c.ice * (k.fusion + k.cIce * CI * (k.freezing - c.iceT));
 }
 
-export const LAKE_DEFAULTS = Object.freeze({ model: 'flake', freshDepth: 10, salineDepth: 5 });
+export const LAKE_DEFAULTS = Object.freeze({ model: 'flake', freshDepth: 10, salineDepth: 5, missingBed: 'default' });
+export const MISSING_BEDS = ['default', 'hydrolakes'];
 export const lakeModelOf = (geography, { model } = {}) => model ?? (geography?.lake ? LAKE_DEFAULTS.model : 'off');
 export const lakeStateName = (name) => `lake${name[0].toUpperCase()}${name.slice(1)}`;
 export const lakeArrays = (serialized) => Object.fromEntries(Object.entries(serialized).map(([name, values]) => [lakeStateName(name), Float64Array.from(values)]));
-export const savedLake = (saved) => (saved?.lakeMean ? Object.fromEntries([...LAKE_FIELDS, 'passed'].map((name) => [name, saved[lakeStateName(name)]]).filter(([, values]) => values)) : null);
+export const savedLake = (saved) => (saved?.lakeMean ? Object.fromEntries([...LAKE_FIELDS, 'passed', 'depth'].map((name) => [name, saved[lakeStateName(name)]]).filter(([, values]) => values)) : null);
 export const LAKE_FIELDS = ['mixed', 'mean', 'bottom', 'shape', 'mixedDepth', 'ice', 'iceT'];
 
 /*
  * The lakes of a geography (its `lake` cells, js/fineGeography.module.js)
  * under FLake: each its own column, as deep as the geography's lake depth
  * within the IFS's bounds, or, where ETOPO 2022 holds no bed below the
- * lake's level, the GLDB v3 default the IFS takes (Choulga et al. 2019):
- * freshDepth, or salineDepth for Natural Earth's alkaline lakes. The water
+ * lake's level, the GLDB v3 default the IFS takes for lakes without data
+ * (Choulga et al. 2019): freshDepth, or salineDepth for Natural Earth's
+ * alkaline lakes; with missingBed 'hydrolakes', the mean depth HydroLAKES
+ * gives the lake (sourceLakeDepths, data/lakedepth.bin or `lakeDepths`),
+ * the default only where it finds none. The water
  * a lake gains (rain and snow and inflowing runoff, less evaporation) it
  * passes on whole to the sea cell its outlet reaches, so its depth stays
  * fixed and a closed basin's loss is drawn from that sea; `passed` holds
- * the running total per lake cell (kg/m², negative for a net loss). Snow
+ * the running total per lake cell (kg/m², negative for a net loss), and
+ * `seen` the part of it already handed to the sea, set to it on load. Snow
  * on a lake joins its water and takes its heat of fusion from it. FLake's
  * equations set the water; the ice holds what remains of the heat the
  * fluxes give (lakeSettle), so enthalpy() changes by exactly those.
  */
-export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, freshDepth = LAKE_DEFAULTS.freshDepth, salineDepth = LAKE_DEFAULTS.salineDepth, fusion = 3.34e5, melting = 273.15 } = {}) {
+export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, freshDepth = LAKE_DEFAULTS.freshDepth, salineDepth = LAKE_DEFAULTS.salineDepth, missingBed = LAKE_DEFAULTS.missingBed, lakeDepths = null, fusion = 3.34e5, melting = 273.15 } = {}) {
   if (model !== 'flake') throw new Error(`lake model is 'flake' or 'off', not ${model}`);
+  if (!MISSING_BEDS.includes(missingBed)) throw new Error(`missingBed is ${MISSING_BEDS.join(' or ')}, not ${missingBed}`);
   if (!geography || !geography.lake) throw new Error('the lake model needs a geography with lakes (mask n1024)');
   const C = mesh.nCells, cells = [];
   for (let i = 0; i < C; i++) if (geography.lake[i]) cells.push(i);
-  const depth = new Float64Array(C), coriolis = new Float64Array(C), passed = new Float64Array(C);
+  const depth = new Float64Array(C), coriolis = new Float64Array(C), passed = new Float64Array(C), seen = new Float64Array(C);
   const fields = Object.fromEntries(LAKE_FIELDS.map((name) => [name, new Float64Array(C)]));
+  const sourced = missingBed === 'hydrolakes' ? sourceLakeDepths(mesh, geography.lake, lakeDepths ?? readLakeDepths()) : null;
   for (const i of cells) {
     const bed = -geography.elevation[i];
-    depth[i] = lakeDepth(bed >= 1 ? bed : geography.saline?.[i] ? salineDepth : freshDepth);
+    depth[i] = lakeDepth(bed >= 1 ? bed : sourced && sourced[i] > 0 ? sourced[i] : geography.saline?.[i] ? salineDepth : freshDepth);
     coriolis[i] = 2 * 7.2921e-5 * Math.sin(mesh.latCell[i]);
   }
   const column = { mixed: 0, mean: 0, bottom: 0, shape: 0, mixedDepth: 0, ice: 0, iceT: 0 };
   const read = (i) => { for (const name of LAKE_FIELDS) column[name] = fields[name][i]; return column; };
   const write = (i) => { for (const name of LAKE_FIELDS) fields[name][i] = column[name]; };
   return {
-    cells, depth, coriolis, ...fields, passed,
+    cells, depth, coriolis, ...fields, passed, seen,
     isLake: geography.lake,
     initialize(surfaceT) {
       for (const i of cells) { Object.assign(column, lakeColumn(surfaceT[i], depth[i])); write(i); surfaceT[i] = column.mixed; }
@@ -289,9 +385,12 @@ export function createLake(mesh, geography, { model = LAKE_DEFAULTS.model, fresh
     },
     evaporate(i, evaporation, dt) { passed[i] -= evaporation * dt; },
     enthalpy(i) { return lakeEnthalpy(read(i), depth[i]); },
-    serialize() { return { ...Object.fromEntries(LAKE_FIELDS.map((name) => [name, Float64Array.from(fields[name])])), passed: Float64Array.from(passed) }; },
+    serialize() { return { ...Object.fromEntries(LAKE_FIELDS.map((name) => [name, Float64Array.from(fields[name])])), passed: Float64Array.from(passed), depth: Float64Array.from(depth) }; },
     load(saved) {
+      const other = saved.depth ? cells.find((i) => Math.abs(saved.depth[i] - depth[i]) > 1e-6 * depth[i]) : undefined;
+      if (other !== undefined) throw new Error(`the saved lakes have other depths than this run's (cell ${other}: ${saved.depth[other]} m saved, ${depth[other]} m here): give the lake options they were made with`);
       for (const name of [...LAKE_FIELDS, 'passed']) if (saved[name]) (name === 'passed' ? passed : fields[name]).set(saved[name]);
+      seen.set(passed);
     },
   };
 }

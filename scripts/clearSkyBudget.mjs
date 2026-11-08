@@ -17,18 +17,20 @@
 // lit separately), with each class's reference range and verdict.
 // RADIATION (JSON) passes options to the radiation, LAND (JSON) to the land.
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
-import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { clearSkyClasses, classTable, TERMS, REFERENCE_SOURCES } from './clearSkyClasses.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/clearSkyBudget.mjs <state.bin>'); process.exit(1); }
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const TIMES = Number(process.env.TIMES ?? 48), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), AT = Number(process.env.DAY ?? saved.day);
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, land: LAND });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, land: { ...ground.land, ...LAND } });
 const { mesh, core, state, seaIce, land } = model;
 const { K, C } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));

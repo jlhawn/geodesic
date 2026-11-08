@@ -108,7 +108,7 @@ test('with deckResolved \'above\' the deck replaces the resolved cloud of the la
     const added = deckRun('bl48', { ...options, radiationEvery, deckResolved: 'added' }, 'moist'), above = deckRun('bl48', { ...options, radiationEvery, deckResolved: 'above' }, 'moist');
     if (radiationEvery > 1) for (const { model, saved } of [added, above]) { model.state.forEach((a, n) => a.set(saved[n])); model.step(900); }
     const a = added.model.radiation, r = above.model.radiation, C = above.C, K = above.model.core.K;
-    let bare = 0, decked = 0, affected = 0, wetter = 0, darker = 0, lighter = 0, gain = 0, worst = 0, fromMiss = 0;
+    let bare = 0, decked = 0, sunlit = 0, affected = 0, wetter = 0, darker = 0, lighter = 0, gain = 0, worst = 0, fromMiss = 0;
     for (let i = 0; i < C; i++) {
       let sum = 0;
       if (radiationEvery === 1) {
@@ -125,6 +125,7 @@ test('with deckResolved \'above\' the deck replaces the resolved cloud of the la
         continue;
       }
       decked++;
+      if (a.surfaceShortwave[i] > 1) sunlit++;
       if (r.deckFrom[i] !== r.deckLayer[i]) fromMiss++;
       if (r.lowWater[i] > a.lowWater[i]) wetter++;
       if (r.surfaceShortwave[i] < a.surfaceShortwave[i] - 1e-9) darker++;
@@ -134,9 +135,9 @@ test('with deckResolved \'above\' the deck replaces the resolved cloud of the la
       gain += r.surfaceShortwave[i] - a.surfaceShortwave[i];
     }
     const label = radiationEvery === 1 ? 'radiation every step' : 'radiation held';
-    console.log(`${label}: ${decked} decked and ${bare} bare columns; the replaced layers start at the deck's own layer on all but ${fromMiss}; of ${affected} sunlit columns losing water, ${lighter} lighter at the surface, by ${(gain / affected).toFixed(2)} W/m² on average; ${darker} decked columns darker; worst column off its boundary fluxes by ${worst.toExponential(2)} W/m²`);
+    console.log(`${label}: ${decked} decked and ${bare} bare columns; the replaced layers start at the deck's own layer on all but ${fromMiss}; of ${sunlit} sunlit decked columns ${affected} lose water, ${lighter} lighter at the surface, by ${(gain / affected).toFixed(2)} W/m² on average; ${darker} decked columns darker; worst column off its boundary fluxes by ${worst.toExponential(2)} W/m²`);
     assert.ok(decked > 0.5 * C && fromMiss === 0 && wetter === 0, `${label}: ${decked} decked, ${fromMiss} replaced from another layer, ${wetter} wetter`);
-    assert.ok(affected > 0.1 * decked && lighter === affected && darker === 0 && worst < 1e-9, `${label}: ${lighter} of ${affected} lighter, ${darker} darker, ${worst} W/m² off`);
+    assert.ok(affected > 0.1 * sunlit && lighter === affected && darker === 0 && worst < 1e-9, `${label}: ${lighter} of ${affected} lighter, ${darker} darker, ${worst} W/m² off`);
   }
 });
 

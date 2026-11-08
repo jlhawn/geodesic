@@ -267,6 +267,15 @@ export function regridDeckField(source, target, values, name = 'mlmSubsidence') 
   return out;
 }
 
+/*
+ * A field per unit of the sea ice, regridded with that ice: each target
+ * cell takes its value from the same source tile as its ice, and 0 where
+ * its ice is inferred from the land.
+ */
+export function regridIceField(source, target, values) {
+  return sampleTiles(source, target, Float64Array.from(values), seaMask(source), interpolationWeights(source.mesh, target.mesh.xCell));
+}
+
 export const regridSubsidence = (source, target, subsidence) => regridDeckField(source, target, subsidence, 'mlmSubsidence');
 
 /*

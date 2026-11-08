@@ -4,8 +4,8 @@ import { Grid } from '../js/grid.module.js';
 import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, fogConstants } from '../js/physics/moist.module.js';
-import { syntheticTopography } from '../js/geography.module.js';
+import { MID_LEVEL, liftingCondensationLevel, saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, fogConstants } from '../js/physics/moist.module.js';
+import { syntheticTopography, surfaceGeopotential } from '../js/geography.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { PREVIOUS_MOIST, PREVIOUS_BERGERON, PREVIOUS_PCAPE_MINIMUM } from './helpers/previousDefaults.mjs';
@@ -71,10 +71,11 @@ function stratocumulus(z, p, below) {
 }
 
 /*
- * Column i of `model` set from profile(z, p, memo) (heights above the
- * surface), iterated so the heights are the core's.
+ * Column i of `model` set from profile(z, p, memo), z the height above sea
+ * level, or above the ground given its geopotential `phis`, iterated so the
+ * heights are the core's.
  */
-function place(model, i, surfacePressure, profile) {
+function place(model, i, surfacePressure, profile, phis = null) {
   const { K, C, sigmaMid, exnerLayer, geopotential, g } = model.core.diagnostics;
   const [pi, theta, , , q, qc] = model.state;
   pi[i] = surfacePressure;
@@ -83,7 +84,7 @@ function place(model, i, surfacePressure, profile) {
     model.core.diagnoseColumn(i, pi, theta, q, qc);
     const memo = {};
     for (let k = K - 1; k >= 0; k--) {
-      const idx = k * C + i, p = pi[i] * sigmaMid[k], z = geopotential[idx] / g;
+      const idx = k * C + i, p = pi[i] * sigmaMid[k], z = (geopotential[idx] - (phis ? phis[i] : 0)) / g;
       const air = profile(z, p, memo);
       theta[idx] = air.T / exnerLayer[idx];
       q[idx] = air.q;
@@ -909,7 +910,7 @@ const nocturnalSounding = (cap, strength, warm = 0) => (z, p) => {
  * boundary layers, deck gates, regimes, mixing tops, sea ice, saved
  * subcloud T_v and surface fluxes, all in single precision.
  */
-function randomColumns(model, { nocturnal = false } = {}) {
+function randomColumns(model, { nocturnal = false, phis = null } = {}) {
   const { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   let seed = 12345;
@@ -927,13 +928,13 @@ function randomColumns(model, { nocturnal = false } = {}) {
     friction[i] = 0.1 + 0.3 * random();
     const night = nocturnal ? { cooled: nightRandom() < 0.4, cap: 300 + 600 * nightRandom(), strength: 4 + 6 * nightRandom(), flux: -2e-5 * nightRandom() } : null;
     if (kind === 0 && night && night.cooled) {
-      place(model, i, surface, nocturnalSounding(night.cap, night.strength, warm));
+      place(model, i, surface, nocturnalSounding(night.cap, night.strength, warm), phis);
       buoyancy[i] = night.flux;
-    } else if (kind === 0) place(model, i, surface, (z, p) => { const air = jordan(p); const T = air.T + warm * (z < 800 ? 1 : 0.5); return { T, q: Math.min(wet * air.q, 0.95 * saturationHumidity(T, p)) }; });
-    else if (kind === 1) place(model, i, surface, (z, p) => { const air = tradeCumulus(z, p); return { T: air.T + warm, q: Math.min(wet * air.q, 0.95 * saturationHumidity(air.T + warm, p)) }; });
-    else if (kind === 2) place(model, i, surface, stratocumulus);
-    else if (kind === 4) place(model, i, surface, (z, p) => { const air = tradeWind(z, p); return { T: air.T + warm, q: Math.min(wet * air.q, 0.95 * saturationHumidity(air.T + warm, p)) }; });
-    else place(model, i, surface, (z, p) => { const air = jordan(p); const T = air.T - 5 + warm; return { T, q: Math.min(0.6 * air.q, 0.95 * saturationHumidity(T, p)) }; });
+    } else if (kind === 0) place(model, i, surface, (z, p) => { const air = jordan(p); const T = air.T + warm * (z < 800 ? 1 : 0.5); return { T, q: Math.min(wet * air.q, 0.95 * saturationHumidity(T, p)) }; }, phis);
+    else if (kind === 1) place(model, i, surface, (z, p) => { const air = tradeCumulus(z, p); return { T: air.T + warm, q: Math.min(wet * air.q, 0.95 * saturationHumidity(air.T + warm, p)) }; }, phis);
+    else if (kind === 2) place(model, i, surface, stratocumulus, phis);
+    else if (kind === 4) place(model, i, surface, (z, p) => { const air = tradeWind(z, p); return { T: air.T + warm, q: Math.min(wet * air.q, 0.95 * saturationHumidity(air.T + warm, p)) }; }, phis);
+    else place(model, i, surface, (z, p) => { const air = jordan(p); const T = air.T - 5 + warm; return { T, q: Math.min(0.6 * air.q, 0.95 * saturationHumidity(T, p)) }; }, phis);
     surfaceT[i] = 300;
     const { geopotential, g } = core.diagnostics;
     model.boundaryLayer.depth[i] = geopotential[(K - 1) * C + i] / g + 200 + 1300 * random();
@@ -1487,34 +1488,65 @@ test('the IFS updraught conversion: on Jordan\'s column each layer rains l (1 �
   for (let n = 1; n < tops.length; n++) assert.ok(tops[n] >= tops[n - 1], `top ${tops[n]} under ${tops[n - 1]}`);
 });
 
-async function parity(options, { momentum = false, nocturnal = false, land = false } = {}) {
+const placeMidLevel = (placed, ascent) => (model, fields) => {
+  const [pi, theta, , , q, qc] = model.state, C = model.mesh.nCells, K = theta.length / C, KL = model.moist.subcloudLayers, { exnerLayer, piSigmaDot, omega } = model.core.diagnostics;
+  placed.forEach((profile, n) => {
+    const i = 7 * n + 3;
+    place(model, i, 101500, profile); setDepth(model, i, 500);
+    for (const a of model.state) if (a.length === C) a[i] = Math.fround(a[i]); else if (a.length === K * C) for (let k = 0; k < K; k++) a[k * C + i] = Math.fround(a[k * C + i]);
+    model.core.diagnoseColumn(i, pi, theta, q, qc);
+    for (let k = K - KL; k < K; k++) { const x = k * C + i; fields.saved[(k - K + KL) * C + i] = Math.fround(theta[x] * exnerLayer[x] * (1 + VIRTUAL_FACTOR * q[x] - qc[x])); }
+    model.boundaryLayer.depth[i] = Math.fround(model.boundaryLayer.depth[i]); model.radiation.mlmGate[i] = Math.fround(0.3);
+    fields.buoyancy[i] = model.boundaryLayer.buoyancyFlux[i] = Math.fround(-1e-4);
+    fields.friction[i] = model.boundaryLayer.friction[i] = 0.25;
+    fields.sensible[i] = model.radiation.sensibleHeat[i] = 0;
+    fields.evaporation[i] = model.radiation.evaporation[i] = 0;
+    for (let k = 1; k < K; k++) piSigmaDot[k * C + i] = Math.fround(ascent);
+    for (let k = 0; k < K; k++) omega[k * C + i] = Math.fround(ascent);
+  });
+};
+
+async function parity(options, { momentum = false, nocturnal = false, land = false, ascent = false, grid = levels, ground = null, columns = null, perturb = null } = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const landMask = land ? Uint8Array.from({ length: 16 * 16 * 10 + 2 }, (_, i) => (i % 3 === 0 ? 1 : 0)) : null;
-  const model = build(landMask ? { ...options, land: landMask } : options), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
+  const model = createModel(new Grid(16), { ...(ground ? { topography: syntheticTopography(90, 180, ground) } : {}), ocean: false, levels: grid, moist: landMask ? { ...options, land: landMask } : options }), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
   const [pi, theta, , surfaceT, q, qc] = model.state;
-  const { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation } = randomColumns(model, { nocturnal });
+  const phis = ground ? surfaceGeopotential(mesh, model.geography) : null, fields = randomColumns(model, { nocturnal, phis });
+  const { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation } = fields;
+  if (ascent) {
+    let ascentSeed = 777;
+    const ascentRandom = () => { ascentSeed = (ascentSeed * 1103515245 + 12345) % 2147483648; return ascentSeed / 2147483648; };
+    for (let k = 1; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.piSigmaDot[k * C + i] = Math.fround(0.6 * ascentRandom() - 0.4);
+    if (core.diagnostics.omega) for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.omega[k * C + i] = Math.fround(0.6 * ascentRandom() - 0.4);
+  }
+  if (columns) columns(model, fields);
+  assert.ok(theta.every(Number.isFinite) && q.every(Number.isFinite), 'every random column holds a finite theta and q');
   let cloudSeed = 4242;
   const cloudRandom = () => { cloudSeed = (cloudSeed * 1103515245 + 12345) % 2147483648; return cloudSeed / 2147483648; };
   for (let x = moist.cumulusK0 * C; x < K * C; x++) if (cloudRandom() < 0.3) { moist.cumulusCover[x] = Math.fround(0.05 * cloudRandom()); moist.cumulusWater[x] = Math.fround(1e-3 * cloudRandom()); }
   const priorCover = Float64Array.from(moist.cumulusCover), priorWater = Float64Array.from(moist.cumulusWater);
-  const gpu = await createGpuCore(mesh, { levels, physics: options });
+  const above = (h, i) => h - (phis ? phis[i] / core.diagnostics.g : 0);
+  const gpu = await createGpuCore(mesh, { levels: grid, physics: options, ...(phis ? { surfaceGeopotential: phis } : {}) });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, concentration, cumulusCover: priorCover.subarray(moist.cumulusK0 * C), cumulusWater: priorWater.subarray(moist.cumulusK0 * C) });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.REGIME, Float32Array.from(regime));
-  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIXTOP, Float32Array.from(mixingTop));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIXTOP, Float32Array.from(mixingTop, above));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(stratiform));
-  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth, above));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.BUOY, Float32Array.from(buoyancy));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.USTAR, Float32Array.from(friction));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SUBTV, Float32Array.from(saved));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(sensible));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(evaporation));
-  if (landMask) device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LAND, Float32Array.from(landMask));
+  const landUsed = landMask ?? (ground ? Float32Array.from(model.geography.land, (l, i) => (l ? (model.geography.iceSheet?.[i] ? 2 : 1) : 0)) : null);
+  if (landUsed) device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LAND, Float32Array.from(landUsed));
   let dragSeed = 31;
   const dragRandom = () => { dragSeed = (dragSeed * 1103515245 + 12345) % 2147483648; return dragSeed / 2147483648; };
   model.boundaryLayer.surfaceDrag.set(Float64Array.from({ length: C }, () => (momentum ? 0 : Math.fround(0.08 * dragRandom()))));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SDRAG, Float32Array.from(model.boundaryLayer.surfaceDrag));
+  if (ascent) device.queue.writeBuffer(buffers.D, 4 * layout.D.PSD, Float32Array.from(core.diagnostics.piSigmaDot));
+  if (ascent && core.diagnostics.omega) device.queue.writeBuffer(buffers.D, 4 * layout.D.OMG, Float32Array.from(core.diagnostics.omega));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.adjustMix.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
@@ -1527,8 +1559,9 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   pass.end();
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
-  const response = new Float64Array(C), warmed = new Float64Array(C), warmedFlux = new Float64Array(C), thetaResponse = new Float64Array(K * C);
-  let windResponse = null;
+  const response = new Float64Array(C), warmed = new Float64Array(C), warmedFlux = new Float64Array(C), thetaResponse = new Float64Array(K * C), qResponse = new Float64Array(K * C), warmedKind = new Array(C);
+  const kind = (i) => [moist.deep.deep, moist.deep.midLevel, moist.deep.deepened, moist.deep.departure, moist.cumulusTop[i], moist.cumulusBaseFlux[i] > 0, moist.convectivePrecipitation[i] > 0].join();
+  let windResponse = null, perturbed = null;
   {
     const kept = model.state.map((a) => Float64Array.from(a)), keptSaved = Float64Array.from(saved), keptSnow = Float64Array.from(model.seaIce.snow);
     for (let x = 0; x < saved.length; x++) saved[x] *= 1 + 2 ** -23;
@@ -1537,25 +1570,46 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow); moist.cumulusCover.set(priorCover); moist.cumulusWater.set(priorWater);
     for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation, moist.fogPrecipitation]) a.fill(0);
     for (let x = 0; x < theta.length; x++) theta[x] *= 1 + 2 ** -23;
-    model.phases.adjust(0, C, dt);
+    for (let i = 0; i < C; i++) { core.diagnoseColumn(i, pi, theta, q, qc); model.phases.adjust(i, i + 1, dt); warmedKind[i] = kind(i); }
     for (let i = 0; i < C; i++) { warmed[i] = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; warmedFlux[i] = moist.cumulusBaseFlux[i]; }
     thetaResponse.set(theta);
+    qResponse.set(q);
     if (momentum) { model.phases.mixMomentum(0, mesh.nEdges, dt); windResponse = Float64Array.from(model.state[2]); }
     model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow); moist.cumulusCover.set(priorCover); moist.cumulusWater.set(priorWater);
     for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation, moist.fogPrecipitation]) a.fill(0);
+    if (perturb) {
+      const undo = perturb();
+      try { for (let i = 0; i < C; i++) { core.diagnoseColumn(i, pi, theta, q, qc); model.phases.adjust(i, i + 1, dt); } } finally { undo(); }
+      perturbed = { theta: Float64Array.from(theta), q: Float64Array.from(q), conv: Float64Array.from(moist.convectivePrecipitation), large: Float64Array.from(moist.largeScalePrecipitation), fog: Float64Array.from(moist.fogPrecipitation), flux: Float64Array.from(moist.cumulusBaseFlux), top: Float64Array.from(moist.cumulusTop) };
+      model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow); moist.cumulusCover.set(priorCover); moist.cumulusWater.set(priorWater);
+      for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation, moist.fogPrecipitation]) a.fill(0);
+    }
   }
   moist.trace.convection = new Float64Array(K * C);
   const threshold = new Set();
-  const typedAtEdge = new Set();
-  const departure = new Int16Array(C).fill(-1);
+  const typedAtEdge = new Set(), forced = new Set();
+  const departure = new Int16Array(C).fill(-1), kinds = new Array(C);
+  let midLevel = 0, deepened = 0, continued = 0, sentBack = 0, trimmed = 0, offsets = 0, dryEnds = 0, cloudEnds = 0, overshoots = 0, perturbedColumns = 0;
+  const continuedColumns = [];
   const downdraftAtEdge = new Set(), { cp, exnerLayer } = core.diagnostics, phiLayer = core.diagnostics.geopotential;
   for (let i = 0; i < C; i++) {
     core.diagnoseColumn(i, pi, theta, q, qc);
     const energy = Float64Array.from({ length: K }, (_, k) => cp * theta[k * C + i] * exnerLayer[k * C + i] + phiLayer[k * C + i] + LATENT_HEAT * q[k * C + i]);
     model.phases.adjust(i, i + 1, dt);
+    kinds[i] = kind(i);
     if (moist.deep.conversionMargin < 1e-3) threshold.add(i);
     if (moist.deep.typeMargin < 1e-3) typedAtEdge.add(i);
+    if (moist.deep.pcapeBoundary !== 0) forced.add(i);
     departure[i] = moist.deep.departure;
+    if (moist.deep.midLevel) midLevel++;
+    if (moist.deep.midLevel && moist.deep.midTrimmed) trimmed++;
+    if (moist.deep.midLevel && moist.deep.midOffset) offsets++;
+    if (moist.deep.midLevel && moist.deep.midDry) dryEnds++;
+    if (moist.deep.midLevel && moist.deep.midCloudEnd) cloudEnds++;
+    if (moist.deep.midLevel && moist.deep.midOvershoot) overshoots++;
+    if (moist.deep.deepened) deepened++;
+    if (moist.deep.deepened && moist.deep.midLevel) sentBack++;
+    if (moist.deep.deepened && needsContinuation(moist.deep, pi[i], core.diagnostics.levels, core.diagnostics.sigmaMid)) { continued++; continuedColumns.push(i); }
     const { start, top, base } = moist.deep;
     if (start >= 0) {
       let gap = Infinity;
@@ -1564,7 +1618,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     }
   }
   for (let i = 0; i < C; i++) { const now = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; response[i] = Math.max(Math.abs(response[i] - now), Math.abs(warmed[i] - now)); }
-  for (let x = 0; x < K * C; x++) thetaResponse[x] = Math.abs(thetaResponse[x] - theta[x] * (1 + 2 ** -23));
+  for (let x = 0; x < K * C; x++) { thetaResponse[x] = Math.abs(thetaResponse[x] - theta[x] * (1 + 2 ** -23)); qResponse[x] = Math.abs(qResponse[x] - q[x]); }
   if (momentum) {
     const E = mesh.nEdges, { dSigma, g } = core.diagnostics, u = model.state[2], before = Float64Array.from(u);
     model.phases.mixMomentum(0, E, dt);
@@ -1594,15 +1648,16 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   }
   const { sigmaMid } = core.diagnostics;
   let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, residues = 0, worstTheta = 0, thetaOver = -Infinity, thetaAllowed = 0, worstQ = 0, worstQc = 0, worstRain = 0, rainScale = 0;
-  let plumes = 0, plumeFlips = 0, topsDiffer = 0, worstFlux = 0, fluxScale = 0, worstCover = 0, worstWater = 0, waterScale = 0;
+  let plumes = 0, plumeFlips = 0, topsDiffer = 0, worstFlux = 0, fluxScale = 0, worstCover = 0, worstWater = 0, waterScale = 0, forcedOver = -Infinity, qOver = -Infinity;
   const K0 = K - (layout.PH.CUWATER - layout.PH.CUCOVER) / C;
   const beside = new Set(), switching = new Set();
   for (let i = 0; i < C; i++) {
     const cpu = moist.cumulusBaseFlux[i], gpuFlux = ph.CUMF[i];
-    if (moist.cumulusTop[i] > 0 && Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) <= 1 && Math.abs(cpu - gpuFlux) > 1e-2 * Math.max(cpu, gpuFlux)) beside.add(i);
     if (Math.abs(warmedFlux[i] - cpu) > 1e-3 * cpu) switching.add(i);
+    if (!(switching.has(i) && forced.has(i)) && moist.cumulusTop[i] > 0 && Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) <= 1 && Math.abs(cpu - gpuFlux) > 1e-2 * Math.max(cpu, gpuFlux)) beside.add(i);
     rainScale = Math.max(rainScale, moist.convectivePrecipitation[i]);
   }
+  const forcedSwitching = [...switching].filter((i) => forced.has(i)).length, heldSwitched = [...switching].filter((i) => forced.has(i) && kinds[i] !== warmedKind[i]);
   const merged = new Set(), alike = (a, b) => Math.abs(a - b) <= 1e-6 * Math.max(Math.abs(a), Math.abs(b));
   for (let i = 0; i < C; i++) for (let k = 0; k < K - 1; k++) if (alike(model.state[4][k * C + i], model.state[4][(k + 1) * C + i]) !== alike(after[4][k * C + i], after[4][(k + 1) * C + i])) { merged.add(i); break; }
   let rainOver = -Infinity, allowed = 0, fogged = 0, fogFlips = 0, worstFog = 0, fogScale = 0;
@@ -1621,6 +1676,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     if (beside.has(i) || merged.has(i) || threshold.has(i) || typedAtEdge.has(i) || downdraftAtEdge.has(i)) continue;
     fluxScale = Math.max(fluxScale, cpu);
     if (!switching.has(i)) worstFlux = Math.max(worstFlux, Math.abs(cpu - gpuFlux));
+    else if (forced.has(i)) forcedOver = Math.max(forcedOver, Math.abs(cpu - gpuFlux) - 2 * Math.abs(warmedFlux[i] - cpu));
     for (let k = K0; k < K; k++) {
       worstCover = Math.max(worstCover, Math.abs(moist.cumulusCover[k * C + i] - ph.CUCOVER[(k - K0) * C + i]));
       worstWater = Math.max(worstWater, Math.abs(moist.cumulusWater[k * C + i] - ph.CUWATER[(k - K0) * C + i]));
@@ -1640,12 +1696,27 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
       thetaOver = Math.max(thetaOver, Math.abs(model.state[1][x] - after[1][x]) - (1e-3 + 2 * thetaResponse[x]));
       thetaAllowed = Math.max(thetaAllowed, 2 * thetaResponse[x]);
       worstQ = Math.max(worstQ, Math.abs(model.state[4][x] - after[4][x]));
+      qOver = Math.max(qOver, Math.abs(model.state[4][x] - after[4][x]) - (2e-6 + (switching.has(i) && forced.has(i) ? 2 * qResponse[x] : 0)));
       worstQc = Math.max(worstQc, Math.abs(model.state[5][x] - after[5][x]));
     }
   }
-  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips} (beyond the rain's allowance below; within it by at most ${residues.toExponential(1)} kg/m²); engines differ in θ by ${worstTheta.toExponential(1)} K (twice the CPU's response to one f32 ulp of θ at most ${thetaAllowed.toExponential(1)} K), q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)}; twice its response to one f32 ulp of the saved subcloud T_v or of θ at most ${allowed.toExponential(1)})`);
-  console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top, ${beside.size} deep in the base flux by more than 1 % (the shallow plume beside it ran on one engine only), ${merged.size} whose dry adjustment merged other layers on the two engines, ${switching.size} whose base flux on the CPU moves by over 1e-3 under one ulp of θ (left out of the flux), ${threshold.size} whose deep plume's condensate at an interface lies within 1e-3 of the conversion threshold, ${typedAtEdge.size} whose test parcel's cloud lies within 1e-3 of 200 hPa or whose w² falls within 1e-3 m²/s² of zero and ${downdraftAtEdge.size} whose downdraft source layer has a moist static energy within 1e-5 of the next lowest (left out); base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
-  assert.ok(deep > C / 40 && plumes > C / 10 && decked > C / 40 && still > C / 40, `${deep} deep, ${plumes} plumes, ${decked} decked, ${still} still`);
+  if (perturbed) for (let i = 0; i < C; i++) {
+    if (beside.has(i) || merged.has(i) || threshold.has(i) || typedAtEdge.has(i) || downdraftAtEdge.has(i)) continue;
+    const cpu = moist.cumulusBaseFlux[i], rainDiff = Math.max(Math.abs(moist.convectivePrecipitation[i] - perturbed.conv[i]), Math.abs(moist.largeScalePrecipitation[i] - perturbed.large[i]), Math.abs(moist.fogPrecipitation[i] - perturbed.fog[i]));
+    let apart = (cpu > 0) !== (perturbed.flux[i] > 0) || (moist.cumulusTop[i] > 0 && Math.abs(moist.cumulusTop[i] - perturbed.top[i]) > 1) || (!switching.has(i) && Math.abs(cpu - perturbed.flux[i]) > 2e-3 * fluxScale) || rainDiff > 1e-4 * rainScale + 2 * response[i];
+    for (let k = 0; k < K && !apart; k++) { const x = k * C + i; apart = Math.abs(theta[x] - perturbed.theta[x]) > 1e-3 + 2 * thetaResponse[x] || Math.abs(q[x] - perturbed.q[x]) > 2e-6 + (switching.has(i) && forced.has(i) ? 2 * qResponse[x] : 0); }
+    if (apart) perturbedColumns++;
+  }
+  let continuedLeftOut = 0, continuedApart = 0;
+  for (const i of continuedColumns) {
+    if (beside.has(i) || merged.has(i) || threshold.has(i) || typedAtEdge.has(i) || downdraftAtEdge.has(i)) { continuedLeftOut++; continue; }
+    let over = -Infinity;
+    for (let k = 0; k < K; k++) over = Math.max(over, Math.abs(model.state[1][k * C + i] - after[1][k * C + i]) - (1e-3 + 2 * thetaResponse[k * C + i]));
+    if ((moist.cumulusBaseFlux[i] > 0) !== (ph.CUMF[i] > 0) || Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) > 1 || Math.abs(moist.cumulusBaseFlux[i] - ph.CUMF[i]) > 2e-3 * fluxScale || over > 0) continuedApart++;
+  }
+  console.log(`${JSON.stringify(options)}: ${C} random columns: ${ascent ? `${midLevel} of them convect at mid-level, ` : ""}${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips} (beyond the rain's allowance below; within it by at most ${residues.toExponential(1)} kg/m²); engines differ in θ by ${worstTheta.toExponential(1)} K (twice the CPU's response to one f32 ulp of θ at most ${thetaAllowed.toExponential(1)} K), q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)}; twice its response to one f32 ulp of the saved subcloud T_v or of θ at most ${allowed.toExponential(1)})`);
+  console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top, ${beside.size} deep in the base flux by more than 1 % (the shallow plume beside it ran on one engine only), ${merged.size} whose dry adjustment merged other layers on the two engines, ${switching.size} whose base flux on the CPU moves by over 1e-3 under one ulp of θ (the ${forcedSwitching} of them whose PCAPE closure carries the subcloud forcing held to twice that response in base flux and q, the rest left out of the flux), ${threshold.size} whose deep plume's condensate at an interface lies within 1e-3 of the conversion threshold, ${typedAtEdge.size} whose test parcel's cloud lies within 1e-3 of 200 hPa or whose w² falls within 1e-3 times the closure velocity squared of zero and ${downdraftAtEdge.size} whose downdraft source layer has a moist static energy within 1e-5 of the next lowest (left out); base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
+  assert.ok(deep > C / 40 && plumes > C / 10 && decked > C / 40 && (ascent || still > C / 40), `${deep} deep, ${plumes} plumes, ${decked} decked, ${still} still`);
   assert.equal(plumeFlips, 0);
   assert.equal(topsDiffer, 0);
   if (nocturnal && options.plumeMomentum !== false) {
@@ -1662,12 +1733,14 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   }
   assert.ok(beside.size <= C / 100, `${beside.size} columns' shallow plume beside the deep one ran on one engine only`);
   assert.ok(merged.size <= C / 100, `${merged.size} columns' dry adjustment merged other layers`);
-  assert.ok(switching.size <= 0.02 * C, `${switching.size} columns' base flux switches under one ulp of θ`);
+  assert.ok(switching.size - forcedSwitching <= 0.02 * C, `${switching.size - forcedSwitching} columns' base flux switches under one ulp of θ without the subcloud forcing`);
+  assert.ok(forcedSwitching <= C / 25 && heldSwitched.length === 0, `${forcedSwitching} columns held to twice their response to one ulp of θ, ${heldSwitched.length} of which change their plume's type, departure or top, or whether it rises or rains, under that ulp: ${heldSwitched.slice(0, 8).join(' ')}`);
+  assert.ok(forcedOver <= 0, `where the subcloud forcing makes the base flux move by over 1e-3 under one ulp of θ the engines differ by ${forcedOver} kg/m²/s more than twice that response`);
   assert.ok(threshold.size <= C / 100 && typedAtEdge.size <= C / 100 && downdraftAtEdge.size <= C / 100, `${threshold.size} columns' plume condensate at the conversion threshold, ${typedAtEdge.size} typed at the edge, ${downdraftAtEdge.size} with a downdraft source at a tie`);
   assert.ok(worstFlux < 2e-3 * fluxScale && worstCover < 1e-4, `base mass flux ${worstFlux}, cover ${worstCover}`);
   assert.ok(waterScale > 0 && worstWater < 1e-3 * waterScale, `plume condensate ${worstWater} against ${waterScale}`);
   assert.equal(flips, 0);
-  assert.ok(thetaOver < 0 && worstQ < 2e-6 && worstQc < 5e-7, `θ ${worstTheta} (${thetaOver} above 1e-3 K and twice the response to one ulp), q ${worstQ}, qc ${worstQc}`);
+  assert.ok(thetaOver < 0 && qOver < 0 && worstQc < 5e-7, `θ ${worstTheta} (${thetaOver} above 1e-3 K and twice the response to one ulp), q ${worstQ} (${qOver} above 2e-6, and twice the response to one ulp of θ where the subcloud forcing switches the base flux), qc ${worstQc}`);
   assert.ok(rainOver < 0, `rain ${worstRain} against ${rainScale}, ${rainOver} above 1e-4 of it and twice the response to one ulp of the saved T_v or of θ`);
   const fogOn = (options.autoconversionFloor ?? MOIST_DEFAULTS.autoconversionFloor) !== 'none' && (('fogDroplets' in options ? options.fogDroplets : MOIST_DEFAULTS.fogDroplets) !== null || (options.fogDeposition ?? MOIST_DEFAULTS.fogDeposition) > 0);
   console.log(`  fog reaches the ground from ${fogged} columns (largest ${(1e3 * fogScale).toFixed(3)} g/m²), the engines differ by ${worstFog.toExponential(1)} kg/m² and on ${fogFlips} in whether more than 1e-9 kg/m² does`);
@@ -1679,7 +1752,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     const plumed = moist.cumulusBaseFlux[i] > 0 && pi[i] * sigmaMid[k] >= moist.cumulusTop[i];
     if (!plumed && Math.max(below ? (regime[i] === COUPLED_REGIME ? 1 : 0) : stratiform[i], iced) > 0) shared[k * C + i] = 1;
   }
-  return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared };
+  return { midLevel, deepened, continued, continuedLeftOut, continuedApart, sentBack, trimmed, offsets, dryEnds, cloudEnds, overshoots, perturbed: perturbedColumns, cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared, largeScale: Float64Array.from(moist.largeScalePrecipitation), gpuLargeScale: Float64Array.from(ph.COND.subarray(0, C)) };
 }
 
 test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, carried through non-buoyant layers by its w² and entraining at 1/z, shut where the EIS of its column passes stratocumulusInversion, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -1713,6 +1786,10 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeEntrainmentLaw: 'gregory' });
 });
 
+test('the engines agree on random columns over land 300 to 2300 m high under a random large-scale ascent, the columns set up by height above the ground and the ice sheets uploaded as ice', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  await parity({}, { ascent: true, ground: (lat, lon) => 1300 + 1000 * Math.sin(2 * lon) * Math.cos(lat) });
+});
+
 test("the departure search matches between the engines on random columns with a nocturnal inversion under a conditionally unstable layer: the same layer roots the plume, under 'elevated' and 'elevatedStable', carrying momentum, and with the test parcel's entrainment scaled by the departure layer's own humidity", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const options = { stratocumulusInversion: null };
   await parity({ ...options, plumeDeparture: 'elevated' }, { nocturnal: true });
@@ -1743,6 +1820,279 @@ test('the stratiform lifetime matches between the engines on random columns of e
   }
   console.log(`after one step the 3 h stratiform lifetime keeps more cloud than the 1 h lifetime alone in ${kept} of ${cloudy} cloudy layers (GPU ${gpuKept}), ${keptShared} of the ${shared} whose long share is positive (outside a plume's layers, below the mixing top of a coupled or ice-covered column or above it under an EIS share)`);
   assert.ok(keptShared > shared / 5 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}, ${keptShared} of the ${shared} with a long share`);
+});
+
+test("the Kessler rate of the stratiform rain's evaporation, the IFS code's semi-implicit form of it, the overlap of the rain's precipitating share and the relative-humidity ceiling match between the engines on random columns, under every law, with the share overlapped or held, and the rate lets more of the large-scale rain reach the ground on both", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const instant = await parity({}), kessler = await parity({ rainEvaporationLaw: 'kessler' });
+  const ceiled = await parity({ rainEvaporationLaw: 'kessler', rainCover: 0.5, rainEvaporationCeiling: 0.7 });
+  const cloudsc = await parity({ rainEvaporationLaw: 'cloudsc', rainEvaporationCeiling: 0.7 });
+  await parity({ rainEvaporationCeiling: 0.7 });
+  await parity({ rainEvaporationLaw: 'cloudsc', rainCover: 0.1 });
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  let wetter = 0, gpuWetter = 0;
+  for (let i = 0; i < instant.largeScale.length; i++) {
+    if (kessler.largeScale[i] > instant.largeScale[i] * (1 + 1e-6) + 1e-9) wetter++;
+    if (kessler.gpuLargeScale[i] > instant.gpuLargeScale[i] * (1 + 1e-6) + 1e-9) gpuWetter++;
+  }
+  console.log(`large-scale rain reaching the ground over the random columns: ${sum(instant.largeScale).toFixed(3)} kg/m² summed under the instant law (GPU ${sum(instant.gpuLargeScale).toFixed(3)}), ${sum(kessler.largeScale).toFixed(3)} under the Kessler rate (GPU ${sum(kessler.gpuLargeScale).toFixed(3)}), more in ${wetter} columns (GPU ${gpuWetter}); ${sum(ceiled.largeScale).toFixed(3)} (GPU ${sum(ceiled.gpuLargeScale).toFixed(3)}) with a_P 0.5 under the 0.85 ceiling; ${sum(cloudsc.largeScale).toFixed(3)} (GPU ${sum(cloudsc.gpuLargeScale).toFixed(3)}) under the semi-implicit form, the share overlapped, and the 0.7 ceiling`);
+  assert.ok(wetter > 0 && Math.abs(gpuWetter - wetter) <= Math.max(2, wetter / 100), `${wetter} columns wetter on the CPU, ${gpuWetter} on the GPU`);
+  assert.ok(sum(kessler.largeScale) > sum(instant.largeScale) && sum(kessler.gpuLargeScale) > sum(instant.gpuLargeScale));
+  assert.ok(sum(cloudsc.largeScale) > sum(instant.largeScale) && sum(cloudsc.gpuLargeScale) > sum(instant.gpuLargeScale));
+});
+
+test("with convectionRetype a column its test parcel types deep runs the shallow plume where the deep plume's own cloud, from its base to the last interface it reaches with w² > 0, is no deeper than 200 hPa, as the IFS's code re-types after the ascent, and any other value than true or false is refused", () => {
+  const counts = {};
+  for (const retype of [false, true]) {
+    const model = build({ convectionRetype: retype }), { moist, core } = model, C = model.mesh.nCells, { levels } = core.diagnostics, pi = model.state[0];
+    randomColumns(model);
+    let deep = 0, shallowCloud = 0;
+    for (let i = 0; i < C; i++) {
+      model.phases.adjust(i, i + 1, 900);
+      if (moist.deep.deep) { deep++; if (!(pi[i] * (levels[moist.deep.base] - levels[moist.deep.top + 1]) > DEEP_CLOUD_DEPTH)) shallowCloud++; }
+    }
+    counts[retype] = { deep, shallowCloud };
+  }
+  console.log(`random columns: ${counts.false.deep} run the deep plume as typed by the test parcel, ${counts.false.shallowCloud} of them with a plume cloud no deeper than 200 hPa; re-typed after the ascent ${counts.true.deep} do, ${counts.true.shallowCloud} with such a cloud`);
+  assert.ok(counts.false.shallowCloud > 0 && counts.true.shallowCloud === 0, JSON.stringify(counts));
+  assert.equal(counts.true.deep, counts.false.deep - counts.false.shallowCloud);
+  assert.throws(() => build({ convectionRetype: 'yes' }), /convectionRetype/);
+});
+
+test('with convectionRetype the engines agree on random columns, and the GPU refuses a value other than true or false', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  await parity({ convectionRetype: true });
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, convectionRetype: 1 }), /convectionRetype/);
+});
+
+test('with midLevelConvection a column that no test parcel types deep and whose shallow plume does not rise lifts the lowest layer above the lowest below 10 km in large-scale ascent with q above 0.8 q_s whose parcel condenses at its top interface and is less than 0.5 K colder in virtual temperature than the half-level air CUININ builds there, at a base flux of −π σ̇/g or (H + L E)/(g z_base), with enthalpy and water exact; sinking, drier air or the option off leave the column as without it', () => {
+  const dt = 600;
+  const run = (options, { ascent = -0.2, humid = 0.95, sensible = 0, evaporation = 0, lapse = 6.5e-3, low = 1000, high = 3000, profile = null, column = null, buoyancy = -1e-4, depth = 500, ground = null, grid = levels } = {}) => {
+    const model = createModel(new Grid(16), { ...(ground === null ? {} : { topography: syntheticTopography(90, 180, () => ground) }), ocean: false, levels: grid, moist: options }), { moist, core } = model, { K, C, dSigma, geopotential, g, piSigmaDot } = core.diagnostics, [pi] = model.state;
+    place(model, 0, 101500, column ?? ((z, p) => { const T = 290 - lapse * Math.min(z, 11000); return { T, q: (z > low && z < high ? humid : 0.3) * saturationHumidity(T, p) }; }));
+    setDepth(model, 0, depth);
+    model.boundaryLayer.buoyancyFlux[0] = buoyancy; model.boundaryLayer.friction[0] = 0.25; model.radiation.mlmGate[0] = 0.3;
+    model.radiation.sensibleHeat[0] = sensible; model.radiation.evaporation[0] = evaporation;
+    for (let k = 1; k < K; k++) piSigmaDot[k * C] = ascent;
+    if (core.diagnostics.omega) for (let k = 0; k < K; k++) core.diagnostics.omega[k * C] = profile ? profile(k) : ascent;
+    const { cp, exnerLayer, exnerLower } = core.diagnostics, thetaV = core.arrays.thetaV, b = (K - 1) * C;
+    const interfaces = Float64Array.from({ length: K }, (_, k) => (k > 0 ? (geopotential[k * C] + cp * thetaV[k * C] * (exnerLayer[k * C] - exnerLower[(k - 1) * C])) / g : Infinity)), groundHeight = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
+    const pre = { T: Float64Array.from({ length: K }, (_, k) => model.state[1][k * C] * exnerLayer[k * C]), q: Float64Array.from({ length: K }, (_, k) => model.state[4][k * C]), p: Float64Array.from({ length: K }, (_, k) => pi[0] * core.diagnostics.sigmaMid[k]), z: Float64Array.from({ length: K }, (_, k) => geopotential[k * C] / g) };
+    const before = budget(model, 0);
+    moist.adjust(model.state, 0, 1, dt);
+    const after = budget(model, 0), source = Array.from({ length: K }, (_, k) => k).find((k) => Math.abs(pi[0] * dSigma[k] - moist.deep.sourceMass) < 1e-12 * moist.deep.sourceMass);
+    return { deep: { ...moist.deep }, pre, excess: Float64Array.from(moist.plumeInterfaceExcess), kappa: core.diagnostics.kappa, speed: Float64Array.from(moist.plumeSpeed), carried: Float64Array.from(moist.plumeCarried), rain: moist.rain[0], entrained: Float64Array.from(moist.plumeEntrained), detrained: Float64Array.from(moist.plumeDetrained), humidity: Float64Array.from(moist.envHumidity), flux: Float64Array.from(moist.cumulusFlux), before, after, state: model.state.map((a) => Float64Array.from(a.subarray(0, a.length))), height: source === undefined ? NaN : geopotential[source * C] / g - geopotential[(K - 1) * C] / g, source, interfaces, groundHeight, z: Float64Array.from({ length: K }, (_, k) => geopotential[k * C] / g), g };
+  };
+  const same = (a, b) => a.state.every((x, n) => x.every((v, j) => v === b.state[n][j]));
+  const off = run({}), on = run({ midLevelConvection: true }), g = on.g;
+  console.log(`mid-level: base flux ${on.deep.baseFlux.toExponential(6)} kg/m²/s against 0.2/g ${(0.2 / g).toExponential(6)}, from the layer ${on.height.toFixed(0)} m above the lowest, top ${on.deep.top}, base ${on.deep.base}, rain ${on.rain.toExponential(3)} kg/m²`);
+  assert.ok(!off.deep.deep && !off.deep.midLevel && off.deep.baseFlux === 0, 'nothing convects without the option');
+  assert.ok(on.deep.deep && on.deep.midLevel && Math.abs(on.deep.baseFlux * g / 0.2 - 1) < 1e-14, `base flux ${on.deep.baseFlux}`);
+  assert.ok(on.height > 800 && on.height < 3000 && on.deep.cape > 0 && on.rain > 0, `the plume departs ${on.height} m above the lowest layer with CAPE ${on.deep.cape} J/kg and rain ${on.rain} kg/m²`);
+  const firstCloud = on.deep.base - 1, firstShare = on.entrained[firstCloud] * (on.interfaces[firstCloud] - on.interfaces[firstCloud + 1]), sourceShare = 2 * Math.min(0.4, 1.75e-3 * (1 - on.humidity[on.source]) * (on.interfaces[on.source] - on.interfaces[on.source + 1]));
+  assert.ok(on.deep.base === on.source && Math.abs(firstShare / sourceShare - 1) < 1e-12 && on.flux[firstCloud] > 1, `the first cloud layer entrains 2 min(0.4, ENTRORG (1 - RH) dz) of the source layer, cuascn.F90's KCBOT, as a share of the flux: ${firstShare} against ${sourceShare}, its flux leaving at ${on.flux[firstCloud]}`);
+  const firstDepth = on.interfaces[firstCloud] - on.interfaces[firstCloud + 1], firstMixing = Math.exp((on.entrained[firstCloud] - on.detrained[firstCloud]) * firstDepth);
+  assert.ok(Math.abs(on.detrained[firstCloud] / on.entrained[firstCloud] - (1.6 - on.humidity[firstCloud])) < 1e-12 && Math.abs(on.flux[firstCloud] / firstMixing - 1) < 1e-12, `the first cloud layer detrains (1.6 - RH) times what it entrains and, the mean of its interface buoyancies not negative, carries exp((epsilon - delta) dz) of the base flux: ${on.flux[firstCloud]} against ${firstMixing}`);
+  const slowed = run({ midLevelConvection: true }, { lapse: 5.78e-3 }), slowCloud = slowed.deep.base - 1, slowDepth = slowed.interfaces[slowCloud] - slowed.interfaces[slowCloud + 1];
+  const slowShare = 2 * Math.min(0.4, 1.75e-3 * (1 - slowed.humidity[slowed.source]) * (slowed.interfaces[slowed.source] - slowed.interfaces[slowed.source + 1]));
+  const slowOutflow = slowed.entrained[slowCloud] * slowDepth + (1.6 - slowed.humidity[slowCloud]) * Math.sqrt(Math.min(1, slowed.speed[slowCloud] / slowed.speed[slowCloud + 1])), slowMixing = Math.exp((slowed.entrained[slowCloud] - slowed.detrained[slowCloud]) * slowDepth);
+  assert.ok(slowed.deep.midLevel && slowed.deep.base === slowed.source && slowed.deep.top < slowCloud && Math.abs(slowed.entrained[slowCloud] * slowDepth / slowShare - 1) < 1e-12 && slowOutflow < slowMixing && Math.abs(slowed.flux[slowCloud] / slowOutflow - 1) < 1e-12, `under 5.78 K/km the mean of the first cloud layer's interface buoyancies is negative, and the layer detrains as cuascn.F90's organized outflow at KCBOT - 1: keeping its entrainment e, it passes on e + (1.6 - RH) sqrt(min(1, w2 above / w2 below)) = ${slowOutflow} of the base flux, less than exp((epsilon - delta) dz) ${slowMixing}, and gets ${slowed.flux[slowCloud]}, while the plume rises on to layer ${slowed.deep.top}`);
+  const fallback = MID_LEVEL.interfaceFallback;
+  let slowedBare;
+  try { MID_LEVEL.interfaceFallback = Infinity; slowedBare = run({ midLevelConvection: true }, { lapse: 5.78e-3 }); } finally { MID_LEVEL.interfaceFallback = fallback; }
+  assert.ok(slowedBare.deep.midLevel && slowedBare.deep.top > slowed.deep.top, `in the same column CUININ's half-level air leaves the plume more than 0.1 K colder at an interface, where the two layers' mean T and q take its place: without that fallback the plume would end in layer ${slowedBare.deep.top}, with it in ${slowed.deep.top}`);
+  const lifted = run({ midLevelConvection: true }, { profile: (k) => (k === on.deep.base - 1 ? 0.45 : -0.2) });
+  assert.ok(lifted.deep.midLevel && lifted.source === on.source && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14, `descent at 0.45 Pa/s in the layer above the cloud base leaves the plume in its source layer at -omega/g of that layer: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
+  const faint = { profile: (k) => (k === on.source ? -1e-7 : -0.2) }, weak = run({ midLevelConvection: true }, faint), weakOff = run({}, faint);
+  assert.ok(!weak.deep.midLevel && same(weak, weakOff), `a source layer ascending at 1e-7 Pa/s, which closes the plume below CUMULUS_FLOOR, gets no plume and ends the search, though the layer above ascends at 0.2 Pa/s: base flux ${weak.deep.baseFlux}, from ${weak.height} m`);
+  const layered = run({ midLevelConvection: true }, { profile: (k) => (k === on.source ? -0.2 : Math.abs(k - on.source) === 1 ? 0.2 : -0.3) });
+  assert.ok(layered.deep.midLevel && layered.source === on.source && Math.abs(layered.deep.baseFlux * g / 0.2 - 1) < 1e-14, `with the source layer ascending at 0.2 Pa/s between layers that descend at 0.2 Pa/s, in ascent of 0.3 Pa/s elsewhere, the plume departs from the source layer (${layered.height} m against ${on.height} m) at -omega/g of that layer: ${layered.deep.baseFlux}`);
+  const lee = run({ midLevelConvection: true }, { profile: () => 0.2 }), windward = run({ midLevelConvection: true }, { ascent: 0.2, profile: () => -0.2 });
+  assert.ok(!lee.deep.midLevel && same(lee, off), 'no mid-level plume where omega > 0 though pi sigma-dot < 0');
+  const single = (rh, lapse = 8e-3) => ({ column: (z, p, memo) => { const T = 290 - lapse * Math.min(z, 11000), picked = !memo.picked && z > 2800; if (picked) memo.picked = true; return { T, q: (picked ? rh : 0.3) * saturationHumidity(T, p) }; }, grid: sigmaInterfaces('bl48') });
+  const shallowLcl = run({ midLevelConvection: true }, single(0.805)), shallowLclOff = run({}, single(0.805)), wet = run({ midLevelConvection: true }, single(0.97));
+  assert.ok(!shallowLcl.deep.midLevel && same(shallowLcl, shallowLclOff), `a bl48 layer near 3 km at RH 0.805, whose parcel condenses above its top interface though below the next layer's midpoint, gets no mid-level plume: base flux ${shallowLcl.deep.baseFlux} from ${shallowLcl.height} m`);
+  assert.ok(wet.deep.midLevel && wet.height > 2000, `the same layer at RH 0.97 departs: base flux ${wet.deep.baseFlux} from ${wet.height} m`);
+  const inversion = { column: (z, p) => { const T = z < 800 ? 290 - 6.5e-3 * z : z < 1400 ? 284.8 + 5 * (z - 800) / 600 : 289.8 - 6.5e-3 * (z - 1400); return { T, q: (z > 800 && z < 2400 ? 0.95 : 0.3) * saturationHumidity(T, p) }; } };
+  const retried = run({ midLevelConvection: true }, inversion);
+  assert.ok(retried.deep.midLevel && retried.height > 1300 && retried.deep.cape > 0, `under a 5 K inversion at 0.8-1.4 km, moist from 0.8 to 2.4 km, the inversion's layers give way to the first one above it: from ${retried.height} m with CAPE ${retried.deep.cape} J/kg`);
+  const tooCold = run({ midLevelConvection: true }, single(0.9, 4e-3)), tooColdOff = run({}, single(0.9, 4e-3)), justWarm = run({ midLevelConvection: true }, single(0.9, 5e-3));
+  assert.ok(!tooCold.deep.midLevel && same(tooCold, tooColdOff) && justWarm.deep.midLevel, `a bl48 layer at RH 0.9 near 3 km whose parcel is 0.70 K colder at its top interface under 4 K/km gets no mid-level plume, and under 5 K/km, 0.45 K colder, departs: from ${justWarm.height} m`);
+  const virtual = run({ midLevelConvection: true }, single(0.99, 3.5e-3)), loaded = run({ midLevelConvection: true }, single(0.97, 1.2e-3));
+  assert.ok(virtual.deep.midLevel && loaded.deep.midLevel, `a parcel 0.07 K warmer in virtual temperature though 0.81 K colder in temperature departs (from ${virtual.height} m), and so does one 0.455 K colder that holds 0.10 K of condensate, unloaded as cuascn's first level is (from ${loaded.height} m)`);
+  const lowestOnly = { column: (z, p) => { const T = z < 300 ? 290 - 6.5e-3 * z : z < 700 ? 288.05 + 4e-3 * (z - 300) : 289.65 - 6.5e-3 * (z - 700); return { T, q: (z < 60 ? 0.995 : 0.3) * saturationHumidity(T, p) }; } };
+  const lowest = run({ midLevelConvection: true }, lowestOnly), lowestOff = run({}, lowestOnly);
+  assert.ok(!lowest.deep.midLevel && same(lowest, lowestOff), `a column moist only in its lowest layer, under an inversion at 300-700 m, gets no mid-level plume: the search starts at the second-lowest layer (base flux ${lowest.deep.baseFlux})`);
+  assert.ok(windward.deep.midLevel && Math.abs(windward.deep.baseFlux * g / 0.2 - 1) < 1e-14, `where omega < 0 though pi sigma-dot > 0 the plume departs at -omega/g: ${windward.deep.baseFlux}`);
+  const mixing = Array.from({ length: on.deep.base - on.deep.top }, (_, n) => on.deep.top + n).filter((k) => on.entrained[k] > 0);
+  const spread = Math.max(...mixing.map((k) => on.humidity[k])) - Math.min(...mixing.map((k) => on.humidity[k]));
+  assert.ok(mixing.length >= 3 && spread > 0.05 && mixing.every((k) => Math.abs(on.detrained[k] / (on.entrained[k] * (1.6 - on.humidity[k])) - 1) < 1e-12), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ratios ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(4)).join(' ')} against 1.6 - RH ${mixing.map((k) => (1.6 - on.humidity[k]).toFixed(4)).join(' ')}`);
+  const equalLayers = Float64Array.from({ length: 41 }, (_, k) => k / 40), forced = { profile: () => -20, grid: equalLayers }, cloudFlux = (r) => Array.from({ length: r.deep.base - r.deep.top - 1 }, (_, n) => r.flux[r.deep.top + 1 + n]);
+  const trimmed = run({ midLevelConvection: true, cumulusBoundaryLoss: 10 }, forced), untrimmed = run({ midLevelConvection: true }, forced);
+  assert.ok(trimmed.deep.midLevel && untrimmed.deep.midLevel && Math.max(...cloudFlux(untrimmed)) > 1.05 && Math.max(...cloudFlux(trimmed)) <= 1 + 1e-12 && cloudFlux(trimmed).some((f) => Math.abs(f - 1) < 1e-12), `on 40 equal layers under 20 Pa/s of ascent, a base flux held to the mass of the layer above the source per step keeps every interface's flux at or below it, as cuascn.F90's ZMFMAX trim does with RMFCFL 1, where the flux under cumulusBoundaryLoss 0.1 grows to ${Math.max(...cloudFlux(untrimmed))} of its base value: ${cloudFlux(trimmed).map((f) => f.toFixed(6)).join(' ')}`);
+  const humidityAt = (r, k) => Math.min(1, r.pre.q[k] / cloudSaturation(r.pre.T[k], r.pre.p[k], MOIST_DEFAULTS.iceSaturation, MOIST_DEFAULTS.liquidTemperature, MOIST_DEFAULTS.iceTemperature, { qs: 0, slope: 0, liquid: 1 }).qs);
+  const offset = run({ midLevelConvection: true, condensation: 'saturation' }, single(0.877, 6.5e-3)), os = offset.source, offsetLcl = liftingCondensationLevel(offset.pre.T[os], offset.pre.q[os], offset.pre.p[os], offset.kappa).pressure;
+  const offsetShare = 2 * Math.min(0.4, 1.75e-3 * (1 - humidityAt(offset, os)) * (offset.interfaces[os] - offset.interfaces[os + 1])), offsetFirst = offset.entrained[os - 1] * (offset.interfaces[os - 1] - offset.interfaces[os]);
+  assert.ok(offset.deep.midLevel && offsetLcl < offset.state[0][0] * sigmaInterfaces('bl48')[os] && offset.deep.base === os && Math.abs(offsetFirst / offsetShare - 1) < 1e-12, `a bl48 layer at RH 0.877 under 6.5 K/km, whose parcel condenses at its top interface though Bolton's LCL (${offsetLcl} Pa) lies above it, mixes from the layer above it on as cuascn.F90's KCBOT - 1: base ${offset.deep.base} at source ${os}, the first cloud layer taking in ${offsetFirst} of the flux against 2 min(0.4, ENTRORG (1 - RH) dz) ${offsetShare}, RH ${humidityAt(offset, os)} from the source layer's own q, T and p`);
+  const cut = run({ midLevelConvection: true }, { high: 2000 }), cutTop = cut.deep.top, cutShare = cut.entrained[cutTop] * (cut.interfaces[cutTop] - cut.interfaces[cutTop + 1]);
+  assert.ok(cut.deep.midLevel && cutTop === cut.deep.base - 2 && cut.carried[cutTop + 1] > 0 && cut.flux[cutTop + 1] > 0 && Math.abs(cutShare / 0.8 - 1) < 1e-12, `with the moist layer cut at 2 km the plume holds condensate at the top of its first cloud layer (${cut.carried[cutTop + 1]}), takes in ${cutShare} of the flux from air at RH ${cut.humidity[cutTop]} in the next, holds none at that layer's top and ends there, as cuascn.F90 ends a type-3 cloud where CUADJTQ condenses nothing: top ${cutTop}, base ${cut.deep.base}`);
+  const humidCut = run({ midLevelConvection: true }, { high: 2000, humid: 0.99 });
+  assert.ok(cut.deep.midDry && humidCut.deep.midLevel && humidCut.deep.midDry && humidCut.deep.top === humidCut.deep.base - 2 && humidCut.carried[humidCut.deep.top + 1] > 0 && humidCut.rain === 0, `at RH 0.99 below 2 km the plume's mixed parcel at the top of layer ${humidCut.deep.top} holds less condensate than the water it carried in, diluted with that layer's air, so its vapor condenses nothing and the plume ends there, still rising, without rain: top ${humidCut.deep.top}, base ${humidCut.deep.base}, rain ${humidCut.rain}`);
+  const stable = (z1, lapse2, depth2, lapse3) => ({ column: (z, p) => { const T = z < z1 ? 300 - 8e-3 * z : z < z1 + depth2 ? 300 - 8e-3 * z1 - lapse2 * (z - z1) : 300 - 8e-3 * z1 - lapse2 * depth2 - lapse3 * (Math.min(z, 14000) - z1 - depth2); return { T, q: (z > 1000 && z < 9000 ? 0.97 : 0.3) * saturationHumidity(T, p) }; }, grid: sigmaInterfaces('bl48') });
+  const isothermalAbove = stable(7000, 0, 0, 0), overshootLimit = MID_LEVEL.overshootBuoyancy;
+  const limited = [isothermalAbove, stable(5000, 4e-3, 1500, 0), stable(4000, 4e-3, 3000, 2e-3), stable(4000, 4.5e-3, 6000, 0)].map((c) => run({ midLevelConvection: true, condensation: 'saturation' }, c)), [stopped] = limited;
+  let overshot;
+  try { MID_LEVEL.overshootBuoyancy = Infinity; overshot = run({ midLevelConvection: true, condensation: 'saturation' }, isothermalAbove); } finally { MID_LEVEL.overshootBuoyancy = overshootLimit; }
+  const lapseAt = (r, k) => (r.pre.T[k] - r.pre.T[k - 1]) / (r.pre.z[k - 1] - r.pre.z[k]), stops = (r, k) => r.excess[k] <= -2 && r.pre.T[k - 1] - r.pre.T[k] >= -3e-3 * (r.pre.z[k - 1] - r.pre.z[k]);
+  const firstStop = (r) => Array.from({ length: r.deep.base - 1 }, (_, n) => r.deep.base - 1 - n).find((k) => stops(r, k));
+  assert.ok(stopped.deep.midLevel && overshot.deep.midLevel && overshot.deep.top < stopped.deep.top, `without the overshoot limit the plume rising into an isothermal layer at 7 km would rise to layer ${overshot.deep.top} rather than end in ${stopped.deep.top}`);
+  assert.ok(limited.every((r) => r.deep.midLevel && r.deep.midOvershoot && !r.deep.midDry && r.deep.top === firstStop(r)) && limited.slice(1).map((r) => r.deep.top).join(' ') === '23 24 22', `each plume ends in the first layer, counting up from base - 1, at whose top it is 2 K or more colder in virtual temperature than the air while the air's temperature falls at most 3 K/km from that layer to the next above: under isothermal air from 7 km, isothermal air from 6.5 km over 4 K/km, 2 K/km from 7 km over 4 K/km, and isothermal air from 10 km over 4.5 K/km, tops ${limited.map((r) => r.deep.top).join(' ')} against ${limited.map(firstStop).join(' ')}, bases ${limited.map((r) => r.deep.base).join(' ')}, at ${limited.map((r) => `${r.excess[r.deep.top].toFixed(2)} K and ${(1e3 * lapseAt(r, r.deep.top)).toFixed(2)} K/km`).join(', ')}`);
+  const steady = limited[3], passed = Array.from({ length: steady.deep.base - 1 - steady.deep.top }, (_, n) => steady.deep.top + 1 + n).filter((k) => steady.excess[k] <= -2 && lapseAt(steady, k) > 3e-3 && lapseAt(steady, k) < 8e-3);
+  assert.ok(passed.length > 0, `under 4.5 K/km from 4 to 10 km the plume is 2 K or more colder at the top of layer ${passed.join(' ')}, below its top ${steady.deep.top}, where the air's temperature falls ${passed.map((k) => (1e3 * lapseAt(steady, k)).toFixed(2)).join(' ')} K/km, between 3 and 8, and rises on: ${passed.map((k) => steady.excess[k].toFixed(2)).join(' ')} K`);
+  const steep = run({ midLevelConvection: true }, { lapse: 8e-3 }), shut = Array.from({ length: Math.max(0, steep.deep.base - steep.deep.top - 2) }, (_, n) => steep.deep.top + 1 + n).filter((k) => steep.entrained[k] === 0);
+  assert.ok(steep.deep.midLevel && shut.length > 0 && shut.every((k) => steep.flux[k] > 0), `under 8 K/km the plume reaches an interface where it is more than 0.2 K colder than CUININ's air, and the layer above it entrains nothing though the plume rises through it: layers ${shut.join(' ')} between top ${steep.deep.top} and base ${steep.deep.base}`);
+  const thinning = Float64Array.from({ length: 41 }, (_, k) => (1.04 ** k - 1) / (1.04 ** 40 - 1)), gate = MID_LEVEL.entrainmentBuoyancy, thin = run({ midLevelConvection: true }, { profile: () => -20, grid: thinning });
+  let thinShut;
+  try { MID_LEVEL.entrainmentBuoyancy = 0; thinShut = run({ midLevelConvection: true }, { profile: () => -20, grid: thinning }); } finally { MID_LEVEL.entrainmentBuoyancy = gate; }
+  assert.ok(thin.deep.midLevel && thinShut.deep.midLevel && thinShut.deep.top < thin.deep.top, `on 40 layers that thin upward the plume reaches an interface where it is colder than CUININ's air by less than 0.2 K and goes on entraining above it: it ends in layer ${thin.deep.top}, where a gate at 0 K would carry it to ${thinShut.deep.top}`);
+  const held = run({ midLevelConvection: true, cumulusBoundaryLoss: 10, downdraftShare: 0 }, { profile: () => -60, grid: thinning }), hs = held.source, hk = hs - 1;
+  const heldDp = (k) => held.state[0][0] * (thinning[k + 1] - thinning[k]), cap = (k) => MID_LEVEL.courant * heldDp(k) / (g * dt), hDepth = held.interfaces[hk] - held.interfaces[hk + 1], hLimit = Math.log(heldDp(hk - 1) / heldDp(hk));
+  const e0 = 2 * Math.min(0.4, 1.75e-3 * (1 - held.humidity[hs]) * (held.interfaces[hs] - held.interfaces[hs + 1])) / hDepth, d0 = e0 * (1.6 - held.humidity[hk]), n0 = (e0 - d0) * hDepth;
+  const hE = e0 - Math.max(0, n0 - hLimit - Math.max(0, -hLimit)) / hDepth, hD = hE - hLimit / hDepth;
+  const heldInterfaces = Array.from({ length: hs - held.deep.top }, (_, n) => held.deep.top + 1 + n), atCap = heldInterfaces.filter((k) => Math.abs(held.deep.baseFlux * held.flux[k] / cap(k - 1) - 1) < 1e-12);
+  assert.ok(held.deep.midLevel && held.deep.midTrimmed && hLimit < 0 && n0 > 0 && Math.abs(held.deep.baseFlux / cap(hs - 1) - 1) < 1e-12 && heldInterfaces.every((k) => held.deep.baseFlux * held.flux[k] <= cap(k - 1) * (1 + 1e-12)) && atCap.length >= 4, `on 40 layers that thin upward, under 60 Pa/s of ascent with cumulusBoundaryLoss 10 and no downdraft, the base flux is held to the mass of the layer above the source per step and ${atCap.length} interfaces to that of the layer above each: ${heldInterfaces.map((k) => (held.deep.baseFlux * held.flux[k] / cap(k - 1)).toFixed(6)).join(' ')}`);
+  assert.ok(Math.abs(held.entrained[hk] / hE - 1) < 1e-12 && Math.abs(held.detrained[hk] / hD - 1) < 1e-12 && Math.abs(held.flux[hk] / Math.exp(hLimit) - 1) < 1e-12, `the first cloud layer, whose inflow already exceeds the next layer's mass per step (ln ratio ${hLimit}), gives up its net entrainment (${n0} of its inflow) and detrains the excess: entrainment ${held.entrained[hk]} against ${hE}, detrainment ${held.detrained[hk]} against ${hD}, flux ${held.flux[hk]} against ${Math.exp(hLimit)}`);
+  assert.ok(Math.abs(on.rain / 9.150931231914563e-3 - 1) < 1e-9 && Math.abs(on.deep.cape / 18.265179537851616 - 1) < 1e-9, `the standard column's plume, loaded with the condensate it carries and driven by the mean of its interface buoyancies, rains ${on.rain} kg/m2 with CAPE ${on.deep.cape} J/kg, pinned at 9.150931231914563e-3 and 18.265179537851616`);
+  const deckColumn = (z, p) => {
+    const T = (z < 900 ? 290 : 304 + 5e-3 * (z - 900)) * Math.pow(p / 1e5, 0.2857);
+    return { T, q: z < 900 ? Math.min(0.0105, saturationHumidity(T, p)) : Math.min(0.003, 0.3 * saturationHumidity(T, p)) };
+  };
+  const deck = { column: deckColumn, buoyancy: 2e-4, depth: 900, ascent: -0.05, sensible: 10, evaporation: 4e-5 };
+  const capped = run({ midLevelConvection: true }, deck), cappedOff = run({}, deck);
+  assert.ok(!capped.deep.midLevel && same(capped, cappedOff), `a column under a deck that the stratocumulus cap closes gets no mid-level plume: base flux ${capped.deep.baseFlux} from ${capped.height} m`);
+  const noCap = run({ midLevelConvection: true, stratocumulusInversion: null }, deck), noCapOff = run({ stratocumulusInversion: null }, deck);
+  assert.ok(!noCap.deep.midLevel && same(noCap, noCapOff), `without the stratocumulus cap the deck column's shallow plume rises and the mid-level type is not tried: base flux ${noCap.deep.baseFlux}`);
+  const lidColumn = (z, p) => {
+    const T = z < 2200 ? 290 - 6.5e-3 * z : z < 2700 ? 275.7 + 0.01 * (z - 2200) : 280.7 - 6.5e-3 * (Math.min(z, 11000) - 2700);
+    return { T, q: (z > 1000 && z < 3000 ? 0.95 : 0.3) * saturationHumidity(T, p) };
+  };
+  const lid = run({ midLevelConvection: true }, { column: lidColumn }), lidRetyped = run({ midLevelConvection: true, convectionRetype: true }, { column: lidColumn });
+  const lidDepth = lid.state[0][0] * (levels[lid.deep.base] - levels[lid.deep.top + 1]);
+  assert.ok(lid.deep.midLevel && lidDepth < DEEP_CLOUD_DEPTH && lidRetyped.deep.midLevel && same(lidRetyped, lid), `convectionRetype leaves a mid-level plume ${lidDepth} Pa deep under an inversion as it is`);
+  const gradedOmega = run({ midLevelConvection: true }, { profile: (k) => -0.05 - 0.005 * k });
+  assert.ok(gradedOmega.deep.midLevel && Math.abs(gradedOmega.deep.baseFlux * g / (0.05 + 0.005 * gradedOmega.source) - 1) < 1e-14, `under omega graded in the vertical the plume departs at -omega/g of its source layer ${gradedOmega.source}: ${gradedOmega.deep.baseFlux * g} Pa/s`);
+  const rateFactor = MID_LEVEL.entrainment;
+  let singleRate;
+  try { MID_LEVEL.entrainment = 1; singleRate = run({ midLevelConvection: true }); } finally { MID_LEVEL.entrainment = rateFactor; }
+  const bothMixing = mixing.filter((k) => singleRate.entrained[k] > 0);
+  assert.ok(bothMixing.length >= 3 && bothMixing.every((k) => on.entrained[k] === 2 * singleRate.entrained[k]), `the mid-level plume entrains twice eq. 6.7's rate in each of its ${bothMixing.length} entraining layers: ${bothMixing.map((k) => on.entrained[k] / singleRate.entrained[k]).join(' ')}`);
+  const pressureColumn = (z, p) => { const T = 290 * Math.pow(p / 101500, 0.19); return { T, q: (p < 90000 && p > 75000 ? 0.95 : 0.3) * saturationHumidity(T, p) }; };
+  const driven = { column: pressureColumn, ascent: -1e-4, sensible: 20, evaporation: 2e-5 }, capHeight = MID_LEVEL.height;
+  const groundLow = run({ midLevelConvection: true }, { ...driven, ground: 300 }), departed = groundLow.source, aboveGround = (k) => groundLow.z[k] - 300;
+  let capAbove, capBelow, groundHigh;
+  try {
+    MID_LEVEL.height = 0.5 * (aboveGround(departed) + aboveGround(departed - 1));
+    capAbove = run({ midLevelConvection: true }, { ...driven, ground: 300 });
+    groundHigh = run({ midLevelConvection: true }, { ...driven, ground: 1800 });
+    MID_LEVEL.height = 0.5 * (aboveGround(departed) + aboveGround(departed + 1));
+    capBelow = run({ midLevelConvection: true }, { ...driven, ground: 300 });
+  } finally { MID_LEVEL.height = capHeight; }
+  assert.ok(groundLow.deep.midLevel && capAbove.deep.midLevel && same(capAbove, groundLow) && !capBelow.deep.midLevel, `on ground 300 m high the search stops at MID_LEVEL.height above the ground: set between the departure layer (${aboveGround(departed)} m) and the next one up the plume departs as before, set between it and the next one down there is none`);
+  assert.ok(groundHigh.deep.midLevel && groundHigh.source === departed && Math.abs(groundHigh.deep.baseFlux / groundLow.deep.baseFlux - 1) < 1e-12, `on ground 1500 m higher, under that bound, the same column departs from the same layer at the same surface-driven flux: ${groundHigh.deep.baseFlux} against ${groundLow.deep.baseFlux}`);
+  assert.ok(!same(on, off), 'the mid-level plume moves the column');
+  assert.ok(Math.abs(on.after.enthalpy - on.before.enthalpy) < 1e-12 * on.before.enthalpy, `enthalpy ${on.before.enthalpy} → ${on.after.enthalpy}`);
+  assert.ok(Math.abs(on.after.water + on.rain - on.before.water) < 1e-12 * on.before.water, `water ${on.before.water} → ${on.after.water} + ${on.rain}`);
+  const sinking = run({ midLevelConvection: true }, { ascent: 0.2 }), drier = run({ midLevelConvection: true }, { humid: 0.75 }), drierOff = run({}, { humid: 0.75 });
+  assert.ok(!sinking.deep.midLevel && same(sinking, off), 'no mid-level plume under large-scale sinking');
+  assert.ok(!drier.deep.midLevel && same(drier, drierOff), 'no mid-level plume where q stays below 0.8 q_s');
+  for (const [name, column] of [['a moist layer at 3.5-4.5 km under 4.5 K/km', { lapse: 4.5e-3, low: 3500, high: 4500 }], ['a moist layer below 300 m under 4.5 K/km', { lapse: 4.5e-3, low: -Infinity, high: 300 }]]) {
+    const cold = run({ midLevelConvection: true }, column), coldOff = run({}, column);
+    assert.ok(!cold.deep.midLevel && same(cold, coldOff), `${name}: no layer's parcel both condenses at the next layer and is less than 0.5 K colder there`);
+  }
+  const surface = [1, 2].map((n) => run({ midLevelConvection: true }, { ascent: -1e-4, sensible: 10 * n, evaporation: 1e-5 * n }));
+  console.log(`mid-level under 1e-4 Pa/s of ascent: base flux ${surface[0].deep.baseFlux.toExponential(6)} at H + L E = ${(10 + 1e-5 * LATENT_HEAT).toFixed(0)} W/m², ${surface[1].deep.baseFlux.toExponential(6)} at twice that`);
+  assert.ok(surface[0].deep.midLevel && surface[0].deep.baseFlux > 100 * 1e-4 / g, `base flux ${surface[0].deep.baseFlux}`);
+  assert.ok(Math.abs(surface[1].deep.baseFlux / surface[0].deep.baseFlux - 2) < 1e-12, `${surface[1].deep.baseFlux} against twice ${surface[0].deep.baseFlux}`);
+  const zBase = surface[0].interfaces[surface[0].source] - surface[0].groundHeight;
+  assert.ok(Math.abs(surface[0].deep.baseFlux * g * zBase / (10 + 1e-5 * LATENT_HEAT) - 1) < 1e-12, `the surface closure divides H + L E by g times the height of the source layer's upper interface, ${zBase} m: base flux ${surface[0].deep.baseFlux}`);
+  assert.throws(() => build({ midLevelConvection: 'yes' }), /midLevelConvection/);
+});
+
+test('with midLevelConvection the engines agree on random columns under a random large-scale ascent, and the GPU refuses a value other than true or false', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { midLevel } = await parity({ midLevelConvection: true }, { ascent: true });
+  assert.ok(midLevel >= 50, `${midLevel} columns convect at mid-level on the CPU`);
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, midLevelConvection: 1 }), /midLevelConvection/);
+});
+test('with midLevelConvection and convectionRetype the engines agree on random columns under a random large-scale ascent', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { midLevel } = await parity({ midLevelConvection: true, convectionRetype: true }, { ascent: true });
+  assert.ok(midLevel >= 50, `${midLevel} columns convect at mid-level on the CPU`);
+});
+test('with midLevelConvection the engines agree on random columns with a deck that the stratocumulus cap closes in every fifth', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const deck = (z, p) => {
+    const T = (z < 900 ? 290 : 304 + 5e-3 * (z - 900)) * Math.pow(p / 1e5, 0.2857);
+    return { T, q: z < 900 ? Math.min(0.0105, saturationHumidity(T, p)) : Math.min(0.003, 0.3 * saturationHumidity(T, p)) };
+  };
+  const decks = (model, fields) => {
+    const [pi, theta, , , q, qc] = model.state, C = model.mesh.nCells, K = theta.length / C, KL = model.moist.subcloudLayers, { exnerLayer } = model.core.diagnostics;
+    for (let i = 0; i < C; i += 5) {
+      place(model, i, 101500, deck); setDepth(model, i, 900);
+      for (const a of model.state) if (a.length === C) a[i] = Math.fround(a[i]); else if (a.length === K * C) for (let k = 0; k < K; k++) a[k * C + i] = Math.fround(a[k * C + i]);
+      model.core.diagnoseColumn(i, pi, theta, q, qc);
+      for (let k = K - KL; k < K; k++) { const x = k * C + i; fields.saved[(k - K + KL) * C + i] = Math.fround(theta[x] * exnerLayer[x] * (1 + VIRTUAL_FACTOR * q[x] - qc[x])); }
+      model.boundaryLayer.depth[i] = Math.fround(model.boundaryLayer.depth[i]); model.radiation.mlmGate[i] = Math.fround(0.3);
+      fields.buoyancy[i] = model.boundaryLayer.buoyancyFlux[i] = Math.fround(2e-4);
+      fields.friction[i] = model.boundaryLayer.friction[i] = 0.25;
+      fields.sensible[i] = model.radiation.sensibleHeat[i] = 10;
+      fields.evaporation[i] = model.radiation.evaporation[i] = Math.fround(4e-5);
+    }
+  };
+  const { midLevel } = await parity({ midLevelConvection: true }, { ascent: true, columns: decks });
+  console.log('mid-level with decks: ' + midLevel + ' columns');
+  assert.ok(midLevel >= 30, `${midLevel} columns convect at mid-level on the CPU`);
+});
+
+test("with midLevelConvection and condensation 'saturation' the engines agree on random columns on bl48 among which are placed columns where Bolton's LCL lies above the source layer's top, where the plume's mixed parcel at a layer top holds less condensate than the water it carried in, and where the plume rises into an isothermal layer", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const single = (rh, lapse) => (z, p, memo) => { const T = 290 - lapse * Math.min(z, 11000), picked = !memo.picked && z > 2800; if (picked) memo.picked = true; return { T, q: (picked ? rh : 0.3) * saturationHumidity(T, p) }; };
+  const cut = (humid, lapse, high) => (z, p) => { const T = 290 - lapse * Math.min(z, 11000); return { T, q: (z > 1000 && z < high ? humid : 0.3) * saturationHumidity(T, p) }; };
+  const isothermal = (surface, lapse, height) => (z, p) => { const T = surface - lapse * Math.min(z, height); return { T, q: (z > 1000 && z < height + 2000 ? 0.97 : 0.3) * saturationHumidity(T, p) }; };
+  const placed = [];
+  for (let n = 0; n <= 16; n++) for (const lapse of [6.4e-3, 6.5e-3, 6.6e-3]) placed.push(single(0.874 + 5e-4 * n, lapse));
+  for (const humid of [0.95, 0.96, 0.97, 0.98, 0.99]) for (const lapse of [6.5e-3, 7e-3, 7.5e-3]) for (const high of [1800, 2000, 2200]) placed.push(cut(humid, lapse, high));
+  for (const surface of [295, 300]) for (const lapse of [7e-3, 8e-3]) for (const height of [5000, 6000, 7000, 8000, 9000]) placed.push(isothermal(surface, lapse, height));
+  const limit = MID_LEVEL.overshootBuoyancy;
+  const { midLevel, offsets, dryEnds, overshoots, perturbed } = await parity({ midLevelConvection: true, condensation: 'saturation' }, { ascent: true, grid: sigmaInterfaces('bl48'), columns: placeMidLevel(placed, -0.2), perturb: () => { MID_LEVEL.overshootBuoyancy = Infinity; return () => { MID_LEVEL.overshootBuoyancy = limit; }; } });
+  console.log(`${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: Bolton's LCL lies above the source layer's top in ${offsets}, the dry end ends a plume that still rises in ${dryEnds}, the overshoot limit in ${overshoots}; without the limit ${perturbed} columns step apart beyond the engines' tolerances`);
+  assert.ok(offsets >= 10 && dryEnds >= 25 && overshoots >= 10 && perturbed >= 10, `${offsets} columns whose LCL lies above the source top, ${dryEnds} whose plume the dry end ends, ${overshoots} whose plume the overshoot limit ends, ${perturbed} that the limit moves beyond the engines' tolerances`);
+});
+const cloudTermGrid = Float64Array.from([...levels.filter((s) => s < 0.65), 0.675, 0.695, 0.7, 0.825, ...levels.filter((s) => s > 0.85)]);
+const cloudTermColumns = (base, step) => [8e-3, 8.5e-3].flatMap((lapse) => [0.81, 0.83].flatMap((source) => Array.from({ length: 42 }, (_, n) => (z, p) => { const T = 292 - lapse * Math.min(z, 11000), s = p / 101500; return { T, q: (s > 0.7 && s < 0.825 ? source : s > 0.695 && s < 0.7 ? base + step * n : 0.3) * saturationHumidity(T, p) }; })));
+test('with midLevelConvection a plume from a thick source layer ends in the thin cloudy layer above it, its first cloud layer, where the vapor it takes in leaves the mixture short of saturation by less than (1 - full) qc of the cloud condensation left there: one run of that layer\'s humidity in each of four families', () => {
+  const model = createModel(new Grid(16), { ocean: false, levels: cloudTermGrid, moist: { midLevelConvection: true } }), { moist, core } = model, [pi, theta, , , q, qc] = model.state;
+  placeMidLevel(cloudTermColumns(0.928, 0.00172), -0.2)(model, randomColumns(model));
+  const runs = [0, 1, 2, 3].map((family) => Array.from({ length: 42 }, (_, n) => n).filter((n) => { const i = 7 * (42 * family + n) + 3; core.diagnoseColumn(i, pi, theta, q, qc); model.phases.adjust(i, i + 1, 900); return moist.deep.midLevel && moist.deep.midCloudEnd && moist.deep.top === 23; }));
+  const spans = runs.map((run) => [run[0], run[run.length - 1]]);
+  assert.ok(runs.every((run) => run.length > 0 && run.length === run[run.length - 1] - run[0] + 1) && JSON.stringify(spans) === JSON.stringify([[12, 34], [11, 33], [9, 30], [8, 29]]), `under 8 and 8.5 K/km over sources at RH 0.81 and 0.83, the thin layer's humidity 0.928 + 0.00172 n ends the plume there by its cloud water for n in ${spans.map(([a, b]) => `${a}-${b}`).join(', ')}: ${runs.map((run) => run.join(' ')).join(' | ')}`);
+});
+test('with midLevelConvection the engines agree on random columns on a 36-layer grid among which are placed columns whose plume ends in a thin cloudy first cloud layer above a thick source, held there by the cloud water it takes in', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const placed = cloudTermColumns(0.928, 0.00172), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
+  console.log(`${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: the dry end ends ${dryEnds} plumes, ${cloudEnds} of them where the cloud water the plume takes in decides`);
+  assert.ok(cloudEnds >= 80, `${cloudEnds} plumes whose end the cloud water they take in decides`);
+});
+test('with midLevelConvection and a liquid plume phase the engines agree on random columns on the same 36-layer grid, among which are placed columns whose plume ends in the thin cloudy layer, held there by the cloud water it takes in, with that layer\'s humidity at 0.95 + 0.0015 n of saturation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const placed = cloudTermColumns(0.95, 0.0015), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true, plumePhase: 'liquid' }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
+  console.log(`with a liquid plume phase, ${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: the dry end ends ${dryEnds} plumes, ${cloudEnds} of them where the cloud water the plume takes in decides`);
+  assert.ok(cloudEnds >= 100, `${cloudEnds} plumes whose end the cloud water they take in decides`);
+});
+
+test("a rainEvaporationLaw other than 'deficit', 'kessler' or 'cloudsc', a rainCover other than 'overlap' or a share in (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
+  const refused = [{ rainEvaporationLaw: 'ifs' }, { rainCover: 'maximum' }, { rainCover: 0 }, { rainCover: 1.5 }, { rainCover: '0.1' }, { rainEvaporationCeiling: -0.1 }, { rainEvaporationCeiling: 1.2 }, { rainEvaporationCeiling: '0.7' }];
+  for (const options of refused) assert.throws(() => build(options), /rainEvaporationLaw|rainCover|rainEvaporationCeiling/, `CPU: ${JSON.stringify(options)}`);
+  if (!gpuAvailable) return;
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  for (const options of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), /rainEvaporationLaw|rainCover|rainEvaporationCeiling/, `GPU: ${JSON.stringify(options)}`);
 });
 
 test('a cumulusMemory other than a finite time of 0 s or more is refused on both engines', async () => {
@@ -1887,4 +2237,232 @@ test("on BOMEX's profile (Siebesma et al. 2003, Table B1) the shallow plume carr
     assert.ok(tops.carried >= tops.defaults, `${set}: carried ${tops.carried} m against ${tops.defaults} m`);
     for (const name of ['perHeight', 'both', 'lowest']) assert.ok(tops[name] > 1600 && tops[name] < 2100, `${set}: ${name} tops at ${tops[name]} m, the LES's core top 1.75–1.8 km and cloud top about 2 km`);
   }
+});
+
+const LIGHT_CUMULUS = { cumulusEntrainmentHeight: null, cumulusEntrainment: 1e-4, cumulusRain: 0 };
+
+test("with shallowRetype a column the test parcel leaves shallow runs the deep plume where the shallow plume's own ascent, continued past the shallow top without tendencies, reaches its first cloudy layer with w² > 0, carried from the shallow closure's velocity scale, and has a cloud deeper than 200 hPa from that layer's lower interface to the last interface it passes, as random columns under a light shallow plume do; every other column steps exactly as without the option, the trade-wind cumulus among them, and a value other than true or false is refused", () => {
+  const dt = 900, { shallowTop } = MOIST_DEFAULTS;
+  const retyping = (shallow, grid = levels) => {
+    const stacks = [];
+    const [off, on] = [false, true].map((deepen) => {
+      const model = createModel(new Grid(16), { ocean: false, levels: grid, moist: { ...shallow, shallowRetype: deepen } }), C = model.mesh.nCells, { moist, core } = model, { levels, sigmaMid } = core.diagnostics;
+      randomColumns(model);
+      const [pi, theta, , , q, qc] = model.state, deepened = new Set();
+      let worst = 0, fired = 0, repeated = 0, based = 0, continued = 0;
+      for (let i = 0; i < C; i++) {
+        core.diagnoseColumn(i, pi, theta, q, qc);
+        const before = budget(model, i), rain = moist.plumeColumn(i, pi, theta, q, qc, dt), after = budget(model, i), d = moist.deep, cu = moist.cumulus;
+        if (!deepen) stacks[i] = { S: cu.sourceS, Q: cu.sourceQ, mass: cu.mass, source: cu.source, lcl: cu.lclPressure };
+        worst = Math.max(worst, Math.abs(after.enthalpy - before.enthalpy) / before.enthalpy, Math.abs(after.water + rain - before.water) / before.water);
+        if (d.deepened) {
+          deepened.add(i);
+          assert.ok(deepen && !d.parcelDeep && d.rooted && d.shallowDepth > DEEP_CLOUD_DEPTH, `column ${i}: re-typed with a shallow cloud of ${d.shallowDepth} Pa`);
+          const stack = stacks[i];
+          assert.ok(d.sourceS === stack.S && d.sourceQ === stack.Q && d.sourceMass === stack.mass && d.excessT === 0 && d.excessQ === 0, `column ${i}: the re-typed deep plume departs from the shallow plume's own stack: s_l ${d.sourceS} and ${stack.S} J/kg, q_t ${d.sourceQ} and ${stack.Q}, ${d.sourceMass} and ${stack.mass} Pa, excess ${d.excessT} K and ${d.excessQ}`);
+          if (needsContinuation(d, pi[i], levels, sigmaMid)) continued++;
+          if (d.deep) {
+            fired++;
+            assert.equal(moist.cumulusBaseFlux[i], d.baseFlux, `column ${i}: the deep plume runs alone`);
+            let base = stack.source;
+            while (base > 1 && !(pi[i] * levels[base] <= stack.lcl)) base--;
+            assert.equal(d.base, base, `column ${i}: the re-typed deep plume's cloud base is the interface at the shallow plume's condensation level`);
+            assert.ok(pi[i] * (levels[d.base] - levels[d.top + 1]) > DEEP_CLOUD_DEPTH, `column ${i}: the re-typed deep plume's cloud is ${pi[i] * (levels[d.base] - levels[d.top + 1])} Pa deep`);
+          }
+        } else if (d.shallowDepth > 0 && cu.top >= 1 && pi[i] * levels[cu.top - 1] > shallowTop) {
+          assert.equal(d.shallowReach, cu.top + 1, `column ${i}: the diagnostic ascent ends where the shallow plume's does`);
+          if (moist.cumulusBaseFlux[i] > 0) {
+            let cloudy = cu.source - 1;
+            while (cloudy > cu.top && !(moist.cumulusWater[cloudy * C + i] > 0)) cloudy--;
+            assert.equal(d.shallowBase, cloudy + 1, `column ${i}: the diagnostic cloud starts at the lower interface of the shallow plume's first cloudy layer`);
+            based++;
+          }
+          repeated++;
+        }
+      }
+      return { model, deepened, worst, fired, repeated, based, continued };
+    });
+    let moved = 0;
+    for (let i = 0; i < on.model.mesh.nCells; i++) {
+      const a = snapshot(off.model, i), b = snapshot(on.model, i), equal = ['theta', 'q', 'qc'].every((key) => a[key].every((v, k) => v === b[key][k]));
+      if (on.deepened.has(i)) { if (!equal) moved++; } else assert.ok(equal, `column ${i} is not re-typed, yet it steps differently`);
+    }
+    return { deepened: on.deepened.size, fired: on.fired, continued: on.continued, moved, repeated: on.repeated, based: on.based, worst: Math.max(off.worst, on.worst), offDeepened: off.deepened.size };
+  };
+  const plain = retyping({}), light = retyping(LIGHT_CUMULUS), fine = retyping(LIGHT_CUMULUS, sigmaInterfaces('bl48'));
+  console.log(`bl48 random columns under the light shallow plume: ${fine.deepened} re-typed deep, ${fine.continued} of them by the ascent continued past shallowTop from a cloud no deeper than DEEP_CLOUD_DEPTH below it`);
+  console.log(`random columns: ${plain.deepened} re-typed deep under the default shallow plume, ${light.deepened} under one entraining 1e-4 /m that keeps no condensate (${light.fired} fire the deep plume, ${light.moved} step differently); ${plain.repeated} and ${light.repeated} shallow plumes that stop below the shallow top end the diagnostic ascent at their own top, ${plain.based} and ${light.based} of them running and starting its cloud at their own first cloudy layer; every other column steps exactly as without the option; enthalpy and water within ${Math.max(plain.worst, light.worst).toExponential(1)}`);
+  assert.ok(light.deepened >= 20 && Math.abs(fine.continued - 3) <= 1 && light.fired > 0 && light.moved > 0 && plain.repeated >= 20 && light.repeated >= 20 && plain.based > 0 && light.based > 0 && [plain, light, fine].every((r) => r.moved === r.fired), JSON.stringify({ plain, light, fine }));
+  assert.ok(plain.offDeepened === 0 && light.offDeepened === 0 && fine.offDeepened === 0 && Math.max(plain.worst, light.worst, fine.worst) < 1e-15);
+  const trade = [false, true].map((deepen) => {
+    const model = tradeWindColumn({ shallowRetype: deepen }), [pi, theta, , , q, qc] = model.state;
+    model.core.diagnoseColumn(0, pi, theta, q, qc);
+    model.moist.plumeColumn(0, pi, theta, q, qc, 600);
+    return { snap: snapshot(model, 0), d: { ...model.moist.deep }, flux: model.moist.cumulusBaseFlux[0] };
+  });
+  console.log(`trade-wind column: the shallow plume's cloud is ${(trade[1].d.shallowDepth / 100).toFixed(1)} hPa deep, base flux ${trade[1].flux.toExponential(3)} kg/m²/s with the option and ${trade[0].flux.toExponential(3)} without`);
+  assert.ok(trade[1].d.shallowDepth > 0 && trade[1].d.shallowDepth < DEEP_CLOUD_DEPTH && !trade[1].d.deepened && trade[1].flux > 0, JSON.stringify(trade[1].d));
+  for (const key of ['theta', 'q', 'qc']) assert.deepEqual(trade[1].snap[key], trade[0].snap[key]);
+  assert.throws(() => build({ shallowRetype: 'yes' }), /shallowRetype/);
+});
+
+const needsContinuation = (d, ps, levels, sigmaMid) => {
+  let ceiling = d.shallowBase - 1;
+  while (ceiling > 1 && ps * sigmaMid[ceiling] > MOIST_DEFAULTS.shallowTop) ceiling--;
+  return ps * levels[d.shallowReach] < MOIST_DEFAULTS.shallowTop && ps * (levels[d.shallowBase] - levels[Math.max(d.shallowReach, ceiling + 1)]) <= DEEP_CLOUD_DEPTH;
+};
+
+const PAGE_COLUMN_13676 = {"dt":337.5,"pi":101494.40113024111,"theta":[3054.8886076870785,2110.9413649520975,1820.1921609629132,1668.3065751122206,1483.0884561461764,1298.6364960778455,1163.885616732911,1013.5028676910305,874.8338179738957,765.0030420564274,669.7593927653216,593.8539532046864,530.6715428284349,479.14471254294887,443.17516557885824,417.9224745649334,399.0292911879083,388.0540775219285,374.200921511677,354.07304435921634,338.59922374210277,328.57798368631126,324.6353538958846,320.6419441498382,317.41504052946897,315.05046284636757,310.42418753003966,309.2426625953133,306.90000083542407,304.1396705843355,301.9113565318508,299.9234083059886,297.7695582225899,296.99878076720324,295.0792027868827,294.80438402875257,292.8648375547794,287.8811165042776,286.18628885345737,286.1012124480151,286.0485258051846,286.01457996996,285.99385517786254,285.98342543624153,285.9800157296597,285.98201600592904,285.99222645564043,286.04102861618844],"q":[0.000004420723201075017,0.000004379845367709267,0.00000451711231569177,0.000004641158623261906,0.0000043808327147769074,0.000004102350071107816,0.0000031171606670207203,0.0000036988160018668285,0.0000040569189342878315,0.0000029872904051668265,0.000002456148478663317,6.651212904623757e-7,0.0000013952885461895664,0.000002310178851262623,0.000003354896636465968,0.000004194903527820176,0.0000013663247194122255,0.000003963132836540237,0.000006033709453996757,0.000021907684372351807,0.000023571580366914115,0.0000612085636522033,0.00014476234528108182,0.0003354868961888411,0.0008351307543146802,0.0014669471066531825,0.0005634933873287046,0.0002764959016803373,0.00009219694890869269,-0.000001009581714749424,-2.8848519499736504e-7,-0.000001125085710560899,0.000006406012106246861,0.000010330015009707616,0.0004970793442477482,0.000220454153345012,0.0003997442045174921,0.00368551594180363,0.005673311892906608,0.005804869610221586,0.005909699594257936,0.0059993113195499406,0.006078471117161322,0.006150788910067775,0.0061942450391528755,0.006226437483185782,0.006262178789386516,0.006362772421041086],"qc":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.000009211694330450904,0.000010248246418038136,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"depth":805.877766933246,"regime":3,"mixingTop":805.877766933246,"cloudLayer":38,"buoyancy":0.0006600150690247001,"friction":0.17775174086504517,"surfaceDrag":0.006910410630024459,"mlmGate":0.04205867755834928,"stratiform":0,"sensible":17.6087223882052,"evaporation":0.00003551381754490235,"cumulusK0":29,"cumulusCover":[0,0,0,0,0,0,0,0.0001757078851368149,0,0,0,0,0,0,0,0,0,0,0],"cumulusWater":[0,0,0,0,0,0,0,0.00014711110022179344,0,0,0,0,0,0,0,0,0,0,0]};
+const PAGE_COLUMN_3555 = {"dt":337.5,"pi":99033.06746108439,"theta":[3102.3002279761645,2117.5990433905467,1852.8427965266644,1705.8564912562001,1525.3006180293805,1354.5111878740731,1168.3160652922004,1018.272717508987,887.1122902854764,776.8063226312967,689.5915142349497,605.2248865183666,534.7005464646481,475.8929672806757,434.46506127266554,400.9630054023617,381.1445687182407,364.8127286495149,353.14853864267235,348.28877351690886,344.40942673553366,342.792827396337,340.6640236019349,336.65709774319816,331.12486466450264,328.7493375020934,326.0121645161613,322.0675348159161,317.889984868103,314.33388034657025,312.09108636577326,310.91877589972887,309.33915365199397,307.888893256398,306.6547822488465,305.59767104902915,304.5162680978994,303.84790276064575,303.35933160693145,302.93148945339055,302.9183612865265,302.91501682849344,302.91431122291493,302.9161616670703,302.92089863468817,302.93031276302594,302.95084518136355,303.03020751049576],"q":[0.000004425619126059593,0.000004342598056354839,0.000004423958929910972,0.000004205286229110553,0.0000041679370239080995,0.0000033430861145152167,0.000002475740934458977,0.0000016660833508865741,0.0000010888131190650675,7.392344141963997e-7,7.722073266518058e-8,9.571011600521492e-7,0.0000021287316061971877,0.0000031066628359052366,0.000002914556874113797,0.0000018191188769516828,0.000002661308234261021,0.000005920695395969138,0.00001078485746030204,0.000009394507630896911,0.000058951161863561513,0.0001165329032180707,0.00010438280867699178,0.00005136603369991584,0.00025972494655360044,0.0002304913435511416,0.00045919332298096293,0.0010976971854892328,0.0015319380612758846,0.005255817368282934,0.00926844556527987,0.010728357958316987,0.011613512728149944,0.012264463174956402,0.01297368031152491,0.013760140964062681,0.014500611222856808,0.015505838190287863,0.016113016786198878,0.01629556279053427,0.01630082886116683,0.016303165623252076,0.01630530514945669,0.016307456822123423,0.016309668375235082,0.01631229910986106,0.016316318148494623,0.01632910408734579],"qc":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.0597240715426335e-7,0.0000024029565526814046,0,0,0,0,0,0,0,0,0,0,0,0.00016817669548748387,0.00013340437396978203,0.00007355482465833066,0.000025807765435322942,0.000009093681307620125,0.000004946826467257722,0.000008483349041467395,0.000020649094778766102,0.000005035842738743802,0,0,0,0,0,0,0,0,0],"depth":767.1659843495459,"regime":1,"mixingTop":767.1659843495459,"cloudLayer":-1,"buoyancy":0.0007226390468329481,"friction":0.13536864088306785,"surfaceDrag":0.012051972602621234,"mlmGate":0.5,"stratiform":0,"sensible":24.645496045631113,"evaporation":0.000004382302221062775,"cumulusK0":29,"cumulusCover":[0.002260689077812534,0.0027060352877132155,0.0033487233595176804,0.003782176657685643,0.004183040333503172,0.004620965472531737,0.00489292228236364,0.006031432779177265,0.010444214518071024,0,0,0,0,0,0,0,0,0,0],"cumulusWater":[0.0023216751193501895,0.0019576912729000326,0.00160475700107698,0.0013248772001631611,0.0010992639595943797,0.0009260106961909632,0.0007914371239626211,0.0006010073452279923,0.00021224869705916693,0,0,0,0,0,0,0,0,0,0]};
+const replayPageColumn = (c, deepen) => {
+  const model = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl48'), moist: { shallowRetype: deepen } });
+  const { moist, core, boundaryLayer: bl, radiation } = model, { K, C, levels } = core.diagnostics, [pi, theta, , , q, qc] = model.state;
+  pi[0] = c.pi;
+  for (let k = 0; k < K; k++) { theta[k * C] = c.theta[k]; q[k * C] = c.q[k]; qc[k * C] = c.qc[k]; }
+  bl.depth[0] = c.depth; bl.regime[0] = c.regime; bl.mixingTop[0] = c.mixingTop; bl.cloudLayer[0] = c.cloudLayer; bl.buoyancyFlux[0] = c.buoyancy; bl.friction[0] = c.friction; bl.surfaceDrag[0] = c.surfaceDrag;
+  radiation.mlmGate[0] = c.mlmGate; radiation.stratiform[0] = c.stratiform; radiation.sensibleHeat[0] = c.sensible; radiation.evaporation[0] = c.evaporation;
+  c.cumulusCover.forEach((v, n) => { moist.cumulusCover[(c.cumulusK0 + n) * C] = v; moist.cumulusWater[(c.cumulusK0 + n) * C] = c.cumulusWater[n]; });
+  core.diagnoseColumn(0, pi, theta, q, qc);
+  moist.plumeColumn(0, pi, theta, q, qc, c.dt);
+  const d = { ...moist.deep };
+  return { d, cu: { ...moist.cumulus }, flux: moist.cumulusBaseFlux[0], snap: snapshot(model, 0), depth: d.deep ? pi[0] * (levels[d.base] - levels[d.top + 1]) : 0, base: pi[0] * levels[d.shallowBase], ps: pi[0], levels };
+};
+const steppedAlike = (a, b) => ['theta', 'q', 'qc'].every((key) => a.snap[key].every((v, k) => v === b.snap[key][k]));
+test("with shallowRetype a re-typed deep plume feeds its stack below the source by cumulusSource, as the shallow plume does: under cumulusSource 'lowest' a re-typed column steps alike under either plumeSource", () => {
+  const runs = ['mean', 'lowest'].map((plumeSource) => {
+    const model = createModel(new Grid(16), { ocean: false, levels, moist: { ...LIGHT_CUMULUS, cumulusSource: 'lowest', plumeSource, shallowRetype: true } }), C = model.mesh.nCells, { moist, core } = model, { K, levels: edges } = core.diagnostics;
+    randomColumns(model);
+    const [pi, theta, , , q, qc] = model.state, retyped = new Map();
+    for (let i = 0; i < C; i++) {
+      core.diagnoseColumn(i, pi, theta, q, qc);
+      moist.plumeColumn(i, pi, theta, q, qc, 900);
+      if (moist.deep.deepened) retyped.set(i, moist.deep.deep && moist.deep.sourceMass > 1.000001 * pi[i] * (1 - edges[K - 1]));
+    }
+    return { model, retyped };
+  });
+  let compared = 0, fed = 0;
+  for (const [i, stacked] of runs[0].retyped) {
+    if (!runs[1].retyped.has(i)) continue;
+    const a = snapshot(runs[0].model, i), b = snapshot(runs[1].model, i);
+    for (const key of ['theta', 'q', 'qc']) assert.deepEqual(b[key], a[key], `column ${i}: ${key} differs between plumeSource 'mean' and 'lowest'`);
+    compared++;
+    if (stacked) fed++;
+  }
+  console.log(`  ${compared} columns re-type under both plumeSource values, ${fed} of them firing from a stack of more than one layer`);
+  assert.ok(fed > 0, `${compared} columns re-type under both, ${fed} of them firing from a stack of more than one layer`);
+});
+function retypedColumns(options, dt = 900) {
+  const model = createModel(new Grid(16), { ocean: false, levels, moist: { ...LIGHT_CUMULUS, cumulusClosure: 1e-9, midLevelConvection: true, ...options } }), C = model.mesh.nCells, { moist, core } = model, { K } = core.diagnostics;
+  randomColumns(model);
+  let seed = 777;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.omega[k * C + i] = 0.6 * random() - 0.4;
+  const [pi, theta, , , q, qc] = model.state, columns = [];
+  for (let i = 0; i < C; i++) {
+    core.diagnoseColumn(i, pi, theta, q, qc);
+    moist.plumeColumn(i, pi, theta, q, qc, dt);
+    columns.push({ ...moist.deep });
+  }
+  return { state: model.state, columns, C };
+}
+test('with midLevelConvection the dry end counts the cloud water a plume takes in from a partly cloudy layer, (1 - full) qc, with the water it carried in: in these random columns alone the mixed vapor falls short of saturation by less than that, and the plume ends there', () => {
+  const ended = retypedColumns({}).columns.map((d, i) => (d.midLevel && d.midCloudEnd ? `${i}@${d.top}` : null)).filter(Boolean);
+  assert.deepEqual(ended, ['422@30', '1774@30', '2312@30'], `the plumes whose condensate at a layer's top exceeds full times the water they carried in, though not that plus (1 - full) times the layer's cloud water: ${ended.join(' ')}`);
+});
+test("with shallowRetype and midLevelConvection a column re-typed deep whose own deep cloud the depth rule finds shallow tries the mid-level type, stepping as without shallowRetype where a shallow plume closed at 1e-9 does not rise", () => {
+  const both = retypedColumns({ shallowRetype: true }), alone = retypedColumns({}), C = both.C;
+  let fired = 0, sentBack = 0, apart = 0;
+  for (let i = 0; i < C; i++) {
+    const d = both.columns[i];
+    if (d.deepened && d.deep && !d.midLevel) { fired++; continue; }
+    if (d.deepened && d.midLevel) sentBack++;
+    if (!both.state.every((a, n) => { for (let x = i; x < a.length; x += C) if (a[x] !== alone.state[n][x]) return false; return true; })) apart++;
+  }
+  console.log(`random columns under a random omega with midLevelConvection: with shallowRetype too ${fired} run the re-typed deep plume and ${sentBack} are sent back by the depth rule and convect at mid-level; ${apart} of the other columns step otherwise than without shallowRetype`);
+  assert.ok(sentBack > 0 && apart === 0, `${fired} run the re-typed deep plume, ${sentBack} sent back convect at mid-level, ${apart} of the others step otherwise than without shallowRetype`);
+});
+test("with midLevelConvection, shallowRetype and convectionRetype a column re-typed deep steps as under the first two, sent back to the mid-level type alike, and every other column as under midLevelConvection and convectionRetype", () => {
+  const all = retypedColumns({ shallowRetype: true, convectionRetype: true }), first = retypedColumns({ shallowRetype: true }), other = retypedColumns({ convectionRetype: true }), C = all.C;
+  const same = (a, b, i) => a.state.every((s, n) => { for (let x = i; x < s.length; x += C) if (s[x] !== b.state[n][x]) return false; return true; });
+  let retyped = 0, sentBack = 0, sentBackFirst = 0, apart = 0, moved = 0;
+  for (let i = 0; i < C; i++) {
+    if (first.columns[i].deepened && first.columns[i].midLevel) sentBackFirst++;
+    if (all.columns[i].deepened) { retyped++; if (all.columns[i].midLevel) sentBack++; if (!same(all, first, i)) apart++; }
+    else { if (!same(all, other, i)) apart++; if (!same(other, first, i)) moved++; }
+  }
+  console.log(`random columns under a random omega with midLevelConvection, shallowRetype and convectionRetype: ${retyped} re-type deep, ${sentBack} of them sent back by the depth rule to convect at mid-level (${sentBackFirst} without convectionRetype); convectionRetype moves ${moved} of the others; ${apart} columns step otherwise than under the two options that apply to them`);
+  assert.ok(sentBack > 0 && sentBack === sentBackFirst && moved > 0 && apart === 0, `${retyped} re-typed, ${sentBack} sent back against ${sentBackFirst}, ${moved} moved by convectionRetype, ${apart} apart`);
+});
+test("with midLevelConvection and shallowRetype the engines agree on random columns under a random large-scale ascent, where columns sent back by the depth rule try the mid-level type under a shallow plume closed at 1e-9", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { midLevel, deepened, sentBack } = await parity({ midLevelConvection: true, shallowRetype: true, ...LIGHT_CUMULUS, cumulusClosure: 1e-9 }, { ascent: true });
+  console.log(`under midLevelConvection and shallowRetype: ${midLevel} columns convect at mid-level on the CPU, ${deepened} re-type deep, ${sentBack} of them sent back by the depth rule to convect at mid-level`);
+  assert.ok(midLevel >= 50 && sentBack > 0, `${midLevel} columns convect at mid-level, ${sentBack} of them sent back by the depth rule`);
+});
+test("with midLevelConvection, shallowRetype and convectionRetype the engines agree on random columns under a random large-scale ascent, where columns the depth rule sends back try the mid-level type under a shallow plume closed at 1e-9", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { midLevel, deepened, sentBack } = await parity({ midLevelConvection: true, shallowRetype: true, convectionRetype: true, ...LIGHT_CUMULUS, cumulusClosure: 1e-9 }, { ascent: true });
+  console.log(`under midLevelConvection, shallowRetype and convectionRetype: ${midLevel} columns convect at mid-level on the CPU, ${deepened} re-type deep, ${sentBack} of them sent back by the depth rule to convect at mid-level`);
+  assert.ok(midLevel >= 50 && sentBack > 0, `${midLevel} columns convect at mid-level, ${sentBack} of them sent back by the depth rule`);
+});
+test('with midLevelConvection, shallowRetype and cumulusBoundaryLoss 10 the engines agree on random columns under a random large-scale ascent, where the mid-level base flux is held to the mass of the layer above its source per step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { midLevel, trimmed } = await parity({ midLevelConvection: true, shallowRetype: true, ...LIGHT_CUMULUS, cumulusClosure: 1e-9, cumulusBoundaryLoss: 10 }, { ascent: true });
+  assert.ok(midLevel >= 50 && trimmed >= 100, `${midLevel} columns convect at mid-level, ${trimmed} of them held to the mass of the layer above`);
+});
+const trimOptions = { midLevelConvection: true, shallowRetype: true, ...LIGHT_CUMULUS, cumulusClosure: 1e-9, cumulusBoundaryLoss: 10 };
+const trimGrid = Float64Array.from([...Array.from({ length: 33 }, (_, k) => (1.05 ** k - 1) / (1.05 ** 32 - 1) * levels[27]), ...levels.slice(28)]);
+const strongAscent = (model) => { const { piSigmaDot, omega } = model.core.diagnostics; for (let x = 0; x < piSigmaDot.length; x++) piSigmaDot[x] = Math.fround(150 * piSigmaDot[x]); if (omega) for (let x = 0; x < omega.length; x++) omega[x] = Math.fround(150 * omega[x]); };
+test("with midLevelConvection, shallowRetype and cumulusBoundaryLoss 10, on 39 layers, 32 of which thin upward by a factor 1.05 a layer above bl34's lowest 7, under 150 times a random large-scale ascent, the CPU holds the mid-level plume at its interfaces to the mass of the layer above per step, and lifting the hold moves the plume's top or θ by over 1e-3 K in at least 100 columns", () => {
+  const step = (courant) => {
+    const model = createModel(new Grid(16), { ocean: false, levels: trimGrid, moist: trimOptions }), { moist, core } = model, C = model.mesh.nCells, K = trimGrid.length - 1, [pi, theta, , , q, qc] = model.state;
+    randomColumns(model);
+    let seed = 777;
+    const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    for (let k = 1; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.piSigmaDot[k * C + i] = Math.fround(0.6 * random() - 0.4);
+    if (core.diagnostics.omega) for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.omega[k * C + i] = Math.fround(0.6 * random() - 0.4);
+    strongAscent(model);
+    const tops = new Float64Array(C), kept = MID_LEVEL.courant;
+    let midLevel = 0, trimmed = 0;
+    try {
+      MID_LEVEL.courant = courant;
+      for (let i = 0; i < C; i++) { core.diagnoseColumn(i, pi, theta, q, qc); model.phases.adjust(i, i + 1, 900); tops[i] = moist.cumulusTop[i]; if (moist.deep.midLevel) { midLevel++; if (moist.deep.midTrimmed) trimmed++; } }
+    } finally { MID_LEVEL.courant = kept; }
+    return { theta: Float64Array.from(theta), tops, midLevel, trimmed, C, K };
+  };
+  const held = step(1), lifted = step(1e30), { C, K } = held;
+  const moved = Array.from({ length: C }, (_, i) => i).filter((i) => Math.abs(held.tops[i] - lifted.tops[i]) > 1 || Array.from({ length: K }, (_, k) => Math.abs(held.theta[k * C + i] - lifted.theta[k * C + i])).some((d) => d > 1e-3));
+  console.log(`on 39 layers, 32 of which thin upward by a factor 1.05 a layer above bl34's lowest 7, under 150 times a random ascent ${held.midLevel} columns convect at mid-level on the CPU, ${held.trimmed} of them held to a layer's mass per step; lifting the hold moves ${moved.length} columns' top or θ by over 1e-3 K`);
+  assert.ok(held.trimmed >= 300 && moved.length >= 100, `${held.midLevel} columns convect at mid-level, ${held.trimmed} of them held to a layer's mass per step; lifting the hold moves ${moved.length} columns' top or θ by over 1e-3 K`);
+});
+test("with midLevelConvection, shallowRetype and cumulusBoundaryLoss 10 the engines agree on random columns on 39 layers, 32 of which thin upward by a factor 1.05 a layer above bl34's lowest 7, under 150 times the random large-scale ascent, where the mid-level plume is held at its interfaces to the mass of the layer above per step and lifting the hold steps columns apart beyond the engines' tolerances", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const courant = MID_LEVEL.courant;
+  const { midLevel, trimmed, perturbed } = await parity(trimOptions, { ascent: true, grid: trimGrid, columns: strongAscent, perturb: () => { MID_LEVEL.courant = 1e30; return () => { MID_LEVEL.courant = courant; }; } });
+  console.log(`on 39 layers, 32 of which thin upward by a factor 1.05 a layer above bl34's lowest 7, under 150 times the random ascent ${midLevel} columns convect at mid-level on the CPU, ${trimmed} of them held to a layer's mass per step; without the hold ${perturbed} columns step apart beyond the engines' tolerances`);
+  assert.ok(trimmed >= 300 && perturbed >= 100, `${midLevel} columns convect at mid-level, ${trimmed} held to a layer's mass per step, ${perturbed} that lifting the hold moves beyond the engines' tolerances`);
+});
+
+test("with shallowRetype the column of the N=64 page state at 30N (seventeen64 day 365, column 13676, after two steps), whose shallow parcel first holds condensate at 539 hPa, is not re-typed: its w² from the closure's velocity scale vanishes below that layer", () => {
+  const [off, on] = [false, true].map((deepen) => replayPageColumn(PAGE_COLUMN_13676, deepen));
+  assert.ok(!on.d.deepened && on.d.shallowDepth === 0 && steppedAlike(on, off), `the column is not re-typed: shallow cloud ${on.d.shallowDepth} Pa, re-typed ${on.d.deepened}`);
+});
+test('with shallowRetype the column of the N=64 page state at 6N (seventeen64 day 365, column 3555, land 121 m up, after two steps, replayed at sea level with its boundary layer as deep above the ground), whose shallow plume holds condensate from 899 hPa, re-types on a cloud deeper than 200 hPa and runs a deep plume deeper than 200 hPa', () => {
+  const [off, on] = [false, true].map((deepen) => replayPageColumn(PAGE_COLUMN_3555, deepen));
+  assert.ok(on.d.deepened && !on.d.parcelDeep && on.d.shallowDepth > DEEP_CLOUD_DEPTH && Math.abs(on.base - 899e2) < 100, `the column re-types on a shallow cloud ${on.d.shallowDepth} Pa deep from ${on.base} Pa`);
+  assert.ok(off.flux > 0 && on.d.deep && on.depth > DEEP_CLOUD_DEPTH && !steppedAlike(on, off), `the re-typed column fires a deep plume ${on.depth} Pa deep (CAPE ${on.d.cape} J/kg) in place of a shallow plume of base flux ${off.flux} kg/m²/s`);
+  assert.ok(on.d.sourceS === off.cu.sourceS && on.d.sourceQ === off.cu.sourceQ && on.d.sourceMass === off.cu.mass && on.d.excessT === 0 && on.d.excessQ === 0, `the deep plume departs from the shallow plume's own stack: s_l ${on.d.sourceS} and ${off.cu.sourceS} J/kg, q_t ${on.d.sourceQ} and ${off.cu.sourceQ}, ${on.d.sourceMass} and ${off.cu.mass} Pa, excess ${on.d.excessT} K and ${on.d.excessQ}`);
+  let base = off.cu.source;
+  while (base > 1 && !(off.ps * off.levels[base] <= off.cu.lclPressure)) base--;
+  assert.equal(on.d.base, base, `the deep plume's cloud base is the interface at the shallow plume's condensation level, ${off.cu.lclPressure} Pa`);
+});
+test("with shallowRetype under a light shallow plume the engines agree on random columns, under cumulusSource 'lowest' too, and the GPU refuses a value other than true or false", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const lowest = await parity({ shallowRetype: true, cumulusSource: 'lowest', ...LIGHT_CUMULUS });
+  assert.ok(lowest.deepened > 0, `${lowest.deepened} columns re-type deep under cumulusSource 'lowest'`);
+  const { deepened } = await parity({ shallowRetype: true, ...LIGHT_CUMULUS }), fine = await parity({ shallowRetype: true, ...LIGHT_CUMULUS }, { grid: sigmaInterfaces('bl48') });
+  const withRetype = await parity({ shallowRetype: true, convectionRetype: true, ...LIGHT_CUMULUS });
+  assert.ok(withRetype.deepened > 0, `${withRetype.deepened} columns re-type deep with convectionRetype on as well`);
+  console.log(`  ${deepened} columns re-typed deep on the CPU`);
+  console.log(`  on bl48 ${fine.deepened} columns re-typed deep on the CPU, ${fine.continued} of them by the continued ascent; the engines part on ${fine.continuedApart} of those, ${fine.continuedLeftOut} left out`);
+  assert.ok(fine.continuedApart === 0 && fine.continuedLeftOut === 0 && Math.abs(fine.continued - 3) <= 1, `on bl48 the engines part on ${fine.continuedApart} of the ${fine.continued} columns re-typed by the continued ascent, ${fine.continuedLeftOut} left out`);
+  assert.ok(deepened >= 20 && fine.continued > 0, `${deepened} columns re-typed deep on the CPU; on bl48 ${fine.deepened}, ${fine.continued} of them by the ascent continued past shallowTop from a cloud no deeper than DEEP_CLOUD_DEPTH below it`);
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, shallowRetype: 1 }), /shallowRetype/);
 });

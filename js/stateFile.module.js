@@ -9,7 +9,7 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * so that a run is named by its content and a store can keep its chunks
  * under their hashes; or the same state in binary: 'GCMS', a
  * little-endian u32 header length, the JSON header { N, K, day, time,
- * terrain, grid, options, ocean, land, arrays: [{ name, length, offset, type }] }
+ * terrain, grid, options, given, terrainOptions, ocean, land, arrays: [{ name, length, offset, type }] }
  * (which may end in spaces counted in that length), zero padding to a
  * multiple of 4, then each array at its byte offset from the end of the
  * padding, as float32 unless its type is 'f64'. Array names are the JSON
@@ -23,7 +23,11 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * `grid` is { relax }, the Lloyd passes of the mesh the state was made on
  * (stateGrid.module.js finds them for a state saved without it).
  * `options`, when present, holds the model options the run was made with
- * by group ({ radiation, moist }), which the page's model starts with.
+ * by group ({ radiation, moist, land }), which the page's model starts with;
+ * `given`, every option group the run was given, and `terrainOptions`, its
+ * terrain's options (see terrainOptions in geography.module.js), are the
+ * scripts' records, of which the page reads only the terrain
+ * (savedTerrain) and builds its model's surface on it.
  */
 export function stateName(file) {
   return file.replace(/(?:\.json(?:\.gz)?|\.parts\.json|\.bin(?:\.gz)?)$/, '');
@@ -83,6 +87,20 @@ export function savedLevels(saved) {
  * with the header padded with spaces so the arrays start 8-byte aligned.
  */
 const GROUPS = ['ocean', 'land', 'means'], F64 = ['levels', 'ocean.densities', 'ocean.shelfLoad', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum'];
+const RECORDS = ['grid', 'options', 'given', 'terrainOptions'];
+
+/*
+ * The terrain options a state's header records, undefined when it records
+ * none (the default terrain).
+ */
+export const savedTerrain = (header) => header.given?.terrain ?? header.terrainOptions;
+
+/*
+ * The terrain a state's surface pressure stands on: false for a state
+ * saved without terrain, else the one its header records, true for the
+ * default.
+ */
+export const stateTerrain = (header) => (header.terrain ? savedTerrain(header) ?? true : false);
 const isF64 = (name) => F64.includes(name) || /^means\.\w+Sum$/.test(name);
 const isNames = (value) => Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string');
 const isArray = (value) => (ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer) && !isNames(value);
@@ -114,7 +132,7 @@ export function encodeState(state, { f64 = [] } = {}) {
     offset += size * values.length;
     return entry;
   });
-  const meta = Object.fromEntries(Object.entries(state).filter(([key, value]) => typeof value !== 'object' || ((key === 'grid' || key === 'options') && value && !isArray(value))));
+  const meta = Object.fromEntries(Object.entries(state).filter(([key, value]) => typeof value !== 'object' || (RECORDS.includes(key) && value && !isArray(value))));
   for (const key of GROUPS) if (state[key] && !isArray(state[key])) { const header = groupHeader(state[key]); if (Object.keys(header).length) meta[key] = header; }
   const json = JSON.stringify({ ...meta, arrays });
   const header = new TextEncoder().encode(json.padEnd(json.length + ((8 - ((8 + new TextEncoder().encode(json).length) % 8)) % 8)));

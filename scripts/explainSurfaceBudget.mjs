@@ -5,18 +5,21 @@
 // writing explain/data/surface_budget.json. About 25 minutes on one core.
 import { writeFileSync } from 'node:fs';
 import { createModel } from '../js/model.module.js';
-import { savedLevels } from '../js/stateFile.module.js';
+import { stateGeography } from '../js/geography.module.js';
+import { savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { LATENT_HEAT, placeCumulus } from '../js/physics/moist.module.js';
-import { readTopography, readState, tagOf } from './figures/figureState.mjs';
+import { readState, tagOf } from './figures/figureState.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const file = process.argv[2] ?? new URL('../runs/eleven64_day1825.bin', import.meta.url).pathname;
 const out = process.argv[3] ?? new URL('../explain/data/surface_budget.json', import.meta.url).pathname;
 const saved = await readState(file);
 const dt = 1350 * 16 / saved.N, steps = Number(process.env.STEPS ?? Math.round(86400 / dt));
-const topography = readTopography(saved);
-const model = createModel(stateGrid(saved, topography).mesh, { ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography, geography: ground.geography, land: ground.land });
 const { moist, boundaryLayer, radiation, mesh, geography } = model, C = mesh.nCells;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => model.state[a].set(saved[name]));
 if (saved.boundaryDepth) boundaryLayer.depth.set(saved.boundaryDepth);

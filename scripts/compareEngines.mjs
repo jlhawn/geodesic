@@ -28,7 +28,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { serialize, deserialize } from 'node:v8';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { stateTerrain } from '../js/stateFile.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const flagValue = (flag) => (process.argv.includes(flag) ? process.argv[process.argv.indexOf(flag) + 1] : null);
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--') && !['--out', '--gpu-dump', '--against'].some((flag) => a === flagValue(flag)));
@@ -114,7 +117,7 @@ async function build(file) {
   const saved = await fs.readState(file), sg = stateGeography(saved), topography = sg.topography, dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
   const subgrid = process.env.NO_SUBGRID ? { subgrid: false } : {};
-  const options = { topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
+  const options = { terrain: stateTerrain(saved), topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
   const load = (model) => {
     const { state } = model, C = model.mesh.nCells, K = model.core.K;
     ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));

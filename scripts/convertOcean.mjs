@@ -16,7 +16,7 @@ import { gzipSync } from 'node:zlib';
 import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { withoutSstRing } from '../js/sstMeans.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
-import { createGeography, topographyFromInt16 } from '../js/geography.module.js';
+import { createGeography, stateGeography } from '../js/geography.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { GENERATORS } from '../js/ocean/column.module.js';
 
@@ -33,8 +33,7 @@ const saved = await decodeState(new Uint8Array(readState(input)));
 if (!saved.ocean || !saved.ocean.h) { console.error(`${input} holds no ocean`); process.exit(1); }
 if (saved.ocean.vertical === 'hybrid') { console.error(`${input} is already on the hybrid layers`); process.exit(1); }
 const { mesh, relax } = stateGrid(saved), C = mesh.nCells;
-const topographyBytes = readFileSync(new URL('../data/topography_0p25.bin', import.meta.url));
-const geography = createGeography(mesh, topographyFromInt16(topographyBytes.buffer.slice(topographyBytes.byteOffset, topographyBytes.byteOffset + topographyBytes.byteLength)), {});
+const ground = stateGeography(saved), geography = createGeography(mesh, ground.topography, ground.geography);
 const ocean = createOcean(mesh, { geography, vertical: 'hybrid', generator });
 const surfaceT = Float64Array.from(saved.surfaceT), ice = Float64Array.from(saved.ice);
 if (saved.concentration) ocean.useSeaIce(Float64Array.from(saved.concentration));

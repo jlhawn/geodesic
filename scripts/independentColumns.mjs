@@ -18,17 +18,17 @@
 // less clear-sky, W/m2), globally, by latitude band and by the columns
 // with cloud only below 680 hPa, only above, or both.
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
-import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { CLOUD_OPTICS, cloudOptics, overlapped, sunDistance, SOLAR_CONSTANT, DECORRELATION_LENGTH, DECORRELATION_SLOPE, LOW_CLOUD_PRESSURE } from '../js/physics/radiation.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2], M = Number(process.env.M ?? 128), FSD = Number(process.env.FSD ?? 0);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true } });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true } });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, dSigma, g, exnerLayer, geopotential } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));

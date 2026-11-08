@@ -6,8 +6,9 @@ import { withoutSstRing } from './sstMeans.module.js';
  * from another decoded state of the same mesh, typically the end of an
  * ocean-only spin-up (scripts/oceanSpinup.mjs) started from an earlier
  * state of the same coupled run. Over the sea (where `land` is 0) the
- * surface temperature, ice, concentration and the snow on the ice come
- * from `ocean`, as do all the ocean's layers; the atmosphere with the
+ * surface temperature, ice, concentration, the snow on the ice and the
+ * brine of the ice (none where `ocean` has none) come from `ocean`, as
+ * do all the ocean's layers; the atmosphere with the
  * mixed-layer deck's carried state (mlmSubsidence, mlmHeight, mlmGate),
  * the land cells, the day and the time stay those of `coupled`.
  * `oceanYears`, the model years the ocean has spent alone, adds up the
@@ -21,9 +22,10 @@ export function withOceanOf(coupled, ocean, land) {
   if (!ocean.ocean || !ocean.ocean.h) throw new Error('the state to take the ocean from has no ocean');
   const sea = (mine, theirs) => Float32Array.from(mine, (x, i) => (land[i] ? x : theirs[i]));
   const concentration = ocean.concentration ? (coupled.concentration ? sea(coupled.concentration, ocean.concentration) : Float32Array.from(ocean.concentration)) : null;
-  const { seaFlow, ...atmosphere } = withoutSstRing(coupled);
+  const { brine, seaFlow, ...atmosphere } = withoutSstRing(coupled);
   return {
     ...atmosphere,
+    ...(ocean.brine ? { brine: Float32Array.from(ocean.brine, (x, i) => (land[i] ? 0 : x)) } : {}),
     surfaceT: sea(coupled.surfaceT, ocean.surfaceT),
     ice: sea(coupled.ice, ocean.ice),
     concentration,

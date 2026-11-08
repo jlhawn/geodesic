@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { inLongitudes, convectionLine, equatorialOcean, equatorLine, heatingProfile, tropicalBoxOf, TROPICAL_BOXES } from '../js/audit.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 const mesh = buildMesh(new Grid(16));
 const C = mesh.nCells, E = mesh.nEdges;
@@ -83,7 +84,7 @@ test('scripts/verticalAudit.mjs prints every headline number of a saved state wi
   writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: 0, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
   const withEffects = join(dir, 'audit16_day0001.bin'), C = model.mesh.nCells;
   writeFileSync(withEffects, encodeState({ N: 16, K: model.core.K, day: 1, time: 0, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize(), meanShortwaveCloudEffect: new Float64Array(C).fill(-41), meanLongwaveCloudEffect: new Float64Array(C).fill(25) }));
-  const audit = (state) => spawnSync(process.execPath, [new URL('../scripts/verticalAudit.mjs', import.meta.url).pathname, state], { env: { ...process.env, STEPS: '2' }, encoding: 'utf8' });
+  const audit = (state) => spawnSync(process.execPath, [new URL('../scripts/verticalAudit.mjs', import.meta.url).pathname, state], { env: { ...withoutOptionGroups(), STEPS: '2' }, encoding: 'utf8' });
   const run = audit(file), saved = audit(withEffects);
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 0, run.stderr);
@@ -121,7 +122,7 @@ test('scripts/tropicalHeating.mjs replays the moist step exactly, closes the hea
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
   const dir = mkdtempSync(join(tmpdir(), 'tropicalHeating-')), file = join(dir, 'heat16_day0000.bin');
   writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
-  const run = spawnSync(process.execPath, [new URL('../scripts/tropicalHeating.mjs', import.meta.url).pathname, file], { env: { ...process.env, STEPS: '3' }, encoding: 'utf8' });
+  const run = spawnSync(process.execPath, [new URL('../scripts/tropicalHeating.mjs', import.meta.url).pathname, file], { env: { ...withoutOptionGroups(), STEPS: '3' }, encoding: 'utf8' });
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 0, run.stderr);
   const [, mismatch, columns, heat, water, sensible, own] = run.stdout.match(/differs from the model's in (\d+) of (\d+) column-steps.*close on the temperature change to ([0-9.e+-]+) K a step and on the change of q_t to ([0-9.e+-]+) kg\/kg a step.*global sensible heat (-?[0-9.]+) against the model's (-?[0-9.]+) W\/m2/);

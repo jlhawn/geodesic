@@ -40,7 +40,7 @@ test("on the GPU, a page save waits for the step that ends an ocean step, a held
     const back = await save(run);
     for (const key of ['windSpeed', 'evaporation', 'exchangeWind', 'rainTotal', 'runoffTotal', 'rainSeen', 'runoffSeen']) assert.ok(back[key] && back[key].length > 0, `the snapshot carries ${key}`);
     for (const key of ['runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen']) assert.ok(Math.max(...back[key]) > 0, `${key} is not 0 at the save`);
-    for (const key of ['Qref', 'previousT0', 'fresh', 'flux', 'boundaryDepths']) assert.ok(back.ocean[key] && back.ocean[key].length > 0, `the snapshot carries the ocean's restart array ${key}`);
+    for (const key of ['previousT0', 'fresh', 'flux', 'boundaryDepths']) assert.ok(back.ocean[key] && back.ocean[key].length > 0, `the snapshot carries the ocean's restart array ${key}`);
     const twin = await createGpuModel(new Grid(16), options);
     await placeSaved(twin, start, 16, dt);
     await frame(twin, 3);

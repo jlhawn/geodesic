@@ -15,20 +15,22 @@
 // 120W–100W's by the height band that carries it. MOIST, BOUNDARY_LAYER
 // and SURFACE (JSON) pass options.
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { SEA_DRAG } from '../js/physics/surface.module.js';
-import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../js/dynamics/operators.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2], LAT = Number(process.env.LAT ?? 3);
 const BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, moist: JSON.parse(process.env.MOIST ?? "{}") });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, moist: JSON.parse(process.env.MOIST ?? "{}") });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land, surface } = model;
 const { K, C, E, V, sigmaMid, sigmaLower, dSigma, R, g, exnerLayer, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;

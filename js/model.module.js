@@ -13,12 +13,12 @@ import { COUPLED_ICE_DRIFT, iceDriftMoves, coverOf } from './ocean/iceDrift.modu
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
 import { createBoundaryLayer, refuseBorrowedOptions } from './physics/boundaryLayer.module.js';
 import { createLake, lakeWater, lakeModelOf, FLAKE } from './physics/lake.module.js';
-import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
+import { createGeography, surfaceGeopotential, terrainOptions, terrainKey, subgridOrography, meshSubgrid, landSubgrid, rebuiltSubgrid, subgridFallbackNote, subgridKeptNote, geographyRecordOf } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, visibleCloudHeights } from './frames.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from './physics/exchange.module.js';
 import { createGravityWaveDrag } from './physics/gravityWaves.module.js';
-import { createOrographicDrag, LOTT_MILLER } from './physics/orography.module.js';
+import { createOrographicDrag, LOTT_MILLER, namedConstants } from './physics/orography.module.js';
 
 export const SIDEREAL_DAY = 86164.0905;
 export const STATE_NAMES = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
@@ -74,21 +74,30 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * The subgrid orography of a mesh: data/subgrid_N<N>.bin's fields from
  * GMTED2010 (`subgrid`, or under node the bundled file), else the 0.25°
  * raster's (`raster` true), which carry no σ_flt and so no form drag and
- * take Lott and Miller's constants, not the IFS's for 5 km fields. The
- * files' fields hold the scales below the resolved terrain on the bundled
- * land mask of the mesh whose Lloyd passes they record, so a run without
- * terrain, on another mask or on a mesh of other passes takes the raster's.
+ * take LOTT_MILLER's C_d 1 and G 1, not the IFS's for 5 km fields. The
+ * files' fields hold the scales below the default terrain's resolved
+ * surface on the bundled land mask of the mesh whose Lloyd passes they
+ * record, so a run without terrain, on another mask or on a mesh of other
+ * passes takes the raster's. A run over terrain of other options (see
+ * terrainOptions) takes the files' fields rebuilt below its own surface
+ * (rebuiltSubgrid) where the fine grids are in reach, and keeps the
+ * files', saying so, where they are not.
  */
-export function orographyFields(mesh, topography, geography, phis, subgrid, g) {
+export function orographyFields(mesh, topography, geography, phis, subgrid, g, terrain = true) {
   const mask = geography.mask ?? 'raster', fields = phis ? meshSubgrid(mesh, subgrid, topography?.name, mask) : null;
   const otherMesh = fields && Number.isInteger(fields.relax) && Number.isInteger(mesh.relax) && fields.relax !== mesh.relax;
   const fitted = fields && !otherMesh ? landSubgrid(fields, geography.land) : null;
+  if (fitted && terrainKey(terrain) !== terrainKey(true)) {
+    const own = rebuiltSubgrid(mesh, geography.land, phis, g);
+    if (own) return landSubgrid(own, geography.land) ?? fitted;
+    subgridKeptNote(mesh, terrainOptions(terrain), topography?.name, mask);
+  }
   if (fitted) return fitted;
   subgridFallbackNote(mesh, !phis ? 'terrain' : otherMesh ? 'relax' : fields ? 'land' : subgrid === false ? 'off' : 'missing', fields, topography?.name, mask);
   return { ...subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / g) : null, geography.land), raster: true };
 }
 
-export const dragConstants = (fields, options) => (fields.raster ? { ...LOTT_MILLER, ...options } : options);
+export const dragConstants = (fields, options) => (fields.raster ? { ...LOTT_MILLER, ...namedConstants(options) } : namedConstants(options));
 
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
@@ -99,7 +108,7 @@ export function createModel(gridOrMesh, {
   if (oceanOptions && oceanOptions.gustiness !== undefined) throw new Error('ocean.gustiness is not an option: the ocean and the ice drift take surface.gustiness');
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
-  const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
+  const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;
   const mode = exchangeMode(surfaceOptions, landOptions), rough = mode === 'roughness';
   const { seaHumidity } = exchangeOptions(surfaceOptions);
   const skinSet = skinOptions(surfaceOptions);
@@ -112,10 +121,10 @@ export function createModel(gridOrMesh, {
   const sigmaMid = Float64Array.from({ length: levels.length - 1 }, (_, k) => 0.5 * (levels[k] + levels[k + 1]));
   const sponge = physics ? spongeRates(sigmaMid, surfaceOptions.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surfaceOptions.spongeDays ?? SPONGE.days) : null;
   const lidFriction = physics ? lidFrictionRates(levels, surfaceOptions.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : surfaceOptions.lidFriction) : null;
-  const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, spongeMeanRates: lidFriction, ...coreOptions });
+  const core = createSigmaCore(mesh, { levels, storeOmega: !!moistOptions.midLevelConvection, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, spongeMeanRates: lidFriction, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const openSea = new Float64Array(C);
-  const subgridFields = physics && geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, subgrid, core.diagnostics.g) : null;
+  const subgridFields = physics && geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, subgrid, core.diagnostics.g, terrain) : null;
   const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};
   const formDrag = subgridFields && subgridFields.filtered && formDragOptions !== false ? { ...formDragOptions, sigma: Float64Array.from(subgridFields.filtered, (value, i) => (geography.land[i] ? value : 0)) } : null;
   const exchange = geography || rough ? createSurfaceExchange(mesh, core, { ...surfaceOptions, geography, vegetated: landOptions.vegetation !== false, mode, seaDrag: surfaceOptions.dragCoefficient ?? SEA_DRAG, landDrag: landOptions.dragCoefficient ?? LAND_DRAG, gustiness: surfaceOptions.gustiness ?? 3, buffers: buffers ? buffers.exchange : null }) : null;
@@ -171,7 +180,6 @@ export function createModel(gridOrMesh, {
   const totals = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), stressScratch = new Float64Array(E);
   const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C), callAlbedo = radiation.callCosZenith && (radiationOptions.radiationEvery ?? 1) > 1 ? new Float64Array(C) : null;
-  const lakeSeen = lake ? new Float64Array(C) : null;
   const runoffSeen = land ? new Float64Array(C) : null, runoffStep = land || lake ? new Float64Array(C) : null, dischargeSeen = land ? new Float64Array(C) : null, dischargeStep = land ? new Float64Array(C) : null, airBefore = new Float64Array(C);
   const dragBuffer = buffers && buffers.drags ? buffers.drags : new SharedArrayBuffer(8 * C), dragStep = new Float64Array(dragBuffer);
   if (!(buffers && buffers.drags)) dragStep.fill(-1);
@@ -202,7 +210,7 @@ export function createModel(gridOrMesh, {
         const total = land.runoff[i]; runoffStep[i] = total >= runoffSeen[i] ? total - runoffSeen[i] : total; runoffSeen[i] = total;
         const shed = land.discharge[i]; dischargeStep[i] = shed >= dischargeSeen[i] ? shed - dischargeSeen[i] : shed; dischargeSeen[i] = shed;
       }
-      if (lake) for (const i of lake.cells) { runoffStep[i] = lake.passed[i] - lakeSeen[i]; lakeSeen[i] = lake.passed[i]; }
+      if (lake) for (const i of lake.cells) { runoffStep[i] = lake.passed[i] - lake.seen[i]; lake.seen[i] = lake.passed[i]; }
       ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoffStep, dischargeStep);
       ocean.advance(state[3], state[6], seaIce.oceanFlux, () => { const stress = surface.stress(state, stressScratch); if (seaFlow && ocean.u && !ocean.iceDrift) seaFlowOf(state[6], seaIce.concentration); return stress; }, dt, seaIce.concentration, model.time + dt);
     },
@@ -249,7 +257,7 @@ export function createModel(gridOrMesh, {
           continue;
         }
         const h = state[6][i], partial = h > 0 && seaIce.cover(i, h) < 1;
-        seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0, surfaceSolar[i]);
+        seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0, surfaceSolar[i], surfaceShortwave[i] > 0 ? 1 - surfaceDirect[i] / surfaceShortwave[i] : 0);
         if (seaSkin && (h > 0 || state[6][i] > 0)) seaSkin.clear(i);
         else if (seaSkin) {
           const airDensity = state[0][i] * core.diagnostics.sigmaMid[K - 1] / (core.diagnostics.R * airBefore[i] * (virtualBefore ? virtualBefore[i] : 1));
@@ -332,12 +340,12 @@ export function createModel(gridOrMesh, {
   model.oceanFields = (depth = 0, upwellingDepth = depth) => (ocean ? ocean.fields(depth, upwellingDepth) : null);
   model.foldUpwelling = (time = model.time) => { if (ocean) ocean.foldUpwelling(time); };
   model.cadence = { radiationEvery: radiationOptions.radiationEvery ?? 1, dragEvery, oceanEvery: ocean ? ocean.everySteps : 1 };
-  const freshwater = [['runoffTotal', land ? land.runoff : null], ['dischargeTotal', land ? land.discharge : null], ['runoffSeen', runoffSeen], ['dischargeSeen', dischargeSeen], ['lakeSeen', lakeSeen], ['rainStep', moist ? moistPhysics.rain : null]].filter(([, values]) => values);
+  const freshwater = [['runoffTotal', land ? land.runoff : null], ['dischargeTotal', land ? land.discharge : null], ['runoffSeen', runoffSeen], ['dischargeSeen', dischargeSeen], ['lakeSeen', lake ? lake.seen : null], ['rainStep', moist ? moistPhysics.rain : null]].filter(([, values]) => values);
   model.readFreshwater = () => Object.fromEntries(freshwater.map(([name, values]) => [name, Float64Array.from(values)]));
   model.writeFreshwater = (saved) => {
     for (const [name, target] of freshwater) if (saved[name] && saved[name].length === target.length) target.set(saved[name]);
     const pending = saved.lakePending && saved.lakePending.length === C ? saved.lakePending : null;
-    if (lake && !(saved.lakeSeen && saved.lakeSeen.length === C)) for (let i = 0; i < C; i++) lakeSeen[i] = lake.passed[i] - (pending ? pending[i] : 0);
+    if (lake && !(saved.lakeSeen && saved.lakeSeen.length === C)) for (let i = 0; i < C; i++) lake.seen[i] = lake.passed[i] - (pending ? pending[i] : 0);
   };
   model.dragsDue = () => dragStep.fill(-1);
   model.cloudWater = (i) => moistPhysics.columnWater(state[0], state[5], i) + moistPhysics.cumulusCloudPath(state[0], i) + radiation.stratusFraction[i] * radiation.stratus[i];

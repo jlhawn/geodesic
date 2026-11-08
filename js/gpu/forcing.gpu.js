@@ -1,5 +1,5 @@
 import { emptyBuffer, storageBuffer, readRanges } from './device.module.js';
-import { physicsConstants, physicsFunctions, SEA_SURFACE_WGSL, snowOnSea } from './physics.gpu.js';
+import { physicsConstants, physicsFunctions, seaSurfaceWgsl, snowOnSea } from './physics.gpu.js';
 import { nearestLayer, STABILITY_SIGMA } from '../physics/radiation.module.js';
 import { encodeForcing } from '../forcing.module.js';
 import { gridHeader } from '../stateGrid.module.js';
@@ -25,7 +25,7 @@ import { gridHeader } from '../stateGrid.module.js';
  *
  * createForcedOcean steps the ocean and sea ice alone under a recorded
  * day. Each `step` is one atmosphere step of the physics kernel's
- * sea-cell surface (SEA_SURFACE_WGSL) under the recorded net flux plus
+ * sea-cell surface (seaSurfaceWgsl) under the recorded net flux plus
  * the restoring −restore·(SST − recorded SST) on the open water, and of
  * the recorded snowfall; every everySteps-th, counted from creation as
  * the coupled model counts, also takes the recorded freshwater and steps
@@ -147,6 +147,7 @@ export async function createForcingRecorder(model, from = null) {
 export function createForcedOcean(model) {
   const { gpu, mesh, oceanEngine: ocean } = model;
   const { device } = gpu;
+  if (gpu.physics.iceLight) throw new Error("the forced surface restores the sea through the leads' share of the sunlight contrast, so it takes no ice.iceLight");
   const C = mesh.nCells, E = mesh.nEdges, PH = gpu.layout.PH;
   const F = seq([['netFlux', C], ['shortwave', C], ['shortwaveDown', C], ['sst', C], ['snowfall', C], ['stress', E]]);
   const forcing = emptyBuffer(device, 4 * F.total);
@@ -163,7 +164,7 @@ export function createForcedOcean(model) {
   let contrast = OUT[FC_shortwaveDown + i] * (surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]) - ALB_DIF_WATER) + pull;
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = skin; var h = ice;
-  ${SEA_SURFACE_WGSL}
+  ${seaSurfaceWgsl(gpu.physics)}
   IN[S_TS + i] = T; IN[S_ICE + i] = h;
   let snowfall = OUT[FC_snowfall + i] * dt;
   if (snowfall > 0.0) {

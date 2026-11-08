@@ -9,6 +9,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { syntheticTopography, geographyOptions, readTopography, decodeMask, maskUrl, FRESH_GEOGRAPHY } from '../js/geography.module.js';
+import { messageState, toSnapshot, restoreMessage, exportState } from '../js/snapshots.module.js';
 
 const SEED = 'soilWater_seed.bin sha256:0123abcd';
 const OPTIONS = {
@@ -16,8 +17,9 @@ const OPTIONS = {
   moist: { stratocumulusInversion: 7, cumulusEntrainmentHeight: 1, cumulusAscent: 'kinetic' },
   surface: { relativeWind: true },
 };
+const TERRAIN = { conserveVolume: true };
 
-test("the page's worker runs a saved state with the options it records, and its snapshots and restores carry them and the soil seed the state descends from", async () => {
+test("the page's worker runs a saved state with the options and the terrain it records, its surface pressure where it stands, and its snapshots and restores carry them and the soil seed the state descends from; a restore onto other terrain restarts the model", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'run-options-'));
   const messages = [], fetched = globalThis.fetch;
   globalThis.self = { postMessage: (message) => messages.push(message) };
@@ -45,7 +47,9 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.deepEqual(fresh.options, {});
     assert.equal(fresh.soilSeed, null, 'a fresh start descends from no soil seed');
     assert.equal(fresh.arrays.seaFlow, undefined);
-    const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, ...(fresh.grid ? { grid: fresh.grid } : {}), options: OPTIONS, soilSeed: SEED };
+    assert.equal(fresh.terrain, true);
+    assert.equal(fresh.terrainOptions, undefined);
+    const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, terrainOptions: TERRAIN, ...(fresh.grid ? { grid: fresh.grid } : {}), options: OPTIONS, soilSeed: SEED };
     for (const [key, buffer] of Object.entries(fresh.arrays)) saved[key] = new Float64Array(buffer.slice(0));
     saved.ocean = { ...groupHeader(fresh.ocean), ...Object.fromEntries(Object.entries(groupArrays(fresh.ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
     saved.land = Object.fromEntries(Object.entries(fresh.land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
@@ -57,9 +61,20 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.deepEqual(taken.options, OPTIONS);
     assert.equal(taken.soilSeed, SEED, 'the snapshot records the soil seed of the state the run started from');
     assert.deepEqual(new Float64Array(taken.arrays.seaFlow), saved.seaFlow, 'the start places the sea\'s velocity under the air and the snapshot carries it');
+    assert.deepEqual(taken.terrainOptions, TERRAIN);
+    const store = toSnapshot(messageState(taken)), { saved: written, wide } = exportState(store.meta, store.data);
+    const imported = toSnapshot(await decodeState(encodeState(written, { f64: wide })));
+    for (const [path, record] of [['the store', store.meta], ["the store's restore message", restoreMessage(store.meta, store.data)], ['an export and import', imported.meta]]) {
+      assert.deepEqual(record.terrainOptions, TERRAIN, `${path} keeps the terrain's options`);
+      assert.equal(record.soilSeed, SEED, `${path} keeps the soil seed`);
+      assert.deepEqual(record.options, OPTIONS, `${path} keeps the options`);
+    }
+    assert.deepEqual(Object.keys(imported.data.arrays).sort(), Object.keys(store.data.arrays).sort(), 'an export and import keeps every array');
+    assert.deepEqual(new Float64Array(taken.arrays.pi), saved.pi);
     assert.deepEqual((await restore(fresh)).options, {});
     const unseeded = await snapshot();
     assert.equal(unseeded.arrays.seaFlow, undefined);
+    assert.equal(unseeded.terrainOptions, undefined);
     assert.equal(unseeded.soilSeed, null, "a restore that starts over takes the snapshot's record");
     assert.deepEqual((await restore(taken)).options, OPTIONS);
     assert.deepEqual(new Float64Array((await snapshot()).arrays.seaFlow), saved.seaFlow, 'the restore places it again');
@@ -87,6 +102,12 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.deepEqual(placed.seaIce.oceanFlux, flux, 'a snapshot whose ocean has no restart flux places the top-level iceOceanFlux it carried before');
     placeCarried(placed, { iceOceanFlux: new Float64Array(C), ocean: { flux } });
     assert.deepEqual(placed.seaIce.oceanFlux, flux, 'the ocean\'s restart flux takes precedence');
+    const { terrainOptions, ...plain } = await snapshot();
+    assert.deepEqual(terrainOptions, TERRAIN);
+    assert.deepEqual((await restore(plain)).options, OPTIONS);
+    const flat = await snapshot();
+    assert.equal(flat.terrainOptions, undefined);
+    assert.equal(flat.soilSeed, SEED, "a restore onto other terrain starts over with the snapshot's soil seed");
   } finally {
     globalThis.fetch = fetched;
     delete globalThis.self;

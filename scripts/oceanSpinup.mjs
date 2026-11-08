@@ -46,7 +46,7 @@ import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appen
 import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { stateGeography, geographyHeader } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
-import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, encodeState, savedLevels, savedTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS, MOIST_FIELDS, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
@@ -58,7 +58,9 @@ import { COUPLED_ICE_DRIFT } from '../js/ocean/iceDrift.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { loadSavedLand } from './savedLand.mjs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const N = Number(process.env.N ?? 64), TAG = process.env.TAG ?? `ocean${N}`, YEARS = Number(process.env.YEARS ?? 1), KEEP = Number(process.env.KEEP ?? 2);
 const DAYS_PER_YEAR = Number(process.env.DAYS_PER_YEAR ?? 365), LOOP_DAYS = Number(process.env.LOOP_DAYS ?? DAYS_PER_YEAR), RESTORE = Number(process.env.RESTORE ?? 30);
 const SNAPSHOT_DAYS = Number(process.env.SNAPSHOT_DAYS ?? 30), STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
@@ -100,7 +102,7 @@ const stepBefore = existing.length ? saved.oceanStep ?? 0 : 0;
 if (stepBefore % everySteps) throw new Error(`${from} stopped at step ${stepBefore}, off the ocean's ${everySteps}-step cadence`);
 const baseDay = saved.day - doneBefore, baseTime = saved.time - doneBefore * 86400 - stepBefore * dt;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
-model.seaIce.load(state[6], saved.concentration ?? null);
+model.seaIce.load(state[6], saved.concentration ?? null, saved.brine ?? null);
 for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
 model.time = saved.time;
 model.load();
@@ -149,7 +151,7 @@ async function save(done, step, read = null) {
   const { o, surfaceT, ice, concentration } = read ?? await readSurface();
   const name = nameAt(done, step), landState = await model.land.serialize();
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
-    N, ...gridHeader(mesh), K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: !!model.surfaceGeopotential, ...geographyHeader(record), levels: core.levels,
+    N, ...gridHeader(mesh), K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: saved.terrain ?? !!model.surfaceGeopotential, ...(savedTerrain(saved) ? { terrainOptions: savedTerrain(saved) } : {}), ...geographyHeader(record), levels: core.levels,
     oceanYears: Math.floor(done / DAYS_PER_YEAR), oceanDays: done, ...(step ? { oceanStep: step } : {}),
     pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
     ...Object.fromEntries([...Object.keys(MOIST_FIELDS), ...Object.keys(RADIATION_FIELDS)].filter((name) => saved[name]).map((name) => [name, saved[name]])),

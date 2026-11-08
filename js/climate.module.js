@@ -1,18 +1,17 @@
 import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
-import { fetchState, stateName, decodeState, encodeState, listedStates, stateDay, groupHeader, groupArrays } from './stateFile.module.js';
+import { fetchState, stateName, decodeState, encodeState, listedStates, stateDay, groupArrays } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
 import { sigmaInterfaces } from "./dynamics/sigmaCore.module.js";
 import { HYBRID_LAYERS } from "./ocean/column.module.js";
 import { sunDirection, orbitOf, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
-import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot, listRuns, deleteRun, runStore, messageState, toSnapshot, restoreMessage } from "./snapshots.module.js";
+import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot, listRuns, deleteRun, runStore, messageState, toSnapshot, restoreMessage, exportState } from "./snapshots.module.js";
 import { Stats } from "./stats.module.js";
 import { pickDevice, isMobileBrowser, probeN, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
 import { defaultRunFor } from "./defaultRun.module.js";
 import { CLOUD_RANGES, CLOUD_OPACITY_PATH } from "./frames.module.js";
-import { pickGeography } from "./geography.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const VERTICAL_MAX = { surface: 10, 1000: 3, 850: 10, 700: 10, 500: 10, 250: 10, 70: 3, 10: 1 };
@@ -1068,12 +1067,8 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     const { data } = await getSnapshot(meta.id);
     if (!data) return;
     document.getElementById('date').textContent = `exporting "${meta.name}"…`;
-    const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, ...(meta.grid ? { grid: meta.grid } : {}), ...pickGeography(meta), ...(meta.options ? { options: meta.options } : {}), ...(meta.soilSeed ? { soilSeed: meta.soilSeed } : {}) };
-    for (const [key, buffer] of Object.entries(data.arrays)) saved[key] = new Float64Array(buffer);
-    if (data.ocean) saved.ocean = { ...groupHeader(data.ocean), ...Object.fromEntries(Object.entries(groupArrays(data.ocean)).map(([k, b]) => [k, new Float64Array(b)])) };
-    if (data.land) saved.land = Object.fromEntries(Object.entries(data.land).map(([k, b]) => [k, new Float64Array(b)]));
-    const names = [...Object.keys(data.arrays), ...Object.keys(groupArrays(data.ocean)).map((k) => `ocean.${k}`), ...Object.keys(data.land ?? {}).map((k) => `land.${k}`)];
-    const gz = await new Response(new Blob([encodeState(saved, { f64: names })]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+    const { saved, wide } = exportState(meta, data);
+    const gz = await new Response(new Blob([encodeState(saved, { f64: wide })]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
     const link = document.createElement('a');
     link.href = URL.createObjectURL(gz);
     link.download = `${slug(meta.name)}_day${Math.round(meta.day)}.bin.gz`;

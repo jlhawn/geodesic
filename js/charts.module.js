@@ -1,9 +1,9 @@
 import { createModel } from './model.module.js';
-import { topographyFromInt16, savedGeography, topographyUrl } from './geography.module.js';
+import { topographyFromInt16, savedGeography, topographyUrl, geographyOptions, landIceUrl, decodeLandIce, maskUrl, decodeMask, terrainKey } from './geography.module.js';
 import { stateGrid } from './stateGrid.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { LEVELS, levelFields } from './levels.module.js';
-import { fetchState, stateName, listedStates, savedLevels } from './stateFile.module.js';
+import { fetchState, stateName, listedStates, savedLevels, stateTerrain } from './stateFile.module.js';
 import { DEFAULT_RUN } from './defaultRun.module.js';
 
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796;
@@ -49,10 +49,17 @@ function gridFor(state, topography) {
   if (!grids.has(state)) grids.set(state, stateGrid(state, topography));
   return grids.get(state);
 }
-function modelFor(state, found) {
-  const levels = savedLevels(state), key = `${state.N} ${found.relax} ${levels.join(' ')}`;
-  if (!models.has(key)) models.set(key, createModel(found.mesh, { levels, radiation: { aerosol: 'flat' } }));
-  return models.get(key);
+
+/*
+ * The physics-free model a state's charts are diagnosed with, on its grid
+ * and level set and, given its topography and geography options, on the
+ * terrain it records.
+ */
+export function chartModel(state, topography = null, geography = null) {
+  const found = gridFor(state, topography), levels = savedLevels(state), terrain = stateTerrain(state);
+  const key = [state.N, found.relax, levels.join(' '), topography?.name ?? 'none', JSON.stringify(savedGeography(state)), terrainKey(terrain)].join(' ');
+  if (!models.has(key)) models.set(key, createModel(found.mesh, { levels, physics: false, terrain, ...(topography ? { topography, ...(geography ? { geography } : {}) } : {}) }));
+  return { found, model: models.get(key) };
 }
 
 function contours(mesh, field, step) {
@@ -173,9 +180,8 @@ function svgFor(model, grid, title, subtitle, fill, contourField, contourStep, u
  * lowest-layer wind at the surface, or geopotential-height contours over
  * the wind interpolated to that pressure.
  */
-export function chartFor(state, level, topography = null) {
-  const found = gridFor(state, topography);
-  const model = modelFor(state, found);
+export function chartFor(state, level, topography = null, geography = null) {
+  const { found, model } = chartModel(state, topography, geography);
   const grid = [...found.grid];
   const { K, C, E, sigmaMid } = model.core.diagnostics;
   const pi = Float64Array.from(state.pi), theta = Float64Array.from(state.theta), u = Float64Array.from(state.u);
@@ -232,6 +238,21 @@ export default async function runCharts(directory = 'runs/') {
     if (!topographies.has(name)) topographies.set(name, fetch(topographyUrl(name)).then((response) => (response.ok ? response.arrayBuffer() : null)).then((buffer) => (buffer ? topographyFromInt16(buffer, 720, 1440, name) : null)).catch(() => null));
     return topographies.get(name);
   };
+  const geographies = new Map();
+  const buffer = async (url) => { const response = await fetch(url); return response.ok ? response.arrayBuffer() : null; };
+  const geographyFor = (state) => {
+    const record = savedGeography(state), key = `${state.N} ${JSON.stringify(record)}`;
+    if (!geographies.has(key)) {
+      geographies.set(key, (async () => {
+        const iced = record.iceSheets !== 'rule', masked = record.mask && record.mask !== 'raster';
+        const ice = iced ? await buffer(landIceUrl) : null, mask = masked ? await buffer(maskUrl(state.N, record.mask)) : null;
+        if ((iced && !ice) || (masked && !mask)) return null;
+        const { geography } = geographyOptions(record, ice ? decodeLandIce(ice) : null);
+        return mask ? { ...geography, maskData: decodeMask(mask) } : geography;
+      })());
+    }
+    return geographies.get(key);
+  };
   let current = '';
   async function render() {
     const name = stateSelect.value, level = levelSelect.value;
@@ -241,7 +262,7 @@ export default async function runCharts(directory = 'runs/') {
     status.textContent = `rendering ${level === 'surface' ? 'surface' : level + ' hPa'}…`;
     await new Promise((resolve) => setTimeout(resolve, 0));
     const t0 = performance.now();
-    current = chartFor(state, level, await topographyFor(state));
+    current = chartFor(state, level, await topographyFor(state), await geographyFor(state));
     holder.innerHTML = current;
     status.textContent = `${name} · ${level === 'surface' ? 'surface' : level + ' hPa'} · ${(performance.now() - t0).toFixed(0)} ms`;
     history.replaceState(null, '', `?state=${encodeURIComponent(name)}&level=${level}`);

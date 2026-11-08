@@ -30,9 +30,9 @@
 // area-weighted means (medians in brackets) and a profile of the box means
 // by layer below 4 km.
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
-import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, ringMean } from '../js/physics/radiation.module.js';
@@ -40,15 +40,17 @@ import { LATENT_HEAT, saturationHumidity, placeCumulus } from '../js/physics/moi
 import { inLongitudes } from '../js/audit.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/deckGate.mjs <state.bin>'); process.exit(1); }
 const env = (name) => JSON.parse(process.env[name] ?? '{}');
 const RADIATION = env('RADIATION'), MOIST = env('MOIST'), EIS_SWITCH = MOIST.stratocumulusInversion ?? 7, BOUNDARY_LAYER = env('BOUNDARY_LAYER'), SURFACE = env('SURFACE');
 const STEPS = Number(process.env.STEPS ?? 4);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land } = model;
 const { K, C, sigmaMid, R, g, cp, p0, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;

@@ -17,7 +17,9 @@ import { decodeMonthlySst, climatologyAt, MONTHLY_SST_FILE } from '../../js/ocea
 import { stateSst } from '../woaSstBias.mjs';
 import { readState, readGeography, figureHeader, DEG, eastNorth, rounded } from './figureState.mjs';
 import { stateGrid } from '../../js/stateGrid.module.js';
+import { refuseUnreadOptions } from '../optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/oceanPanels.mjs <state.bin> <out.json>'); process.exit(2); }
 const KELVIN = 273.15, SURFACE_DEPTH = 15;

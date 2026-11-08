@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { divergence } from '../js/dynamics/operators.module.js';
+import { syntheticTopography, surfaceGeopotential } from '../js/geography.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -94,4 +96,58 @@ test('twenty GPU steps with divergence damping track twenty CPU steps, and the d
   console.log(`20 steps at N=${N} with c = 0.05: rms divergence ${rmsDivergence(model.state[2]).toExponential(2)} /s on the CPU, ${rmsDivergence(Float64Array.from(got[2])).toExponential(2)} on the GPU, ${rmsDivergence(free.state[2]).toExponential(2)} undamped; the damping moves the wind by up to ${uMoved.toFixed(3)} m/s, the engines differ by ${uDiff.toExponential(1)}`);
   assert.ok(uDiff < 0.02 * uMoved, `engines differ by ${uDiff} m/s, the damping moved the wind by ${uMoved}`);
   assert.ok(rmsDivergence(model.state[2]) < rmsDivergence(free.state[2]), 'the damping lowers the divergence');
+});
+
+const dome = syntheticTopography(90, 180, (lat, lon) => 3000 * Math.exp(-((lat - 0.6) ** 2 + (lon - 1) ** 2) / 0.08));
+function omegaModel() {
+  const model = createModel(new Grid(N), { topography: dome, ocean: false, moist: { midLevelConvection: true } });
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) if (init[a] && model.state[a]) model.state[a].set(init[a]);
+  const u = model.state[2];
+  for (let x = 0; x < u.length; x++) u[x] += 5 * Math.sin(0.37 * x);
+  return model;
+}
+function omegaOf(model) {
+  const { mesh, core } = model, C = mesh.nCells, E = mesh.nEdges, { K, sigmaMid, dSigma } = core.diagnostics, [pi, , u] = model.state;
+  const piEdge = Float64Array.from({ length: E }, (_, e) => 0.5 * (pi[mesh.cellsOnEdge[2 * e]] + pi[mesh.cellsOnEdge[2 * e + 1]]));
+  const divFlux = new Float64Array(K * C), divU = new Float64Array(K * C);
+  for (let k = 0; k < K; k++) {
+    const uk = u.subarray(k * E, (k + 1) * E);
+    divergence(mesh, Float64Array.from(uk, (x, e) => x * piEdge[e]), divFlux.subarray(k * C, (k + 1) * C));
+    divergence(mesh, uk, divU.subarray(k * C, (k + 1) * C));
+  }
+  const omega = new Float64Array(K * C), mean = new Float64Array(K * C);
+  for (let i = 0; i < C; i++) {
+    let tendency = 0;
+    for (let k = 0; k < K; k++) tendency -= divFlux[k * C + i] * dSigma[k];
+    let above = 0;
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i, below = above - dSigma[k] * (tendency + divFlux[idx]);
+      mean[idx] = 0.5 * (above + below);
+      omega[idx] = sigmaMid[k] * (tendency + divFlux[idx] - pi[i] * divU[idx]) + mean[idx];
+      above = below;
+    }
+  }
+  return { omega, mean };
+}
+
+test('with midLevelConvection the CPU core stores omega = sigma (dpi/dt + v.grad pi) + pi sigma-dot at the middle of each layer of the state it steps, over a 3 km dome', () => {
+  const model = omegaModel(), out = model.state.map((s) => (s ? new Float64Array(s.length) : s));
+  model.core.tendency(model.state, out);
+  const { omega, mean } = omegaOf(model);
+  const r = compare('stored omega', omega, model.core.diagnostics.omega, 1e-10);
+  let apart = 0, scale = 0;
+  for (let x = 0; x < omega.length; x++) { apart = Math.max(apart, Math.abs(omega[x] - mean[x])); scale = Math.max(scale, Math.abs(omega[x])); }
+  console.log(`CPU omega store: ${r.toExponential(1)} relative, largest omega ${scale.toExponential(3)} Pa/s, apart from the pi sigma-dot mean by ${apart.toExponential(3)}`);
+  assert.ok(scale > 0.05 && apart > 0.1 * scale, `omega reaches ${scale} Pa/s and parts from the pi sigma-dot mean by ${apart}`);
+});
+
+test('with midLevelConvection the GPU dynamics store the same omega in D.OMG over a 3 km dome', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const model = omegaModel();
+  const gpu = await createGpuCore(model.mesh, { levels: model.core.levels, physics: { midLevelConvection: true }, surfaceGeopotential: surfaceGeopotential(model.mesh, model.geography) });
+  gpu.upload(model.state);
+  await gpu.tendency();
+  const { OMG } = await gpu.downloadDiagnostics();
+  const r = compare('GPU omega', omegaOf(model).omega, OMG, 1e-3);
+  console.log(`GPU omega store: ${r.toExponential(1)} relative`);
 });

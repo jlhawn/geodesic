@@ -19,18 +19,12 @@
  *
  *   node scripts/subgridTerrain.mjs [CACHE] [N ...]
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
-import { readTopography, subgridOrography, encodeSubgrid, decodeSubgrid, subgridUrl, geographyOptions, FRESH_GEOGRAPHY } from '../js/geography.module.js';
+import { readTopography, encodeSubgrid, decodeSubgrid, subgridUrl, geographyOptions, FRESH_GEOGRAPHY, FINE_ROWS, FINE_COLS, GRADIENT_SPACING, readFine, fineSubgrid, terrainCache } from '../js/geography.module.js';
 import { createModel } from '../js/model.module.js';
 
-export const FINE_ROWS = 4320, FINE_COLS = 8640, GRADIENT_SPACING = 5000;
-
-export function readFine(cache, name, rows = FINE_ROWS, cols = FINE_COLS) {
-  const bytes = readFileSync(`${cache}/fine_${name}.f32`);
-  if (bytes.byteLength !== 4 * rows * cols) throw new Error(`fine_${name}.f32: ${bytes.byteLength} bytes`);
-  return new Float32Array(bytes.buffer, bytes.byteOffset, rows * cols);
-}
+export { FINE_ROWS, FINE_COLS, GRADIENT_SPACING, readFine };
 
 /*
  * The fields for a mesh from the fine grids `h5` and `flt2` (rows from
@@ -39,7 +33,7 @@ export function readFine(cache, name, rows = FINE_ROWS, cols = FINE_COLS) {
  */
 export function meshFields(model, h5, flt2, rows = FINE_ROWS, cols = FINE_COLS) {
   const g = model.core.diagnostics.g, phis = model.surfaceGeopotential;
-  return subgridOrography(model.mesh, { rows, cols, data: h5 }, phis ? Float64Array.from(phis, (p) => p / g) : null, model.geography.land, { filtered: { data: flt2 }, spacing: GRADIENT_SPACING });
+  return fineSubgrid(model.mesh, model.geography.land, phis ? Float64Array.from(phis, (p) => p / g) : null, h5, flt2, rows, cols);
 }
 
 function summary(N, model, fields) {
@@ -63,7 +57,8 @@ function summary(N, model, fields) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const cache = process.argv[2] ?? new URL('../../geodesic-terrain-cache', import.meta.url).pathname;
+  const cache = process.argv[2] ?? terrainCache();
+  if (!cache) throw new Error('no fine grids: give the cache directory, or TERRAIN_CACHE');
   const Ns = process.argv.length > 3 ? process.argv.slice(3).map(Number) : [16, 32, 64, 128];
   const mask = process.env.MASK ?? 'raster', topography = readTopography(process.env.TOPOGRAPHY ?? 'etopo1'), url = (N) => subgridUrl(N, topography.name, mask);
   const geography = mask === 'raster' ? {} : geographyOptions({ ...FRESH_GEOGRAPHY, topography: topography.name, mask }).geography;

@@ -26,16 +26,57 @@ const CAM_L26_HYBI = [
 ];
 
 export const DIVERGENCE_SURFACES = ['sigma', 'hybrid'];
+export const TEMPERATURE_CLOSURES = ['sigma', 'standard'];
+export const VERTICAL_ADVECTION = ['centered', 'vanLeerWater'];
+export const THETA_FACES = ['exner', 'arakawaSuarez'];
 
 /*
  * The models' `dynamics` options with their defaults: divergenceSurfaces,
- * the surfaces the divergence damping acts along, 'sigma' or 'hybrid'.
+ * the surfaces the divergence damping acts along, 'sigma' or 'hybrid';
+ * divergenceViscosity, the damping's ν_d in m²/s in place of the
+ * coefficient c of `divergenceDamping` (0 keeps c, so ν_d = c d²/dt);
+ * temperatureClosure, 'sigma' for the ∇⁴ closure on T along σ, or
+ * 'standard' for it on T less the US Standard Atmosphere 1976 at the
+ * layer's pressure πσ, which takes out T's hydrostatic slope along σ over
+ * terrain; verticalAdvection, 'centered' for q and q_c at the layer
+ * interfaces linear in Exner, or 'vanLeerWater' for them limited by
+ * vanLeerFace, θ never limited; thetaFace, 'exner' for θ's interface
+ * value linear in Exner, θ_k + t(θ_{k+1} − θ_k) with
+ * t = (Π_{k+½} − Π_k)/ΔΠ, or 'arakawaSuarez' for it weighted as the
+ * hydrostatic step weights θ_v,
+ * [θ_k(Π_{k+½} − Π_k) + θ_{k+1}(Π_{k+1} − Π_{k+½})]/ΔΠ, the one face
+ * whose vertical transport of c_p θ the pressure work balances. The
+ * 'exner' face swaps those weights and differs from it by
+ * (2t − 1)(θ_{k+1} − θ_k), so it carries an energy residual of its own
+ * (docs/c-grid-dynamical-core.md, section 4.3); a limited θ face would
+ * add a one-signed c_p T source to it. The last four are returned
+ * only when given.
  */
-export function dynamicsOptions({ divergenceSurfaces = 'sigma', ...rest } = {}) {
+export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscosity, temperatureClosure, verticalAdvection, thetaFace, ...rest } = {}) {
   const unknown = Object.keys(rest);
-  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, not ${unknown.join(', ')}`);
+  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, divergenceViscosity, temperatureClosure, verticalAdvection and thetaFace, not ${unknown.join(', ')}`);
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
-  return { divergenceSurfaces };
+  if (divergenceViscosity !== undefined && !(typeof divergenceViscosity === 'number' && divergenceViscosity >= 0 && Number.isFinite(divergenceViscosity))) throw new Error(`divergenceViscosity is ν_d in m²/s, 0 or more, not ${divergenceViscosity}`);
+  if (temperatureClosure !== undefined && !TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
+  if (verticalAdvection !== undefined && !VERTICAL_ADVECTION.includes(verticalAdvection)) throw new Error(`verticalAdvection is ${VERTICAL_ADVECTION.join(' or ')}, not ${verticalAdvection}`);
+  if (thetaFace !== undefined && !THETA_FACES.includes(thetaFace)) throw new Error(`thetaFace is ${THETA_FACES.join(' or ')}, not ${thetaFace}`);
+  return { divergenceSurfaces, ...(divergenceViscosity !== undefined ? { divergenceViscosity } : {}), ...(temperatureClosure !== undefined ? { temperatureClosure } : {}), ...(verticalAdvection !== undefined ? { verticalAdvection } : {}), ...(thetaFace !== undefined ? { thetaFace } : {}) };
+}
+
+/*
+ * A layer interface's value under van Leer's limiter: the centered value
+ * blended toward the upwind layer's by φ(r) = (r + |r|)/(1 + |r|), r the
+ * ratio of the gradient upwind of the upwind layer to the gradient across
+ * the interface, each difference over its spacing (`upSpacing`,
+ * `acrossSpacing`; in the core, of the layer middles' Exner function), so
+ * that a profile straight in that coordinate keeps the centered value; and
+ * never past the downwind layer's value.
+ */
+export function vanLeerFace(beyond, upwind, downwind, centered, upSpacing = 1, acrossSpacing = 1) {
+  const rise = upwind - beyond, across = downwind - upwind, up = rise * acrossSpacing, sum = up + across * upSpacing;
+  const phi = rise * across > 0 && sum !== 0 ? 2 * up / sum : 0;
+  const face = upwind + phi * (centered - upwind);
+  return (face - downwind) * across > 0 ? downwind : face;
 }
 
 /*
@@ -87,6 +128,16 @@ export function standardSigma(z) {
 export function standardHeight(sigma) {
   const [z0, T0, lapse, sigma0] = STANDARD_LAYERS.findLast((layer) => layer[3] >= sigma) ?? STANDARD_LAYERS[0];
   return lapse === 0 ? z0 + STANDARD.R * T0 / STANDARD.g * Math.log(sigma0 / sigma) : z0 + T0 / lapse * (1 - Math.pow(sigma / sigma0, STANDARD.R * lapse / STANDARD.g));
+}
+
+/*
+ * The standard atmosphere's layers as [base σ, base T, exponent] with
+ * T = T_base (σ/σ_base)^exponent inside each, and the temperature at a σ.
+ */
+export const STANDARD_TEMPERATURE = STANDARD_LAYERS.map(([, T0, lapse, sigma0]) => [sigma0, T0, STANDARD.R * lapse / STANDARD.g]);
+export function standardTemperature(sigma) {
+  const [sigma0, T0, exponent] = STANDARD_TEMPERATURE.findLast((layer) => layer[0] >= sigma) ?? STANDARD_TEMPERATURE[0];
+  return T0 * Math.pow(sigma / sigma0, exponent);
 }
 
 export const SIGMA_GRIDS = ['cam26', 'bl34', 'bl36', 'bl42', 'bl48', 'bl60'];
@@ -195,16 +246,21 @@ export function sigmaGridName(levels) {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma', surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null, spongeMeanRates = null,
+    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma', surfaceGeopotential = null, buffers = null, storeOmega = false, splitClosure = false, spongeRates = null, spongeMeanRates = null,
+    divergenceViscosity = 0, temperatureClosure = 'sigma', verticalAdvection = 'centered', thetaFace = 'exner',
   } = options;
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
+  if (!TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
+  if (!VERTICAL_ADVECTION.includes(verticalAdvection)) throw new Error(`verticalAdvection is ${VERTICAL_ADVECTION.join(' or ')}, not ${verticalAdvection}`);
+  if (!THETA_FACES.includes(thetaFace)) throw new Error(`thetaFace is ${THETA_FACES.join(' or ')}, not ${thetaFace}`);
+  const standardClosure = temperatureClosure === 'standard', vanLeer = verticalAdvection === 'vanLeerWater', hydrostaticFace = thetaFace === 'arakawaSuarez';
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
     cellsOnEdge, verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, areaTriangle, dcEdge, dvEdge, fVertex,
   } = mesh;
   const K = levels.length - 1;
   const kappa = R / cp;
-  if (divergenceDamping > 0 && !splitClosure) throw new Error('divergence damping needs a core with splitClosure');
+  if ((divergenceDamping > 0 || divergenceViscosity > 0) && !splitClosure) throw new Error('divergence damping needs a core with splitClosure');
   const sponged = [spongeRates, spongeMeanRates].some((rates) => rates && rates.some((rate) => rate > 0));
   if (sponged && !splitClosure) throw new Error('the sponge needs a core with splitClosure');
   const sigmaUpper = levels.subarray(0, K);
@@ -223,6 +279,7 @@ export function createSigmaCore(mesh, options = {}) {
   const uBefore = new Float64Array(E);
   const divFlux = sharedArray('divFlux', K * C);
   const piSigmaDot = sharedArray('piSigmaDot', (K + 1) * C);
+  const layerOmega = storeOmega ? sharedArray('omega', K * C) : null;
   const exnerLower = sharedArray('exnerLower', K * C);
   const exnerLayer = sharedArray('exnerLayer', K * C);
   const dExnerDpi = sharedArray('dExnerDpi', K * C);
@@ -257,9 +314,9 @@ export function createSigmaCore(mesh, options = {}) {
   let spacing = 0;
   for (let e = 0; e < E; e++) spacing += dcEdge[e];
   spacing /= E;
-  const divergenceStep = divergenceDamping * spacing * spacing;
+  const divergenceStep = divergenceDamping * spacing * spacing, damped = divergenceViscosity > 0 || divergenceStep > 0;
   const gradDiv = new Float64Array(E);
-  const coupled = divergenceSurfaces === 'hybrid' && divergenceStep > 0;
+  const coupled = divergenceSurfaces === 'hybrid' && damped;
   const surfaceWeight = coupled ? hybridWeights(sigmaMid) : null, lnSigmaStep = coupled ? logSigmaSteps(sigmaMid) : null;
   const hybridDivergence = coupled ? new Float64Array(K * C) : null, halfLnRatio = coupled ? new Float64Array(E) : null;
   const sponge = sponged ? spongeGeometry(mesh) : null, bandMeans = sponge ? new Float64Array(2 * sponge.bands) : null;
@@ -281,7 +338,7 @@ export function createSigmaCore(mesh, options = {}) {
     for (let k = 0; k < K - 1; k++) {
       const idx = k * C + i;
       const t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
-      thetaLower[idx] = theta[idx] + t * (theta[idx + C] - theta[idx]);
+      thetaLower[idx] = theta[idx] + (hydrostaticFace ? 1 - t : t) * (theta[idx + C] - theta[idx]);
       qLower[idx] = q ? q[idx] + t * (q[idx + C] - q[idx]) : 0;
       qcLower[idx] = qc ? qc[idx] + t * (qc[idx + C] - qc[idx]) : 0;
     }
@@ -356,6 +413,7 @@ export function createSigmaCore(mesh, options = {}) {
     const off = k * C;
     if (exner) {
       for (let i = 0; i < C; i++) massField[i] = field[off + i] * exner[off + i];
+      if (standardClosure) for (let i = 0; i < C; i++) massField[i] -= standardTemperature(pi[i] * sigmaMid[k] / P0);
       laplacianScalar(mesh, massField, lapTheta);
       laplacianScalar(mesh, lapTheta, lapTheta2, pi);
       for (let i = 0; i < C; i++) target[off + i] -= coefficient * lapTheta2[i] / (pi[i] * exner[off + i]);
@@ -382,14 +440,15 @@ export function createSigmaCore(mesh, options = {}) {
   /*
    * Divergence damping of one layer over one step: u += c d² ∇(∇·u) with
    * d the mean distance between cell centres, the tendency ν_d ∇δ with
-   * ν_d = c d²/dt. The gradient of a divergence has no curl on the C-grid,
-   * so the vorticity is untouched.
+   * ν_d = c d²/dt, or with divergenceViscosity u += ν_d Δt ∇(∇·u). The
+   * gradient of a divergence has no curl on the C-grid, so the vorticity
+   * is untouched.
    */
-  function divergenceClosure(k, u) {
+  function divergenceClosure(k, u, step) {
     const off = k * E, uk = u.subarray(off, off + E);
     divergence(mesh, uk, divScratch);
     gradient(mesh, divScratch, gradDiv);
-    for (let e = 0; e < E; e++) u[off + e] += divergenceStep * gradDiv[e];
+    for (let e = 0; e < E; e++) u[off + e] += step * gradDiv[e];
   }
 
   /*
@@ -404,7 +463,7 @@ export function createSigmaCore(mesh, options = {}) {
    * through the edge, ∇_σ D_η − w (∂D_η/∂ln σ) ∇ln π. The derivatives
    * couple the layers, so all of them are damped at once.
    */
-  function hybridDivergenceClosure(pi, u) {
+  function hybridDivergenceClosure(pi, u, divergenceStep) {
     const { maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, areaCell } = mesh;
     for (let e = 0; e < E; e++) halfLnRatio[e] = 0.5 * Math.log(pi[cellsOnEdge[2 * e + 1]] / pi[cellsOnEdge[2 * e]]);
     for (let k = 0; k < K; k++) {
@@ -433,7 +492,14 @@ export function createSigmaCore(mesh, options = {}) {
    * Flux-form transport of a layer scalar by the mass fluxes, with the
    * ∇⁴ closure as part of the tendency unless the closure is split off.
    */
-  function transportLayer(k, pi, field, fieldLower, edgeFlux, divField, dField, conservative = false) {
+  function limitedFace(field, centered, n, above, flow) {
+    const down = flow > 0, far = down ? above - 1 : above + 2, upwind = down ? n : n + C, downwind = down ? n + C : n;
+    if (far < 0 || far >= K) return vanLeerFace(field[upwind], field[upwind], field[downwind], centered[n]);
+    const beyond = n + (far - above) * C;
+    return vanLeerFace(field[beyond], field[upwind], field[downwind], centered[n], Math.abs(exnerLayer[upwind] - exnerLayer[beyond]), Math.abs(exnerLayer[downwind] - exnerLayer[upwind]));
+  }
+
+  function transportLayer(k, pi, field, fieldLower, edgeFlux, divField, dField, conservative = false, limited = false) {
     const off = k * C;
     const fk = flux.subarray(k * E, (k + 1) * E);
     for (let e = 0; e < E; e++) {
@@ -444,8 +510,8 @@ export function createSigmaCore(mesh, options = {}) {
       const idx = off + i;
       const lowerFlow = piSigmaDot[(k + 1) * C + i];
       const upperFlow = piSigmaDot[k * C + i];
-      const lower = k === K - 1 ? 0 : fieldLower[idx];
-      const upper = k === 0 ? 0 : fieldLower[idx - C];
+      const lower = k === K - 1 ? 0 : limited ? limitedFace(field, fieldLower, idx, k, lowerFlow) : fieldLower[idx];
+      const upper = k === 0 ? 0 : limited ? limitedFace(field, fieldLower, idx - C, k - 1, upperFlow) : fieldLower[idx - C];
       const vertical = (lowerFlow * lower - upperFlow * upper - field[idx] * (lowerFlow - upperFlow)) / (pi[i] * dSigma[k]);
       dField[idx] = -(divField[i] - field[idx] * divFlux[idx]) / pi[i] - vertical;
     }
@@ -464,6 +530,7 @@ export function createSigmaCore(mesh, options = {}) {
     for (let i = 0; i < C; i++) {
       const idx = k * C + i;
       const omega = sigmaMid[k] * (dPi[i] + divFlux[idx] - pi[i] * divScratch[i]) + 0.5 * (piSigmaDot[idx] + piSigmaDot[idx + C]);
+      if (layerOmega) layerOmega[idx] = omega;
       dTheta[idx] += kappa * theta[idx] * (VIRTUAL_FACTOR * q[idx] - (qc ? qc[idx] : 0)) * omega / (pi[i] * sigmaMid[k]);
     }
   }
@@ -480,7 +547,7 @@ export function createSigmaCore(mesh, options = {}) {
   function phaseClosure(state, kFrom, kTo, dt, part = 'all') {
     const [pi, theta, u] = state;
     const q = state[4] ?? null, qc = state[5] ?? null;
-    const together = coupled && part !== 'tracers';
+    const together = coupled && part !== 'tracers', step = divergenceViscosity > 0 ? divergenceViscosity * dt : divergenceStep;
     if (together && (kFrom !== 0 || kTo !== K)) throw new Error('the hybrid divergence damping couples the layers: close all of them at once');
     for (let k = kFrom; k < kTo; k++) {
       if (part !== 'momentum' && nu4Theta > 0) {
@@ -496,16 +563,16 @@ export function createSigmaCore(mesh, options = {}) {
         continue;
       }
       const spongeRate = sponge && spongeRates ? spongeRates[k] : 0, meanRate = sponge && spongeMeanRates ? spongeMeanRates[k] : 0;
-      if (nu4 > 0 || divergenceStep > 0 || spongeRate > 0 || meanRate > 0) {
+      if (nu4 > 0 || damped || spongeRate > 0 || meanRate > 0) {
         for (let e = 0; e < E; e++) uBefore[e] = u[off + e];
         if (nu4 > 0) momentumClosure(k, u, u, dt * nu4);
-        if (divergenceStep > 0) divergenceClosure(k, u);
+        if (damped) divergenceClosure(k, u, step);
         if (spongeRate > 0 || meanRate > 0) dampEddies(mesh, sponge, u.subarray(off, off + E), spongeRate, dt, bandMeans, meanRate);
         for (let e = 0; e < E; e++) dissipation[off + e] = uBefore[e] * uBefore[e] - u[off + e] * u[off + e];
       } else dissipation.fill(0, off, off + E);
     }
     if (!together) return;
-    hybridDivergenceClosure(pi, u);
+    hybridDivergenceClosure(pi, u, step);
     for (let k = 0; k < K; k++) {
       const off = k * E;
       const spongeRate = sponge && spongeRates ? spongeRates[k] : 0, meanRate = sponge && spongeMeanRates ? spongeMeanRates[k] : 0;
@@ -525,10 +592,10 @@ export function createSigmaCore(mesh, options = {}) {
     const q = state[4] ?? null, dQ = out[4] ?? null, qc = state[5] ?? null, dQc = out[5] ?? null;
     if (part !== 'momentum') {
       for (let k = kFrom; k < kTo; k++) {
-        transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta);
+        transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta, false);
         if (q) virtualWork(k, pi, u, theta, q, qc, out[0], dTheta);
-        if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true);
-        if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true);
+        if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true, vanLeer);
+        if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true, vanLeer);
       }
     }
     if (part === 'tracers') return;
@@ -573,7 +640,7 @@ export function createSigmaCore(mesh, options = {}) {
     phaseLayer(state, out, 0, K);
   }
 
-  const diagnostics = { K, C, E, V, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, diagnose, diagnoseColumn };
+  const diagnostics = { K, C, E, V, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, omega: layerOmega, diagnose, diagnoseColumn };
 
   function mass(pi) {
     let m = 0;
@@ -581,5 +648,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, divergenceViscosity, temperatureClosure, verticalAdvection, thetaFace, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }

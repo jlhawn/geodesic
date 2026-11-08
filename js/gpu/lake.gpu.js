@@ -1,6 +1,5 @@
 /* FLake (http://www.flake.igb-berlin.de/source/src_flake_sfcflx.tar.gz) is distributed under the MIT license; see the notice in js/physics/lake.module.js. */
 import { FLAKE, LAKE_FIELDS, SETTLE_SLACK } from '../physics/lake.module.js';
-import { SEA_SURFACE_WGSL } from './physics.gpu.js';
 
 export const LAKE_SLOTS = ['depth', 'coriolis', ...LAKE_FIELDS, 'passed', 'pending'];
 const slot = (name) => LAKE_SLOTS.indexOf(name);
@@ -192,12 +191,12 @@ const SKIN_STEP = '  if (!onLand) { skinStep(';
 export function lakeKernels(bodies, { held = false, skin = false } = {}) {
   const physics = iceAlbedo(iceAlbedo(bodies.physics, 'adif', ADIF, 'diffuse albedo'), 'adir', ADIR, 'direct albedo');
   const radiation = held ? iceAlbedo(bodies.radiation, 'adir', ADIR, 'held direct albedo') : bodies.radiation;
-  let surface = replaceOnce(bodies.physicsSurface, `} else ${SEA_SURFACE_WGSL}`, `} else if (${ON_LAKE}) {
+  let surface = replaceOnce(bodies.physicsSurface, `} else if (h <= 0.0) {`, `} else if (${ON_LAKE}) {
     let lake = lakeStep(i, absorbed, net - absorbed, sqrt(rho / LK_RHOW * PH[PH_DRAG + i]) * xWind(i, ws), dt);
     T = lake.x; h = lake.y;
     PH[PH_CONC + i] = select(0.0, 1.0, h > 0.0);
     PH[lkAt(${slot('passed')}, i)] -= evap * dt; PH[lkAt(${slot('pending')}, i)] -= evap * dt;
-${skin ? '    PH[PH_WARM + i] = 0.0; PH[PH_COOL + i] = 0.0;\n' : ''}  } else ${SEA_SURFACE_WGSL}`, 'surface');
+${skin ? '    PH[PH_WARM + i] = 0.0; PH[PH_COOL + i] = 0.0;\n' : ''}  } else if (h <= 0.0) {`, 'surface');
   if (skin) surface = replaceOnce(surface, SKIN_STEP, `  if (!onLand && !(${ON_LAKE})) { skinStep(`, 'skin');
   const rain = replaceOnce(bodies.adjustRain, DEPOSIT, `  if (${ON_LAKE}) {
     PH[lkAt(${slot('passed')}, i)] += rained + convected; PH[lkAt(${slot('pending')}, i)] += rained + convected;

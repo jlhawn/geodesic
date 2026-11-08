@@ -46,8 +46,14 @@ import { cellVector } from '../dynamics/operators.module.js';
  * C_d 2 (eq. 4.17), waveDrag G 1.23 (the value §4.1 gives for the
  * elliptical mountain of eq. 4.2 that the scheme assumes), effectiveHeight
  * 2 (H_eff = 2(H − Z_b), eq. 4.8), criticalHeight H_n,crit 0.5 (§4.1),
- * criticalRichardson 0.25 (§4.4.2). Lott and Miller's (1997) are C_d 1,
- * G 1 and effectiveHeight 1.
+ * criticalRichardson 0.25 (§4.4.2): at Z_b = 0 the launched stress is
+ * 4.92 ρUNμσD. `constants` 'cy41r2' takes the G of the IFS's operational
+ * fields instead, GKDRAG 0.3 (the G of Cy41r2 Part IV §4.2.2, eq. 4.19, which
+ * states no value; 0.3 is set in SUGWD), 1.2 ρUNμσD.
+ * LOTT_MILLER, for the 0.25° raster's fields, keeps C_d 1, G 1,
+ * effectiveHeight 1 and Ri_crit 0.25, 1.0 ρUNμσD. Those are not Lott and
+ * Miller's (1997) own constants: C_d 1, G 0.5, H_n,crit 0.5 and Ri_c 1
+ * (their p. 110) with H = 2μ and no cut-off (their eq. 18), 0.5 ρUNμσD.
  *
  * `diagnose` lays the per-cell rates, `apply` steps each edge's normal
  * velocity as u ← (u + Δt a)/(1 + Δt β), with a and β the two cells'
@@ -58,6 +64,17 @@ import { cellVector } from '../dynamics/operators.module.js';
  */
 export const OROGRAPHY_DEFAULTS = { blockingDrag: 2, waveDrag: 1.23, criticalHeight: 0.5, criticalRichardson: 0.25, effectiveHeight: 2 };
 export const LOTT_MILLER = { blockingDrag: 1, waveDrag: 1, criticalHeight: 0.5, criticalRichardson: 0.25, effectiveHeight: 1 };
+export const OROGRAPHY_CONSTANTS = { cy41r2: { ...OROGRAPHY_DEFAULTS, waveDrag: 0.3 } };
+
+/*
+ * The orography options with `constants`, a name in OROGRAPHY_CONSTANTS,
+ * replaced by that set's constants; constants given by name win over it.
+ */
+export function namedConstants({ constants, ...options } = {}) {
+  if (constants === undefined) return options;
+  if (!Object.hasOwn(OROGRAPHY_CONSTANTS, constants)) throw new Error(`the orographic drag's constants are ${Object.keys(OROGRAPHY_CONSTANTS).join(' or ')}, not ${constants}`);
+  return { ...OROGRAPHY_CONSTANTS[constants], ...options };
+}
 
 /*
  * One column, k = 0 at the top: z (above the ground), p, rho, theta, east

@@ -12,6 +12,7 @@ import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { CLIMATOLOGY_FILE, loadClimatology } from '../js/ocean/climatology.module.js';
 import { decodeState } from '../js/stateFile.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -38,7 +39,7 @@ test(`a fresh start on the default geography at N=${N} on ${LEVELS} stays finite
 test(`a fresh start on the default geography at N=${N} on ${LEVELS} stays finite for ${GPU_DAYS} days on the GPU, through scripts/spinup.mjs`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'fresh-'));
   try {
-    execFileSync(process.execPath, [new URL('../scripts/spinup.mjs', import.meta.url).pathname], { env: { ...process.env, N: String(N), LEVELS, TAG: 'fresh', OUT: out, MINUTES: '100', DAYS: String(GPU_DAYS) }, stdio: 'pipe' });
+    execFileSync(process.execPath, [new URL('../scripts/spinup.mjs', import.meta.url).pathname], { env: { ...withoutOptionGroups(), N: String(N), LEVELS, TAG: 'fresh', OUT: out, MINUTES: '100', DAYS: String(GPU_DAYS) }, stdio: 'pipe' });
     const st = await decodeState(new Uint8Array(readFileSync(join(out, `fresh_day${String(GPU_DAYS).padStart(4, '0')}.bin`))));
     assert.equal(st.day, GPU_DAYS);
     assert.deepEqual(nonFinite({ pi: st.pi, theta: st.theta, u: st.u, surfaceT: st.surfaceT, q: st.q, qc: st.qc }), [], 'atmosphere');

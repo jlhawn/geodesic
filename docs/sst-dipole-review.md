@@ -60,8 +60,8 @@ The panel averages days 336–365. Day 0 is the March equinox, so that is
 | 1 | The Gulf Stream and Kuroshio overshoot because harmonic viscosity widens the boundary layer; use ∇⁴ and lateral slip | The closure is already ∇⁴: ν₄ ≈ 2.5 × 10¹³ m⁴/s at N=128, a Munk width (ν₄/β)^(1/5) of about 67 km, one cell. The +4–5 K spots are real, and the North Atlantic warms 0.9–1.6 K at 400–1000 m in five years. There is no lateral-slip option. | Mechanism does not apply. At 60 km, separation is limited by resolution (Chassignet and Xu 2017). The 40–60° N bias peaks in June–September (+1.1 to +2.6 K), not in winter. |
 | 2a | Tropical instability waves are damped | Resolved at N=128 since the third-order tracer flux (10–12°, 40 cm/s) | Does not apply |
 | 2b | GM is untapered at the equator | κ = 1000/(1 + (L_d/Δx)²) is 76 m²/s on the equator and 185 at 5°, with mode weights and a 200 m taper (`js/ocean/layered.module.js`) | Does not apply |
-| 2c | No shortwave penetration, or κ_v too large | Two-band Jerlov IB light to 300 m (`js/ocean/column.module.js`); κ_b = 10⁻⁵ m²/s | Does not apply. Second order: one water type everywhere. Type II in the upwelling zones would keep about 9 W/m² more in a 25 m layer. |
-| 2d | The trades are too strong, amplified by the Bjerknes feedback | Over observed SST the trades are 1.3–2.2 times observed (`docs/equatorial-wind-bias.md`, findings 1–2). At 0.6 times the stress, the ocean-only hybrid matches WOA. | Already diagnosed, and the leading cause (finding 3) |
+| 2c | No shortwave penetration, or κ_v too large | Two-band Jerlov IB light to 300 m (`js/ocean/column.module.js`). κ_b = 10⁻⁵ m²/s everywhere, where MOM025 (Holmes et al. 2019) falls to 10⁻⁶ within 5° of the equator; PP81's ν₀ is 10⁻², twice theirs; shear mixing runs above Ri 0.7, where KPP stops (Large et al. 1994). Explicit vertical mixing carries the most heat across 20 °C at the equator: 31–53 W/m² at N=64, 38–65 at N=128 (Nov 7 audit). | Shortwave: does not apply; second order, one water type everywhere (type II in the upwelling zones would keep about 9 W/m² more in a 25 m layer). κ_v: open, the leading candidate for the too-diffuse thermocline. |
+| 2d | The trades are too strong, amplified by the Bjerknes feedback | Over observed SST the atmosphere's own excess is about 1.2 times ERA5's stress and lies east of 150° W only (160–100° W 1.21 times, 150° E–180 0.5 times; N=64, nine members over WOA23). Coupled at N=128 it is 1.21–1.35 times at 160–100° W and 1.43–1.64 times at 130° E–100° W (`docs/equatorial-wind-bias.md`, findings 1–2; Nov 7 audit). The 0.6× ocean-only match does not clear the ocean: 0.6 of the recording is 0.84 of ERA5's stress, and the current errors persist at ERA5's stress. | Real, but not the leading cause alone: the Nov 7 audit finds three causes acting together, this atmospheric excess east of 150° W, an ocean whose thermocline and undercurrent are wrong at every stress, and surface-flux offsets that cool the whole tropics (finding 3) |
 | 3a | December mixed layers are over-mixed at 15–45° S | December–March mixed layers are 24–29 m at 20–30° S and 25–54 m at 30–40° S, and the band is cold in every season | Refuted |
 | 3b | The warm ring around Antarctica comes from missing supercooled cloud or early melt | SWCRE is −49 W/m² at 60–65° S, the ring persists through winter, and September mixed layers are 370–980 m deep | Does not apply: open-ocean convection (finding 5) |
 | 3c | The −1.56 K global mean implies a 15–25 W/m² surface heat loss | Net TOA is +7 W/m², and the ocean gains 9 W/m² of ocean area (finding 2) | Refuted |
@@ -99,24 +99,35 @@ depth (m), and the column's heat gain in W/m² of that region's ocean.
   against a March start, so the south starts warm and the north cold.
   The signal is in the subsurface bins and the five-year rates.
 - **The equatorial Pacific** cools 1.1–1.6 K at 0–100 m and warms 1.5 K
-  at 100–400 m. That is Ekman and subtropical-cell pumping under strong
-  trades.
+  at 100–400 m. The warmth below 150 m is not Ekman or subtropical-cell
+  pumping under strong trades: the warm 150–200 m (+1.35 to +4.4 K)
+  appears at every stress tested (0.84–1.35 times ERA5) and shrinks as
+  the stress grows, and the diathermal transport across 20 °C is 2.6–2.8
+  PW a year, 1.6–1.75 times MOM025's. The thermocline is too diffuse
+  (Nov 7 audit).
 
 ### 3. The causes, ranked
 
 1. **The atmosphere's excess trades, and the ocean's response to them
-   (documented).** They explain:
-   - the cold 20° S–20° N band and the cold tongue;
-   - the equatorial west's cooling, through the Bjerknes feedback;
-   - the thermocline's heat uptake (finding 2).
+   (documented).** That the trades cause the cold is assumed, not shown.
+   They explain:
+   - part of the cold 20° S–20° N band and the cold tongue: at N=128 the
+     30° S–30° N SST falls 1.6 K per unit of the stress ratio, and about
+     −0.8 K remains at unbiased equatorial stress, tropic-wide and with
+     no identified cause (Nov 7 audit);
+   - the equatorial west's cooling, through the Bjerknes feedback.
 
+   The thermocline's warmth below 150 m does not follow them (finding 2).
    Finding 4 attributes the excess.
 2. **Southern Ocean open-ocean convection (finding 5).** It explains
    the warm ring and the missing Antarctic ice. By ice-albedo
    arithmetic it is also about 1 W/m² of the TOA excess.
 3. **Excess subtropical cloud (documented).**
-   - The 8–12 W/m² at 20–40° S is worth about 0.5 K of the cold southern
-     subtropics, at a surface response of about 20 W/m² per K.
+   - The 8–12 W/m² at 20–40° S would be worth about 0.5 K of the cold
+     southern subtropics at a surface response of about 20 W/m² per K,
+     a rule of thumb for a local anomaly under air that does not follow.
+     That response is unmeasured here; the one tropic-wide measurement is
+     3.2 ± 1.8 W/m² per K (N=64, fixed SST; Nov 7 audit).
    - The colder SST then raises the inversion strength and the cloud.
 4. **Summer warmth at 40–60° N (unresolved).**
    - It is largest in the marginal seas and the NE Pacific, and the
@@ -144,11 +155,17 @@ ocean-only protocols, not on the coupled global mean.
 ### 4. Why the trades are too strong
 
 **The excess pressure gradient.**
-- Over observed SST, sea-level pressure rises about 4.5 hPa from
-  180–160° W to 120–100° W, against about 2 hPa observed. 87 % of it
-  sits below 2 km (`docs/equatorial-wind-bias.md`, finding 2), so the
-  boundary layer's temperature sets most of it: the mechanism Lindzen and
-  Nigam (1987) proposed for the tropics' surface winds.
+- Over observed SST, sea-level pressure rose about 4.5 hPa from
+  180–160° W to 120–100° W in the earlier arms. ERA5's August rise there
+  is 2.72 hPa in the day mean and 1.86 hPa at 12 UTC
+  (`data/era5_equatorial_stress.json`), not the 2 hPa those arms were
+  judged against, and over WOA23 on the current defaults the sea-level
+  pressure contrast is 1.4 times ERA5's (N=64, nine members in five
+  windows; Nov 7 audit). 87 % of the rise sits below 2 km
+  (`docs/equatorial-wind-bias.md`, finding 2), but that is a share of the
+  total, not of the excess: in the coupled N=128 years the excess sits at
+  800–500 hPa, where the 775 hPa temperature contrast, 140–170° E less
+  140–100° W at 12 UTC, is 2.55 and 1.68 K against ERA5's 0.33 K.
 - With fifteen's cloud options (`docs/toa-radiation-bias.md`,
   finding 8), the rise is 4.0–4.1 hPa.
 - The central-three stress is −85 to −91 mN/m² against about −52
@@ -161,9 +178,11 @@ ocean-only protocols, not on the coupled global mean.
   0.8.
 
 **The SST start is not the cause.**
-- The fixed-SST arms hold WOA's SST, so no ocean feedback runs, and the
-  atmosphere alone builds the excess within days.
-- The coupled loop (Bjerknes) then amplifies it west of the dateline.
+- The fixed-SST arms hold WOA's SST, so no ocean feedback runs, and east
+  of 200° E (160° W) the atmosphere alone builds the excess within days,
+  over a dry, descending equator (Nov 7 audit).
+- West of 200° E the coupled loop (Bjerknes) then amplifies it: the
+  descent belt and the rain hole there come from the coupled drift.
 
 **The inversion is no longer smeared, but it is still too high.**
 - On bl36, the layers between 1.2 and 4.7 km were 450–600 m thick. The
@@ -295,14 +314,20 @@ Sea cells at 60–75° S deeper than 500 m, in fifteen's first winter:
 
 ### 6. The Indonesian throughflow excess
 
-- **Size:** both runs carry 2–2.5 times the observed throughflow. That
-  is 30 Sv (fourteen) and 42 Sv (fifteen) through all exits, against
-  about 15 Sv (INSTANT; Gordon et al. 2010).
+- **Size:** the current states carry 1.8–2.1 times the observed
+  throughflow: 26.6 ± 1.9 Sv (ctl) and 31.1 ± 2.6 (A) through the exits
+  of a sealed Indonesian box, from 12 saves at 12 UTC in the N=128
+  pair's coupled year (days 1490–1825), against about 15 Sv (INSTANT;
+  Gordon et al. 2010; Nov 7 audit). Fourteen and fifteen, not
+  re-measured, carried 30 and 42 Sv through all exits.
 - **Not wind-driven:**
   - The island rule (Godfrey 1989) on each run's own stress gives 18
     and 21 Sv, against about 16 from observed winds.
-  - So 12–16 Sv flows beyond what the winds require, independent of the
-    trades.
+  - Beyond what the winds require: in the current N=128 pair (ctl and A,
+    a sealed Indonesian box, 12 instants a year) the island rule gives
+    17.4 and 20.4 Sv and leaves a steady 9.2 and 10.7 Sv beyond it, of
+    26.6 and 31.1 Sv through the exits; stronger trades add about 3 Sv.
+    Fourteen's and fifteen's 12–16 Sv was not re-measured (Nov 7 audit).
 - **Fifteen's extra 8–12 Sv:**
   - 3–5 Sv comes from its stronger winds.
   - The rest goes through two coastline gaps near Bali: +5.2 Sv at
@@ -324,8 +349,10 @@ Sea cells at 60–75° S deeper than 500 m, in fifteen's first winter:
   - It cannot explain the cold tongue, the southern subtropics,
     40–60° N or the Southern Ocean.
 - **The figures are instants, not means.** Every state is saved at
-  00 UTC, and a fast barotropic exchange locked to that time leaves
-  budgets out of balance: 12.9 Sv in fourteen's Indonesian seas.
+  12 UTC. Fourteen's Indonesian seas read 12.9 Sv out of balance; in the
+  current N=128 pair's sealed Indonesian box the entries and exits close
+  within 0.4 Sv (−0.38 and −0.09 Sv, 12 instants a year), and fourteen
+  was not re-measured (Nov 7 audit).
 
 ### 7. The deck's top locks to the grid
 
@@ -588,14 +615,14 @@ Proposed and not run; every GPU run needs Joshua's go:
   - Thin the high cloud's water.
   - First, on the CPU: `scripts/tropicalHeating.mjs` on the 5–12° N band
     of fixed-SST states.
-- **The throughflow (CPU).** Run the island-rule and strait-transport
-  diagnostics on the end states of the Oct 18 ocean-only ladder's 1.0×
-  and 0.6× arms.
-  - If the 0.6× arm, whose tropics match WOA, still carries 12–16 Sv
-    beyond its own winds, the excess is not what holds the warm pool
-    cold.
-  - If the excess shrinks with the stress, a 1.0× arm with the Bali
-    gaps closed measures the warm pool's change per Sv.
+- **The throughflow.** The Oct 18 ladder's arms cannot show whether the
+  excess holds the warm pool cold, since the ladder restores the
+  tropics to WOA. In the N=128 pair's coupled year (12 saves, days
+  1490–1825) the island rule gives 17.4 (ctl) and 20.4 (A) Sv and the
+  throughflow carries a steady 9.2 and 10.7 Sv beyond it. Three
+  confounded pairs, all short and unreplicated, give the throughflow 0
+  to −0.7 K of the warm pool's −1.5 to −1.75 K (Nov 7 audit). The warm
+  pool's change per Sv is still unmeasured.
 - **The Canary coast (CPU, about 10 minutes):** its alongshore stress
   against California's, from existing states.
 - **bl48:**

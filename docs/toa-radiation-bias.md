@@ -19,15 +19,22 @@ definition (Loeb et al. 2020: clear-sky OLR −2.2, SW +0.5 W/m²):
 | thirteen128 year 2 | 14.16 | 233.2 | 231.1 | 0.315 | −59.6 | +27.8 | 258.9 |
 | eleven128 year 1 | 14.86 | 237.7 | 234.1 | 0.302 | −53.9 | +27.0 | 261.1 |
 | eleven128 year 5 | 15.86 | 237.9 | 236.8 | 0.301 | −54.1 | +26.6 | 263.4 |
-| EBAF Ed4.0, clear scenes | 14.85 | 240.9 | 240.1 | 0.291 | −45.8 | +27.9 | 268.1 |
-| EBAF, whole-region clear sky | | | | | about −45.3 | about +25.8 | about 265.9 |
+| EBAF Ed4.0, clear scenes | 14.85 (no source) | 240.9 | 240.1 | 0.291 | −45.8 | +27.9 | 268.1 |
+| EBAF, whole-region clear sky | | | | | about −45.3 (−45.1 on Ed4.2.1) | about +25.8 (+25.6 on Ed4.2.1) | about 265.9 |
+
+The whole-region row is the clear scenes' shifted by Loeb et al. (2020):
+on EBAF Ed4.2.1, whose obs4MIPs clear-sky files (rsutcs, rlutcs) hold the
+cloud-free-area fluxes, it is SWCRE −45.1 and LWCRE +25.6. EBAF has no
+surface temperature, and the Ts entry above cites none. On fa61952 the
+coupled N=128 year's SWCRE is −51.1 against −45.1 (Nov 7 audit).
 
 Against the whole-region clear sky the cloud reflects 16 W/m² too much
 and the clear sky emits 9.5 W/m² too little. The clear sky's reflectance,
 0.148, is a little darker than EBAF's 0.157 (about 3 W/m²), and the
 atmosphere absorbs 80 W/m² against about 79. The errors cancel in the
 net; the surface, short of sunlight (about 150 W/m² absorbed against
-163.8, Kato et al. 2018), runs 1.3 K cold at N=64, its open sea 2.3 K
+163.8, Kato et al. 2018), runs 1.3 K below the unsourced 14.85 °C at
+N=64, its open sea 2.3 K
 below WOA23 on day 1825.
 
 eleven (bl36, 8-pass mesh, the isopycnal ocean, the defaults before

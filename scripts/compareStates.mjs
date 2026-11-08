@@ -11,7 +11,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createModel } from '../js/model.module.js';
 import { stateGeography } from '../js/geography.module.js';
-import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { layerDensities, mixedLayerDepth } from '../js/ocean/column.module.js';
@@ -25,8 +25,8 @@ if (!files.length) { console.error('usage: node scripts/compareStates.mjs <state
 
 const meshes = new Map();
 const modelFor = (saved) => {
-  const { record, topography, geography } = stateGeography(saved), levels = savedLevels(saved), key = `${saved.N} ${stateRelax(saved, topography).relax} ${levels.join(' ')} ${JSON.stringify(record)}`;
-  return meshes.get(key) ?? meshes.set(key, createModel(stateGrid(saved, topography).mesh, { physics: false, topography, geography, levels })).get(key);
+  const { record, topography, geography } = stateGeography(saved), levels = savedLevels(saved), key = `${saved.N} ${stateRelax(saved, topography).relax} ${levels.join(' ')} ${JSON.stringify(record)} ${JSON.stringify(stateTerrain(saved))}`;
+  return meshes.get(key) ?? meshes.set(key, createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), physics: false, topography, geography, levels })).get(key);
 };
 
 /*

@@ -98,10 +98,15 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * function that is near ±1 away from the root, found by the
  * Anderson–Björck secant to a part in 10⁶ in a bracket around the
  * previous step's depth, or between the floor and the whole column, the
- * side where the work is within the energy taken; below and beside it the Pacanowski and Philander
- * (1981) interior viscosity ν = ν₀/(1 + 5Ri)² + ν_b and diffusivity
- * ν/(1 + 5Ri) + κ_b on the gradient Richardson number of the resolved
- * shear and stratification, a convective diffusivity where the column is
+ * side where the work is within the energy taken; below and beside it the
+ * interior mixing on the gradient Richardson number of the resolved shear
+ * and stratification: under interiorShear 'pp81' Pacanowski and
+ * Philander's (1981) viscosity ν = ν₀/(1 + 5Ri)² + ν_b and diffusivity
+ * ν/(1 + 5Ri) + κ_b with ν₀ shearViscosity, under 'lmd94' Large,
+ * McWilliams and Doney's (1994) shear mixing ν₀[1 − (Ri/0.7)²]³ below
+ * Ri 0.7 and 0 above, in viscosity and diffusivity alike, plus ν_b and
+ * κ_b, with ν₀ lmd94Viscosity (their 5 × 10⁻³ m²/s unless set);
+ * a convective diffusivity where the column is
  * still unstable; and one implicit solve (solveColumn) of the column's
  * heat and salt with the summed diffusivities, which conserves both. The
  * viscosity profile is published for the edges' solve of their normal
@@ -604,7 +609,14 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, buoyancy
   return { depth, energy: available, work: done, velocity: vstar };
 }
 
-export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, rho0 = SEAWATER.rho0, gravity = GRAVITY, shearViscosity = 1e-2, backgroundViscosity = 1e-4, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1 }, kappa, nu, scratch) {
+export const INTERIOR_SHEARS = ['pp81', 'lmd94'];
+export const LMD94_RICHARDSON = 0.7, LMD94_VISCOSITY = 5e-3;
+export function lmd94Shape(richardson) {
+  const x = Math.min(1, Math.max(0, richardson) / LMD94_RICHARDSON), y = 1 - x * x;
+  return y * y * y;
+}
+
+export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, rho0 = SEAWATER.rho0, gravity = GRAVITY, shearViscosity = 1e-2, interiorShear = 'pp81', lmd94Viscosity = LMD94_VISCOSITY, backgroundViscosity = 1e-4, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1 }, kappa, nu, scratch) {
   const { rho } = scratch;
   layerDensities(T, S, K, rho);
   for (let k = 0; k < K - 1; k++) {
@@ -612,6 +624,12 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
     if (buoyancy < 0) { kappa[k] = convectiveDiffusivity; nu[k] = convectiveDiffusivity; continue; }
     const du = u ? u[k] - u[k + 1] : 0, dv = v ? v[k] - v[k + 1] : 0, squared = shear ? shear[k] : du * du + dv * dv;
     const richardson = buoyancy * dz / (squared + 1e-12);
+    if (interiorShear === 'lmd94') {
+      const shear = lmd94Viscosity * lmd94Shape(richardson);
+      nu[k] = shear + backgroundViscosity;
+      kappa[k] = shear + backgroundDiffusivity;
+      continue;
+    }
     const viscosity = shearViscosity / (1 + 5 * richardson) ** 2 + backgroundViscosity;
     nu[k] = viscosity;
     kappa[k] = viscosity / (1 + 5 * richardson) + backgroundDiffusivity;
@@ -620,7 +638,7 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
   nu[K - 1] = 0;
 }
 
-export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, buoyancy = null, type = 'IB', ustar, f, dt, capped = false, options = {} }, { kappa, nu }, scratch) {
+export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, buoyancy = null, type = 'IB', ustar, f, dt, capped = false, isoneutral = null, options = {} }, { kappa, nu }, scratch) {
   const { interfaces, shares, boundaryKappa, interiorKappa, interiorNu } = scratch;
   interfacesOf(h, K, interfaces);
   const flux = buoyancy ?? (options.mstarScheme === 'rh18' ? surfaceBuoyancy(T[0], S[0], heat + light, salt, dt, options.gravity) : 0);
@@ -634,6 +652,7 @@ export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat =
   const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: capped ? 0 : convection.released, buoyancy: flux, ...options }, boundaryKappa, scratch);
   interiorMixing({ h, T, S, u, v, shear, K, ...options }, interiorKappa, interiorNu, scratch);
   for (let k = 0; k < K; k++) { kappa[k] = boundaryKappa[k] + interiorKappa[k]; nu[k] = boundaryKappa[k] + interiorNu[k]; }
+  if (isoneutral) for (let k = 0; k < isoneutral.length; k++) kappa[k] += isoneutral[k];
   if (anyMixing(kappa, K)) solveLayers(h, K, kappa, dt, scratch.gain, T, T, S, S);
   return { depth: layer.depth, energy: layer.energy, work: layer.work, released: convection.released, convectiveDepth: convection.depth };
 }

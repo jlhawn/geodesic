@@ -3,7 +3,7 @@ import { createIceDrift, coverOf } from './iceDrift.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
-import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, MSTAR_SCHEMES, LANGMUIR_SCHEMES, surfaceBuoyancy, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
+import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, MSTAR_SCHEMES, LANGMUIR_SCHEMES, surfaceBuoyancy, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities, INTERIOR_SHEARS, LMD94_VISCOSITY } from './column.module.js';
 import { basalMelt, baseFreezing, SHELF_MELT } from './iceShelfMelt.module.js';
 import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
 
@@ -197,6 +197,104 @@ export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
 }
 
 /*
+ * Under shearDiffusivityResolution { scale s, power p } the shear-scaled
+ * diffusivity is scaled edge by edge by MOM6's resolution function (Hallberg
+ * 2013, Ocean Modell. 72, 92): 1/(1 + (s R_d/Δ)^p), R_d the deformation
+ * radius of deformationRadii and Δ the edge's spacing, so it falls away
+ * where the grid resolves the eddies the diffusion stands in for, at the
+ * equator the tropical instability waves. true takes s 1 and p 2, the form
+ * that scales the eddy diffusivity. Where it falls away it also takes the
+ * damping of grid-scale noise that tracerAdvection 'third' relies on, which
+ * the guard on shearDiffusivity 0 does not see.
+ */
+export const SHEAR_RESOLUTION = { scale: 1, power: 2 };
+export function shearResolutionOptions(o) {
+  if (!o) return null;
+  const out = { ...SHEAR_RESOLUTION, ...(o === true ? {} : o) };
+  if (!(out.scale > 0) || !(out.power > 0)) throw new Error(`shearDiffusivityResolution takes a positive scale and power, not ${out.scale} and ${out.power}`);
+  return out;
+}
+export function shearResolution(mesh, { scale, power }) {
+  const { dcEdge } = mesh;
+  return Float64Array.from(deformationRadii(mesh), (radius, e) => 1 / (1 + (scale * radius / dcEdge[e]) ** power));
+}
+
+/*
+ * Under isoneutralDiffusion the along-layer tracer diffusion of the
+ * fixed-depth layers follows the neutral surfaces, on the triads of Griffies
+ * et al. (1998, J. Phys. Oceanogr. 28, 805). An edge's flux in a layer
+ * keeps the horizontal diffusion and adds, over four triads (each of its
+ * two cells' interfaces above and below the layer), the slope times the
+ * vertical gradient at that interface, S ∂T/∂z with S = −R_x/R_z from
+ * gradients of density linearized at the triad's cell and layer; the same
+ * triads' cross terms move tracer across the interfaces in the dynamics,
+ * and their κS² term, weighted over the dynamics' four stages 1:2:2:1 as
+ * the cross terms are, is added to the interfaces' diffusivity in the
+ * column phase's implicit solve. A triad's slope terms, though not its
+ * horizontal diffusion, take Danabasoglu and McWilliams's (1995, J. Climate
+ * 8, 2967) tanh taper of κ, ½[1 + tanh((slopeCap − |S|)/slopeWidth)],
+ * centered on slopeCap rather than their 4e-3. S is each triad's own slope,
+ * the interface's tilt along the triad's edge, so past slopeCap an
+ * interface's κS² falls but not to zero, kept by the triads of the edges
+ * that cross its tilt gently. A triad turns nothing where its interface is
+ * unstable or neutral (density rising downward across it by less than
+ * NEUTRAL_STRATIFICATION of itself per meter, N² ≈ 1e-8 s⁻², above what
+ * float32 resolves across a 3 m layer), where its slope is steeper than
+ * slopeCap + 10 slopeWidth (the taper there is 2e-9), or anywhere under a
+ * slopeCap of 0. Under boundaryTaper a triad whose interface lies above
+ * the base of its cell's boundary layer takes, in place of its own slope,
+ * the tapered slope of its cell's triad along the same edge at the first
+ * interface at or below that base (the last fixed interface at most), in
+ * the layer above that interface, times its depth over the boundary
+ * layer's, a NEMO-like mixed-layer slope. A triad needs both layers at its
+ * interface thicker than twice minimumLayer, and a triad whose slope comes
+ * from a base needs the layer above that base as thick across its edge,
+ * the thinner cell's layer cut at the edge's sill; where one is missing,
+ * at the surface, a thin layer, a shelf or a sill, its quarter of the flux
+ * stays horizontal. The triads below the last fixed layer reach the first
+ * isopycnal layer.
+ */
+export const ISONEUTRAL = { slopeCap: 0.01, slopeWidth: 0.001, boundaryTaper: true }, NEUTRAL_STRATIFICATION = 1e-9;
+export function isoneutralOptions(o) {
+  if (!o) return null;
+  const out = { ...ISONEUTRAL, ...(o === true ? {} : o) };
+  if (!(out.slopeCap >= 0 && out.slopeCap < Infinity) || !(out.slopeWidth > 0 && out.slopeWidth < Infinity) || typeof out.boundaryTaper !== 'boolean') throw new Error(`isoneutralDiffusion takes a non-negative slopeCap, a positive slopeWidth and a boolean boundaryTaper, not ${out.slopeCap}, ${out.slopeWidth} and ${out.boundaryTaper}`);
+  return out;
+}
+
+/*
+ * The interior's background diffusivity κ_b by latitude φ, cell by cell.
+ * 'uniform' holds κ_b everywhere. 'henyey' is MOM6's HENYEY_IGW_BACKGROUND,
+ * OM4's form (Harrison and Hallberg 2008, J. Phys. Oceanogr. 38, 1894,
+ * after Henyey, Wright and Flatté 1986): κ = max(κ_eq, κ_b G(φ)/G(30°))
+ * with G(φ) = |sin φ| arccosh(n/|sin φ|) and n = N0/2Ω = 20, so κ_b is the
+ * value at 30° and the poles take 1.68 κ_b. 'equatorial' is MOM025's
+ * (Holmes, Zika and England 2019, J. Phys. Oceanogr. 49, 141): κ_b poleward
+ * of 15°, κ_eq within 5°, and between them a raised cosine in latitude
+ * where MOM025 ramps linearly.
+ */
+export const BACKGROUND_LATITUDES = ['uniform', 'henyey', 'equatorial'];
+export const HENYEY_RATIO = 20, HENYEY_SINE_FLOOR = 1e-10, EQUATORIAL_BACKGROUND = { inner: 5, outer: 15 };
+export function backgroundDiffusivities(mesh, shape, kappa, equatorial) {
+  const { nCells: C, latCell } = mesh;
+  const out = new Float64Array(C).fill(kappa);
+  if (shape === 'henyey') {
+    const atThirty = 0.5 * Math.acosh(2 * HENYEY_RATIO);
+    for (let i = 0; i < C; i++) {
+      const s = Math.max(HENYEY_SINE_FLOOR, Math.abs(Math.sin(latCell[i])));
+      out[i] = Math.max(equatorial, kappa * s * Math.acosh(HENYEY_RATIO / s) / atThirty);
+    }
+  } else if (shape === 'equatorial') {
+    const { inner, outer } = EQUATORIAL_BACKGROUND;
+    for (let i = 0; i < C; i++) {
+      const x = (Math.abs(latCell[i]) * 180 / Math.PI - inner) / (outer - inner);
+      if (x < 1) out[i] = equatorial + (kappa - equatorial) * 0.5 * (1 - Math.cos(Math.PI * Math.max(0, x)));
+    }
+  } else if (shape !== 'uniform') throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${shape}`);
+  return out;
+}
+
+/*
  * Mixed-layer eddy restratification: the overturning that submesoscale
  * eddies drive across a lateral buoyancy front in the mixed layer,
  * Fox-Kemper, Ferrari & Hallberg (2008, J. Phys. Oceanogr. 38, 1145) with
@@ -216,7 +314,13 @@ export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
  * carries Ψ(top) − Ψ(bottom) from a to b, which sends light water over
  * dense, with the donor's temperature and salinity. H is the boundary
  * depth of the column physics run through a mean that jumps to a deeper
- * depth at once and relaxes to a shallower one over decayDays.
+ * depth at once and relaxes to a shallower one over decayDays. A
+ * taperLatitude φ_t scales Ψ by |f|/√(f² + f_t²), f_t = 2Ω sin φ_t, which
+ * goes to zero at the equator: the change in Fox-Kemper et al.'s (2011)
+ * scaling when the front's width follows the mixed layer's deformation
+ * radius NH/|f| (Fox-Kemper, Ferrari and Hallberg 2008) where |f| < f_t
+ * instead of holding at Lf. MOM6's OM4 form has no taper: its τ tends to
+ * H/(2κπ²u*) as f → 0.
  */
 export const RESTRATIFICATION = { coefficient: 1, frontLength: 500, decayDays: 30 };
 export const RESTRATIFICATION_VON_KARMAN = 0.41, RESTRATIFICATION_PI_SQUARED = 9.8696, RESTRATIFICATION_USTAR_MIN = 1e-6, RESTRATIFICATION_NEGLECT = 1e-9;
@@ -224,7 +328,15 @@ export function restratificationOptions(option) {
   if (!option) return null;
   const o = { ...RESTRATIFICATION, ...(option === true ? {} : option) };
   if (!(o.coefficient > 0) || !(o.frontLength > 0) || !(o.decayDays >= 0)) throw new Error(`mixedLayerRestratification takes a positive coefficient and frontLength and a non-negative decayDays, not ${o.coefficient}, ${o.frontLength} and ${o.decayDays}`);
+  if (o.taperLatitude !== undefined && !(o.taperLatitude >= 0 && o.taperLatitude < 90)) throw new Error(`mixedLayerRestratification's taperLatitude is a latitude from 0 to 90 degrees, not ${o.taperLatitude}`);
   return o;
+}
+export function restratificationScale(mesh, restrat) {
+  const { dcEdge, fEdge, omega } = mesh, taper = restrat.taperLatitude > 0 ? 2 * omega * Math.sin(restrat.taperLatitude * Math.PI / 180) : 0;
+  return Float64Array.from(deformationRadii(mesh), (radiusE, e) => {
+    const scale = restrat.coefficient * Math.min(dcEdge[e], radiusE) / restrat.frontLength;
+    return taper > 0 ? scale * Math.abs(fEdge[e]) / Math.hypot(fEdge[e], taper) : scale;
+  });
 }
 export function restratificationShape(s) {
   const x = 2 * s + 1, x2 = x * x;
@@ -288,10 +400,26 @@ export function beyondCells(mesh) {
  * the upwind one holds no water in the layer.
  */
 export const TRACER_ADVECTIONS = ['upwind', 'third'], EDGE_TRANSPORTS = ['remapped', 'kept'], SHEAR_DIFFUSIVITY = 0.2, HYCOM_DIFFUSION_SPEED = 0.005;
+export const EDDY_TRACERS = ['donor', 'third', 'centered'];
 export function limitedEdgeValue(field, up, down, uu, dUp, dCentral) {
   const phiU = field[up], central = field[down] - phiU;
   if (central === 0) return phiU;
   const r = (phiU - field[uu]) * dCentral / dUp / central;
+  return phiU + 0.5 * Math.max(0, Math.min(2 * r, (2 + r) / 3, 2)) * central;
+}
+
+/*
+ * limitedEdgeValue on the values themselves, `ratio` being dCentral/dUp.
+ * Under eddyTracers 'third' or 'centered' an eddy-phase layer flux carries
+ * this value or the two cells' mean, moved toward the donor's own in
+ * proportion to the share of the donor's allowance the flux takes, so that
+ * a layer the flux nearly drains keeps a bounded value; under 'donor' it
+ * carries the donor's.
+ */
+export function limitedFaceValue(phiU, phiD, phiUU, ratio) {
+  const central = phiD - phiU;
+  if (central === 0) return phiU;
+  const r = (phiU - phiUU) * ratio / central;
   return phiU + 0.5 * Math.max(0, Math.min(2 * r, (2 + r) / 3, 2)) * central;
 }
 
@@ -466,13 +594,14 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2, langmuirIce = 'tanh',
-  momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
+  momentumDepth = 50, shearViscosity = 1e-2, interiorShear = 'pp81', lmd94Viscosity = LMD94_VISCOSITY, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureScale = 1, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, rotationLimit = 'rh18', mstarScheme = 'rh18', langmuirScheme = 'rescale', nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
-  tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
+  backgroundLatitude = 'uniform', equatorialDiffusivity = 1e-6,
+  tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, shearDiffusivityResolution = false, isoneutralDiffusion = false, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
-  iceDrift = false, mixedLayerRestratification = true,
+  iceDrift = false, mixedLayerRestratification = true, eddyTracers = 'donor',
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -491,10 +620,19 @@ export function createOcean(mesh, {
   const advection = tracerAdvection;
   if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
   if (!EDGE_TRANSPORTS.includes(edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${edgeTransport}`);
+  if (!EDDY_TRACERS.includes(eddyTracers)) throw new Error(`eddyTracers is one of ${EDDY_TRACERS.join(', ')}, not ${eddyTracers}`);
+  if (eddyTracers === 'third' && advection !== 'third') throw new Error("eddyTracers 'third' reads the beyond cells of tracerAdvection 'third'");
   const beyond = advection === 'third' ? beyondCells(mesh) : null;
   const shearDiffusion = shearDiffusivity;
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
   if (advection === 'third' && !(shearDiffusion > 0)) throw new Error('the limited third-order tracer flux admits grid-scale noise that the shear-scaled diffusion of the surface layers damps, so tracerAdvection third needs shearDiffusivity above zero');
+  const shearResolve = shearResolutionOptions(shearDiffusivityResolution), shearScale = shearResolve ? shearResolution(mesh, shearResolve) : null;
+  const isoneutral = isoneutralOptions(isoneutralDiffusion);
+  if (!INTERIOR_SHEARS.includes(interiorShear)) throw new Error(`interiorShear is one of ${INTERIOR_SHEARS.join(', ')}, not ${interiorShear}`);
+  if (!(lmd94Viscosity >= 0 && lmd94Viscosity < Infinity)) throw new Error(`lmd94Viscosity is a non-negative viscosity, not ${lmd94Viscosity}`);
+  if (!BACKGROUND_LATITUDES.includes(backgroundLatitude)) throw new Error(`backgroundLatitude is one of ${BACKGROUND_LATITUDES.join(', ')}, not ${backgroundLatitude}`);
+  if (!(equatorialDiffusivity >= 0)) throw new Error(`equatorialDiffusivity is a non-negative diffusivity, not ${equatorialDiffusivity}`);
+  const backgroundKappa = backgroundLatitude === 'uniform' ? null : backgroundDiffusivities(mesh, backgroundLatitude, backgroundDiffusivity, equatorialDiffusivity);
   const lateralSpeed = lateralDiffusionSpeed;
   if (!(lateralSpeed >= 0)) throw new Error(`lateralDiffusionSpeed is a non-negative velocity scale, not ${lateralSpeed}`);
   const table = layerTable;
@@ -506,10 +644,11 @@ export function createOcean(mesh, {
   let spacing = 0, minSpacing = Infinity;
   for (let e = 0; e < E; e++) { spacing += dcEdge[e]; minSpacing = Math.min(minSpacing, dcEdge[e]); }
   spacing /= E;
-  const nu4 = closureCoefficient(spacing, closureHours, closureSpacing);
+  if (!(closureScale >= 0 && closureScale < Infinity)) throw new Error(`closureScale is a non-negative factor on the ∇⁴ closure, not ${closureScale}`);
+  const nu4 = closureCoefficient(spacing, closureHours, closureSpacing) * closureScale;
   const restrat = restratificationOptions(mixedLayerRestratification);
   const eddyKappa = eddyDiffusivities(mesh, eddyDiffusivity), eddyLimit = eddyDiffusivity > 0 || restrat ? eddyDiffusionLimit(mesh) : 0, eddyFirst = restrat ? 0 : 1;
-  const restratScale = restrat ? Float64Array.from(deformationRadii(mesh), (radiusE, e) => restrat.coefficient * Math.min(dcEdge[e], radiusE) / restrat.frontLength) : null;
+  const restratScale = restrat ? restratificationScale(mesh, restrat) : null;
   let eddy = null;
 
   const { water, cellOcean, shelf, cellOpen, draft } = oceanCells(C, geography);
@@ -562,6 +701,8 @@ export function createOcean(mesh, {
   const shelfBudget = { discharge: [0, 0], melt: [0, 0], moved: [0, 0], drawn: [0, 0], keep: [1, 1], share: [0, 0] };
   const layerRho = shared('layerRho', L * C), columnAbove = shared('columnAbove', L * C), targetZ = shared('targetZ', (L + 1) * C), viscosity = shared('viscosity', L * C), edgeBottom = shared('edgeBottom', E);
   const mixedDepths = shared('mixedDepths', C), boundaryDepths = shared('boundaryDepths', C);
+  const isoKappa = isoneutral ? shared('isoKappa', table.fixed * C) : null, isoColumn = isoneutral ? new Float64Array(table.fixed) : null;
+  const isoScratch = isoneutral ? { kappa: [0, 1, 2].map(() => new Float64Array(E)), depth: new Float64Array(2 * C), triad: new Float64Array(16), top: new Float64Array(2 * C), bottom: new Float64Array(2 * C), k33: new Float64Array(C) } : null;
   const mleDepths = restrat ? shared('mleDepths', C) : null, mleThickness = restrat ? shared('mleThickness', C) : null, mleBuoyancy = restrat ? shared('mleBuoyancy', C) : null, mleUstar = restrat ? shared('mleUstar', C) : null;
   const edgeAbove = shared('edgeAbove', L * E), eddyFlux = shared('eddyFlux', L * E), eddyVolume = shared('eddyVolume', L * C), eddyHeat = shared('eddyHeat', L * C), eddySalt = shared('eddySalt', L * C);
   const pvFloor = Float64Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m)), tokenEdge = Float64Array.from(table.minimum, (m) => 2 * Math.min(m, table.spacing ?? m)), pinned = new Uint8Array(E);
@@ -662,10 +803,107 @@ export function createOcean(mesh, {
     prepareEdges(0, E, input);
   }
 
-  function tendency(input, out) {
+  function tendency(input, out, stage = 0) {
+    if (isoneutral) params[7] = stage;
     prepare(input);
     if (layerRunner) layerRunner(input === trial ? 1 : 0, stages.indexOf(out));
     else tendencyLayers(input, out, 0, L);
+  }
+
+  function alongKappa(l, uIn, out) {
+    const sheared = shearDiffusion > 0 && l < table.fixed;
+    if (sheared) curl(mesh, uIn.subarray(l * E, (l + 1) * E), zeta);
+    for (let e = 0; e < E; e++) {
+      const dc = dcEdge[e];
+      out[e] = lateralSpeed * dc + (sheared ? Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc) * (shearScale ? shearScale[e] : 1) : 0);
+    }
+  }
+  function isoColumnAt(i) {
+    for (let k = 0; k < table.fixed; k++) isoColumn[k] = isoKappa[k * C + i];
+    return isoColumn;
+  }
+  /*
+   * Layer k's share of isoneutralDiffusion (see ISONEUTRAL): for a fixed
+   * layer the triad flux through its edges and the κS² diffusivity of the
+   * interface below it, and for every layer to the first isopycnal one the
+   * cross-term transport through its top and bottom, each interface's
+   * computed alike by the two layers it parts.
+   */
+  function isoneutralLayer(k, input, dQ, dW) {
+    const [hIn, uIn, QIn, WIn] = input, F = table.fixed, { slopeCap: cap, slopeWidth: width, boundaryTaper } = isoneutral, thin = 2 * minimumLayer, reach = cap + 10 * width;
+    const { kappa: rows, depth, triad: tri, top, bottom, k33 } = isoScratch, oc = k * C;
+    const valueT = (l, c) => { const n = l * C + c, hv = hIn[n]; return hv > 1e-6 ? QIn[n] / hv : labelT[l]; };
+    const valueS = (l, c) => { const n = l * C + c, hv = hIn[n]; return hv > 1e-6 ? WIn[n] / hv : labelS[l]; };
+    for (let i = 0; i < C; i++) { let z = 0; for (let j = 0; j < k; j++) z += hIn[j * C + i]; depth[i] = z; depth[C + i] = z + hIn[oc + i]; }
+    for (let l = Math.max(0, k - 1); l <= Math.min(k + 1, F - 1); l++) alongKappa(l, uIn, rows[l - k + 1]);
+    let s1 = 0, s2 = 0;
+    const slopeAt = (c, l, m, dT, dS, dc) => {
+      s1 = 0; s2 = 0;
+      const hu = hIn[(m - 1) * C + c], hl = hIn[m * C + c];
+      if (!(cap > 0 && hu > thin && hl > thin)) return;
+      const Tc = valueT(l, c), Sc = valueS(l, c), alpha = expansionOf(Tc, Sc), beta = contractionOf(Tc, Sc);
+      const rx = (beta * dS - alpha * dT) / dc, rz = (beta * (valueS(m - 1, c) - valueS(m, c)) - alpha * (valueT(m - 1, c) - valueT(m, c))) / (0.5 * (hu + hl));
+      if (!(-rz > NEUTRAL_STRATIFICATION && -rz * reach > Math.abs(rx))) return;
+      const slope = -rx / rz;
+      s1 = slope / (1 + Math.exp(2 * (Math.abs(slope) - cap) / width)); s2 = s1 * slope;
+    };
+    const triad = (c, a, b, e, l, m, dT, dS, dc, o) => {
+      tri[o] = 0; tri[o + 1] = 0; tri[o + 2] = 0; tri[o + 3] = 0;
+      if (m < 1 || m >= L) return;
+      const hu = hIn[(m - 1) * C + c], hl = hIn[m * C + c];
+      if (!(hu > thin && hl > thin)) return;
+      const z = depth[(m - k) * C + c], layer = boundaryDepths[c], dz = 0.5 * (hu + hl);
+      if (boundaryTaper && layer > z) {
+        let base = m, below = z;
+        while (base < F && below < layer) below += hIn[base++ * C + c];
+        if (hEdge[(base - 1) * E + e] > thin) slopeAt(c, base - 1, base, valueT(base - 1, b) - valueT(base - 1, a), valueS(base - 1, b) - valueS(base - 1, a), dc);
+        else { s1 = 0; s2 = 0; }
+        const r = z / layer;
+        s1 *= r; s2 *= r * r;
+      } else slopeAt(c, l, m, dT, dS, dc);
+      tri[o] = s1 * (valueT(m - 1, c) - valueT(m, c)) / dz; tri[o + 1] = s1 * (valueS(m - 1, c) - valueS(m, c)) / dz; tri[o + 2] = s1 / dz; tri[o + 3] = s2 / dz;
+    };
+    const transport = (m, out, kappa33) => {
+      out.fill(0);
+      if (kappa33) kappa33.fill(0);
+      if (m < 1 || m > F) return;
+      for (let e = 0; e < E; e++) {
+        if (!edgeOcean[e]) continue;
+        const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], dc = dcEdge[e], dv = dvEdge[e];
+        for (let l = m - 1; l <= m && l < F; l++) {
+          const dT = valueT(l, b) - valueT(l, a), dS = valueS(l, b) - valueS(l, a), weight = 0.25 * rows[l - k + 1][e] * dv * hEdge[l * E + e];
+          for (let side = 0; side < 2; side++) {
+            const c = side ? b : a;
+            triad(c, a, b, e, l, m, dT, dS, dc, 0);
+            out[c] -= weight * tri[2] * dT; out[C + c] -= weight * tri[2] * dS;
+            if (kappa33) kappa33[c] += weight * dc * tri[3];
+          }
+        }
+      }
+    };
+    transport(k, top, null);
+    transport(k + 1, bottom, k < F ? k33 : null);
+    if (k < F) {
+      const kap = rows[1], oe = k * E;
+      for (let e = 0; e < E; e++) {
+        const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], dc = dcEdge[e];
+        const weight = edgeOcean[e] ? kap[e] * hEdge[oe + e] / dc : 0, dT = T[b] - T[a], dS = S[b] - S[a];
+        let turnT = 0, turnS = 0;
+        if (weight) {
+          triad(a, a, b, e, k, k, dT, dS, dc, 0); triad(a, a, b, e, k, k + 1, dT, dS, dc, 4); triad(b, a, b, e, k, k, dT, dS, dc, 8); triad(b, a, b, e, k, k + 1, dT, dS, dc, 12);
+          turnT = 0.25 * dc * (((tri[0] + tri[4]) + tri[8]) + tri[12]);
+          turnS = 0.25 * dc * (((tri[1] + tri[5]) + tri[9]) + tri[13]);
+        }
+        tracerFlux[e] = -weight * (dT + turnT); edgeS[e] = -weight * (dS + turnS);
+      }
+      divergence(mesh, tracerFlux, divScratch);
+      for (let i = 0; i < C; i++) dQ[oc + i] -= divScratch[i];
+      divergence(mesh, edgeS, divScratch);
+      for (let i = 0; i < C; i++) dW[oc + i] -= divScratch[i];
+      const stage = params[7], share = stage > 0 ? (stage === 2 || stage === 3 ? 2 : 1) / 6 : 1, kept = stage > 1;
+      for (let i = 0; i < C; i++) isoKappa[oc + i] = (kept ? isoKappa[oc + i] : 0) + share * (k33[i] / areaCell[i]);
+    }
+    for (let i = 0; i < C; i++) { dQ[oc + i] += (bottom[i] - top[i]) / areaCell[i]; dW[oc + i] += (bottom[C + i] - top[C + i]) / areaCell[i]; }
   }
 
   /*
@@ -735,12 +973,12 @@ export function createOcean(mesh, {
         }
         divergence(mesh, tracerFlux, divScratch);
         for (let i = 0; i < C; i++) dW[oc + i] = -divScratch[i];
-        if ((shearDiffusion > 0 && k < table.fixed) || lateralSpeed > 0) {
+        if (!(isoneutral && k < table.fixed) && ((shearDiffusion > 0 && k < table.fixed) || lateralSpeed > 0)) {
           const sheared = shearDiffusion > 0 && k < table.fixed;
           if (sheared) curl(mesh, uIn.subarray(oe, oe + E), zeta);
           for (let e = 0; e < E; e++) {
             const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], dc = dcEdge[e];
-            const kappa = lateralSpeed * dc + (sheared ? Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc) : 0);
+            const kappa = lateralSpeed * dc + (sheared ? Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc) * (shearScale ? shearScale[e] : 1) : 0);
             const weight = edgeOcean[e] ? kappa * hEdge[oe + e] / dc : 0;
             tracerFlux[e] = -weight * (T[b] - T[a]); edgeS[e] = -weight * (S[b] - S[a]);
           }
@@ -749,6 +987,7 @@ export function createOcean(mesh, {
           divergence(mesh, edgeS, divScratch);
           for (let i = 0; i < C; i++) dW[oc + i] -= divScratch[i];
         }
+        if (isoneutral && k <= table.fixed) isoneutralLayer(k, input, dQ, dW);
         for (let i = 0; i < C; i++) if (!cellOcean[i]) { dh[oc + i] = 0; dQ[oc + i] = 0; dW[oc + i] = 0; }
       }
       if (!momentum) continue;
@@ -860,14 +1099,14 @@ export function createOcean(mesh, {
     params[1] = dt;
     upwellingStale = true;
     freeSurface();
-    tendency(state, k1);
+    tendency(state, k1, 1);
     barotropic(dt);
     combine(trial, state, k1, dt / 2);
-    tendency(trial, k2);
+    tendency(trial, k2, 2);
     combine(trial, state, k2, dt / 2);
-    tendency(trial, k3);
+    tendency(trial, k3, 3);
     combine(trial, state, k3, dt);
-    tendency(trial, k4);
+    tendency(trial, k4, 4);
     const w = dt / 6;
     for (let a = 0; a < state.length; a++) {
       const s = state[a], a1 = k1[a], a2 = k2[a], a3 = k3[a], a4 = k4[a];
@@ -995,7 +1234,27 @@ export function createOcean(mesh, {
       for (let k = eddyFirst; k < L; k++) eddyFlux[k * E + e] = scale * classFlux[k];
     }
   }
+  const carried = new Float64Array(2);
+  function eddyEdgeValues(k, e, f, dt) {
+    const side = f > 0 ? 0 : 1, up = cellsOnEdge[2 * e + side], down = cellsOnEdge[2 * e + 1 - side], u = at(k, up), d = at(k, down);
+    let T = Q[u] / h[u], S = W[u] / h[u];
+    if (h[d] > 1e-6) {
+      const Td = Q[d] / h[d], Sd = W[d] / h[d];
+      let Tl = T, Sl = S;
+      if (eddyTracers === 'centered') { Tl = 0.5 * (T + Td); Sl = 0.5 * (S + Sd); } else {
+        const uu = beyond.cell[2 * e + side];
+        if (uu >= 0 && cellOcean[uu] && h[at(k, uu)] > 1e-6) {
+          const ratio = dcEdge[e] / dcEdge[beyond.edge[2 * e + side]], n = at(k, uu);
+          Tl = limitedFaceValue(T, Td, Q[n] / h[n], ratio); Sl = limitedFaceValue(S, Sd, W[n] / h[n], ratio);
+        }
+      }
+      const allowance = (Math.max(0, h[u] - EPS) + EDDY_SLACK) * areaCell[up] / (nEdgesOnCell[up] * dt), blend = Math.max(0, 1 - Math.abs(f) / allowance);
+      T += blend * (Tl - T); S += blend * (Sl - S);
+    }
+    carried[0] = T; carried[1] = S;
+  }
   function eddyCells(from, to) {
+    const dt = params[1];
     for (let i = from; i < to; i++) {
       for (let k = 0; k < L; k++) { const n = at(k, i); eddyVolume[n] = 0; eddyHeat[n] = 0; eddySalt[n] = 0; }
       if (!cellOcean[i]) continue;
@@ -1005,7 +1264,9 @@ export function createOcean(mesh, {
           const f = eddyFlux[k * E + e];
           if (f === 0) continue;
           const d = at(k, f > 0 ? a : b), n = at(k, i);
-          eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * Q[d] / h[d]); eddySalt[n] += sign * (f * W[d] / h[d]);
+          if (eddyTracers === 'donor') { eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * Q[d] / h[d]); eddySalt[n] += sign * (f * W[d] / h[d]); continue; }
+          eddyEdgeValues(k, e, f, dt);
+          eddyVolume[n] += sign * f; eddyHeat[n] += sign * (f * carried[0]); eddySalt[n] += sign * (f * carried[1]);
         }
       }
     }
@@ -1061,12 +1322,13 @@ export function createOcean(mesh, {
    * barotropic sub-stepping with each RK4 stage's trial state written to
    * alternating buffers and the stage, sub-step and averaging weight in
    * params[4..6]; the columns are then rescaled to the sub-step mean of
-   * the free surface and shifted to the mean transport, which lags the
-   * barotropic mode by half a step but is the only
-   * filter the split has, the end-of-window state alone running to the
-   * speed limit within months) reading the step's relax from params[2]
-   * and dt from
-   * params[1], so a column runner (setColumnRunner) can hand the ranges
+   * the free surface and shifted to the mean transport, which moves the
+   * barotropic mode each step by (1 + 1/M)/2 of its change over the M
+   * sub-steps (0.52 at M = 21), so it evolves at about half its rate, but
+   * is the only filter the split has, the end-of-window state alone
+   * running to the speed limit within months) reading the step's relax
+   * from params[2] and dt from params[1], so a column runner
+   * (setColumnRunner) can hand the ranges
    * to worker threads that adopt the shared arrays; counts holds the dried
    * and clamped tallies.
    */
@@ -1140,13 +1402,14 @@ export function createOcean(mesh, {
   }
   function columnCells(from, to) {
     const dt = params[1], { h: hCol, T: TCol, S: SCol, rho: rhoCol, shear, kappa, nu, vector } = cols, out = { kappa, nu };
-    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, mstarScheme, langmuirScheme, nstar, langmuir, shearViscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
+    const options = { rho0, gravity: g, mstar, ekman: ekmanFactor, rotationLimit, mstarScheme, langmuirScheme, nstar, langmuir, shearViscosity, interiorShear, lmd94Viscosity, backgroundViscosity, backgroundDiffusivity, convectiveDiffusivity };
     for (let i = from; i < to; i++) {
       if (!cellOcean[i]) { mixedDepths[i] = 0; boundaryDepths[i] = 0; continue; }
       cellColumn(i, hCol, TCol, SCol);
       for (let k = 0; k < L; k++) cellVectorAt(k, i, vector, 3 * k);
       for (let k = 0; k < L - 1; k++) shear[k] = (vector[3 * k] - vector[3 * k + 3]) ** 2 + (vector[3 * k + 1] - vector[3 * k + 4]) ** 2 + (vector[3 * k + 2] - vector[3 * k + 5]) ** 2;
       options.guess = boundaryDepths[i]; options.langmuir = shelf[i] ? 0 : langmuir; options.waves = waves[i];
+      if (backgroundKappa) options.backgroundDiffusivity = backgroundKappa[i];
       const buoyancy = mstarScheme === 'rh18' && !shelf[i] ? surfaceBuoyancy(TCol[0], SCol[0], heatIn[i], saltIn[i], dt, g) : 0;
       let meltHeat = 0, meltSalt = 0;
       if (shelf[i] && meltOn) {
@@ -1171,7 +1434,7 @@ export function createOcean(mesh, {
         }
         melted[i] = mass; meltBase[i] = Tb; shelfMelted[i] += mass;
       }
-      const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: shelf[i] ? Math.sqrt(topDrag) * Math.hypot(vector[0], vector[1], vector[2]) : Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, heat: meltHeat, salt: meltSalt, buoyancy, capped: shelf[i] === 1 && !(meltOn && melted[i] < 0), options }, out, cs);
+      const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: shelf[i] ? Math.sqrt(topDrag) * Math.hypot(vector[0], vector[1], vector[2]) : Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, heat: meltHeat, salt: meltSalt, buoyancy, isoneutral: isoKappa ? isoColumnAt(i) : null, capped: shelf[i] === 1 && !(meltOn && melted[i] < 0), options }, out, cs);
       for (let k = 0; k < L; k++) { const n = at(k, i); Q[n] = hCol[k] * TCol[k]; W[n] = hCol[k] * SCol[k]; viscosity[n] = nu[k]; }
       layerDensities(TCol, SCol, L, rhoCol);
       mixedDepths[i] = mixedLayerDepth(hCol, rhoCol, L);
@@ -1324,6 +1587,7 @@ export function createOcean(mesh, {
   }
 
   function advance(surfaceT, ice, oceanFlux, totalStress, dt, concentration = seaCover, time = null) {
+    seaFlux = oceanFlux;
     if (++counter % everySteps !== 0) return false;
     if (!initialised) initialize(surfaceT, ice, { concentration });
     const dtOcean = everySteps * dt;
@@ -1644,7 +1908,7 @@ export function createOcean(mesh, {
       ...(penetration ? { transmission: copy(transmission) } : {}),
       ...(drift ? { iceVelocity: copy(drift.velocity), iceSigma: copy(drift.sigma) } : {}),
       ...(restrat ? { mleDepths: copy(mleDepths) } : {}),
-      ...(seaFlux ? { flux: copy(seaFlux) } : {}),
+      flux: seaFlux ? copy(seaFlux) : new Float64Array(C),
     };
   }
 
@@ -1746,7 +2010,7 @@ export function createOcean(mesh, {
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, waves: waves.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   Object.assign(sharedBuffers, { baroSlow: slow.buffer, baroU: U.buffer, baroDepth: depthEdge.buffer, baroEta: etaB.buffer, baroAvgU: avgU.buffer, baroAvgEta: avgEta.buffer, baroTrialEtaA: bTrial[0].buffer, baroTrialUA: bTrial[1].buffer, baroTrialEtaB: bTrialB[0].buffer, baroTrialUB: bTrialB[1].buffer, counts: countBuffer });
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
-  Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, heatIn: heatIn.buffer, saltIn: saltIn.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer , ...(restrat ? { mleDepths: mleDepths.buffer, mleThickness: mleThickness.buffer, mleBuoyancy: mleBuoyancy.buffer, mleUstar: mleUstar.buffer } : {}) });
+  Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, ...(isoKappa ? { isoKappa: isoKappa.buffer } : {}), heatIn: heatIn.buffer, saltIn: saltIn.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer , ...(restrat ? { mleDepths: mleDepths.buffer, mleThickness: mleThickness.buffer, mleBuoyancy: mleBuoyancy.buffer, mleUstar: mleUstar.buffer } : {}) });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; seaFlux = seaIce ? seaIce.oceanFlux : null; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, foldUpwelling, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells };
+  return { state, trial, stages, layers: L, everySteps, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, heatIn, saltIn, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration, seaIce = null) { seaCover = concentration; seaFlux = seaIce ? seaIce.oceanFlux : null; if (drift) drift.attach(seaIce); }, iceDrift: drift, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, foldUpwelling, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, isoKappa, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, restratCells: restrat ? restratCells : undefined, restratification: restrat, restratScale, mleDepths, mleThickness, mleBuoyancy, mleUstar, baroPrep, baroCoriolis, baroEdges, baroCells };
 }

@@ -6,7 +6,7 @@ import { createOcean as createCpuOcean } from '../js/ocean/layered.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
-import { HYBRID_LAYERS, labelBoundaries } from '../js/ocean/column.module.js';
+import { HYBRID_LAYERS, labelBoundaries, H_MIN } from '../js/ocean/column.module.js';
 import { SEAWATER, seawaterDensity, salinityForDensity } from '../js/ocean/seawater.module.js';
 
 /*
@@ -53,7 +53,10 @@ function scenario(n, options = HYBRID) {
   for (let i = 0; i < cpuModel.mesh.nCells; i++) if (cpuModel.geography.land[i]) cpuModel.state[6][i] = 0;
   const surfaceT = Float64Array.from(cpuModel.state[3]), ice = Float64Array.from(cpuModel.state[6]), stress = buildStress(cpuModel.mesh);
   const cpu = createCpuOcean(cpuModel.mesh, { geography: cpuModel.geography, ...options });
-  return { cpuModel, mesh: cpuModel.mesh, cpu, surfaceT, ice, stress };
+  // The GPU's upload drops a current on a coastal edge, as the CPU's load does; a CPU ocean given one directly keeps it.
+  const { land } = cpuModel.geography, { cellsOnEdge } = cpuModel.mesh;
+  const sea = Uint8Array.from({ length: cpuModel.mesh.nEdges }, (_, e) => (land[cellsOnEdge[2 * e]] || land[cellsOnEdge[2 * e + 1]] ? 0 : 1));
+  return { cpuModel, mesh: cpuModel.mesh, cpu, surfaceT, ice, stress, sea };
 }
 const cpuFields = (ocean, C) => {
   const T = Float64Array.from(ocean.Q, (q, n) => q / Math.max(1e-9, ocean.h[n])), S = Float64Array.from(ocean.W, (w, n) => w / Math.max(1e-9, ocean.h[n]));
@@ -133,11 +136,197 @@ async function tracking(options) {
   assert.equal(gpuDiag.oceanDried, 0);
   gpuModel.destroy();
 }
+/*
+ * An option's change to the state over a few steps on the GPU against its
+ * change on the CPU, both engines from the CPU's start under the same
+ * surface and stress: it sees an option that moves the state by less than
+ * the engines part.
+ */
+async function optionChange(base, extra, { still = false, steps = 6 } = {}) {
+  const runs = [];
+  for (const options of [base, { ...base, ...extra }]) {
+    const { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, flux = new Float64Array(C);
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options }), gpu = gpuModel.oceanEngine;
+    cpu.initialize(Float64Array.from(surfaceT), ice);
+    if (!still) for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = sea[e] * 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+    await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
+    for (let n = 0; n < steps; n++) { cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT); await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT); }
+    runs.push({ cpu: cpuFields(cpu, C), gpu: await gpu.download(), wet: Array.from(cpu.h, (v) => v > 1), layers: cpu.layers });
+    gpuModel.destroy();
+  }
+  const [a, b] = runs, out = {};
+  for (const f of ['T', 'S', 'u']) {
+    let change = 0, miss = 0;
+    const length = a.cpu[f].length;
+    for (let n = 0; n < length; n++) if (f === 'u' || a.wet[n]) { const dc = b.cpu[f][n] - a.cpu[f][n], dg = b.gpu[f][n] - a.gpu[f][n]; change += dc * dc; miss += (dg - dc) ** 2; }
+    out[f] = { change: Math.sqrt(change / length), ratio: Math.sqrt(miss / Math.max(change, 1e-300)) };
+  }
+  console.log(`the option's change on the CPU from the ${still ? 'still' : 'sheared'} start, rms, and the GPU's miss of it, relative: ${Object.entries(out).map(([f, r]) => `${f} ${r.change.toExponential(2)}, ${r.ratio.toExponential(2)}`).join('; ')}`);
+  return out;
+}
+function assertTracks(change, fields) {
+  for (const [f, [floor, bound]] of Object.entries(fields)) {
+    assert.ok(change[f].change > floor, `${f}: the option changes the CPU's state by ${change[f].change} rms, not over ${floor}`);
+    assert.ok(change[f].ratio < bound, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+  }
+}
+const OPTION_CHANGE = 'the GPU hybrid ocean changes the state under an option as the CPU does, from one start over six steps';
+test(`${OPTION_CHANGE}: shearDiffusivityResolution, under a strengthened shear-scaled diffusion`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, shearDiffusivity: 10, shearDiffusivityCap: 1e6 }, { shearDiffusivityResolution: { scale: 4, power: 2 } });
+  assertTracks(change, { T: [1.5e-4, 0.1], S: [1.5e-4, 0.1] });
+});
+test(`${OPTION_CHANGE}: isoneutralDiffusion`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange(HYBRID, { isoneutralDiffusion: true });
+  assertTracks(change, { T: [1e-4, 0.05], S: [2e-5, 0.03] });
+});
+test('under isoneutralDiffusion and 30 m boundary layers the κS² diffusivity the GPU hybrid ocean\'s column takes from a dynamics phase is the CPU\'s 1:2:2:1 mean of the four stages\', not the fourth stage\'s, and its triads move the tracers above 30 m, and heat and salt between columns, as the CPU\'s do', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { ...HYBRID, isoneutralDiffusion: true }, { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, zeros = new Float64Array(C), dt = 4 * DT;
+  const off = scenario(N, HYBRID).cpu, sheared = (ocean) => {
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = sea[e] * 0.6 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+    ocean.boundaryDepths.fill(30);
+  };
+  sheared(cpu); sheared(off);
+  const start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths };
+  const upper = Array.from(cpu.h, (hv, n) => { let z = 0; for (let k = 0; k < Math.floor(n / C); k++) z += cpu.h[k * C + n % C]; return z < 30 && hv > 1; }), moved = [];
+  let kappa;
+  for (const ocean of [options, HYBRID]) {
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean }), gpu = gpuModel.oceanEngine;
+    await gpu.upload(start, Float64Array.from(surfaceT), ice);
+    gpu.setStress(stress.map(() => 0), ice);
+    gpu.phases.dynamics(dt);
+    if (ocean === options) kappa = Float64Array.from(await gpu.readSection('ISOK'));
+    moved.push(await gpu.download());
+    gpuModel.destroy();
+  }
+  cpu.phases.dynamics(dt);
+  off.phases.dynamics(dt);
+  const mean = Float64Array.from(cpu.isoKappa), on = cpuFields(cpu, C), without = cpuFields(off, C), turned = {};
+  cpu.tendency(cpu.trial, cpu.stages[0].map((a) => new Float64Array(a.length)));
+  const fourth = Float64Array.from(cpu.isoKappa), toMean = stats(mean, kappa), apart = stats(mean, fourth);
+  for (const f of ['T', 'S']) {
+    let miss = 0, change = 0;
+    for (let n = 0; n < upper.length; n++) if (upper[n]) { const c = on[f][n] - without[f][n], g = moved[0][f][n] - moved[1][f][n]; miss += (g - c) ** 2; change += c * c; }
+    turned[f] = Math.sqrt(miss / change);
+  }
+  const across = {}, content = (fields, f, reference) => { const out = new Float64Array(C); for (let n = 0; n < fields.h.length; n++) out[n % C] += fields.h[n] * (fields[f][n] - reference); return out; };
+  for (const [f, reference] of [['T', HEAT_REFERENCE], ['S', SALT_REFERENCE]]) {
+    const [gOn, gOff, cOn, cOff] = [moved[0], moved[1], on, without].map((fields) => content(fields, f, reference));
+    let miss = 0, change = 0;
+    for (let i = 0; i < C; i++) { const c = cOn[i] - cOff[i], g = gOn[i] - gOff[i]; miss += (g - c) ** 2; change += c * c; }
+    across[f] = Math.sqrt(miss / change);
+  }
+  console.log(`κS² after a dynamics phase, rms relative to the CPU's: the GPU's from the CPU's 1:2:2:1 mean ${toMean.rmsRel.toExponential(2)}, the CPU's fourth stage's from it ${apart.rmsRel.toExponential(2)}; the GPU's miss of the triads' change above 30 m, T ${turned.T.toExponential(2)} and S ${turned.S.toExponential(2)}, and in the columns' heat ${across.T.toExponential(2)} and salt ${across.S.toExponential(2)}`);
+  assert.ok(apart.rmsRel > 0 && toMean.rmsRel < 2e-3 && toMean.rmsRel < 0.5 * apart.rmsRel, `the GPU's κS² parts from the CPU's stage mean by ${toMean.rmsRel}, the fourth stage's from it by ${apart.rmsRel}`);
+  assert.ok(turned.T < 2e-2 && turned.S < 2e-2, `the GPU misses the triads' change above 30 m by ${turned.T} in T and ${turned.S} in S`);
+  assert.ok(across.T < 5e-2 && across.S < 5e-2, `the GPU misses the triads' change in the columns' heat by ${across.T} and salt by ${across.S}`);
+});
+test('under isoneutralDiffusion the GPU hybrid ocean takes the CPU\'s κS² diffusivity on a shelf sea, where no column takes a slope from a shelf\'s thin layer at its boundary layer\'s base, nor from a base its edge\'s sill closes, and a column keeps its slope where a sill leaves the layer above the base open', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const shelf = syntheticTopography(90, 180, (lat, lon) => { const d = Math.acos(Math.max(-1, Math.min(1, Math.cos(lat) * Math.cos(lon)))) * 180 / Math.PI; return d < 7 ? 100 : -Math.min(4000, 40 * 1.6 ** ((d - 7) / 4)); });
+  const cpuModel = createModel(new Grid(N), { topography: shelf }), init = initializeState(cpuModel, {});
+  for (let a = 0; a < init.length; a++) cpuModel.state[a].set(init[a]);
+  const { mesh, geography } = cpuModel, { latCell, lonCell, cellsOnEdge } = mesh, C = mesh.nCells, E = mesh.nEdges, surfaceT = Float64Array.from(cpuModel.state[3]), ice = new Float64Array(C), zeros = new Float64Array(C);
+  const { depths, fixed } = HYBRID_LAYERS, edgeSill = Float64Array.from(geography.edgeSill), near = new Set();
+  let deep = 1;
+  while (deep < fixed && depths[deep] < 64) deep++;
+  const closeness = (i, lon) => Math.sin(latCell[i]) * Math.sin(-Math.PI / 3) + Math.cos(latCell[i]) * Math.cos(-Math.PI / 3) * Math.cos(lonCell[i] - lon);
+  const shut = { cell: 0, sill: 50, edges: [] }, ajar = { cell: 0, sill: 0.5 * (depths[deep - 1] + depths[deep]), edges: [] };
+  for (let i = 0; i < C; i++) { if (closeness(i, Math.PI) > closeness(shut.cell, Math.PI)) shut.cell = i; if (closeness(i, 0) > closeness(ajar.cell, 0)) ajar.cell = i; }
+  for (let e = 0; e < E; e++) for (const p of [shut, ajar]) if (cellsOnEdge[2 * e] === p.cell || cellsOnEdge[2 * e + 1] === p.cell) { edgeSill[e] = p.sill; p.edges.push(e); near.add(cellsOnEdge[2 * e]); near.add(cellsOnEdge[2 * e + 1]); }
+  const options = { ...HYBRID, isoneutralDiffusion: true, edgeSill };
+  const cpu = createCpuOcean(mesh, { geography, ...options }), F = cpu.table.fixed, thin = 2 * H_MIN;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  cpu.boundaryDepths.fill(30);
+  for (const i of near) cpu.boundaryDepths[i] = 64;
+  const h = Float64Array.from(cpu.h), start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths };
+  const gpuModel = await createGpuModel(new Grid(N), { topography: shelf, ocean: options }), gpu = gpuModel.oceanEngine;
+  await gpu.upload(start, Float64Array.from(surfaceT), ice);
+  gpu.setStress(new Float64Array(mesh.nEdges), ice);
+  gpu.phases.dynamics(DT);
+  const kappa = Float64Array.from(await gpu.readSection('ISOK'));
+  gpuModel.destroy();
+  cpu.phases.dynamics(DT);
+  const all = [], beside = [];
+  for (let n = 0; n < F * C; n++) if (cpu.isoKappa[n] > 0) all.push(n);
+  for (let e = 0; e < mesh.nEdges; e++) {
+    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+    if (geography.land[a] || geography.land[b]) continue;
+    for (const [i, j] of [[a, b], [b, a]]) {
+      let base = 0, below = 0;
+      while (base < F && below < 30) below += h[base++ * C + i];
+      if (h[(base - 1) * C + i] > thin && h[(base - 1) * C + j] <= thin) for (let m = 1; m < base; m++) beside.push((m - 1) * C + i);
+    }
+  }
+  const miss = (entries) => { let d = 0, s = 0; for (const n of entries) { d += (kappa[n] - cpu.isoKappa[n]) ** 2; s += cpu.isoKappa[n] ** 2; } return Math.sqrt(d / s); };
+  const sill = [], opened = [];
+  let shutKappa = 0;
+  for (let m = 0; m < F; m++) {
+    shutKappa = Math.max(shutKappa, Math.abs(kappa[m * C + shut.cell]), cpu.isoKappa[m * C + shut.cell]);
+    if (cpu.isoKappa[m * C + ajar.cell] > 0) opened.push(m * C + ajar.cell);
+  }
+  for (const i of near) if (i !== shut.cell && i !== ajar.cell) for (let m = 0; m < F; m++) if (cpu.isoKappa[m * C + i] > 0) sill.push(m * C + i);
+  const cut = shut.edges.every((e) => cpu.hEdge[(deep - 1) * E + e] <= thin) && ajar.edges.every((e) => cpu.hEdge[(deep - 1) * E + e] > thin && cpu.hEdge[deep * E + e] <= thin);
+  console.log(`κS² on a shelf sea under 30 m boundary layers, the GPU's rms miss of the CPU's: ${miss(all).toExponential(2)} over ${all.length} interfaces, ${miss(beside).toExponential(2)} over the ${beside.length} above the base of a column beside a shelf's thin layer. Under 64 m boundary layers a column whose edges 50 m sills close takes κS² up to ${shutKappa} on either engine; the GPU misses the κS² of one whose ${ajar.sill.toFixed(1)} m sills leave layer ${deep - 1} open by ${miss(opened).toExponential(2)} over ${opened.length} interfaces, and their neighbors' by ${miss(sill).toExponential(2)} over ${sill.length}`);
+  assert.ok(cut, 'the sills do not cut the layers at the base of the 64 m boundary layers as the row needs');
+  assert.ok(beside.length > 0 && sill.length > 0 && opened.length > 0, 'no column beside a shelf or a sill');
+  assert.equal(shutKappa, 0);
+  assert.ok(miss(all) < 1e-2 && miss(beside) < 1e-2 && miss(sill) < 1e-2 && miss(opened) < 1e-2, `the GPU misses the CPU's κS² by ${miss(all)}, beside the shelves by ${miss(beside)}, beside the sills by ${miss(sill)} and under the open sill by ${miss(opened)}`);
+});
+test(`${OPTION_CHANGE}: backgroundLatitude equatorial, under a strengthened background diffusivity, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, backgroundDiffusivity: 1e-3 }, { backgroundLatitude: 'equatorial' }, { still: true });
+  assertTracks(change, { T: [7e-4, 0.02], S: [1e-5, 0.02] });
+});
+test(`${OPTION_CHANGE}: closureScale`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange(HYBRID, { closureScale: 0.25 });
+  assertTracks(change, { u: [2e-3, 0.1] });
+});
+test(`${OPTION_CHANGE}: interiorShear lmd94, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, shearViscosity: 5e-3 }, { interiorShear: 'lmd94' }, { still: true });
+  assertTracks(change, { T: [3e-4, 0.02], S: [2e-5, 0.02], u: [7e-5, 0.02] });
+});
+test(`${OPTION_CHANGE}: interiorShear lmd94 with no shear term, whose change is PP81's ν_b/(1 + 5Ri) share of κ, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, shearViscosity: 0, backgroundViscosity: 1e-3 }, { interiorShear: 'lmd94', lmd94Viscosity: 0 }, { still: true });
+  assertTracks(change, { T: [2e-4, 0.02], S: [1.5e-5, 0.02] });
+});
+for (const eddyTracers of ['third', 'centered']) test(`${OPTION_CHANGE}: eddyTracers ${eddyTracers}, under a strengthened restratification, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, mixedLayerRestratification: { coefficient: 1000 } }, { eddyTracers }, { still: true });
+  assertTracks(change, { T: [1e-3, 0.02], S: [4e-4, 0.02] });
+});
+test(`${OPTION_CHANGE}: mixedLayerRestratification taperLatitude, under a strengthened restratification, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, mixedLayerRestratification: { coefficient: 1000 } }, { mixedLayerRestratification: { coefficient: 1000, taperLatitude: 15 } }, { still: true });
+  assertTracks(change, { T: [2e-3, 0.02], S: [5e-4, 0.02] });
+});
+
+test('the GPU hybrid ocean uploads a state that carries the restart arrays with the current the CPU\'s load keeps, none on a coastal edge in any layer', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice } = scenario(N), C = mesh.nCells, E = mesh.nEdges;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  cpu.u.fill(0.3);
+  const saved = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  const marked = gpu.cellOcean.findIndex((x) => x > 0);
+  saved.h = Float64Array.from(saved.h, (v, n) => (n === marked ? v + 0.5 : v));
+  await gpu.upload(saved, Float64Array.from(surfaceT), ice);
+  const { u, h } = await gpu.download();
+  gpuModel.destroy();
+  assert.equal(h[marked], Math.fround(saved.h[marked]), 'the upload took its plain branch: it refitted a sea column the save left 0.5 m off its depth');
+  cpu.load(saved, Float64Array.from(surfaceT), ice);
+  const apart = new Set();
+  for (let n = 0; n < cpu.layers * E; n++) if (u[n] !== Math.fround(cpu.u[n])) apart.add(n % E);
+  assert.equal(apart.size, 0, `${apart.size} edges hold a current the CPU's load does not`);
+});
+
 const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
 test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
 test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
 test(`${TRACKING}, with mstarScheme rh18, langmuirScheme rescale and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY_ALL));
+test(`${TRACKING}, with backgroundLatitude equatorial`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, backgroundLatitude: 'equatorial' }));
+test(`${TRACKING}, with interiorShear lmd94`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, interiorShear: 'lmd94' }));
+test(`${TRACKING}, with eddyTracers third and mixedLayerRestratification taperLatitude 5`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, eddyTracers: 'third', mixedLayerRestratification: { coefficient: 50, taperLatitude: 5 } }));
+test(`${TRACKING}, with eddyTracers centered and mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...RESTRAT, eddyTracers: 'centered' }));
+test(`${TRACKING}, with shearDiffusivityResolution`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, shearDiffusivityResolution: { scale: 4, power: 2 } }));
+test(`${TRACKING}, with closureScale 0.5`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, closureScale: 0.5 }));
+test(`${TRACKING}, with isoneutralDiffusion`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking({ ...HYBRID, isoneutralDiffusion: true }));
 
 /*
  * What each phase of the GPU hybrid step changes of the stores' heat
@@ -222,6 +411,9 @@ async function conservation(options) {
 const CONSERVATION = 'in single precision the GPU hybrid ocean keeps the heat, salt and water it stores through the regrid and the column physics to the stores\' rounding, and through the other phases of its step';
 test(CONSERVATION, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(HYBRID));
 test(`${CONSERVATION}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation(RESTRAT));
+test(`${CONSERVATION}, with mixedLayerRestratification and eddyTracers third`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation({ ...RESTRAT, eddyTracers: 'third' }));
+test(`${CONSERVATION}, with shearDiffusivityResolution`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation({ ...HYBRID, shearDiffusivityResolution: { scale: 4, power: 2 } }));
+test(`${CONSERVATION}, with isoneutralDiffusion`, { skip: !gpuAvailable && 'webgpu not installed' }, () => conservation({ ...HYBRID, isoneutralDiffusion: true }));
 
 test('the GPU hybrid ocean keeps a brackish band\'s fixed-depth surface layers as the CPU does and tracks it over five steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const brackish = (lat) => (Math.abs(lat) < 0.35 ? 12 : 34.5);
@@ -440,6 +632,55 @@ test('with mixedLayerRestratification the GPU eddy phase takes the CPU\'s fluxes
   gpuModel.destroy();
 });
 
+test('under recordEddyFluxes the GPU hybrid ocean keeps the volume and heat fluxes its eddy pass applies through the passes after it, and steps bit for bit as without it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, E = mesh.nEdges, L = cpu.layers, zeros = new Float64Array(C);
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+  const start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths };
+  const SECTIONS = ['EDDYVREC', 'EDDYQREC', 'EDDYV', 'EDDYQ'], runs = [];
+  for (const recordEddyFluxes of [false, true]) {
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: { ...HYBRID, recordEddyFluxes } }), gpu = gpuModel.oceanEngine;
+    await gpu.upload(start, Float64Array.from(surfaceT), ice);
+    await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
+    const run = { ...(await gpu.readStores()), eta: (await gpu.download()).eta, restart: await gpu.restartArrays() };
+    if (recordEddyFluxes) {
+      const read = () => Promise.all(SECTIONS.map((name) => gpu.readSection(name)));
+      await gpu.upload(start, Float64Array.from(surfaceT), ice);
+      gpu.setStress(stress, ice);
+      run.before = await gpu.readStores();
+      gpu.phases.eddy(DT);
+      run.after = await gpu.readStores();
+      run.eddy = await read();
+      gpu.readSurface(Float64Array.from(surfaceT), ice);
+      gpu.phases.shift(); gpu.phases.regrid(DT); gpu.phases.column(DT); gpu.phases.dynamics(DT);
+      run.later = await read();
+    }
+    runs.push(run);
+    gpuModel.destroy();
+  }
+  const [off, on] = runs, differing = {};
+  const count = (a, b) => { let n = 0; for (let m = 0; m < a.length; m++) if (!Object.is(a[m], b[m])) n++; return n; };
+  for (const f of ['h', 'u', 'q', 'w', 'eta']) differing[f] = count(off[f], on[f]);
+  for (const [name, values] of Object.entries(off.restart)) if (ArrayBuffer.isView(values)) differing[name] = count(values, on.restart[name]);
+  assert.ok(Object.values(differing).every((n) => n === 0), `recordEddyFluxes changes the step: ${JSON.stringify(differing)}`);
+  const kept = Object.fromEntries(SECTIONS.map((name, s) => [name, count(on.eddy[s], on.later[s])]));
+  console.log(`values the shift, regrid, column and dynamics passes after the eddy pass change, of ${L * E}: ${JSON.stringify(kept)}`);
+  assert.ok(kept.EDDYVREC === 0 && kept.EDDYQREC === 0, `the passes after the eddy pass write over the record: ${JSON.stringify(kept)}`);
+  const inflow = (record) => {
+    const out = new Float64Array(L * C);
+    for (let e = 0; e < E; e++) {
+      const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+      for (let k = 0; k < L; k++) { out[k * C + b] += record[k * E + e]; out[k * C + a] -= record[k * E + e]; }
+    }
+    return out;
+  };
+  const applied = (f) => Float64Array.from(on.after[f], (v, m) => (v - on.before[f][m]) * mesh.areaCell[m % C] / DT);
+  const volume = stats(applied('h'), inflow(on.later[0])), heat = stats(applied('q'), inflow(on.later[1]));
+  console.log(`the record's convergence against the eddy pass's change of the stores, per layer and cell, rms relative: volume ${volume.rmsRel.toExponential(2)}, heat ${heat.rmsRel.toExponential(2)}`);
+  assert.ok(stats(applied('h'), new Float64Array(L * C)).rms > 0, 'the eddy pass moves water');
+  assert.ok(volume.rmsRel < 0.05, `the record's volume convergence parts from the water the eddy pass moved by ${volume.rmsRel} rms relative (largest ${volume.maxDiff} m³/s at ${volume.at})`);
+  assert.ok(heat.rmsRel < 0.05, `the record's heat convergence parts from the heat the eddy pass moved by ${heat.rmsRel} rms relative (largest ${heat.maxDiff} K m³/s at ${heat.at})`);
+});
 test(`at N=${N} a thick deep layer lighter than its class boundary by less than float32 resolves at 1027 kg/m³ goes to the lighter class in the regrid on both engines`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { mesh, cpu, surfaceT, ice } = scenario(N, HYBRID), C = mesh.nCells;
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });
@@ -467,4 +708,39 @@ test(`at N=${N} a thick deep layer lighter than its class boundary by less than 
   assert.ok(onCpu[k - 1] - before[k - 1] > 0.5 * before[k], `the CPU files the water in class ${k - 1}`);
   for (let m = 0; m < L; m++) assert.ok(Math.abs(onCpu[m] - onGpu[m]) < 1, `layer ${m}: CPU ${onCpu[m]} m, GPU ${onGpu[m]} m`);
   gpuModel.destroy();
+});
+
+test('the GPU hybrid ocean saved on its cadence as the page saves it, every array as float64 and no Qref or Wref, steps on in a fresh model bit for bit with one run whole', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const every = 4, options = { ...HYBRID, everySteps: every }, before = 2 * every, after = 2 * every - 1;
+  const { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = sea[e] * 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+  const start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  const evaporation = Float32Array.from({ length: C }, (_, i) => 3e-5 * (1 + 0.5 * Math.sin(3 * i)));
+  const iceAt = (n) => Float64Array.from(ice, (x) => (x > 0 ? x + 0.02 * n : 0));
+  const numeric = (v) => (Array.isArray(v) || ArrayBuffer.isView(v)) && v.length > 0 && typeof v[0] === 'number';
+  const run = async (save, from, to) => {
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options }), gpu = gpuModel.oceanEngine, core = gpuModel.gpu;
+    await gpu.upload(save, Float64Array.from(surfaceT), iceAt(from - 1));
+    const loaded = await gpu.restartArrays();
+    for (let n = from; n < to; n++) {
+      core.device.queue.writeBuffer(core.buffers.PH, 4 * core.layout.PH.EVAP, evaporation);
+      gpu.accumulateFreshwater(DT);
+      if ((n + 1) % every === 0) await gpu.advance(Float64Array.from(surfaceT), iceAt(n), stress, every * DT);
+    }
+    const out = { ...(await gpu.serialize()), ...(await gpu.restartArrays()) };
+    gpuModel.destroy();
+    return { out, loaded };
+  };
+  const { out: whole } = await run(start, 0, before + after);
+  const { Qref, Wref, ...kept } = (await run(start, 0, before)).out;
+  const saved = Object.fromEntries(Object.entries(kept).map(([name, v]) => [name, numeric(v) ? Float64Array.from(v) : v]));
+  const { out: resumed, loaded } = await run(saved, before, before + after);
+  assert.ok(saved.boundaryDepths.some((x) => x > 0), 'the save carries no boundary layer');
+  const lost = Array.from(saved.boundaryDepths).filter((x, i) => x !== loaded.boundaryDepths[i]).length;
+  assert.equal(lost, 0, `the upload took its plain branch: ${lost} cells lost the saved boundary-layer depth`);
+  for (const [name, values] of Object.entries(whole)) if (numeric(values)) {
+    const at = Array.from(values).findIndex((x, i) => !Object.is(x, resumed[name][i]));
+    assert.equal(at, -1, `${name}[${at}]: ${values[at]} whole against ${resumed[name][at]} resumed`);
+  }
 });

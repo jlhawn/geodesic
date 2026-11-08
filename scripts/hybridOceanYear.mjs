@@ -60,7 +60,9 @@ import { oceanMinutes } from '../js/cadence.module.js';
 import { stopOnSignal } from './runControl.mjs';
 import { parallelism } from '../js/threads.module.js';
 import { createParallelModel } from '../js/parallel.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const N = Number(process.env.N ?? 32), FORCING = process.env.FORCING ?? 'runs/twelve-local/forcing', OUT = process.env.OUT ?? 'runs/hybrid', TAG = process.env.TAG ?? `hybrid${N}`;
 const DAYS = Number(process.env.DAYS ?? 365), RESTORE = Number(process.env.RESTORE ?? 30), RESTORE_ICE = Number(process.env.RESTORE_ICE ?? 100), LOG_DAYS = Number(process.env.LOG_DAYS ?? 10), SAVE_DAYS = Number(process.env.SAVE_DAYS ?? 30);
 const STEP = Number(process.env.STEP ?? oceanMinutes(N) * 60), OCEAN = JSON.parse(process.env.OCEAN ?? '{}'), DIURNAL = (process.env.DIURNAL ?? '1') !== '0';

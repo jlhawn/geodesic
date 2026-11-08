@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { SECTIONS, sectionName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable, readSections, pairTable } from '../scripts/equatorialSections.mjs';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 const era5 = JSON.parse(readFileSync(new URL('../data/era5_equatorial_stress.json', import.meta.url), 'utf8'));
 
@@ -65,7 +66,7 @@ test('armMetrics.mjs ends with the sections against ERA5 in the saves\' month an
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
   const dir = mkdtempSync(join(tmpdir(), 'armMetrics-')), file = join(dir, 'arm16_day0882.bin');
   writeFileSync(file, encodeState({ N: 16, ...gridHeader(model.mesh), K: model.core.K, day: 882, time: 882 * 86400, terrain: true, ...geographyHeader(record), levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
-  const run = spawnSync(process.execPath, [new URL('../scripts/armMetrics.mjs', import.meta.url).pathname, 'arm16', file], { encoding: 'utf8' });
+  const run = spawnSync(process.execPath, [new URL('../scripts/armMetrics.mjs', import.meta.url).pathname, 'arm16', file], { env: withoutOptionGroups(), encoding: 'utf8' });
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 0, run.stderr);
   const lines = run.stdout.split('\n');
@@ -85,8 +86,8 @@ test('armMetrics.mjs ends with the sections against ERA5 in the saves\' month an
   const C = model.mesh.nCells, means = { fields: ['mslp', 'speed', 'zonalStress'], every: 8, samples: 240, days: 30, mslp: new Float32Array(C).fill(101000), speed: new Float32Array(C).fill(7), zonalStress: new Float32Array(C).fill(-0.05) };
   const meanDir = mkdtempSync(join(tmpdir(), 'armMetrics-')), files = [882, 913].map((day) => join(meanDir, `arm16_day0${day}.bin`));
   for (const [n, path] of files.entries()) writeFileSync(path, encodeState({ N: 16, ...gridHeader(model.mesh), K: model.core.K, day: 882 + 31 * n, time: (882 + 31 * n) * 86400, terrain: true, ...geographyHeader(record), levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize(), means }));
-  const meaned = spawnSync(process.execPath, [new URL('../scripts/armMetrics.mjs', import.meta.url).pathname, 'arm16', ...files], { encoding: 'utf8' });
-  const mixed = spawnSync(process.execPath, [new URL('../scripts/armMetrics.mjs', import.meta.url).pathname, 'arm16', files[0], file], { encoding: 'utf8' });
+  const meaned = spawnSync(process.execPath, [new URL('../scripts/armMetrics.mjs', import.meta.url).pathname, 'arm16', ...files], { env: withoutOptionGroups(), encoding: 'utf8' });
+  const mixed = spawnSync(process.execPath, [new URL('../scripts/armMetrics.mjs', import.meta.url).pathname, 'arm16', files[0], file], { env: withoutOptionGroups(), encoding: 'utf8' });
   rmSync(meanDir, { recursive: true, force: true });
   assert.equal(meaned.status, 0, meaned.stderr);
   assert.notEqual(mixed.status, 0);

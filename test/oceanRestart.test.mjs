@@ -23,7 +23,7 @@ test(`on ETOPO 2022 with its cavities at N=${N}, an ocean restarted from its arr
   const whole = run(fresh(), 2 * day), first = run(fresh(), day);
   const second = createOcean(mesh, { geography, everySteps: 1 });
   second.surfaceT = Float64Array.from(first.surfaceT); second.flux = Float64Array.from(first.flux);
-  second.load({ ...first.serialize(), ...first.restartArrays(), flux: Float64Array.from(first.flux) }, second.surfaceT, ice);
+  second.load({ ...first.serialize(), ...first.restartArrays() }, second.surfaceT, ice);
   run(second, day);
   const a = { ...whole.serialize(), ...whole.restartArrays() }, b = { ...second.serialize(), ...second.restartArrays() };
   for (const name of ['h', 'u', 'T', 'S', 'eta', 'shelfLoad', 'shelfMelted', 'shelfDraw', 'previousT0', 'fresh', 'buoyancy', 'boundaryDepths']) {
