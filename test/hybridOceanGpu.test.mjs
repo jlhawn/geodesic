@@ -179,7 +179,7 @@ test(`${OPTION_CHANGE}: isoneutralDiffusion`, { skip: !gpuAvailable && 'webgpu n
   const change = await optionChange(HYBRID, { isoneutralDiffusion: true });
   assertTracks(change, { T: [1e-4, 0.05], S: [2e-5, 0.03] });
 });
-test('under isoneutralDiffusion and 30 m boundary layers the κS² diffusivity the GPU hybrid ocean\'s column takes from a dynamics phase is the CPU\'s 1:2:2:1 mean of the four stages\', not the fourth stage\'s, and its triads move the tracers above 30 m as the CPU\'s do', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('under isoneutralDiffusion and 30 m boundary layers the κS² diffusivity the GPU hybrid ocean\'s column takes from a dynamics phase is the CPU\'s 1:2:2:1 mean of the four stages\', not the fourth stage\'s, and its triads move the tracers above 30 m, and heat and salt between columns, as the CPU\'s do', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const options = { ...HYBRID, isoneutralDiffusion: true }, { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, zeros = new Float64Array(C), dt = 4 * DT;
   const off = scenario(N, HYBRID).cpu, sheared = (ocean) => {
     ocean.initialize(Float64Array.from(surfaceT), ice);
@@ -209,9 +209,17 @@ test('under isoneutralDiffusion and 30 m boundary layers the κS² diffusivity t
     for (let n = 0; n < upper.length; n++) if (upper[n]) { const c = on[f][n] - without[f][n], g = moved[0][f][n] - moved[1][f][n]; miss += (g - c) ** 2; change += c * c; }
     turned[f] = Math.sqrt(miss / change);
   }
-  console.log(`κS² after a dynamics phase, rms relative to the CPU's: the GPU's from the CPU's 1:2:2:1 mean ${toMean.rmsRel.toExponential(2)}, the CPU's fourth stage's from it ${apart.rmsRel.toExponential(2)}; the GPU's miss of the triads' change above 30 m, T ${turned.T.toExponential(2)} and S ${turned.S.toExponential(2)}`);
+  const across = {}, content = (fields, f, reference) => { const out = new Float64Array(C); for (let n = 0; n < fields.h.length; n++) out[n % C] += fields.h[n] * (fields[f][n] - reference); return out; };
+  for (const [f, reference] of [['T', HEAT_REFERENCE], ['S', SALT_REFERENCE]]) {
+    const [gOn, gOff, cOn, cOff] = [moved[0], moved[1], on, without].map((fields) => content(fields, f, reference));
+    let miss = 0, change = 0;
+    for (let i = 0; i < C; i++) { const c = cOn[i] - cOff[i], g = gOn[i] - gOff[i]; miss += (g - c) ** 2; change += c * c; }
+    across[f] = Math.sqrt(miss / change);
+  }
+  console.log(`κS² after a dynamics phase, rms relative to the CPU's: the GPU's from the CPU's 1:2:2:1 mean ${toMean.rmsRel.toExponential(2)}, the CPU's fourth stage's from it ${apart.rmsRel.toExponential(2)}; the GPU's miss of the triads' change above 30 m, T ${turned.T.toExponential(2)} and S ${turned.S.toExponential(2)}, and in the columns' heat ${across.T.toExponential(2)} and salt ${across.S.toExponential(2)}`);
   assert.ok(apart.rmsRel > 0 && toMean.rmsRel < 2e-3 && toMean.rmsRel < 0.5 * apart.rmsRel, `the GPU's κS² parts from the CPU's stage mean by ${toMean.rmsRel}, the fourth stage's from it by ${apart.rmsRel}`);
   assert.ok(turned.T < 2e-2 && turned.S < 2e-2, `the GPU misses the triads' change above 30 m by ${turned.T} in T and ${turned.S} in S`);
+  assert.ok(across.T < 5e-2 && across.S < 5e-2, `the GPU misses the triads' change in the columns' heat by ${across.T} and salt by ${across.S}`);
 });
 test('under isoneutralDiffusion the GPU hybrid ocean takes the CPU\'s κS² diffusivity on a shelf sea, where no column takes a slope from a shelf\'s thin layer at its boundary layer\'s base, nor from a base its edge\'s sill closes, and a column keeps its slope where a sill leaves the layer above the base open', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const shelf = syntheticTopography(90, 180, (lat, lon) => { const d = Math.acos(Math.max(-1, Math.min(1, Math.cos(lat) * Math.cos(lon)))) * 180 / Math.PI; return d < 7 ? 100 : -Math.min(4000, 40 * 1.6 ** ((d - 7) / 4)); });
@@ -294,13 +302,13 @@ test('the GPU hybrid ocean uploads a state that carries the restart arrays with 
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
   cpu.initialize(Float64Array.from(surfaceT), ice);
   cpu.u.fill(0.3);
-  const fresh = Float64Array.from({ length: C }, (_, i) => 1e-3 * (1 + (i % 5)));
-  const saved = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh, buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  const saved = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  const marked = gpu.cellOcean.findIndex((x) => x > 0);
+  saved.h = Float64Array.from(saved.h, (v, n) => (n === marked ? v + 0.5 : v));
   await gpu.upload(saved, Float64Array.from(surfaceT), ice);
-  const { u } = await gpu.download(), kept = await gpu.restartArrays();
+  const { u, h } = await gpu.download();
   gpuModel.destroy();
-  const plain = Array.from(kept.fresh).filter((x, i) => gpu.cellOcean[i] && x !== Math.fround(fresh[i])).length;
-  assert.equal(plain, 0, `the upload took its plain branch: ${plain} sea cells lost the saved fresh water`);
+  assert.equal(h[marked], Math.fround(saved.h[marked]), 'the upload took its plain branch: it refitted a sea column the save left 0.5 m off its depth');
   cpu.load(saved, Float64Array.from(surfaceT), ice);
   const apart = new Set();
   for (let n = 0; n < cpu.layers * E; n++) if (u[n] !== Math.fround(cpu.u[n])) apart.add(n % E);
