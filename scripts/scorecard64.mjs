@@ -7,22 +7,39 @@
  * The gate run starts from the standard start, seventeen64_day0365.bin (the March equinox; sha256 STANDARD_START, kept at
  * ~/.cache/webgcm-scratch/seventeen/out64/ on this Mac: the page's runs/seventeen64_day0365 parts drop its means and SST
  * ring). Under gpu_run (about 6 GPU minutes, level 2):
- *   node scripts/scorecard64.mjs --run START OUT [--base BASE.json] [--json OUT.json] [--any-start]
+ *   node scripts/scorecard64.mjs --run START OUT [--base BASE.json] [--json OUT.json] [--any-start] [--identical]
  * refuses any other start without --any-start, copies START into the empty directory OUT as p64_day0365.bin, runs
  * LEVELS=bl48 N=64 TAG=p64 spinup.mjs on this tree to days 395 and 425, and scores the two saves; without the copy
  * spinup.mjs would start fresh and run 395 days. Saves already made are scored with
- *   node scripts/scorecard64.mjs [--json OUT.json] [--base BASE.json] [--start START] [--any-start] DIR/p64_day0395.bin DIR/p64_day0425.bin
+ *   node scripts/scorecard64.mjs [--json OUT.json] [--base BASE.json] [--log FILE] [--start START] [--commit HASH] [--any-start] [--identical] DIR/p64_day0395.bin DIR/p64_day0425.bin
  * which takes the start from --start or from the save 30 days before the first one beside it. Each state's daily lines
- * (TOA fluxes and the sea-ice cuts) are read from TAG.log beside it, or from --log FILE. The JSON records the start's
- * sha256 and day, the save days, the tree's commit, the spin-up's environment (with --run) and the saves' options; a
- * --base whose start or leads differ is refused without --any-start.
+ * (TOA fluxes and the sea-ice cuts) are read from TAG.log beside it, or from --log FILE; a missing log is an error.
+ * The JSON records the start's
+ * sha256 and day, the save days, each save's sha256, the saves' options, the scoring tree's HEAD (scoredOn) and the
+ * commit that made the saves (commit: with --run the tree's HEAD before the first segment, else --commit, else null,
+ * since a save does not record it), and with --run the spin-up's environment and treeChangedDuringRun when the fingerprint
+ * of HEAD, the tracked changes and the untracked files under js/, scripts/ and data/ differs before a segment or at
+ * scoring. A --base whose start or leads differ is refused without --any-start, which prints what differs; --json may
+ * not name the --base file, and --run takes no other arguments.
  *
  * With --base, a row moves when its two-window mean changed by more than t·sigma, t the two-sided 5 % quantile of
- * Student's t at sigma's degrees of freedom, and is unresolved otherwise; a re-pin cites the moved rows. The null is a
+ * Student's t at sigma's degrees of freedom, and is unresolved otherwise; a re-pin cites the moved rows. Unresolved is not
+ * unchanged: the count of rows whose two-window mean is bit-identical to the base's is printed beside the moved rows.
+ * A row with no number on either side (a log without the window's every day, a base that JSON wrote as null) is named
+ * as no value, never identical and never moved. --identical, the check for a merge whose changes are off by default,
+ * exits 0 only when every gated row has a value on both sides, the two are bit-identical and the recorded starts
+ * match, and says whether the saves are byte-identical to the base's (its own, or a run that reproduced them).
+ * The null is a
  * merge that changes a default and has no effect on the row: it perturbs from the first step, so the faster rows
  * (rain, TOA, clouds) have decorrelated within one window, and the change over sigma is t-distributed at sigma's
- * degrees of freedom; each such row then moves 5 % of the time, about 1.5 of the 30 rows a merge if all had
- * decorrelated. A fixed 2 sigma would move 7.5–14 % at these degrees of freedom.
+ * degrees of freedom; each such row then moves 5 % of the time where its March–May spread matches the year's that sigma
+ * pools, about 1.5 of the 30 rows a merge if all had decorrelated. Where spring is noisier pooling narrows the
+ * threshold. The March–June pairs carry 68 % of the 160–100W stress's sigma², about 3 % likely were spring no noisier
+ * than the year (a season-free AR(1) null), so that guard likely moves more often than 5 %; they carry 52 % of the SLP
+ * contrast's, about 10 % likely under that null. S2's saturated pairs at the gate's own windows, 1.67 sigma for the
+ * stress and 1.44 for the SLP contrast, are single draws (about 9 % and 16 % likely with no season). All of it rests on
+ * one start's overlapping spring pairs.
+ * A fixed 2 sigma would move 7.5–14 % at these degrees of freedom.
  *
  * Sigma (data/scorecard64-sigma.json) is the pair sigma of that two-window mean: the RMS, over adjacent windows at
  * leads of 180 days or more, of the difference between twin controls (the second perturbed by 1e-6 at its start), from
@@ -34,19 +51,24 @@
  * where sigma's 95 % interval spans a factor of 0.56 to 3.9 at 2.9 degrees of freedom. Saturated and pooled over the
  * year, sigma costs power: a row reads unresolved up to its threshold (in the current record the cold tongue 2.3 K,
  * the 160–100W stress 23 mN/m², the SLP contrast 0.71 hPa, the 30S–30N SST 0.49 K, ASR 1.4 W/m²), and the seasons
- * that set a pooled sigma need not be the gate's: the June–July pairs give 79 % of India rain's sigma², the melt and
- * freeze pairs about 63 % of the Arctic extent's. Twins at the gate's own leads move 0 of 30 rows.
+ * that set a pooled sigma need not be the gate's: the June–July pairs give 80 % of India rain's sigma², the melt and
+ * freeze pairs (Jun/Jul, Sep/Oct and Oct/Nov) 63 % of the Arctic extent's, and with the second July pair and Nov/Dec
+ * 90 %. Twins at the gate's own leads move 0 of 30 rows.
  *   node scripts/scorecard64.mjs --sigma [--from LEAD] [--out PATH] [--cache FILE] A_DIR B_DIR START ...
  * rewrites it from twin pairs; rows the twins cannot give (no gridBoxSkin or daily ice line) take the named proxy.
  *
- * Not definition-matched: the 40–60N land row compares the lowest layer's air with ERA5's 2 m air until the model has a
- * 2 m diagnostic, and the undercurrent rows compare the window-end ocean's velocity, a snapshot, with TAO's annual-mean
- * climatology, not day means of the window's calendar months.
+ * The 40–60N land rows: landT2m, the saves' t2m day means (the 2 m air) against ERA5's 2 m air, is definition-matched;
+ * landT, the lowest layer's air against the same, is kept for continuity and is not. A save without t2m means reads
+ * no value on landT2m. The twin pairs carry no t2m, so landT2m has no sigma and is ungated: reported with its bias,
+ * never moved, and outside --identical, until a calibration from twins with t2m exists.
+ *
+ * Not definition-matched: landT, and the undercurrent rows, which compare the window-end ocean's velocity, a snapshot,
+ * with TAO's annual-mean climatology, not day means of the window's calendar months.
  */
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, copyFileSync, realpathSync } from 'node:fs';
 import { spawnSync, execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeState } from '../js/stateFile.module.js';
 import { stateGeography, createGeography } from '../js/geography.module.js';
@@ -70,7 +92,7 @@ export const BOXES = {
 
 export const ROWS = [
   ['sst30', 'SST 30S–30N sea', '°C'], ['sstCold', 'SST cold tongue 2S–2N 150–90W', '°C'], ['sstWarm', 'SST warm pool 10S–10N 130–160E', '°C'],
-  ['ts', 'global Ts, grid-box skin', '°C'], ['landT', '40–60N land air: lowest layer against 2 m (not matched)', 'K'],
+  ['ts', 'global Ts, grid-box skin', '°C'], ['landT', '40–60N land air: lowest layer against 2 m (not matched; continuity)', 'K'], ['landT2m', '40–60N land 2 m air, day means', 'K'],
   ...Object.keys(BOXES).map((b) => [`rain_${b}`, `rain ${b}`, 'mm/d']),
   ['stress', 'eastward stress 160–100W within 3°', 'mN/m²'], ['slp', 'SLP 180–160W less 120–100W within 3°', 'hPa'],
   ['asr', 'ASR', 'W/m²'], ['net', 'net TOA', 'W/m²'], ['swcre', 'SWCRE', 'W/m²'], ['lwcre', 'LWCRE', 'W/m²'],
@@ -110,6 +132,25 @@ export function undercurrentCore(profile) {
   return { speed, depth };
 }
 
+export const PROFILE_DEPTHS = Array.from({ length: 67 }, (_, j) => 20 + 5 * j);
+export const meshSpacing = (cells) => 0.9 * Math.sqrt(4 * Math.PI / cells) * DEG;
+export const inMooringWindow = (latDeg, lonDeg, stationLon, spacing) => Math.abs(latDeg) <= Math.max(1, spacing) && Math.abs(wrap(lonDeg - stationLon)) <= Math.max(1.5, spacing);
+
+export function mooringProfile(columns, Z = PROFILE_DEPTHS) {
+  const sum = new Float64Array(Z.length), weight = new Float64Array(Z.length);
+  for (const { area, z: zc, u: uc } of columns) {
+    for (let j = 0; j < Z.length; j++) {
+      const z = Z[j];
+      if (zc.length < 2 || z < zc[0] || z > zc[zc.length - 1]) continue;
+      let n = 0;
+      while (zc[n + 1] < z) n++;
+      const f = (z - zc[n]) / (zc[n + 1] - zc[n]);
+      sum[j] += area * (uc[n] + f * (uc[n + 1] - uc[n])); weight[j] += area;
+    }
+  }
+  return Z.map((z, j) => ({ z, u: weight[j] ? sum[j] / weight[j] : NaN }));
+}
+
 const meshes = new Map();
 function meshOf(saved) {
   const { topography, geography } = stateGeography(saved), key = `${saved.N} ${JSON.stringify(saved.grid ?? null)} ${JSON.stringify(geography)}`;
@@ -120,7 +161,7 @@ function meshOf(saved) {
 let refs = null;
 const references = () => (refs ??= { gpcp: R.gpcp().grid, era5: R.era5Fields().fields, woa: R.woa23Sst().sst, ts: R.globalTs(), ice: R.seaIce(), tao: R.tao(), ceres: R.ceres().fields });
 
-export function reduceState(saved, logText) {
+export function reduceState(saved, logText, { spacing: mooringSpacing = null } = {}) {
   const { gpcp, era5: { t2m, msl, metss, lsm }, woa, ts, ice: iceRef, tao, ceres } = references();
   const { mesh, land } = meshOf(saved), C = mesh.nCells, E = mesh.nEdges, M = saved.means, area = mesh.areaCell, D = saved.day;
   if (!M?.fields) throw new Error(`the day-${D} state carries no means`);
@@ -145,7 +186,9 @@ export function reduceState(saved, logText) {
   const all = cells(() => true);
   row('ts', M.gridBoxSkin ? over(M.gridBoxSkin, all) - KELVIN : NaN, dayWeighted(D, (m) => ts.monthly[m - 1]), { proxy: over(M.surfaceT, all) - KELVIN });
   const band = cells((i) => land[i] && lat(i) >= 40 && lat(i) <= 60);
-  row('landT', over(M.temperature, band), dayWeighted(D, (m) => R.boxMean(mesh, t2m, m - 1, band, { lsm, land })));
+  const landRef = dayWeighted(D, (m) => R.boxMean(mesh, t2m, m - 1, band, { lsm, land }));
+  row('landT', over(M.temperature, band), landRef);
+  row('landT2m', M.t2m ? over(M.t2m, band) : NaN, landRef);
   for (const [box, [kind, s, n, w, e]] of Object.entries(BOXES)) {
     const cs = cells((i) => lat(i) >= s && lat(i) <= n && lon(i) >= w && lon(i) <= e && (kind === 'all' || (kind === 'land') === !!land[i]));
     row(`rain_${box}`, over(M.precipitation, cs), box === 'global' ? dayWeighted(D, (m) => R.gridMean(gpcp, m - 1)) : dayWeighted(D, (m) => R.boxMean(mesh, gpcp, m - 1, cs)), { cells: cs.length });
@@ -169,28 +212,20 @@ export function reduceState(saved, logText) {
   row('iceSArea', fromLog(ice, (x) => x.sArea), nsidc('area', 'S'), { proxy: cutS.area });
 
   const eastward = Array.from({ length: L }, (_, k) => cellVector(mesh, Float64Array.from(saved.ocean.u.subarray(k * E, (k + 1) * E))));
-  const Z = Array.from({ length: 67 }, (_, j) => 20 + 5 * j), spacing = 0.9 * Math.sqrt(4 * Math.PI / C) * DEG;
+  const spacing = mooringSpacing ?? meshSpacing(C);
   for (const s of R.TAO_STATIONS) {
-    const st = tao.stations[s], cs = cells((i) => sea[i] && Math.abs(lat(i)) <= Math.max(1, spacing) && Math.abs(wrap(lon(i) - st.longitude)) <= Math.max(1.5, spacing));
-    const sum = new Float64Array(Z.length), weight = new Float64Array(Z.length);
-    for (const i of cs) {
-      const zc = [], uc = [], sinL = Math.sin(mesh.lonCell[i]), cosL = Math.cos(mesh.lonCell[i]);
+    const st = tao.stations[s], cs = cells((i) => sea[i] && inMooringWindow(lat(i), lon(i), st.longitude, spacing));
+    const columns = cs.map((i) => {
+      const z = [], u = [], sinL = Math.sin(mesh.lonCell[i]), cosL = Math.cos(mesh.lonCell[i]);
       let top = 0;
       for (let k = 0; k < L; k++) {
         const h = saved.ocean.h[k * C + i];
-        if (h > 1e-3) { zc.push(top + h / 2); uc.push(-sinL * eastward[k][3 * i] + cosL * eastward[k][3 * i + 1]); }
+        if (h > 1e-3) { z.push(top + h / 2); u.push(-sinL * eastward[k][3 * i] + cosL * eastward[k][3 * i + 1]); }
         top += h;
       }
-      for (let j = 0; j < Z.length; j++) {
-        const z = Z[j];
-        if (zc.length < 2 || z < zc[0] || z > zc[zc.length - 1]) continue;
-        let n = 0;
-        while (zc[n + 1] < z) n++;
-        const f = (z - zc[n]) / (zc[n + 1] - zc[n]);
-        sum[j] += area[i] * (uc[n] + f * (uc[n + 1] - uc[n])); weight[j] += area[i];
-      }
-    }
-    const core = undercurrentCore(Z.map((z, j) => ({ z, u: weight[j] ? sum[j] / weight[j] : NaN })));
+      return { area: area[i], z, u };
+    });
+    const core = undercurrentCore(mooringProfile(columns));
     row(`euc_${s}`, core.speed, st.core.speed, { cells: cs.length });
     row(`eucDepth_${s}`, core.depth, st.core.depth, { cells: cs.length });
   }
@@ -200,13 +235,13 @@ export function reduceState(saved, logText) {
 export function windowMeans(reductions, { proxy = false } = {}) {
   const out = {};
   for (const [key] of ROWS) {
-    const pick = (r) => { const x = r.rows[key]; return Number.isFinite(x.model) ? x.model : proxy && Number.isFinite(x.proxy) ? x.proxy : NaN; };
-    out[key] = { model: avg(reductions.map(pick)), ref: avg(reductions.map((r) => r.rows[key].ref)) };
+    const pick = (r) => { const x = r.rows[key] ?? {}; return Number.isFinite(x.model) ? x.model : proxy && Number.isFinite(x.proxy) ? x.proxy : NaN; };
+    out[key] = { model: avg(reductions.map(pick)), ref: avg(reductions.map((r) => r.rows[key]?.ref ?? NaN)) };
   }
   return out;
 }
 
-const pickOf = (key, proxy = true) => (r) => { const x = r.rows[key]; return Number.isFinite(x.model) ? x.model : proxy && Number.isFinite(x.proxy) ? x.proxy : NaN; };
+const pickOf = (key, proxy = true) => (r) => { const x = r.rows[key] ?? {}; return Number.isFinite(x.model) ? x.model : proxy && Number.isFinite(x.proxy) ? x.proxy : NaN; };
 const rms = (xs) => Math.sqrt(avg(xs.map((x) => x * x)));
 export const GATE_LEADS = [30, 60];
 
@@ -271,6 +306,7 @@ export function calibrate(twins, { from = 180, leads = GATE_LEADS } = {}) {
   for (const [key] of ROWS) {
     const pick = pickOf(key), series = twins.map((t) => t.a.map((r, k) => ({ lead: r.day - t.start, d: pick(r) - pick(t.b[k]) })).filter((x) => Number.isFinite(x.d)));
     const late = series.map((sr) => sr.filter((x) => x.lead >= from).map((x) => x.d)), all = late.flat();
+    if (!all.length) { rows[key] = { sigma: null, windows: 0, ungated: 'no twin pair carries this row' }; continue; }
     const pairs = late.flatMap((ds) => ds.slice(1).map((d, k) => (ds[k] + d) / 2));
     const lag = late.flatMap((ds) => ds.slice(1).map((d, k) => d * ds[k]));
     const perWindow = rms(all), lag1 = Math.max(-0.9, Math.min(0.9, lag.length ? avg(lag) / (perWindow * perWindow) : 0));
@@ -282,10 +318,10 @@ export function calibrate(twins, { from = 180, leads = GATE_LEADS } = {}) {
     rows[key] = {
       sigma, perWindow, lag1, windows: all.length, pairs: pairs.length, dof, critical, threshold, early, earlyGate: rms(gate.filter(Number.isFinite)), saturation: rms(gate.filter(Number.isFinite)) / sigma,
       nullAtLeads: gate.map((g) => (Number.isFinite(g) ? Math.abs(g) > threshold : null)), normalTailRate: spread > 0 ? twoSidedTail(threshold / spread) : 0, inSampleRate: pairs.filter((m) => Math.abs(m) > threshold).length / pairs.length,
-      proxy: twins.some((t) => t.a.some((r) => !Number.isFinite(r.rows[key].model))),
+      proxy: twins.some((t) => t.a.some((r) => !Number.isFinite(r.rows[key]?.model))),
     };
   }
-  const values = Object.values(rows), mean = (f) => avg(values.map(f));
+  const values = Object.values(rows).filter((r) => !r.ungated), mean = (f) => avg(values.map(f));
   const nulls = {
     atLeads: twins.map((t, k) => ({ start: t.label, moved: values.filter((r) => r.nullAtLeads[k] === true).length, rows: values.filter((r) => r.nullAtLeads[k] !== null).length })),
     normalTailRate: mean((r) => r.normalTailRate), inSampleRate: mean((r) => r.inSampleRate), saturatedRateAtTwoSigma: mean((r) => studentTail(2, r.dof)),
@@ -301,13 +337,29 @@ export function designProblems(base, now) {
   return problems;
 }
 
+const valueOf = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+
 export function compareScores(base, now, sigma, { anyStart = false } = {}) {
   const problems = designProblems(base, now);
   if (problems.length && !anyStart) throw new Error(`not the same gate design: ${problems.join('; ')} (--any-start compares them anyway)`);
+  if (problems.length) console.warn(`--any-start: comparing anyway, though ${problems.join('; ')}`);
   return ROWS.map(([key]) => {
-    const delta = now.means[key].model - base.means[key].model, s = sigma[key]?.sigma, threshold = s * studentCritical(sigma[key]?.dof);
-    return { key, delta, sigma: s, threshold, verdict: !Number.isFinite(delta) || !Number.isFinite(threshold) ? 'no value' : Math.abs(delta) > threshold ? 'moved' : 'unresolved' };
+    const a = valueOf(base.means?.[key]?.model), b = valueOf(now.means?.[key]?.model), s = valueOf(sigma[key]?.sigma), threshold = s === null ? NaN : s * studentCritical(sigma[key]?.dof);
+    const gated = Number.isFinite(threshold);
+    if (a === null || b === null) return { key, delta: NaN, sigma: s, threshold, gated, identical: false, missing: [...(a === null ? ['base'] : []), ...(b === null ? ['candidate'] : [])], verdict: 'no value' };
+    const delta = b - a;
+    return { key, delta, sigma: s, threshold, gated, identical: a === b, verdict: !gated ? 'ungated' : Math.abs(delta) > threshold ? 'moved' : 'unresolved' };
   });
+}
+
+export function identityCheck(base, now, comparison) {
+  const gated = comparison.filter((c) => c.gated), describe = (c) => (c.verdict === 'no value' ? `${c.key} (no value in the ${c.missing.join(' and ')})` : `${c.key} (${c.identical ? 'identical' : 'changed'})`);
+  const empty = gated.filter((c) => c.verdict === 'no value').map(describe);
+  const changed = gated.filter((c) => c.verdict !== 'no value' && !c.identical).map((c) => c.key);
+  const ungated = comparison.filter((c) => !c.gated).map(describe);
+  const sameStart = !!base.start?.sha256 && base.start.sha256 === now.start?.sha256;
+  const sameSaves = Array.isArray(base.saves) && Array.isArray(now.saves) && base.saves.length === now.saves.length && base.saves.every((h, k) => h === now.saves[k]);
+  return { ok: !empty.length && !changed.length && sameStart, empty, changed, ungated, sameStart, sameSaves, baseHasSaves: Array.isArray(base.saves) };
 }
 
 export function formatTable(reductions, sigma, comparison = null) {
@@ -317,49 +369,98 @@ export function formatTable(reductions, sigma, comparison = null) {
   for (const [key, name, units] of ROWS) {
     const cells = reductions.map((r) => { const x = r.rows[key]; return `${f(x.model)} / ${f(x.ref)} / **${f(x.model - x.ref)}**`; });
     const c = comparison?.find((x) => x.key === key);
-    lines.push(`| ${name} (${units}) | ${cells.join(' | ')} | ${f(sigma[key]?.sigma, 3)}${sigma[key]?.proxy ? '*' : ''} / ${f(sigma[key]?.sigma * studentCritical(sigma[key]?.dof), 3)} |${c ? ` ${f(c.delta, 3)} | ${c.verdict} |` : ''}`);
+    lines.push(`| ${name} (${units}) | ${cells.join(' | ')} | ${f(sigma[key]?.sigma, 3)}${sigma[key]?.proxy ? '*' : ''} / ${f(valueOf(sigma[key]?.sigma) === null ? NaN : sigma[key].sigma * studentCritical(sigma[key].dof), 3)} |${c ? ` ${f(c.delta, 3)} | ${c.verdict} |` : ''}`);
   }
   return lines.join('\n');
 }
 
-const readLog = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '');
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const readLog = (file) => { if (!existsSync(file)) throw new Error(`no log at ${file}; give the run's log with --log FILE`); return readFileSync(file, 'utf8'); };
 const logBeside = (path) => join(dirname(path), `${basename(path).replace(/_day\d+\.bin$/, '')}.log`);
 async function reduceFile(path, logFile) {
-  const saved = await decodeState(new Uint8Array(readFileSync(path)));
-  return { ...reduceState(saved, readLog(logFile ?? logBeside(path))), options: saved.options ?? null, given: saved.given ?? null };
+  const bytes = readFileSync(path), saved = await decodeState(new Uint8Array(bytes));
+  return { ...reduceState(saved, readLog(logFile ?? logBeside(path))), sha256: sha256(bytes), options: saved.options ?? null, given: saved.given ?? null };
 }
 
-const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 async function startOf(path) {
   if (!path || !existsSync(path)) return null;
   const bytes = readFileSync(path);
   return { path, sha256: sha256(bytes), day: (await decodeState(new Uint8Array(bytes))).day };
 }
 
-function provenance(env) {
-  const root = fileURLToPath(new URL('..', import.meta.url)), run = (cmd) => execSync(cmd, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  let commit = null;
-  try { commit = `${run('git rev-parse --short=12 HEAD')}${run('git status --porcelain --untracked-files=no -- js scripts data') ? ' with changes' : ''}`; } catch {}
-  const source = readFileSync(join(root, 'scripts/spinup.mjs'), 'utf8');
-  return { commit, env: env && Object.fromEntries(Object.keys(env).filter((k) => /^[A-Z][A-Z0-9_]+$/.test(k) && new RegExp(`\\b${k}\\b`).test(source)).sort().map((k) => [k, env[k]])) };
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const GIT = { cwd: ROOT, maxBuffer: 1 << 30, stdio: ['ignore', 'pipe', 'ignore'] };
+const git = (cmd) => execSync(cmd, { ...GIT, encoding: 'utf8' }).trim();
+
+function fingerprint() {
+  try {
+    const head = git('git rev-parse --short=12 HEAD'), diff = execSync('git diff HEAD -- js scripts data', GIT);
+    const untracked = execSync('git ls-files -z --others --exclude-standard -- js scripts data', GIT).toString().split('\0').filter(Boolean);
+    const hash = createHash('sha256').update(head).update(diff);
+    for (const path of untracked) hash.update(`\0${path}\0`).update(readFileSync(join(ROOT, path)));
+    return { scoredOn: `${head}${diff.length || untracked.length ? ' with changes' : ''}`, tree: hash.digest('hex').slice(0, 16) };
+  } catch (error) {
+    console.warn(`warning: no fingerprint of the tree (${String(error.message).split('\n')[0]}); scoredOn and tree are null`);
+    return { scoredOn: null, tree: null };
+  }
 }
 
-function score({ reductions, start, env, baseFile, jsonOut, anyStart, extra = {} }) {
-  const sigma = JSON.parse(readFileSync(SIGMA_FILE, 'utf8')).rows, means = windowMeans(reductions);
-  const now = { start: start && { sha256: start.sha256, day: start.day, path: start.path }, days: reductions.map((r) => r.day), ...provenance(env), options: reductions[0]?.options ?? null, given: reductions[0]?.given ?? null, ...extra, means };
-  const comparison = baseFile ? compareScores(JSON.parse(readFileSync(baseFile, 'utf8')), now, sigma, { anyStart }) : null;
-  if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ ...now, reductions, comparison }, null, 1) + '\n');
+function spinupEnv(env) {
+  const source = readFileSync(join(ROOT, 'scripts/spinup.mjs'), 'utf8');
+  return Object.fromEntries(Object.keys(env).filter((k) => /^[A-Z][A-Z0-9_]+$/.test(k) && new RegExp(`\\b${k}\\b`).test(source)).sort().map((k) => [k, env[k]]));
+}
+
+function commitArg(value) {
+  if (value === null) return null;
+  if (!/^[0-9a-f]{7,40}$/.test(value)) throw new Error(`--commit ${value} is not a commit hash`);
+  try { return git(`git rev-parse --verify --short=12 ${value}^{commit}`); } catch {}
+  if (value.length < 12) throw new Error(`--commit ${value} is not a commit in this repository and too short to record as 12 characters`);
+  return value.slice(0, 12);
+}
+
+function loadBase(baseFile, jsonOut) {
+  if (!baseFile) return null;
+  const same = (x, y) => resolve(x) === resolve(y) || (existsSync(x) && existsSync(y) && realpathSync(x) === realpathSync(y));
+  if (jsonOut && same(baseFile, jsonOut)) throw new Error(`--json ${jsonOut} is the --base file; it would overwrite the base`);
+  return JSON.parse(readFileSync(baseFile, 'utf8'));
+}
+
+function score({ reductions, start, made = null, commit = null, base = null, jsonOut, anyStart, identical = false, extra = {} }) {
+  const sigma = JSON.parse(readFileSync(SIGMA_FILE, 'utf8')).rows, means = windowMeans(reductions), scored = fingerprint();
+  const trees = made ? [made.tree, ...made.segments.map((x) => x.tree), scored.tree] : [];
+  const now = {
+    start: start && { sha256: start.sha256, day: start.day, path: start.path }, days: reductions.map((r) => r.day), saves: reductions.map((r) => r.sha256),
+    commit: made ? made.scoredOn : commit, scoredOn: scored.scoredOn, tree: scored.tree, env: made?.env ?? null, ...(made ? { segments: made.segments } : {}),
+    ...(made && new Set(trees).size > 1 ? { treeChangedDuringRun: { before: made.scoredOn, trees, after: scored.scoredOn } } : {}),
+    options: reductions[0]?.options ?? null, given: reductions[0]?.given ?? null, ...extra, means,
+  };
+  if (now.treeChangedDuringRun) console.warn(`warning: the tree changed during the run (fingerprints ${trees.join(' → ')}); the commit recorded is the one at the start`);
+  const write = (comparison) => jsonOut && writeFileSync(jsonOut, JSON.stringify({ ...now, reductions, comparison }, null, 1) + '\n');
+  write(null);
+  const comparison = base ? compareScores(base, now, sigma, { anyStart }) : null;
+  if (comparison) write(comparison);
   console.log(formatTable(reductions, sigma, comparison));
-  if (comparison) console.log(`moved: ${comparison.filter((c) => c.verdict === 'moved').map((c) => c.key).join(', ') || 'none'}`);
+  if (!comparison) return;
+  const check = identityCheck(base, now, comparison);
+  console.log(`moved: ${comparison.filter((c) => c.verdict === 'moved').map((c) => c.key).join(', ') || 'none'}; identical (Δ exactly 0): ${comparison.filter((c) => c.gated && c.identical).length} of ${comparison.filter((c) => c.gated).length} gated rows${check.empty.length ? `; no value: ${check.empty.join(', ')}` : ''}${check.ungated.length ? `; ungated, not checked: ${check.ungated.join(', ')}` : ''}`);
+  if (!identical) return;
+  const saves = !check.baseHasSaves ? 'the base records no save hashes' : check.sameSaves ? 'byte-identical saves (the base\'s own, or a run that reproduced them)' : 'different saves';
+  if (check.ok) console.log(`--identical: all ${comparison.filter((c) => c.gated).length} gated rows bit-identical from the same start; ${saves}`);
+  else {
+    console.error(`--identical: ${[!check.sameStart && 'the recorded starts differ', check.changed.length && `${check.changed.join(', ')} changed`, check.empty.length && `no value: ${check.empty.join(', ')}`].filter(Boolean).join('; ')}`);
+    process.exitCode = 1;
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs')).realpathSync(process.argv[1])) {
   const args = process.argv.slice(2), opt = (name) => { const k = args.indexOf(name); return k < 0 ? null : args.splice(k, 2)[1]; };
   const flag = (name) => { const k = args.indexOf(name); if (k >= 0) args.splice(k, 1); return k >= 0; };
-  const anyStart = flag('--any-start');
+  const anyStart = flag('--any-start'), identical = flag('--identical');
   if (args[0] === '--run') {
-    const jsonOut = opt('--json'), baseFile = opt('--base'), [, start, outDir] = args;
-    if (!outDir) throw new Error('usage: --run START OUT [--base BASE.json] [--json OUT.json] [--any-start]');
+    const jsonOut = opt('--json'), baseFile = opt('--base'), [, start, outDir] = args, usage = 'usage: --run START OUT [--base BASE.json] [--json OUT.json] [--any-start] [--identical]';
+    if (!outDir || args.length !== 3 || [start, outDir].some((a) => a.startsWith('--'))) throw new Error(`${usage}; not ${JSON.stringify(args.slice(1))}`);
+    if (identical && !baseFile) throw new Error('--identical needs --base');
+    const base = loadBase(baseFile, jsonOut);
     const bytes = readFileSync(start), hash = sha256(bytes), first = await decodeState(new Uint8Array(bytes));
     if (first.N !== 64) throw new Error(`${start} is N=${first.N}, not 64`);
     if (hash !== STANDARD_START && !anyStart) throw new Error(`${start} is not the standard start (sha256 ${hash.slice(0, 12)}…, the standard ${STANDARD_START.slice(0, 12)}…); --any-start runs it anyway`);
@@ -367,14 +468,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs
     if (readdirSync(outDir).some((name) => /_day\d+\.bin$/.test(name))) throw new Error(`${outDir} already holds saves`);
     const D0 = first.day, days = [D0 + 30, D0 + 60], spinup = fileURLToPath(new URL('./spinup.mjs', import.meta.url));
     copyFileSync(start, join(outDir, `p64_day${String(D0).padStart(4, '0')}.bin`));
-    const env = { ...process.env, LEVELS: 'bl48', N: '64', TAG: 'p64', OUT: outDir, MINUTES: '100000', KEEP: '20' };
+    const env = { ...process.env, LEVELS: 'bl48', N: '64', TAG: 'p64', OUT: outDir, MINUTES: '100000', KEEP: '20' }, made = { ...fingerprint(), env: spinupEnv(env), segments: [] };
     for (const d of days) {
+      made.segments.push({ day: d, tree: d === days[0] ? made.tree : fingerprint().tree });
       const run = spawnSync(process.execPath, ['--max-old-space-size=6000', spinup], { stdio: 'inherit', env: { ...env, DAYS: String(d) } });
       if (run.status !== 0) throw new Error(`spinup.mjs to day ${d} exited ${run.status}`);
     }
     const reductions = [];
     for (const d of days) reductions.push(await reduceFile(join(outDir, `p64_day${String(d).padStart(4, '0')}.bin`)));
-    score({ reductions, start: { path: start, sha256: hash, day: D0 }, env, baseFile, jsonOut, anyStart });
+    score({ reductions, start: { path: start, sha256: hash, day: D0 }, made, base, jsonOut, anyStart, identical });
   } else if (args[0] === '--sigma') {
     const out = opt('--out') ?? SIGMA_FILE, from = Number(opt('--from') ?? 180), cacheFile = opt('--cache');
     const groups = args.slice(1), twins = [], cache = cacheFile && existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, 'utf8')) : {};
@@ -400,22 +502,25 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs
     const record = {
       name: 'Pair sigma of the N=64 scorecard\'s gate statistic',
       design: `twin controls (the second perturbed by 1e-6 at its start) from ${twins.length} starts, each a year of 30-day windows; sigma is the RMS of the two-window mean difference (the gate's statistic) over the windows at leads of ${from} days or more, where the twins have decorrelated, pooled over the starts`,
-      definition: 'per row: sigma, the pair sigma of the mean of two adjacent windows; perWindow, the RMS of one window\'s difference; lag1, the correlation of adjacent windows\' differences; dof, sigma\'s degrees of freedom, (tr C)² / tr(C²) for the pair means\' covariance C under a Gaussian AR(1) at lag1 with the starts independent; critical, the two-sided 5 % quantile of Student\'s t at dof; threshold, critical × sigma, past which a row moves; early, the RMS at leads 30 and 60 days (the gate\'s), earlyGate their two-window mean, saturation earlyGate / sigma; nullAtLeads, whether each start\'s twins at the gate\'s leads would read moved; normalTailRate, P(|mean| > threshold) for normal differences at the early RMS with lag1, a closed form; inSampleRate, the share of the late pairs past threshold. proxy: the twins carry no gridBoxSkin or daily sea-ice line, so Ts takes surfaceT and sea ice the 30-day-mean cut on the index\'s grids',
+      definition: 'per row: sigma, the pair sigma of the mean of two adjacent windows; perWindow, the RMS of one window\'s difference; lag1, the correlation of adjacent windows\' differences; dof, sigma\'s degrees of freedom, (tr C)² / tr(C²) for the pair means\' covariance C under a Gaussian AR(1) at lag1 with the starts independent; critical, the two-sided 5 % quantile of Student\'s t at dof; threshold, critical × sigma, past which a row moves; early, the RMS at leads 30 and 60 days (the gate\'s), earlyGate their two-window mean, saturation earlyGate / sigma; nullAtLeads, whether each start\'s twins at the gate\'s leads would read moved; normalTailRate, P(|mean| > threshold) for normal differences at the early RMS with lag1, a closed form; inSampleRate, the share of the late pairs past threshold. nulls: atLeads, the rows each start\'s twins move at the gate\'s leads; normalTailRate and inSampleRate, their means over rows; saturatedRateAtTwoSigma, the mean over rows of P(|t| > 2) at dof, what a fixed 2 sigma would move under a decorrelated null. ungated: a row no twin pair carries, with no sigma, reported but never moved or checked by --identical. proxy: the twins carry no gridBoxSkin or daily sea-ice line, so Ts takes surfaceT and sea ice the 30-day-mean cut on the index\'s grids',
       twins: twins.map((t) => ({ label: t.label, start: t.start, days: t.a.map((r) => r.day) })), from, measured: new Date().toISOString().slice(0, 10),
       expires: 'remeasure whenever a row changes its instrument or the control physics changes, and with more starts when they exist',
       script: 'scripts/scorecard64.mjs --sigma', nulls, rows,
     };
     writeFileSync(out, JSON.stringify(record, null, 1) + '\n');
     const f = (x, n = 3) => (Number.isFinite(x) ? x.toFixed(n) : '—');
-    console.log('| row | σ (gate) | per window | lag1 | dof | early 30 / 60 | saturation | null at leads | MC rate |');
+    console.log('| row | σ (gate) | per window | lag1 | dof | early 30 / 60 | saturation | null at leads | normal tail |');
     console.log('|---|---|---|---|---|---|---|---|---|');
-    for (const [key, name, units] of ROWS) { const r = rows[key]; console.log(`| ${name} (${units}) | ${f(r.sigma)}${r.proxy ? '*' : ''} | ${f(r.perWindow)} | ${f(r.lag1, 2)} | ${f(r.dof, 1)} | ${f(r.early[0])} / ${f(r.early[1])} | ${f(r.saturation, 2)} | ${r.nullAtLeads.map((x) => (x ? 'moved' : x === false ? '·' : '—')).join(' ')} | ${f(100 * r.monteCarloRate, 1)} % |`); }
+    for (const [key, name, units] of ROWS) { const r = rows[key]; if (r.ungated) { console.log(`| ${name} (${units}) | ungated: ${r.ungated} |`); continue; } console.log(`| ${name} (${units}) | ${f(r.sigma)}${r.proxy ? '*' : ''} | ${f(r.perWindow)} | ${f(r.lag1, 2)} | ${f(r.dof, 1)} | ${f(r.early[0])} / ${f(r.early[1])} | ${f(r.saturation, 2)} | ${r.nullAtLeads.map((x) => (x ? 'moved' : x === false ? '·' : '—')).join(' ')} | ${f(100 * r.normalTailRate, 1)} % |`); }
     console.log(`nulls: ${nulls.atLeads.map((n) => `${n.start}: ${n.moved} of ${n.rows} moved`).join('; ')}; normal tail at the twins' spread ${(100 * nulls.normalTailRate).toFixed(1)} %, in-sample ${(100 * nulls.inSampleRate).toFixed(1)} %; a saturated null at 2σ would move ${(100 * nulls.saturatedRateAtTwoSigma).toFixed(1)} %`);
   } else {
-    const jsonOut = opt('--json'), baseFile = opt('--base'), logFile = opt('--log'), startFile = opt('--start');
+    const jsonOut = opt('--json'), baseFile = opt('--base'), logFile = opt('--log'), startFile = opt('--start'), commit = commitArg(opt('--commit'));
+    if (identical && !baseFile) throw new Error('--identical needs --base');
+    const base = loadBase(baseFile, jsonOut);
+    if (args.length !== 2 || !args.every((a) => /_day\d+\.bin$/.test(a))) throw new Error(`give the gate's two saves, not ${JSON.stringify(args)}: [--json OUT.json] [--base BASE.json] [--log FILE] [--start START] [--commit HASH] [--any-start] [--identical] DIR/p64_day0395.bin DIR/p64_day0425.bin`);
     const reductions = [];
     for (const path of args) reductions.push(await reduceFile(path, logFile));
     const first = args[0] && reductions[0], beside = first && join(dirname(args[0]), basename(args[0]).replace(/_day\d+\.bin$/, `_day${String(first.day - GATE_LEADS[0]).padStart(4, '0')}.bin`));
-    score({ reductions, start: await startOf(startFile ?? beside), env: null, baseFile, jsonOut, anyStart, extra: { states: args } });
+    score({ reductions, start: await startOf(startFile ?? beside), commit, base, jsonOut, anyStart, identical, extra: { states: args } });
   }
 }
