@@ -220,7 +220,7 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
 export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2, subsidence: false };
 export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400, cumulusCapped: true };
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
-export const BORROWED_OPTIONS = { virtualDensity: 'surface', gustiness: 'surface', implicitDrag: 'surface', relativeWind: 'surface', formDrag: 'orography' };
+export const BORROWED_OPTIONS = { virtualDensity: 'surface', gustiness: 'surface', implicitDrag: 'surface', relativeWind: 'surface', seaHumidity: 'surface', formDrag: 'orography' };
 export function refuseBorrowedOptions(options) {
   for (const key of Object.keys(options || {})) if (Object.hasOwn(BORROWED_OPTIONS, key)) throw new Error(`boundaryLayer.${key} is not a boundary-layer option: set ${BORROWED_OPTIONS[key]}.${key}, which both engines read`);
 }

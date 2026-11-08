@@ -423,11 +423,11 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
   await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
 });
 
-test('both engines refuse under boundaryLayer the options they take from the surface or the orography', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const [key, value, group] of [['virtualDensity', true, 'surface'], ['gustiness', 1, 'surface'], ['implicitDrag', false, 'surface'], ['relativeWind', true, 'surface'], ['formDrag', false, 'orography']]) {
+test('both engines refuse under boundaryLayer the options they take from the surface or the orography', async () => {
+  for (const [key, value, group] of [['virtualDensity', true, 'surface'], ['gustiness', 1, 'surface'], ['implicitDrag', false, 'surface'], ['relativeWind', true, 'surface'], ['seaHumidity', 0.5, 'surface'], ['formDrag', false, 'orography']]) {
     const refused = new RegExp(`boundaryLayer\\.${key} is not a boundary-layer option: set ${group}\\.${key}`);
     assert.throws(() => createModel(new Grid(16), { topography, boundaryLayer: { [key]: value } }), refused);
-    await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { [key]: value } }), refused);
+    if (gpuAvailable) await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { [key]: value } }), refused);
   }
 });
 
