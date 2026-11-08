@@ -443,7 +443,7 @@ export function createModel(gridOrMesh, {
       cloud += a * moistPhysics.columnWater(pi, qc, i);
       rain += a * precipitation[i];
       const cover = seaIce.cover(i, ice[i]);
-      if (ice[i] > 0) { iceArea += a * cover; iceVolume += a * cover * ice[i]; }
+      if (ice[i] > 0 && !(lakeCell && lakeCell[i])) { iceArea += a * cover; iceVolume += a * cover * ice[i]; }
       albedoSum += a * model.diffuseAlbedoAt(i);
     }
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));

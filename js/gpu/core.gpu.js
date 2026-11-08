@@ -213,7 +213,7 @@ const REDUCED = [
   ['soil', 'sum', 'land * a * PH[PH_SOIL + i]'],
 ];
 const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
-    let conc = PH[PH_CONC + i]; let cover = select(0.0, select(conc, 1.0, conc <= 0.0), IN[S_ICE + i] > 0.0);
+    let conc = PH[PH_CONC + i]; let cover = select(0.0, select(conc, 1.0, conc <= 0.0), IN[S_ICE + i] > 0.0 && PH[PH_LAND + i] > -0.5);
     let land = select(0.0, 1.0, PH[PH_LAND + i] > 0.5);
     var water = 0.0; var cloud = 0.0; var wind = 0.0;
     for (var k = 0; k < K; k++) {

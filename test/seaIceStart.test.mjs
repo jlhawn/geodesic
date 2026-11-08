@@ -114,3 +114,20 @@ test('at N=32 on the n1024 mask after the fresh start, the CPU\'s albedo map tak
   const { surfaceAlbedo } = model.diagnostics();
   assert.ok(Math.abs(surfaceAlbedo - sum / area) < 1e-7, `the diagnostic ${surfaceAlbedo} against the map's mean ${sum / area}`);
 });
+
+test('at N=32 on the n1024 mask after the fresh start, the CPU\'s sea-ice diagnostics count the ice on the sea and not a frozen lake\'s', () => {
+  const model = observedStart(32), { state, mesh, seaIce } = model, land = model.geography.land, lakeCell = model.lake.isLake;
+  let area = 0, sea = 0, volume = 0, lakes = 0;
+  for (let i = 0; i < mesh.nCells; i++) {
+    const a = mesh.areaCell[i], h = state[6][i], c = seaIce.concentration[i];
+    area += a;
+    if (!(h > 0)) continue;
+    if (lakeCell[i]) lakes += a * c;
+    else if (!land[i]) { sea += a * c; volume += a * c * h; }
+  }
+  console.log(`sea ice ${(100 * sea / area).toFixed(3)} % of the area, ${(volume / sea).toFixed(3)} m thick; the frozen lakes' ice ${(100 * lakes / area).toFixed(4)} %`);
+  assert.ok(lakes / sea > 5e-4, `the start freezes a lake: its ice ${lakes / area} of the area against the sea's ${sea / area}`);
+  const d = model.diagnostics();
+  assert.ok(Math.abs(d.iceFraction - sea / area) < 1e-12, `iceFraction ${d.iceFraction} against the sea's ${sea / area}`);
+  assert.ok(Math.abs(d.iceThickness - volume / sea) < 1e-12, `iceThickness ${d.iceThickness} against the sea's ${volume / sea}`);
+});

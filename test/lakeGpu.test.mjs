@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { LAKE_FIELDS } from '../js/physics/lake.module.js';
+import { decodeSeaIceStart, SEA_ICE_START_FILE } from '../js/physics/seaIceStart.module.js';
 import { oceanCells } from '../js/ocean/layered.module.js';
 import { encodeState, decodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
 
@@ -165,4 +167,34 @@ test(`at N=${N} on the n1024 mask, a save that holds none of the GPU's pending-w
   } finally {
     if (stand) delete globalThis.self;
   }
+});
+
+test(`at N=${N} on the n1024 mask with FLake, after the fresh start with the observed March ice, the sea-ice diagnostics count the ice on the sea and not a frozen lake's, on the GPU as on the CPU`, async () => {
+  const start = decodeSeaIceStart(readFileSync(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url)));
+  const begin = (model) => {
+    initializeState(model, { seaIce: start }).forEach((values, a) => model.state[a].set(values));
+    if (model.load) model.load();
+    model.ocean.initialize(model.state[3], model.state[6]);
+    model.land.initialize();
+    return model;
+  };
+  const cpu = begin(createModel(new Grid(N), setup({ model: 'flake' }))), gpu = begin(await createGpuModel(new Grid(N), setup({ model: 'flake' })));
+  const { state, mesh, seaIce } = cpu, land = cpu.geography.land, lakeCell = cpu.lake.isLake;
+  assert.deepEqual(Array.from(gpu.lake.isLake), Array.from(lakeCell));
+  let area = 0, sea = 0, volume = 0, lakes = 0;
+  for (let i = 0; i < mesh.nCells; i++) {
+    const a = mesh.areaCell[i], h = state[6][i], c = seaIce.concentration[i];
+    area += a;
+    if (!(h > 0)) continue;
+    if (lakeCell[i]) lakes += a * c;
+    else if (!land[i]) { sea += a * c; volume += a * c * h; }
+  }
+  assert.ok(lakes / sea > 5e-4, `the start freezes a lake: its ice ${lakes / area} of the area against the sea's ${sea / area}`);
+  const engines = { CPU: [cpu.diagnostics(), 1e-12], GPU: [(await gpu.beginFrame({ diagnostics: true })).diagnostics, 1e-5] };
+  console.log(`sea ice ${(100 * sea / area).toFixed(3)} % of the area, ${(volume / sea).toFixed(3)} m thick, the frozen lakes' ${(100 * lakes / area).toFixed(4)} %; ${Object.entries(engines).map(([name, [d]]) => `${name} ${(100 * d.iceFraction).toFixed(3)} %, ${d.iceThickness.toFixed(3)} m`).join('; ')}`);
+  for (const [name, [d, relative]] of Object.entries(engines)) {
+    assert.ok(Math.abs(d.iceFraction - sea / area) <= relative * sea / area, `${name} iceFraction ${d.iceFraction} against the sea's ${sea / area}`);
+    assert.ok(Math.abs(d.iceThickness - volume / sea) <= relative * volume / sea, `${name} iceThickness ${d.iceThickness} against the sea's ${volume / sea}`);
+  }
+  gpu.destroy();
 });
