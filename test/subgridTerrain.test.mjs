@@ -160,7 +160,7 @@ test('the files record the Lloyd passes of their meshes, and a mesh of other pas
   assert.ok(said.some((line) => line.includes(`mesh of ${file.relax} Lloyd passes, not this one of 8`)), said.join(' | '));
 });
 
-const cache = terrainCache(), noGrids = !cache && 'no fine grids: no geodesic-terrain-cache beside the repository or above it, and no TERRAIN_CACHE';
+const cache = terrainCache(), noGrids = !cache && 'no fine grids: no geodesic-terrain-cache beside or above the repository or the one this worktree belongs to, and no TERRAIN_CACHE';
 const fileFields = (N, name, mask) => decodeSubgrid(readFileSync(subgridUrl(N, name, mask)));
 const pageGeography = (name) => geographyOptions({ ...FRESH_GEOGRAPHY, topography: name, mask: 'n1024' }).geography;
 
