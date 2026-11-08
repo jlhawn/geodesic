@@ -136,6 +136,7 @@ if (resumed) {
   restartNames.push(...new Set([...Object.keys(resumed.ocean), ...Object.keys(loaded)].filter((name) => !['T', 'S', 'densities'].includes(name))));
   for (const name of restartNames) {
     const want = resumed.ocean[name], got = loaded[name];
+    if (typeof want === 'string' || typeof got === 'string') { if (want !== got) differing.push(`${name} (${want} saved, ${got} loaded)`); continue; }
     if ((want == null && (name === 'penetrated' || name === 'remainder') && got && got.every((x) => x === 0)) || (name === 'transmission' && (want == null || got == null))) continue;
     if (want == null || got == null || want.length !== got.length) { differing.push(`${name} (${want == null ? 'missing' : want.length} saved, ${got == null ? 'missing' : got.length} loaded)`); continue; }
     let count = 0;
