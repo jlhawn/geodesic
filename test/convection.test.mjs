@@ -2067,18 +2067,23 @@ test("with midLevelConvection and condensation 'saturation' the engines agree on
   assert.ok(offsets >= 10 && dryEnds >= 25 && overshoots >= 10 && perturbed >= 10, `${offsets} columns whose LCL lies above the source top, ${dryEnds} whose plume the dry end ends, ${overshoots} whose plume the overshoot limit ends, ${perturbed} that the limit moves beyond the engines' tolerances`);
 });
 const cloudTermGrid = Float64Array.from([...levels.filter((s) => s < 0.65), 0.675, 0.695, 0.7, 0.825, ...levels.filter((s) => s > 0.85)]);
-const cloudTermColumns = () => [8e-3, 8.5e-3].flatMap((lapse) => [0.81, 0.83].flatMap((source) => Array.from({ length: 42 }, (_, n) => (z, p) => { const T = 292 - lapse * Math.min(z, 11000), s = p / 101500; return { T, q: (s > 0.7 && s < 0.825 ? source : s > 0.695 && s < 0.7 ? 0.93 + 0.0015 * n : 0.3) * saturationHumidity(T, p) }; })));
+const cloudTermColumns = (base, step) => [8e-3, 8.5e-3].flatMap((lapse) => [0.81, 0.83].flatMap((source) => Array.from({ length: 42 }, (_, n) => (z, p) => { const T = 292 - lapse * Math.min(z, 11000), s = p / 101500; return { T, q: (s > 0.7 && s < 0.825 ? source : s > 0.695 && s < 0.7 ? base + step * n : 0.3) * saturationHumidity(T, p) }; })));
 test('with midLevelConvection a plume from a thick source layer ends in the thin cloudy layer above it, its first cloud layer, where the vapor it takes in leaves the mixture short of saturation by less than (1 - full) qc of the cloud condensation left there: one run of that layer\'s humidity in each of four families', () => {
   const model = createModel(new Grid(16), { ocean: false, levels: cloudTermGrid, moist: { midLevelConvection: true } }), { moist, core } = model, [pi, theta, , , q, qc] = model.state;
-  placeMidLevel(cloudTermColumns(), -0.2)(model, randomColumns(model));
+  placeMidLevel(cloudTermColumns(0.928, 0.00172), -0.2)(model, randomColumns(model));
   const runs = [0, 1, 2, 3].map((family) => Array.from({ length: 42 }, (_, n) => n).filter((n) => { const i = 7 * (42 * family + n) + 3; core.diagnoseColumn(i, pi, theta, q, qc); model.phases.adjust(i, i + 1, 900); return moist.deep.midLevel && moist.deep.midCloudEnd && moist.deep.top === 23; }));
   const spans = runs.map((run) => [run[0], run[run.length - 1]]);
-  assert.ok(runs.every((run) => run.length > 0 && run.length === run[run.length - 1] - run[0] + 1) && JSON.stringify(spans) === JSON.stringify([[12, 38], [11, 36], [9, 33], [8, 32]]), `under 8 and 8.5 K/km over sources at RH 0.81 and 0.83, the thin layer's humidity 0.93 + 0.0015 n ends the plume there by its cloud water for n in ${spans.map(([a, b]) => `${a}-${b}`).join(', ')}: ${runs.map((run) => run.join(' ')).join(' | ')}`);
+  assert.ok(runs.every((run) => run.length > 0 && run.length === run[run.length - 1] - run[0] + 1) && JSON.stringify(spans) === JSON.stringify([[12, 34], [11, 33], [9, 30], [8, 29]]), `under 8 and 8.5 K/km over sources at RH 0.81 and 0.83, the thin layer's humidity 0.928 + 0.00172 n ends the plume there by its cloud water for n in ${spans.map(([a, b]) => `${a}-${b}`).join(', ')}: ${runs.map((run) => run.join(' ')).join(' | ')}`);
 });
-test('with midLevelConvection the engines agree on random columns on a 36-layer grid among which are placed columns whose plume ends in a thin cloudy first cloud layer above a thick source, held there by the cloud water it takes in', async () => {
-  const placed = cloudTermColumns(), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
+test('with midLevelConvection the engines agree on random columns on a 36-layer grid among which are placed columns whose plume ends in a thin cloudy first cloud layer above a thick source, held there by the cloud water it takes in', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const placed = cloudTermColumns(0.928, 0.00172), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
   console.log(`${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: the dry end ends ${dryEnds} plumes, ${cloudEnds} of them where the cloud water the plume takes in decides`);
   assert.ok(cloudEnds >= 80, `${cloudEnds} plumes whose end the cloud water they take in decides`);
+});
+test('with midLevelConvection and a liquid plume phase the engines agree on random columns on the same 36-layer grid, among which are placed columns whose plume ends in the thin cloudy layer, held there by the cloud water it takes in, with that layer\'s humidity at 0.95 + 0.0015 n of saturation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const placed = cloudTermColumns(0.95, 0.0015), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true, plumePhase: 'liquid' }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
+  console.log(`with a liquid plume phase, ${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: the dry end ends ${dryEnds} plumes, ${cloudEnds} of them where the cloud water the plume takes in decides`);
+  assert.ok(cloudEnds >= 100, `${cloudEnds} plumes whose end the cloud water they take in decides`);
 });
 
 test("a rainEvaporationLaw other than 'deficit', 'kessler' or 'cloudsc', a rainCover other than 'overlap' or a share in (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
@@ -2401,6 +2406,37 @@ test("with midLevelConvection, shallowRetype and convectionRetype the engines ag
 test('with midLevelConvection, shallowRetype and cumulusBoundaryLoss 10 the engines agree on random columns under a random large-scale ascent, where the mid-level base flux is held to the mass of the layer above its source per step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { midLevel, trimmed } = await parity({ midLevelConvection: true, shallowRetype: true, ...LIGHT_CUMULUS, cumulusClosure: 1e-9, cumulusBoundaryLoss: 10 }, { ascent: true });
   assert.ok(midLevel >= 50 && trimmed >= 100, `${midLevel} columns convect at mid-level, ${trimmed} of them held to the mass of the layer above`);
+});
+const trimOptions = { midLevelConvection: true, shallowRetype: true, ...LIGHT_CUMULUS, cumulusClosure: 1e-9, cumulusBoundaryLoss: 10 };
+const trimGrid = Float64Array.from([...Array.from({ length: 33 }, (_, k) => (1.05 ** k - 1) / (1.05 ** 32 - 1) * levels[27]), ...levels.slice(28)]);
+const strongAscent = (model) => { const { piSigmaDot, omega } = model.core.diagnostics; for (let x = 0; x < piSigmaDot.length; x++) piSigmaDot[x] = Math.fround(150 * piSigmaDot[x]); if (omega) for (let x = 0; x < omega.length; x++) omega[x] = Math.fround(150 * omega[x]); };
+test("with midLevelConvection, shallowRetype and cumulusBoundaryLoss 10, on 39 layers, 32 of which thin upward by a factor 1.05 a layer above bl34's lowest 7, under 150 times a random large-scale ascent, the CPU holds the mid-level plume at its interfaces to the mass of the layer above per step, and lifting the hold moves the plume's top or θ by over 1e-3 K in at least 100 columns", () => {
+  const step = (courant) => {
+    const model = createModel(new Grid(16), { ocean: false, levels: trimGrid, moist: trimOptions }), { moist, core } = model, C = model.mesh.nCells, K = trimGrid.length - 1, [pi, theta, , , q, qc] = model.state;
+    randomColumns(model);
+    let seed = 777;
+    const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    for (let k = 1; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.piSigmaDot[k * C + i] = Math.fround(0.6 * random() - 0.4);
+    if (core.diagnostics.omega) for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) core.diagnostics.omega[k * C + i] = Math.fround(0.6 * random() - 0.4);
+    strongAscent(model);
+    const tops = new Float64Array(C), kept = MID_LEVEL.courant;
+    let midLevel = 0, trimmed = 0;
+    try {
+      MID_LEVEL.courant = courant;
+      for (let i = 0; i < C; i++) { core.diagnoseColumn(i, pi, theta, q, qc); model.phases.adjust(i, i + 1, 900); tops[i] = moist.cumulusTop[i]; if (moist.deep.midLevel) { midLevel++; if (moist.deep.midTrimmed) trimmed++; } }
+    } finally { MID_LEVEL.courant = kept; }
+    return { theta: Float64Array.from(theta), tops, midLevel, trimmed, C, K };
+  };
+  const held = step(1), lifted = step(1e30), { C, K } = held;
+  const moved = Array.from({ length: C }, (_, i) => i).filter((i) => Math.abs(held.tops[i] - lifted.tops[i]) > 1 || Array.from({ length: K }, (_, k) => Math.abs(held.theta[k * C + i] - lifted.theta[k * C + i])).some((d) => d > 1e-3));
+  console.log(`on 39 layers, 32 of which thin upward by a factor 1.05 a layer above bl34's lowest 7, under 150 times a random ascent ${held.midLevel} columns convect at mid-level on the CPU, ${held.trimmed} of them held to a layer's mass per step; lifting the hold moves ${moved.length} columns' top or θ by over 1e-3 K`);
+  assert.ok(held.trimmed >= 300 && moved.length >= 100, `${held.midLevel} columns convect at mid-level, ${held.trimmed} of them held to a layer's mass per step; lifting the hold moves ${moved.length} columns' top or θ by over 1e-3 K`);
+});
+test("with midLevelConvection, shallowRetype and cumulusBoundaryLoss 10 the engines agree on random columns on 39 layers, 32 of which thin upward by a factor 1.05 a layer above bl34's lowest 7, under 150 times the random large-scale ascent, where the mid-level plume is held at its interfaces to the mass of the layer above per step and lifting the hold steps columns apart beyond the engines' tolerances", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const courant = MID_LEVEL.courant;
+  const { midLevel, trimmed, perturbed } = await parity(trimOptions, { ascent: true, grid: trimGrid, columns: strongAscent, perturb: () => { MID_LEVEL.courant = 1e30; return () => { MID_LEVEL.courant = courant; }; } });
+  console.log(`on 39 layers, 32 of which thin upward by a factor 1.05 a layer above bl34's lowest 7, under 150 times the random ascent ${midLevel} columns convect at mid-level on the CPU, ${trimmed} of them held to a layer's mass per step; without the hold ${perturbed} columns step apart beyond the engines' tolerances`);
+  assert.ok(trimmed >= 300 && perturbed >= 100, `${midLevel} columns convect at mid-level, ${trimmed} held to a layer's mass per step, ${perturbed} that lifting the hold moves beyond the engines' tolerances`);
 });
 
 test("with shallowRetype the column of the N=64 page state at 30N (seventeen64 day 365, column 13676, after two steps), whose shallow parcel first holds condensate at 539 hPa, is not re-typed: its w² from the closure's velocity scale vanishes below that layer", () => {

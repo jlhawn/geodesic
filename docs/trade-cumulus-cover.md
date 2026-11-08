@@ -540,7 +540,10 @@ window, at 160W–100W and 12 UTC, as model over ERA5:
 |---|---|---|---|
 | 1–2 | 1.28 / 0.95 / 1.25 | 1.07 / 1.04 / 1.01 | 0.88 |
 | 3–5 | 1.17 / 0.98 / 1.22 | not read | 0.96 |
-| 6–10 | 1.16 / 0.87 / 1.21 | 1.28 / 1.09 / 1.11 | 1.11 |
+| 6–10 | 1.16 / 0.86 / 1.21 | 1.28 / 1.09 / 1.11 | 1.11 |
+
+December's ERA5 rows end at lead 9, so its share of the 6–10 row is
+leads 6–9.
 
 The wind is nearly right on days 1–2 only. Per unit of that wind and of
 the sea–air humidity difference at 1000 hPa, the evaporation is
