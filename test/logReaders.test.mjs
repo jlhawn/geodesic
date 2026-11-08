@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const python = spawnSync('python3', ['--version']).status === 0;
 
 const dayLine = (day, { fog = true, label = false, cloud = true, current = 1.2, clamped = 0 } = {}) => [
   `day ${day} (${(0.5 * day).toFixed(1)} min): Ts ${(14 + day / 100).toFixed(2)} °C, ASR ${(240 + day / 10).toFixed(1)} (atmosphere ${(75 + day / 10).toFixed(1)}) OLR ${(238.3 + day / 10).toFixed(1)} W/m², ps 505–1041 hPa, max wind ${(80 + day).toFixed(1)} m/s, precip ${(2.9 + day / 100).toFixed(2)} mm/d, `,
@@ -34,14 +35,14 @@ const withLogs = (body) => {
   }
 };
 
-test("rounds.py takes each field of spinup.mjs's daily lines from before the atmosphere's shortwave and the fog text, without the lakes' label and with it, and marks the quarters whose extents count frozen lakes", () => withLogs((dir) => {
+test("rounds.py takes each field of spinup.mjs's daily lines from before the atmosphere's shortwave and the fog text, without the lakes' label and with it, and marks the quarters whose extents count frozen lakes", { skip: !python && 'python3 not found' }, () => withLogs((dir) => {
   const rounds = (name) => execFileSync('python3', [join(root, 'scripts/rounds.py'), join(dir, `${name}.log`)], { encoding: 'utf8', env: { ...process.env, PER_YEAR: '4' } }).trim();
   assert.equal(rounds('fx64'), `fx64 ${QUARTER}; frozen lakes counted)`, 'a line from before the atmosphere\'s shortwave, and lines from before the fog text and the label');
   assert.equal(rounds('fx128'), `fx128 ${QUARTER}; frozen lakes counted on 2 of 3 days)`, 'two lines without the label and one with it');
   assert.equal(rounds('ns64'), `ns64 ${QUARTER})`, 'labeled lines without the cloud effects');
 }));
 
-test("elevenReport.mjs takes each field of spinup.mjs's newest daily line, from before the fog text, with the lakes' label and without the cloud effects, and flags clamped ocean edges and currents at the 5 m/s cap", () => withLogs((dir) => {
+test("elevenReport.mjs takes each field of spinup.mjs's newest daily line, from before the fog text, with the lakes' label and without the cloud effects, and flags clamped ocean edges and currents at the 5 m/s cap", { skip: !python && 'python3 not found' }, () => withLogs((dir) => {
   const report = (prefix) => execFileSync(process.execPath, [join(root, 'scripts/elevenReport.mjs'), dir, prefix, `log-readers-test-${process.pid}`], { cwd: root, encoding: 'utf8', env: { ...process.env, PER_YEAR: '4' } }).trim().split('\n');
 
   const fx = report('fx');
