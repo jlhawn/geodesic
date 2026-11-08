@@ -128,6 +128,10 @@ test('a saved state re-seeded from a soil-water file holds the land water an obs
   assert.deepEqual(nonDefault, []);
   const smaller = await decodeState(encode({ ...header, K: running.core.K, day: 365, time: 365 * 86400, soilSeed: 'earlier.bin sha256:0', ...headerOptions({ land: { rootZoneCapacity: 200, surfaceCapacity: 10, bucketCapacity: 100 } }), land: running.land.serialize() }));
   assert.deepEqual(reseedLand(smaller, soilWater).nonDefault, ['rootZoneCapacity 200', 'surfaceCapacity 10']);
+  const carried = headerOptions({ land: { rootZoneCapacity: 200, surfaceCapacity: 10 } });
+  carried.options.land = { ...carried.options.land, rootZoneCapacity: 200 };
+  const split = await decodeState(encode({ ...header, K: running.core.K, day: 365, time: 365 * 86400, ...carried, land: running.land.serialize() }));
+  assert.deepEqual(reseedLand(split, soilWater).nonDefault, ['surfaceCapacity 10']);
   assert.equal(smaller.soilSeed, undefined);
   const fresh = createModel(grid, { topography, geography: { ...geography, soilWater }, land });
   fresh.land.initialize();
