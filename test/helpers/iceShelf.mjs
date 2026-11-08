@@ -4,6 +4,8 @@ import { createModel } from '../../js/model.module.js';
 import { gridMesh } from '../../js/stateGrid.module.js';
 import { createOcean, displacedWeight } from '../../js/ocean/layered.module.js';
 import { syntheticTopography, encodeLandIce, decodeLandIce, ICE_DENSITY, SEAWATER_DENSITY } from '../../js/geography.module.js';
+import { initializeState } from '../../js/physics/init.module.js';
+import { thinTopLayers } from './thinLayers.mjs';
 
 export const N = 16;
 const deg = 180 / Math.PI;
@@ -106,4 +108,27 @@ export async function steppedDraft(engines) {
   console.log(`a month at rest on ISOMIP+'s warm profile: with the shelves ${show(layered)}, on the cavities' edges ${engines.map((e) => `${e} ${layered[`${e}Cavity`].toExponential(1)}`).join(', ')}; with them as land ${show(flat)}`);
   // On a stratified profile the sloping base's pressure gradient moves the cavity edges at about twice the open sea's speed; 3× still catches a runaway.
   for (const [u, eta, under] of engines.map((e) => [e, `${e}Eta`, `${e}Cavity`])) assert.ok(layered[u] < 10 * flat[u] && layered[eta] < 10 * flat[eta] && layered[under] < 3 * flat[u], `${u}: ${show(layered)}, cavities ${layered[under]}, against ${show(flat)}`);
+}
+
+export function shelfModel(make = createModel) {
+  const { raster, options } = shelfBands();
+  return make(new Grid(N), { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { iceDrift: false } });
+}
+
+export async function prepareShelfModel(model) {
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
+  if (model.load) await model.load();
+  model.ocean.initialize(model.state[3], model.state[6]);
+  model.land.initialize();
+  return model;
+}
+
+export function shelfTops(ocean, ice) {
+  const { shelfLoad, h } = ocean.serialize(), C = shelfLoad.length;
+  const [thin, empty, dry] = [...shelfLoad.keys()].filter((i) => shelfLoad[i] > 0 && h[i] > 1);
+  const { Q, W, state } = thinTopLayers(ocean, ice, [[thin, 0.005], [empty, 0]]);
+  for (let n = dry; n < state.h.length; n += C) [state.h[n], state.T[n], state.S[n], Q[n], W[n]] = [0, 0, 0, 0, 0];
+  const restart = new Set(['shelfLoad', 'previousT0', 'previousIceVolume', 'fresh', 'buoyancy', 'flux', 'capacity']);
+  return { C, thin, empty, dry, Q, W, saved: Object.fromEntries(Object.entries(state).filter(([name]) => !restart.has(name))) };
 }

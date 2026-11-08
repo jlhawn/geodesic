@@ -9,6 +9,7 @@ import { zonalWindOnEdges } from './helpers/layered.mjs';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { thinTopLayers } from './helpers/thinLayers.mjs';
+import { seawaterDensity } from '../js/ocean/seawater.module.js';
 
 const N = 16;
 
@@ -79,14 +80,30 @@ test(`at N=${N} a CPU ocean loads a save with T and S and no Q or W, a top layer
   }
 });
 
-test(`at N=${N} a CPU ocean converts a save on other labels with the heat and salt its layers hold: from Q and W when it carries them, a top layer thinner than EPS included, and from h·T and h·S when it does not`, () => {
+test(`at N=${N} a CPU ocean takes a layer of 1e-6 m or thinner at its class density and a thicker one at its own water`, () => {
   const options = { ocean: { everySteps: 1 } };
   const prepare = (model) => { initializeState(model, {}).forEach((values, a) => model.state[a].set(values)); model.ocean.initialize(model.state[3], model.state[6]); return model; };
   const run = prepare(createModel(new Grid(N), options)), C = run.mesh.nCells, column = new Float64Array(C);
   run.ocean.serialize().h.forEach((v, n) => { column[n % C] += v; });
-  const thin = column.indexOf(Math.max(...column)), { Q, W, state } = thinTopLayers(run.ocean, run.state[6], [[thin, 0.005]]);
+  const [above, submicron, micron] = [...column.keys()].filter((i) => column[i] > 0).sort((a, b) => column[b] - column[a]);
+  const { Q, W, state } = thinTopLayers(run.ocean, run.state[6], [[above, 2e-6], [submicron, 1e-7], [micron, 1e-6]]);
+  const resumed = createModel(new Grid(N), options), { ocean } = resumed;
+  resumed.state.forEach((array, a) => array.set(run.state[a]));
+  ocean.load(state, resumed.state[3], resumed.state[6]);
+  for (const i of [submicron, micron]) assert.equal(ocean.layerRho[i], ocean.densities[0], `the ${state.h[i]} m top layer at ${i} weighs ${ocean.layerRho[i]}, not its class's ${ocean.densities[0]}`);
+  const own = seawaterDensity(Q[above] / state.h[above], W[above] / state.h[above]);
+  assert.ok(Math.abs(ocean.layerRho[above] - own) <= 1e-12 * own, `the 2e-6 m top layer at ${above} weighs ${ocean.layerRho[above]}, its water ${own}`);
+});
+
+test(`at N=${N} a CPU ocean converts a save on other labels with the heat and salt its layers hold: from Q and W, or from Qref and Wref as a GPU save carries them, top layers thinner than EPS and empty included, and from h·T and h·S when it carries neither`, () => {
+  const options = { ocean: { everySteps: 1 } };
+  const prepare = (model) => { initializeState(model, {}).forEach((values, a) => model.state[a].set(values)); model.ocean.initialize(model.state[3], model.state[6]); return model; };
+  const run = prepare(createModel(new Grid(N), options)), C = run.mesh.nCells, column = new Float64Array(C);
+  run.ocean.serialize().h.forEach((v, n) => { column[n % C] += v; });
+  const [thin, empty] = [...column.keys()].sort((a, b) => column[b] - column[a]), { Q, W, state } = thinTopLayers(run.ocean, run.state[6], [[thin, 0.005], [empty, 0]]);
   const other = { ...state, densities: state.densities.slice(1) }, hT = Float64Array.from(state.h, (h, n) => h * state.T[n]), hS = Float64Array.from(state.h, (h, n) => h * state.S[n]);
-  for (const [saved, heat, salt] of [[{ ...other, Q, W }, Q, W], [other, hT, hS]]) {
+  const Qref = Float32Array.from(Q, (q, n) => q - HEAT_REFERENCE * state.h[n]), Wref = Float32Array.from(W, (w, n) => w - SALT_REFERENCE * state.h[n]), held = (store, reference) => Float64Array.from(store, (v, n) => v + reference * state.h[n]);
+  for (const [saved, heat, salt] of [[{ ...other, Q, W }, Q, W], [{ ...other, Qref, Wref }, held(Qref, HEAT_REFERENCE), held(Wref, SALT_REFERENCE)], [other, hT, hS]]) {
     const resumed = createModel(new Grid(N), options), { ocean } = resumed, L = ocean.layers;
     resumed.state.forEach((array, a) => array.set(run.state[a]));
     ocean.load(saved, resumed.state[3], resumed.state[6]);
@@ -97,7 +114,7 @@ test(`at N=${N} a CPU ocean converts a save on other labels with the heat and sa
       for (const [name, held, loaded] of [['heat', heat, ocean.Q], ['salt', salt, ocean.W]]) {
         let before = 0, after = 0;
         for (let k = 0; k < L; k++) { before += held[k * C + i] * depth / column[i]; after += loaded[k * C + i]; }
-        assert.ok(Math.abs(after - before) <= 1e-9 * before, `column ${i}${i === thin ? ', the thin one,' : ''} ${saved.Q ? 'with' : 'without'} Q and W: ${name} ${after} loaded, ${before} saved`);
+        assert.ok(Math.abs(after - before) <= 1e-9 * before, `column ${i}, under a ${state.h[i]} m top layer, ${saved.Q ? 'with Q and W' : saved.Qref ? 'with Qref and Wref' : 'with neither'}: ${name} ${after} loaded, ${before} saved`);
       }
     }
   }
