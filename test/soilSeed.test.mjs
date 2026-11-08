@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +11,9 @@ import { gridHeader } from '../js/stateGrid.module.js';
 import { stateGeography, createGeography, encodeSoilWater, FRESH_GEOGRAPHY, SOIL_SCALE, SOIL_NONE } from '../js/geography.module.js';
 import { referenceScale, scaleFill, startGeography } from '../scripts/soilWater.mjs';
 import { reseedLand } from '../scripts/reseedSoil.mjs';
+import { headerOptions } from '../scripts/stateOptions.mjs';
+import { DEEP_CAPACITY } from '../js/physics/land.module.js';
+import { createHash } from 'node:crypto';
 import { decodeState } from '../js/stateFile.module.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'soil-seed-'));
@@ -122,7 +125,7 @@ test('a saved state re-seeded from a soil-water file holds the land water an obs
   const saved = await decodeState(encode({ ...header, K: running.core.K, day: 365, time: 365 * 86400, soilSeed: 'earlier.bin sha256:0', land: serialized }));
   const kept = Object.fromEntries(['soil', 'surface', 'deep'].map((name) => [name, Float64Array.from(saved.land[name])])), { cells } = reseedLand(saved, soilWater, 'later.bin sha256:1');
   assert.equal(saved.soilSeed, 'later.bin sha256:1');
-  const smaller = await decodeState(encode({ ...header, K: running.core.K, day: 365, time: 365 * 86400, soilSeed: 'earlier.bin sha256:0', options: { land: { rootZoneCapacity: 200, surfaceCapacity: 10 } }, land: running.land.serialize() }));
+  const smaller = await decodeState(encode({ ...header, K: running.core.K, day: 365, time: 365 * 86400, soilSeed: 'earlier.bin sha256:0', ...headerOptions({ land: { rootZoneCapacity: 200, surfaceCapacity: 10 } }), land: running.land.serialize() }));
   reseedLand(smaller, soilWater);
   assert.equal(smaller.soilSeed, undefined);
   const fresh = createModel(grid, { topography, geography: { ...geography, soilWater }, land });
@@ -138,4 +141,40 @@ test('a saved state re-seeded from a soil-water file holds the land water an obs
   }
   console.log(`${cells} cells re-seeded (${open} checked against a fresh start, ${untouched} kept); arrays ${['soil', 'surface', 'deep'].filter((n) => saved.land[n]).join(', ')}`);
   assert.ok(cells === open && open > 600 && saved.land.surface, `${cells} re-seeded, ${open} open`);
+});
+
+test('a re-seed fills to the capacities the header records, on the state\x27s own mesh, and the command line records the seed', async () => {
+  const fill = Uint8Array.from({ length: COLS * ROWS }, (_, n) => (n % 991 === 0 ? SOIL_NONE : Math.round((0.15 + 0.7 * ((n * 7) % ROWS) / ROWS) * SOIL_SCALE)));
+  const soilWater = { cols: COLS, rows: ROWS, fill };
+  const relaxed = new Grid(16, { relax: 3 }), relaxedHeader = { N: 16, ...gridHeader(relaxed), ...FRESH_GEOGRAPHY, mask: 'raster' }, raster = stateGeography(relaxedHeader);
+  const cases = [
+    { name: 'relax 3', grid: relaxed, header: relaxedHeader, geo: raster, land: {}, root: 300, deep: DEEP_CAPACITY },
+    { name: 'deep 120', grid, header, land: { deepCapacity: 120 }, root: 300, deep: 120 },
+    { name: 'bucket', grid, header, land: { vegetation: false, start: 'neutral' }, root: 150, deep: 0 },
+  ];
+  for (const c of cases) {
+    const g = c.geo ?? { topography, geography, land }, m = createModel(c.grid, { topography: g.topography, geography: g.geography, land: { ...g.land, ...c.land } });
+    m.land.initialize();
+    const saved = await decodeState(encode({ ...c.header, K: m.core.K, day: 365, time: 365 * 86400, ...headerOptions({ land: c.land }), land: m.land.serialize() }));
+    reseedLand(saved, soilWater);
+    const seed = createGeography(m.mesh, g.topography, { ...g.geography, landCover: null, soilWater });
+    let open = 0;
+    for (let i = 0; i < m.mesh.nCells; i++) {
+      if (!seed.land[i] || (seed.iceSheet && seed.iceSheet[i]) || !Number.isFinite(seed.wetness[i])) continue;
+      const w = Math.min(1, Math.max(0, seed.wetness[i]));
+      assert.ok(Math.abs(saved.land.soil[i] - c.root * w) < 1e-3, `${c.name}, cell ${i}: soil ${saved.land.soil[i]} against ${c.root * w}`);
+      if (saved.land.deep) assert.ok(Math.abs(saved.land.deep[i] - c.deep * w) < 1e-3, `${c.name}, cell ${i}: deep ${saved.land.deep[i]} against ${c.deep * w}`);
+      open++;
+    }
+    assert.ok(open > 600, `${c.name}: ${open} open cells`);
+  }
+  const m = createModel(grid, { topography, geography, land });
+  m.land.initialize();
+  const input = join(dir, 'reseed-in.bin'), seedFile = join(dir, 'reseed-seed.bin'), output = join(dir, 'reseed-out.bin');
+  writeFileSync(input, encode({ ...header, K: m.core.K, day: 365, time: 365 * 86400, land: m.land.serialize() }));
+  writeFileSync(seedFile, new Uint8Array(encodeSoilWater(soilWater)));
+  const run = spawnSync(process.execPath, [new URL('../scripts/reseedSoil.mjs', import.meta.url).pathname, input, seedFile, output], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const written = await decodeState(new Uint8Array(readFileSync(output)));
+  assert.equal(written.soilSeed, `reseed-seed.bin sha256:${createHash('sha256').update(readFileSync(seedFile)).digest('hex')}`);
 });

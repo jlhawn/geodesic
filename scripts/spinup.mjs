@@ -4,7 +4,9 @@
 // time have passed or DAYS is reached, finishing the simulated day, save a
 // binary snapshot and keep the KEEP newest. Logs one line a day to
 // <TAG>.log, with the sea-ice extent of each hemisphere (the area of the
-// cells at least 15% covered), and at the end of the segment the rain,
+// cells at least 15% covered; with the means, a second line gives the sea
+// cells' extent and area, concentration cut at 15 %, on the day's mean
+// concentration, the Sea Ice Index's daily definition), and at the end of the segment the rain,
 // vegetation and surface temperature of the regions in BOXES, the
 // equatorial Pacific's surface temperatures and thermocline, and the
 // convection and equator lines of js/audit.module.js, and exits with 2 on
@@ -292,7 +294,7 @@ const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADI
 const otherGroups = base?.given ? differingGroups(GIVEN, base.given) : [];
 if (otherGroups.length) log(`options other than ${saved ? file : process.env.FROM}'s header records: ${otherGroups.join(', ')}`);
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
-const landFromState = !saved && process.env.LAND_FROM ? await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM))) : null;
+let landFromState = !saved && process.env.LAND_FROM ? await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM))) : null;
 const { geography: startingGeography, soilSeed, soilNote } = startGeography(sheets.geography, process.env, { saved, from: fromState, landFrom: landFromState });
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}, ${soilNote}`;
 const found = base ? stateGrid(base, topography) : null;
@@ -397,6 +399,7 @@ if (saved) {
     const source = { mesh: sourceMesh, geography: seed.N === N && sameGround ? model.geography : createGeography(sourceMesh, seedGeography.topography, seedGeography.geography) };
     model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6], model.time, state[3]);
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
+    landFromState = null;
   }
   const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at', 'the topsoil carbon, the trees free, at'][record[1]];
   log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green', 'observed'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}${model.land.deepWater ? `; ${deepNote(process.env.LAND_FROM ? null : fromState ? fromState.land : null)}` : ''}`);
@@ -407,6 +410,16 @@ const gcd = (a, b) => (b ? gcd(b, a % b) : a), lcm = (a, b) => a * b / gcd(a, b)
 if (startStep % everySteps) throw new Error(`the snapshot stopped at step ${startStep}, off the ocean's ${everySteps}-step cadence`);
 
 const deg = 180 / Math.PI, land = model.geography.land;
+const seaIceCut = (concentration) => {
+  const lake = model.geography.lake, out = { N: { extent: 0, area: 0 }, S: { extent: 0, area: 0 } };
+  for (let i = 0; i < C; i++) {
+    const c = concentration[i];
+    if (land[i] || (lake && lake[i]) || !(c >= 0.15)) continue;
+    const h = out[mesh.latCell[i] > 0 ? 'N' : 'S'];
+    h.extent += mesh.areaCell[i] / 1e12; h.area += c * mesh.areaCell[i] / 1e12;
+  }
+  return out;
+};
 const inBox = Object.fromEntries(Object.entries(BOXES).map(([k, [a, b, c, e]]) => [k, [...Array(C).keys()].filter((i) => land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e)]));
 const PH = model.gpu.layout.PH;
 const split = { convective: new Float64Array(C), largeScale: new Float64Array(C), wet: new Float64Array(C), seconds: 0 };
@@ -532,6 +545,7 @@ async function dayEnd(day, stepsToday, jump) {
     renameSync(`${file}.partial`, file);
     hook.after(file);
   }
+  const dayIce = meansRecorder && MEANS.includes('concentration') && stepsToday === perDay ? meansRecorder.latest() : null;
   const ice = iceArea(), lowest = lowestCloudLine(day), synced = STRATOSPHERE || budget ? model.sync() : null;
   const landed = (async () => {
     const [absorbedSum, atmosphereSum, longwaveSum] = await sums;
@@ -547,8 +561,10 @@ async function dayEnd(day, stepsToday, jump) {
     for (let i = 0; i < C; i++) if (!land[i] && iceNow[i] > 0 && Math.abs(mesh.latCell[i] * deg) >= 60) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
     const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
     iceNorth += north; iceSouth += south;
+    const seaIceDay = dayIce ? seaIceCut((await dayIce).values.concentration) : null;
     const minutes = (performance.now() - start) / 60000;
     log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
+    if (seaIceDay) log(`sea ice on day ${day}'s mean concentration, sea cells, 15 %: N extent ${seaIceDay.N.extent.toFixed(2)} area ${seaIceDay.N.area.toFixed(2)}, S extent ${seaIceDay.S.extent.toFixed(2)} area ${seaIceDay.S.area.toFixed(2)} Mkm²`);
     log(await lowest);
     if (sstDay) {
       const { mean, samples } = await sstDay;

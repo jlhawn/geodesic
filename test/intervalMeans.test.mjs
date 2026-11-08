@@ -8,7 +8,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { FIELDS } from '../js/frames.module.js';
-import { createIntervalMeans, meansGroup, savedMeansPart, meansFields, meansEvery, availableMeans, withoutMeans, MEANS, MEANS_WINDOW, MEMORY_FIELDS } from '../js/intervalMeans.module.js';
+import { createIntervalMeans, meansGroup, savedMeansPart, meansFields, meansEvery, availableMeans, withoutMeans, MEANS, MEANS_WINDOW, MEMORY_FIELDS, DERIVED_MEANS } from '../js/intervalMeans.module.js';
 
 const root = new URL('..', import.meta.url).pathname;
 const same = (a, b) => !!a && !!b && a.length === b.length && Array.prototype.every.call(a, (v, n) => Object.is(v, b[n]));
@@ -73,12 +73,32 @@ test('MEANS names the default list, none, or frame fields other than the memorie
   assert.deepEqual(meansFields('none'), []);
   assert.deepEqual(meansFields('["mslp","sst","mslp"]'), ['mslp', 'sst']);
   for (const bad of ['["rain"]', '["nothing"]', '{"mslp":1}']) assert.throws(() => meansFields(bad), /MEANS is 'none' or a JSON list/);
-  assert.ok(MEANS.every((name) => name in FIELDS && !MEMORY_FIELDS.includes(name)));
+  assert.ok(MEANS.every((name) => (name in FIELDS || name in DERIVED_MEANS) && !MEMORY_FIELDS.includes(name)));
   assert.deepEqual([16, 64, 128].map((n) => meansEvery(1350 * 16 / n)), [1, 4, 8]);
   assert.equal(MEANS_WINDOW, 30);
   const offering = { time: 0, frameFields: new Set(['mslp', 'sst']), sampleFrame() {} };
   assert.deepEqual([availableMeans(offering, ['mslp', 'zonalStress', 'sst']), availableMeans({}, ['zonalStress'])], [['mslp', 'sst'], ['zonalStress']]);
   assert.throws(() => createIntervalMeans(offering, { fields: ['mslp', 'zonalStress'] }), /frames give no zonalStress/);
+  assert.deepEqual(availableMeans({ frameFields: new Set(['surfaceT', 'sst']) }, ['gridBoxSkin', 'sst']), ['sst']);
+});
+
+test('gridBoxSkin is the mean of each sample\'s c·surfaceT + (1 − c)·sst over sea cells with ice and of surfaceT elsewhere, and a recorder hands back the last day it closed', async () => {
+  const frames = [
+    { surfaceT: [250, 260, 300, 290], sst: [271, 272, NaN, 290], concentration: [0.5, 0, 1, 0] },
+    { surfaceT: [254, 262, 302, 292], sst: [271, 273, NaN, 291], concentration: [1, 0.25, 0, 0] },
+  ];
+  let k = 0;
+  const model = { time: 0, mesh: { nCells: 4 }, frameFields: new Set(['surfaceT', 'sst', 'concentration']), asked: null };
+  model.sampleFrame = ({ fields }) => { model.asked = fields; const f = frames[k++]; return Promise.resolve({ fields: Object.fromEntries(fields.map((name) => [name, Float32Array.from(f[name])])) }); };
+  const recorder = createIntervalMeans(model, { fields: ['gridBoxSkin', 'surfaceT'] });
+  assert.equal(await recorder.latest(), null);
+  recorder.step(); recorder.step(); recorder.day();
+  assert.deepEqual(new Set(model.asked), new Set(['surfaceT', 'sst', 'concentration']));
+  const day = await recorder.latest(), { means } = meansGroup(await recorder.checkpoint());
+  const expected = [(0.5 * 250 + 0.5 * 271 + 254) / 2, (260 + 0.25 * 262 + 0.75 * 273) / 2, (300 + 302) / 2, (290 + 292) / 2];
+  for (let i = 0; i < 4; i++) assert.ok(Math.abs(means.gridBoxSkin[i] - expected[i]) < 1e-4 && Math.abs(day.values.gridBoxSkin[i] - expected[i]) < 1e-4, `cell ${i}: ${means.gridBoxSkin[i]} against ${expected[i]}`);
+  assert.deepEqual(Array.from(means.surfaceT), [252, 261, 301, 291]);
+  assert.deepEqual(meansFields('["gridBoxSkin"]'), ['gridBoxSkin']);
 });
 
 const topography = topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer);

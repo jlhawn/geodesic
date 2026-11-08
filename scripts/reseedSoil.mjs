@@ -5,7 +5,8 @@
  * (land off the ice sheets) where the file has a value, the root zone holds the fill times its capacity, the surface
  * layer the fill times its own, and the deep store, when the state carries one, the fill times DEEP_CAPACITY. Everything
  * else in the state is kept but the header's soilSeed, which names the file and its sha256. The capacities are those the
- * state's land options record, else the defaults, and the mesh is the state's own (stateGrid).
+ * state's header records among its land options (given, as scripts/stateOptions.mjs writes them, then options), else
+ * the defaults, and the mesh is the state's own (stateGrid).
  *
  *   node scripts/reseedSoil.mjs state.bin seed.bin out.bin
  */
@@ -22,8 +23,8 @@ export const ROOT_ZONE = 300, SURFACE = 15, BUCKET = 150;
 export function reseedLand(saved, soilWater, soilSeed = null) {
   const record = savedGeography(saved), topography = readTopography(record.topography), { mesh } = stateGrid(saved, topography);
   const geography = createGeography(mesh, topography, { ...geographyOptions(record).geography, landCover: null, soilWater });
-  const options = saved.options?.land ?? {}, vegetated = options.vegetation !== false;
-  const rootZone = vegetated ? options.rootZoneCapacity ?? ROOT_ZONE : options.bucketCapacity ?? BUCKET, surface = options.surfaceCapacity ?? SURFACE, deep = options.deepCapacity ?? (vegetated ? DEEP_CAPACITY : 0);
+  const option = (key) => saved.given?.land?.[key] ?? saved.options?.land?.[key], vegetated = option('vegetation') !== false;
+  const rootZone = vegetated ? option('rootZoneCapacity') ?? ROOT_ZONE : option('bucketCapacity') ?? BUCKET, surface = option('surfaceCapacity') ?? SURFACE, deep = option('deepCapacity') ?? (vegetated ? DEEP_CAPACITY : 0);
   const { land } = saved, before = Float64Array.from(land.soil);
   let cells = 0;
   for (let i = 0; i < mesh.nCells; i++) {
