@@ -112,12 +112,12 @@ export function initializeState(model, {
   const ice = new Float64Array(C), cover = seaIce ? new Float64Array(C) : null;
   const snow = model.land ? model.land.snow : model.seaIce ? model.seaIce.snow : null, lakeCell = model.lake ? model.lake.isLake : null;
   for (let i = 0; i < C; i++) {
-    if (land && land[i]) continue;
+    if ((land && land[i]) || (lakeCell && lakeCell[i])) continue;
     const lat = latCell[i] / deg, polar = Math.max(0, Math.min(1, (Math.abs(lat) - 50) / 20));
     const observed = seaIce ? seaIce.at(latCell[i], lonCell[i]) : null;
     ice[i] = observed ? observed.thickness : lat > 72 ? 1.5 : lat < -68 ? 0.7 : 0;
     if (observed) cover[i] = observed.concentration;
-    if (snow) snow[i] = observed && !(lakeCell && lakeCell[i]) ? observed.snow : 0;
+    if (snow) snow[i] = observed ? observed.snow : 0;
     surfaceT[i] = ice[i] > 0 ? FREEZING_POINT : Math.max(FREEZING_POINT + 0.3, 273.15 + 30 * Math.cos(latCell[i]) ** 2 - 2 - 4 * polar);
   }
   if (model.seaIce) model.seaIce.load(ice, cover);

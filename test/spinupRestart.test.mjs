@@ -53,7 +53,7 @@ for (const [arm, env] of Object.entries(arms)) {
   });
 }
 
-test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed inside a day and run to its end whole, and stopped again inside it with lake outflow not yet drained to the sea, saved, then resumed, ends on the same state bit for bit but for the day\'s rain and radiation means and its energy record, which cover the steps each run took; and a run from a fresh start, which lays no observed sea-ice snow on a lake, ends the day on the state of its own restart from step 32 but for those means', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed inside a day and run to its end whole, and stopped again inside it with lake outflow not yet drained to the sea, saved, then resumed, ends on the same state bit for bit but for the day\'s rain and radiation means, which cover the steps each run took; and a run from a fresh start, which lays none of the observed sea ice on a lake, ends the day on the state of its own restart from step 32 but for those means and the energy record, which holds day 0 only for the run that took it whole', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'restart-lakes-'));
   try {
     const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: '32', MINUTES: '100', OUT: out, DAYS: '1', ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -67,14 +67,14 @@ test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed insi
     run({ TAG: 'split' });
     run({ TAG: 'fresh' });
     const [fresh, whole, split] = await Promise.all(['fresh', 'whole', 'split'].map((tag) => decoded(join(out, `${tag}_day0001.bin`))));
-    const ownSteps = ['energyRecord', 'convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect'];
-    const parted = apart(whole, split, ownSteps);
+    const means = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect'];
+    const parted = apart(whole, split, means);
     assert.deepEqual(parted, [], `day 1, whole against split: ${parted.join(', ')}`);
     const start = await loadSeaIceStart(fileURLToPath(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url))), { mesh } = stateGrid(whole);
     const snowed = [...whole.lakeMean.keys()].filter((i) => whole.lakeMean[i] !== 0 && start.at(mesh.latCell[i], mesh.lonCell[i]).snow > 0);
     assert.ok(snowed.length > 0, 'the observed sea ice holds snow at a lake cell');
     assert.deepEqual(snowed.map((i) => fresh.land.snow[i]), snowed.map((i) => whole.land.snow[i]), `day 1, land.snow at lake cells ${snowed.join(', ')}: the fresh run against its restart`);
-    const restarted = apart(fresh, whole, ownSteps);
+    const restarted = apart(fresh, whole, [...means, 'energyRecord']);
     assert.deepEqual(restarted, [], `day 1, fresh against whole: ${restarted.join(', ')}`);
   } finally {
     rmSync(out, { recursive: true, force: true });
