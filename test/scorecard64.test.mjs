@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, linkSync, symlinkSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { spawnSync, execSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ROWS, BOXES, SIGMA_FILE, logDays, undercurrentCore, dayWeighted, monthAt, windowDays, windowMeans, calibrate, twoSidedTail, studentTail, studentCritical, sigmaDof, designProblems, compareScores, identityCheck, formatTable, fingerprint, sameFile, runSegments, withoutGitEnv, inMooringWindow, mooringProfile, PROFILE_DEPTHS } from '../scripts/scorecard64.mjs';
@@ -249,7 +250,8 @@ test('the tree fingerprint sees tracked edits, untracked files and their content
 });
 
 test('withoutGitEnv drops every GIT_* variable and keeps the rest', () => {
-  const env = { GIT_DIR: 'a', GIT_WORK_TREE: 'b', GIT_COMMON_DIR: 'c', GIT_OBJECT_DIRECTORY: 'd', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.bare', GIT_CONFIG_VALUE_0: 'true', GIT_ALTERNATE_OBJECT_DIRECTORIES: 'e', PATH: '/bin', HOME: '/h', MYGIT_DIR: 'kept' };
+  const unlisted = `GIT_${randomBytes(6).toString('hex').toUpperCase()}`;
+  const env = { [unlisted]: 'f', GIT_CONFIG_PARAMETERS: "'core.bare'='true'", GIT_DIR: 'a', GIT_WORK_TREE: 'b', GIT_COMMON_DIR: 'c', GIT_OBJECT_DIRECTORY: 'd', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.bare', GIT_CONFIG_VALUE_0: 'true', GIT_ALTERNATE_OBJECT_DIRECTORIES: 'e', PATH: '/bin', HOME: '/h', MYGIT_DIR: 'kept' };
   assert.deepEqual(withoutGitEnv(env), { PATH: '/bin', HOME: '/h', MYGIT_DIR: 'kept' });
 });
 
