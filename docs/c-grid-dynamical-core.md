@@ -463,8 +463,9 @@ Kept, ported to operate on flat arrays (no algorithmic change):
 - Gray longwave radiation column (`RadiationColumn`), solar geometry, slab
   ocean heat capacity, surface albedo.
 - Bulk surface drag and sensible heat flux (speed from 3.7), gustiness
-  floor (`surface.gustiness`, 3 m/s, on both engines), dry convective
-  adjustment, PBL and top Rayleigh drag.
+  floor (`surface.gustiness`, 3 m/s, on both engines; the roughness
+  exchange's convective gust replaces it), dry convective adjustment, PBL
+  and top Rayleigh drag.
 - Initialization: latitude-dependent surface temperature and σ-tapered θ
   shift, balanced surface pressure (bisection on a level 500 hPa
   surface), the wavenumber-5 eddy seed, the ±30°/±60° pressure bands.
@@ -9542,10 +9543,11 @@ order of the vegetation's turbulent stress itself over the mountains
 (0.12–0.29 N/m² after); the μ, γ, θ and σ fields can be computed from the
 0.25° file at the model's start.
 
-What still misses: the gustiness is a fixed floor (`surface.gustiness`,
-3 m/s, which reaches the GPU's exchange, drag and ice drift as well), not a free
+What still misses: the gustiness is a fixed floor (3 m/s), not a free
 convection velocity (COARE's 1.2 w*, the IFS's w* with z_i 1000 m), so
-calm stable nights keep a flux; the tiles share one skin, so a forest's
+calm stable nights keep a flux (the roughness exchange's convective gust,
+`surface.convectiveGust`, is that velocity: see `surface.gustiness` at
+the end of M22); the tiles share one skin, so a forest's
 strong coupling and the bare soil's weak one average into one
 temperature (the IFS solves each tile's skin); the grass is one IFS type
 (0.1 m) where the table spans 0.034 (tundra) to 0.47 (tall grass); there
@@ -12061,10 +12063,37 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
   lowest layer's θ_v plus Troen and Mahrt's excess b (w'θ_v')₀ / w_m.
   Holtslag and Boville, and CAM, take b = 8.5.
 
-`boundaryLayer.virtualDensity` (false): the flux air density takes the
+Why the lowest layer (21 m) over the sea is barely moister than the air
+at 1000 hPa was measured on the CPU over two days from seventeen64 day
+365, in the cold tongue (160–100W, 3S–3N, 353 sea cells). There it holds
+0.080 ± 0.014 g/kg more than 1000 hPa, against about 0.35 in ERA5. Its q
+budget around each process of the step, in g/kg/day (± the standard
+error of eight 6 h means):
+- the surface's deposit +45.5 ± 1.5, the boundary layer's implicit
+  mixing −28.0 ± 1.3, the dry convective adjustment −18.4 ± 1.1, the
+  convective plume −1.1 ± 0.1, large-scale condensation −0.3 ± 0.1, the
+  rain's fall and evaporation +2.6 ± 0.7, the dynamics 0.0.
+- The dry adjustment (`convectiveAdjustColumn` in
+  `js/physics/surface.module.js`, at the end of the GPU's `adjustRain`)
+  follows the boundary layer's mixing on both engines. It mixes θ, not
+  θ_v, over any unstable block at a tolerance of 1e-6 and carries q with
+  it, so it erases the superadiabatic θ and q gradient between the
+  lowest layer and the next.
+- With it off, a 0.6-day run from the same state raises the difference
+  to 0.23 g/kg and lowers the evaporation by 3 %; the boundary layer's
+  mixing then takes what the adjustment took.
+- diagnoseFirst moves the difference by −0.006 ± 0.002 g/kg, and the
+  plume's subcloud draw is 1 % of the deposit.
+- Exempting the lowest interface in the surface and coupled regimes, or
+  keeping the adjustment above the boundary layer, would be a design
+  change.
+
+`surface.virtualDensity` (false): the flux air density takes the
 virtual factor, ρ = p / (R T (1 + 0.61 q)). It applies in the bulk
 fluxes, the stress, the boundary layer's mass and the fog deposition's
-cap.
+cap. Both engines refuse it under `boundaryLayer`, as they refuse
+`gustiness`, `implicitDrag` and `relativeWind` (all `surface`) and
+`formDrag` (`orography`) there.
 
 `boundaryLayer.profileHeight` ('midpoint'), `stableProfile` ('flat') and
 `prandtlCoefficient` (7.2).
@@ -12075,10 +12104,16 @@ cap.
   or 5 + z/L above z/L = 1.
 - prandtlCoefficient is their a in Pr = φ_h/φ_m + a κ (z/h) w*/w_m.
 
-`surface.gustiness` (3 m/s): the floor on the wind speed of the bulk
-fluxes, the drag and the ice drift's stress. It reaches the GPU's
-exchange, drag and ice drift (`GUSTO`) as well as the CPU's.
-`ocean.gustiness` is refused.
+`surface.gustiness` (3 m/s): under the fixed exchange, the floor on the
+wind speed of the bulk fluxes, the drag and the stress on the ocean and
+the ice. Under the roughness exchange (the default) the convective gust
+(`surface.convectiveGust`: U² = |v|² + u_g², u_g = max(0.2 m/s, β w*))
+takes its place in the bulk fluxes and the boundary layer, and through
+the implicit drag in the stress. The gustiness then only seeds the
+exchange's wind before its first step and floors the stress of a step
+that has no implicit stress yet, which is every step with
+`surface.implicitDrag` false (the CPU's explicit stress, the GPU's
+`GUSTO`). Both engines read it; `ocean.gustiness` is refused.
 
 `boundaryLayer.searchTop` (0.5): the Richardson search for the top
 stops at the highest level whose midpoint σ exceeds it (σ 0.531 on bl48).
@@ -12087,11 +12122,14 @@ form drag (`orography.formDrag`) acts on the same levels on both engines.
 
 Where it binds was measured on the two page states. Each is one save at
 12 UTC near the March equinox, and the count is of columns whose saved
-top lies within 0.5 % of that level's height:
-- seventeen64 day 365: 34 of 40962 columns (0.08 %), over the Sahara
-  from local noon to 15 h, 5.1–5.2 km above the ground.
-- combined128 day 1460: 35 of 163842 (0.02 %), over the western Tibetan
-  Plateau from 15 to 21 h, 4.4–4.6 km above the ground.
+top lies within 0.5 % of that level's height above the ground, at local
+solar time 12 + λ/15 h:
+- seventeen64 day 365: 34 of 40962 columns (0.08 %), all on land at
+  21–34N and 4.6–5.2 km above the ground: 31 over the Sahara (2–15E)
+  from 12.1 to 13.0 h, and 3 at 80–90E from 17.5 to 17.8 h.
+- combined128 day 1460: 35 of 163842 (0.02 %), all over the Tibetan
+  Plateau (33–36N, 81–94E) from 17.4 to 18.3 h, 4.4–4.6 km above the
+  ground.
 
 All but four are dry convective columns (regime 1). These are real deep
 dry boundary layers, and the ceiling cuts them off; it would bind more

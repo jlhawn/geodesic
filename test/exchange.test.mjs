@@ -406,6 +406,14 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
   await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
 });
 
+test('both engines refuse under boundaryLayer the options they take from the surface or the orography', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const [key, value, group] of [['virtualDensity', true, 'surface'], ['gustiness', 1, 'surface'], ['implicitDrag', false, 'surface'], ['relativeWind', true, 'surface'], ['formDrag', false, 'orography']]) {
+    const refused = new RegExp(`boundaryLayer\\.${key} is not a boundary-layer option: set ${group}\\.${key}`);
+    assert.throws(() => createModel(new Grid(16), { topography, boundaryLayer: { [key]: value } }), refused);
+    await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { [key]: value } }), refused);
+  }
+});
+
 test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cases = [
     ['defaults', {}, []],

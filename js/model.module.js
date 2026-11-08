@@ -11,7 +11,7 @@ import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.modul
 import { createOcean, JERLOV } from './ocean/layered.module.js';
 import { COUPLED_ICE_DRIFT, iceDriftMoves, coverOf } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
-import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
+import { createBoundaryLayer, refuseBorrowedOptions } from './physics/boundaryLayer.module.js';
 import { createLake, lakeWater, lakeModelOf, FLAKE } from './physics/lake.module.js';
 import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote, geographyRecordOf } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
@@ -126,6 +126,7 @@ export function createModel(gridOrMesh, {
   if (surfaceOptions.relativeWind && !implicitDrag) throw new Error('surface.relativeWind needs the implicit drag of the roughness exchange');
   const seaFlow = surfaceOptions.relativeWind ? new Float64Array(buffers && buffers.seaFlow ? buffers.seaFlow : new SharedArrayBuffer(8 * mesh.nEdges)) : null;
   const virtualBefore = surfaceOptions.virtualDensity === true ? new Float64Array(C).fill(1) : null;
+  refuseBorrowedOptions(boundaryLayerOptions);
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, heatCoefficients: rough ? heatCoefficients : null, surfaceBuoyancy: rough ? radiation.surfaceBuoyancy : null, surfaceHeat: rough ? radiation.sensibleHeat : null, surfaceEvaporation: rough ? radiation.evaporation : null, implicitDrag, formDrag, ...(gusty ? { surfaceWind: exchange.wind, gustiness: 0 } : { gustiness }), land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, deckLayer: radiation.deckInversion === 'subgrid' ? radiation.mlmLayer : null, deckShare: radiation.mlmShare, deckEntrainment: radiation.mlmEntrainment, stratiform: radiation.stratiform, longwave: radiation.longwave, openSea, seaHumidity, depositedHeat: radiation.sensibleHeat, depositedWater: moist ? radiation.evaporation : null, seaFlow, virtualDensity: surfaceOptions.virtualDensity === true, ...boundaryLayerOptions }) : null;
   if (boundaryLayer && boundaryLayer.turbulence === 'moist') radiation.useBoundaryLayer(boundaryLayer.regime, boundaryLayer.mixingTop, boundaryLayer.buoyancyFlux);
   const gravityWaves = physics && gravityWaveOptions !== false ? createGravityWaveDrag(mesh, core, { buffers: buffers ? buffers.gravityWaves : null, ...gravityWaveOptions }) : null;

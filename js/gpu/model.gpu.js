@@ -22,6 +22,7 @@ import { JERLOV } from '../ocean/layered.module.js';
 import { createLake, lakeWater, lakeModelOf } from '../physics/lake.module.js';
 import { lakeUpload, lakeDownload, LAKE_SLOTS } from './lake.gpu.js';
 import { COUPLED_ICE_DRIFT, iceDriftMoves } from '../ocean/iceDrift.module.js';
+import { refuseBorrowedOptions } from '../physics/boundaryLayer.module.js';
 
 export const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'soilDarkening', 'wetSoilAlbedo', 'darkeningWetness', 'rootZoneCapacity', 'dryWetness', 'wetWetness', 'growthTime', 'declineTime', 'snowDeclineTime', 'oldSnowAlbedo', 'snowMasking', 'forestSnowAlbedo', 'closedCanopy', 'canopyMemory', 'treeline', 'seasonThreshold', 'minimumSeason', 'treelineWarmth', 'seasonMemory', 'treeGrowthTime', 'treeDeclineTime', 'surfaceCapacity', 'percolationTime', 'stomatalResistance', 'growthColdest', 'growthWarmest', 'iceSheetAlbedo', 'iceSheetBalance', 'snowCap', 'bareIceAlbedo', 'treeMoisture', 'moistureMemory', 'forestAridity', 'grassland', 'forestAlbedo', 'grassAlbedo', 'grassSnowDarkening', 'coverGoal', 'deepCapacity', ...Object.keys(SOIL_CARBON)];
 const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
@@ -88,6 +89,7 @@ export async function createGpuModel(gridOrMesh, {
   const ageingOf = (options, key) => options[key] ?? (key === 'snowAgeing' ? true : SNOW_AGEING[key]);
   if (geography) for (const key of AGEING_OPTIONS) if (ageingOf(ice, key) !== ageingOf(landOptions, key)) throw new Error(`the GPU's land and sea ice share ${key}: ${ageingOf(landOptions, key)} on the land, ${ageingOf(ice, key)} on the ice`);
   if (geography && landOptions.latentHeatFusion !== undefined && landOptions.latentHeatFusion !== (ice.latentHeatFusion ?? 3.34e5)) throw new Error(`the GPU's land and sea ice share latentHeatFusion: ${landOptions.latentHeatFusion} on the land, ${ice.latentHeatFusion ?? 3.34e5} on the ice`);
+  refuseBorrowedOptions(boundaryLayer);
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
