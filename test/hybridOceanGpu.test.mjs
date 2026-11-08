@@ -701,3 +701,38 @@ test(`at N=${N} a thick deep layer lighter than its class boundary by less than 
   for (let m = 0; m < L; m++) assert.ok(Math.abs(onCpu[m] - onGpu[m]) < 1, `layer ${m}: CPU ${onCpu[m]} m, GPU ${onGpu[m]} m`);
   gpuModel.destroy();
 });
+
+test('the GPU hybrid ocean saved on its cadence as the page saves it, every array as float64 and no Qref or Wref, steps on in a fresh model bit for bit with one run whole', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const every = 4, options = { ...HYBRID, everySteps: every }, before = 2 * every, after = 2 * every - 1;
+  const { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = sea[e] * 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+  const start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  const evaporation = Float32Array.from({ length: C }, (_, i) => 3e-5 * (1 + 0.5 * Math.sin(3 * i)));
+  const iceAt = (n) => Float64Array.from(ice, (x) => (x > 0 ? x + 0.02 * n : 0));
+  const numeric = (v) => (Array.isArray(v) || ArrayBuffer.isView(v)) && v.length > 0 && typeof v[0] === 'number';
+  const run = async (save, from, to) => {
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options }), gpu = gpuModel.oceanEngine, core = gpuModel.gpu;
+    await gpu.upload(save, Float64Array.from(surfaceT), iceAt(from - 1));
+    const loaded = await gpu.restartArrays();
+    for (let n = from; n < to; n++) {
+      core.device.queue.writeBuffer(core.buffers.PH, 4 * core.layout.PH.EVAP, evaporation);
+      gpu.accumulateFreshwater(DT);
+      if ((n + 1) % every === 0) await gpu.advance(Float64Array.from(surfaceT), iceAt(n), stress, every * DT);
+    }
+    const out = { ...(await gpu.serialize()), ...(await gpu.restartArrays()) };
+    gpuModel.destroy();
+    return { out, loaded };
+  };
+  const { out: whole } = await run(start, 0, before + after);
+  const { Qref, Wref, ...kept } = (await run(start, 0, before)).out;
+  const saved = Object.fromEntries(Object.entries(kept).map(([name, v]) => [name, numeric(v) ? Float64Array.from(v) : v]));
+  const { out: resumed, loaded } = await run(saved, before, before + after);
+  assert.ok(saved.boundaryDepths.some((x) => x > 0), 'the save carries no boundary layer');
+  const lost = Array.from(saved.boundaryDepths).filter((x, i) => x !== loaded.boundaryDepths[i]).length;
+  assert.equal(lost, 0, `the upload took its plain branch: ${lost} cells lost the saved boundary-layer depth`);
+  for (const [name, values] of Object.entries(whole)) if (numeric(values)) {
+    const at = Array.from(values).findIndex((x, i) => !Object.is(x, resumed[name][i]));
+    assert.equal(at, -1, `${name}[${at}]: ${values[at]} whole against ${resumed[name][at]} resumed`);
+  }
+});
