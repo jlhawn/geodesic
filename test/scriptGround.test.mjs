@@ -6,6 +6,8 @@ const scripts = new URL('../scripts/', import.meta.url);
 const BUILDERS = ['createModel', 'createGpuModel', 'createParallelModel', 'createGeography'];
 const GROUND = ['stateGeography', 'savedGeography'];
 const NAME = /(?<![\w$])(?:(?<=\.\.\.)|(?<!\.))[A-Za-z_$][\w$]*/g;
+const LAID_ON_GROUND = parts(/export function createGeography\(\s*mesh\s*,\s*topography\s*,\s*\{([^}]*)\}/.exec(readFileSync(new URL('../js/geography.module.js', import.meta.url), 'utf8'))[1]).filter((part) => !part.startsWith('...')).map((part) => /^[A-Za-z_$][\w$]*/.exec(part)[0]);
+const KEY = /^(?:([A-Za-z_$][\w$]*)|'([^']*)'|"([^"]*)")\s*(?::|$)/;
 
 function closing(text, i) {
   for (let depth = 1; depth && i < text.length; i++) {
@@ -58,17 +60,20 @@ function definitions(text) {
   return defs;
 }
 
-function grounded(value, defs, ground, seen = new Set()) {
+function grounded(value, defs, ground, seen = new Set(), laid = []) {
   value = value.trim();
   if (value.startsWith('{') && closing(value, 1) === value.length) {
-    const members = parts(value.slice(1, -1));
-    return members.length > 0 && members.every((part) => grounded(part.startsWith('...') ? part.slice(3) : part.replace(/^[A-Za-z_$][\w$]*\s*:/, ''), defs, ground, new Set(seen)));
+    const members = parts(value.slice(1, -1)), spread = members.some((part) => part.startsWith('...'));
+    return members.length > 0 && members.every((part) => {
+      if (part.startsWith('...')) return grounded(part.slice(3), defs, ground, new Set(seen), laid);
+      return (spread && laid.includes(KEY.exec(part)?.slice(1).find((name) => name !== undefined))) || grounded(part.replace(/^(?:[A-Za-z_$][\w$]*|'[^']*'|"[^"]*")\s*:/, ''), defs, ground, new Set(seen));
+    });
   }
   if (new RegExp(`\\b(${ground.join('|')})\\(`).test(value)) return true;
   for (const { 0: name, index } of value.matchAll(NAME)) {
     if (seen.has(name) || (/[{,]\s*$/.test(value.slice(0, index)) && /^\s*:/.test(value.slice(index + name.length)))) continue;
     seen.add(name);
-    if ((defs.get(name) ?? []).some((def) => grounded(def, defs, ground, seen))) return true;
+    if ((defs.get(name) ?? []).some((def) => grounded(def, defs, ground, seen, laid))) return true;
   }
   return false;
 }
@@ -113,7 +118,7 @@ function misplaced(file, text) {
     const where = `${file}:${call.line} ${call.name}`;
     if (builders.get(call.name) === 'createGeography') {
       if (call.args.length < 3) left.push(`${where} without the state's geography options`);
-      for (const [i, role] of [[1, 'topography'], [2, 'geography']]) if (call.args[i] !== undefined && !grounded(call.args[i], defs, ground)) left.push(`${where}'s ${role} ${call.args[i]} is not the state's own`);
+      for (const [i, role, laid] of [[1, 'topography', []], [2, 'geography', LAID_ON_GROUND]]) if (call.args[i] !== undefined && !grounded(call.args[i], defs, ground, new Set(), laid)) left.push(`${where}'s ${role} ${call.args[i]} is not the state's own`);
       continue;
     }
     const named = entries(call.args[1] ?? '', defs).filter((entry) => entry.key === 'topography' || entry.key === 'geography');
@@ -123,11 +128,20 @@ function misplaced(file, text) {
   return left;
 }
 
-test('every script that reads a saved state builds its models and geographies on the topography and geography that stateGeography or savedGeography gives for that state, never on the raster of data/topography_0p25.bin, as far as the scripts\' text shows: options that resolve to no object literal in the file, such as a call\'s result, are taken on trust, a model given no topography is an aquaplanet, and a value is the state\'s own when any name in it leads there through any assignment in its file', () => {
+test('every script that reads a saved state builds its models and geographies on the topography and geography that stateGeography or savedGeography gives for that state, never on the raster of data/topography_0p25.bin, as far as the scripts\' text shows: options that resolve to no object literal in the file, such as a call\'s result, are taken on trust, a model given no topography is an aquaplanet, and a value is the state\'s own when any name in it leads there through any assignment in its file, or, as createGeography\'s options, when it spreads the state\'s own and sets beside it only what createGeography lays on the ground it builds', () => {
   const left = [];
   for (const file of readdirSync(scripts, { recursive: true }).filter((name) => name.endsWith('.mjs')).sort()) {
     const text = readFileSync(new URL(file, scripts), 'utf8');
     if (/\b(decodeState|readState|stateGrid)\(/.test(text)) left.push(...misplaced(file, text));
   }
   assert.deepEqual(left, []);
+});
+
+test("createGeography's options that spread the state's own geography may set beside it what createGeography lays on the ground it builds, its land cover and soil water, inline or through a name, but nothing that sets the ground, and without the spread neither stands", () => {
+  assert.deepEqual(LAID_ON_GROUND, ['landCover', 'soilWater']);
+  const script = (options) => `import { decodeState } from '../js/stateFile.module.js';\nconst saved = decodeState(bytes), record = savedGeography(saved), raw = readField(path);\nconst options = ${options};\nconst inline = createGeography(mesh, readTopography(record.topography), ${options});\nconst named = createGeography(mesh, readTopography(record.topography), options);\n`;
+  for (const options of ['{ ...geographyOptions(record).geography, landCover: null, soilWater: raw }', '{ soilWater: raw, ...geographyOptions(record).geography }', '{ ...geographyOptions(record).geography, soilWater }', '{ ...geographyOptions(record).geography, mask: record.mask }']) assert.deepEqual(misplaced('fixture.mjs', script(options)), [], options);
+  for (const options of ['{ ...geographyOptions(record).geography, mask: raw }', '{ ...geographyOptions(record).geography, landCover: null, maskData: raw }', "{ ...geographyOptions(record).geography, 'landIce': raw }", '{ ...geographyOptions(record).geography, landBridges }', '{ ...geographyOptions(record).geography, ...raw }', '{ ...raw, landCover: null }', '{ landCover: null, soilWater: raw }']) {
+    assert.deepEqual(misplaced('fixture.mjs', script(options)).map((line) => line.slice(0, line.indexOf(' '))), ['fixture.mjs:4', 'fixture.mjs:5'], options);
+  }
 });
