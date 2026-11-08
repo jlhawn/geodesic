@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createOcean as createCpuOcean } from '../js/ocean/layered.module.js';
+import { createOcean as createCpuOcean, EPS } from '../js/ocean/layered.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
@@ -766,12 +766,18 @@ test('the GPU hybrid ocean saved as the page saves it, every array as float64 an
   }
 });
 
-test('the GPU hybrid ocean takes a save with T and S and neither stores nor mixed-layer depths up its restart branch, and builds the depths from T and S as from the CPU\'s Q and W', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the GPU hybrid ocean takes a save with T and S and neither stores nor mixed-layer depths up its restart branch, and builds the depths from T and S as from the CPU\'s Q and W, through a top layer thinner than EPS', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { mesh, cpu, surfaceT, ice } = scenario(N), C = mesh.nCells;
   cpu.initialize(Float64Array.from(surfaceT), ice);
-  const state = { ...cpu.serialize(), previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  const served = cpu.serialize(), thickness = Float64Array.from(served.h), Q = Float64Array.from(cpu.Q), W = Float64Array.from(cpu.W), column = new Float64Array(C);
+  thickness.forEach((v, n) => { column[n % C] += v; });
+  const thin = column.indexOf(Math.max(...column));
+  thickness[C + thin] += thickness[thin] - 0.005;
+  thickness[thin] = 0.005;
+  for (const n of [thin, C + thin]) [Q[n], W[n]] = [Math.max(EPS, thickness[n]) * served.T[n], Math.max(EPS, thickness[n]) * served.S[n]];
+  const state = { ...served, h: thickness, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
   const mixed = [];
-  for (const saved of [{ ...state, Q: cpu.Q, W: cpu.W }, state]) {
+  for (const saved of [{ ...state, Q, W }, state]) {
     const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
     const marked = gpu.cellOcean.findIndex((x) => x > 0);
     await gpu.upload({ ...saved, eta: Float64Array.from(saved.eta, (v, i) => (i === marked ? v + 0.5 : v)) }, Float64Array.from(surfaceT), ice);

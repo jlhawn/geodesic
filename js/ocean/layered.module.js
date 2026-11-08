@@ -1795,17 +1795,6 @@ export function createOcean(mesh, {
     }
   }
 
-  /*
-   * As on the GPU (layeredOcean.gpu.js, restartable), a state that
-   * carries every array of the GPU's restartArrays, its columns within a
-   * meter of this bathymetry and dry on land, brings back the surface's
-   * last temperature, the ice volume it last saw, the freshwater not yet
-   * taken and the heat capacity, the sunlight not yet deposited when it
-   * carries `penetrated`, the ice not yet melted when it carries
-   * `calved`, the boundary-layer depths the column physics
-   * search from when it carries `boundaryDepths`, and the heat and salt
-   * stores as they were when it carries `Q` and `W`.
-   */
   const RESTART = ['previousT0', 'previousIceVolume', 'fresh', 'buoyancy', 'flux', 'capacity'];
   function restartable(saved) {
     if (![saved.Qref ?? saved.Q ?? saved.T, saved.Wref ?? saved.W ?? saved.S].every((store) => store && store.length === L * C) || !RESTART.every((name) => saved[name] && saved[name].length === C)) return false;
