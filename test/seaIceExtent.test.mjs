@@ -36,11 +36,14 @@ test("at N=32 on the n1024 mask at the observed fresh start, spinup.mjs's sea-ic
     const held = model.lake ? LAKES : [];
     const { concentration, ice } = cpuFrameFields(model, { fields: ['concentration', 'ice'] });
     assert.ok(concentration[SUPERIOR] >= 0.15 && ice[SUPERIOR] > 0 && mesh.latCell[SUPERIOR] > 0, `${name}: Lake Superior starts frozen, cover ${concentration[SUPERIOR]}`);
+    const [below, above] = [...concentration.keys()].filter((i) => !land[i] && !LAKES.includes(i) && mesh.latCell[i] < 0 && concentration[i] >= 0.15);
+    concentration[below] = 0.1;
+    concentration[above] = 0.16;
 
     const sea = seaCells(model);
     assert.deepEqual(Array.from(sea), Array.from(land, (l, i) => (l || held.includes(i) ? 0 : 1)), `${name}: the sea cells are the cells off land${held.length ? ' but the two lakes' : ''}`);
     const extent = seaIceExtent(mesh, sea, concentration), all = extentOf(mesh, land, concentration, []);
-    assert.deepEqual(extent, extentOf(mesh, land, concentration, held), `${name}: the extents count the sea cells at least 15 % covered`);
+    assert.deepEqual(extent, extentOf(mesh, land, concentration, held), `${name}: the extents count the sea cells at least 15 % covered, cell ${above} at 16 % but not cell ${below} at 10 %`);
     console.log(`${name}: extent N ${extent[0].toFixed(3)} S ${extent[1].toFixed(3)} Mkm², every cell off land N ${all[0].toFixed(3)} S ${all[1].toFixed(3)}`);
     if (held.length) assert.ok(all[0] - extent[0] > 0.04, `FLake: Lake Superior's cell leaves the northern extent, ${all[0] - extent[0]} Mkm²`);
     else assert.deepEqual(extent, all, 'with the lake model off the frozen lake counts');
