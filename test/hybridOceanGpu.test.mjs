@@ -135,22 +135,23 @@ async function tracking(options) {
 }
 /*
  * An option's change to the state over a few steps on the GPU against its
- * change on the CPU, both engines from the CPU's start with a sheared
- * current in the upper layers, under the same surface and stress: it sees
- * an option that moves the state by less than the engines part. The GPU
- * misses 10 to 15 % of the change from halving shearDiffusivity or raising
- * lateralDiffusionSpeed tenfold here. The sheared start parts the engines by
- * a few 1e-3 K rms in the top four layers over six steps and by about
- * 5e-5 K below them, so fromLayer 4 measures an option whose change in the
- * top layers is of that size below them.
+ * change on the CPU, both engines from the CPU's start under the same
+ * surface and stress: it sees an option that moves the state by less than
+ * the engines part. The sheared start, a current in the upper layers that
+ * varies from edge to edge, parts the engines by a few 1e-3 K rms in
+ * the top four layers over six steps and by about 5e-5 K below them; the
+ * GPU misses 10 to 15 % of the change from halving shearDiffusivity or
+ * raising lateralDiffusionSpeed tenfold there. From the still start, the
+ * sea at rest, they part by about 1e-5 K in the top four layers, so an
+ * option that needs no current is measured there over every layer.
  */
-async function optionChange(base, extra, steps = 6, fromLayer = 0) {
+async function optionChange(base, extra, { still = false, steps = 6 } = {}) {
   const runs = [];
   for (const options of [base, { ...base, ...extra }]) {
     const { mesh, cpu, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, flux = new Float64Array(C);
     const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options }), gpu = gpuModel.oceanEngine;
     cpu.initialize(Float64Array.from(surfaceT), ice);
-    for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+    if (!still) for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
     await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
     for (let n = 0; n < steps; n++) { cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT); await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT); }
     runs.push({ cpu: cpuFields(cpu, C), gpu: await gpu.download(), wet: Array.from(cpu.h, (v) => v > 1), layers: cpu.layers });
@@ -159,11 +160,11 @@ async function optionChange(base, extra, steps = 6, fromLayer = 0) {
   const [a, b] = runs, out = {};
   for (const f of ['T', 'S', 'u']) {
     let change = 0, miss = 0;
-    const length = a.cpu[f].length, first = fromLayer * length / a.layers;
-    for (let n = first; n < length; n++) if (f === 'u' || a.wet[n]) { const dc = b.cpu[f][n] - a.cpu[f][n], dg = b.gpu[f][n] - a.gpu[f][n]; change += dc * dc; miss += (dg - dc) ** 2; }
-    out[f] = { change: Math.sqrt(change / (length - first)), ratio: Math.sqrt(miss / Math.max(change, 1e-300)) };
+    const length = a.cpu[f].length;
+    for (let n = 0; n < length; n++) if (f === 'u' || a.wet[n]) { const dc = b.cpu[f][n] - a.cpu[f][n], dg = b.gpu[f][n] - a.gpu[f][n]; change += dc * dc; miss += (dg - dc) ** 2; }
+    out[f] = { change: Math.sqrt(change / length), ratio: Math.sqrt(miss / Math.max(change, 1e-300)) };
   }
-  console.log(`the option's change on the CPU${fromLayer ? ` from layer ${fromLayer} down` : ''}, rms, and the GPU's miss of it, relative: ${Object.entries(out).map(([f, r]) => `${f} ${r.change.toExponential(2)}, ${r.ratio.toExponential(2)}`).join('; ')}`);
+  console.log(`the option's change on the CPU from the ${still ? 'still' : 'sheared'} start, rms, and the GPU's miss of it, relative: ${Object.entries(out).map(([f, r]) => `${f} ${r.change.toExponential(2)}, ${r.ratio.toExponential(2)}`).join('; ')}`);
   return out;
 }
 const OPTION_CHANGE = 'the GPU hybrid ocean changes the state under an option as the CPU does, from one start over six steps';
@@ -300,28 +301,32 @@ test('under isoneutralDiffusion the GPU hybrid ocean takes the CPU\'s κS² diff
   assert.equal(shutKappa, 0);
   assert.ok(miss(all) < 1e-2 && miss(beside) < 1e-2 && miss(sill) < 1e-2 && miss(opened) < 1e-2, `the GPU misses the CPU's κS² by ${miss(all)}, beside the shelves by ${miss(beside)}, beside the sills by ${miss(sill)} and under the open sill by ${miss(opened)}`);
 });
-test(`${OPTION_CHANGE}: backgroundLatitude equatorial, under a strengthened background diffusivity`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const change = await optionChange({ ...HYBRID, backgroundDiffusivity: 1e-3 }, { backgroundLatitude: 'equatorial' });
-  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.2, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+test(`${OPTION_CHANGE}: backgroundLatitude equatorial, under a strengthened background diffusivity, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, backgroundDiffusivity: 1e-3 }, { backgroundLatitude: 'equatorial' }, { still: true });
+  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.02, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
 });
 test(`${OPTION_CHANGE}: closureScale`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionChange(HYBRID, { closureScale: 0.25 });
   assert.ok(change.u.ratio < 0.1, `u: the GPU misses ${change.u.ratio} of the option's change`);
 });
-test(`${OPTION_CHANGE}: interiorShear lmd94`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const change = await optionChange({ ...HYBRID, shearViscosity: 5e-3 }, { interiorShear: 'lmd94' }, 6, 4);
-  for (const f of ['T', 'S', 'u']) assert.ok(change[f].ratio < 0.1, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+test(`${OPTION_CHANGE}: interiorShear lmd94, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, shearViscosity: 5e-3 }, { interiorShear: 'lmd94' }, { still: true });
+  for (const f of ['T', 'S', 'u']) assert.ok(change[f].ratio < 0.02, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
 });
-test(`${OPTION_CHANGE}: interiorShear lmd94 with no shear term, whose change is PP81's ν_b/(1 + 5Ri) share of κ`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const change = await optionChange({ ...HYBRID, shearViscosity: 0, backgroundViscosity: 1e-3 }, { interiorShear: 'lmd94', lmd94Viscosity: 0 }, 6, 4);
-  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.1, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+test(`${OPTION_CHANGE}: interiorShear lmd94 with no shear term, whose change is PP81's ν_b/(1 + 5Ri) share of κ, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, shearViscosity: 0, backgroundViscosity: 1e-3 }, { interiorShear: 'lmd94', lmd94Viscosity: 0 }, { still: true });
+  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.02, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
 });
-for (const eddyTracers of ['third', 'centered']) test(`${OPTION_CHANGE}: eddyTracers ${eddyTracers}, under a strengthened restratification`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const change = await optionChange({ ...HYBRID, mixedLayerRestratification: { coefficient: 1000 } }, { eddyTracers });
-  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.1, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+for (const eddyTracers of ['third', 'centered']) test(`${OPTION_CHANGE}: eddyTracers ${eddyTracers}, under a strengthened restratification, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, mixedLayerRestratification: { coefficient: 1000 } }, { eddyTracers }, { still: true });
+  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.02, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+});
+test(`${OPTION_CHANGE}: mixedLayerRestratification taperLatitude, under a strengthened restratification, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const change = await optionChange({ ...HYBRID, mixedLayerRestratification: { coefficient: 1000 } }, { mixedLayerRestratification: { coefficient: 1000, taperLatitude: 15 } }, { still: true });
+  for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.02, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
 });
 
-const TRACKING = 'the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
+const TRACKING ='the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
 test(TRACKING, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(HYBRID));
 test(`${TRACKING}, with mixedLayerRestratification`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RESTRAT));
 test(`${TRACKING}, with mstarScheme rh18`, { skip: !gpuAvailable && 'webgpu not installed' }, () => tracking(RH18_ENERGY));
