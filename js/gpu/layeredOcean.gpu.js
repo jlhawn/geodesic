@@ -796,7 +796,7 @@ fn isoTriad(c: i32, ca: i32, cb: i32, l: i32, m: i32, along: vec2<f32>, dc: f32)
     var base = m; var below = z;
     while (base < ISOFIXED && below < layer) { below += IN[hOff(base) + c]; base++; }
     let r = z / layer;
-    s = isoSlope(c, base - 1, base, isoValue(cb, base - 1) - isoValue(ca, base - 1), dc) * vec2<f32>(r, r * r);
+    if (IN[hOff(base - 1) + ca] > THINEDGE && IN[hOff(base - 1) + cb] > THINEDGE) { s = isoSlope(c, base - 1, base, isoValue(cb, base - 1) - isoValue(ca, base - 1), dc) * vec2<f32>(r, r * r); }
   } else { s = isoSlope(c, l, m, along, dc); }` : `
   let s = isoSlope(c, l, m, along, dc);`}
   return vec4<f32>(s.x * (up.x - down.x) / dz, s.x * (up.y - down.y) / dz, s.x / dz, s.y / dz);
