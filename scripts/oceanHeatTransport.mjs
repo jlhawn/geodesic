@@ -15,17 +15,16 @@
 import { readFileSync } from 'node:fs';
 import { decodeState } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
-import { createGeography, topographyFromInt16 } from '../js/geography.module.js';
+import { createGeography, stateGeography } from '../js/geography.module.js';
 import { edgeSills } from '../js/ocean/layered.module.js';
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const KELVIN = 273.15, deg = 180 / Math.PI, RHO_CP = 1025 * 3990;
 const LATS = [-60, -50, -40, -30, -20, -10, 0, 10, 20, 26.5, 30, 40, 50, 60];
 const rows = new Map(); const push = (la, g, atl) => { if (!rows.has(la)) rows.set(la, []); rows.get(la).push([g.V, g.H, atl ? atl.H : NaN]); };
 const f = (x, d = 2, w = 7) => (Number.isFinite(x) ? x.toFixed(d) : '—').padStart(w);
 for (const path of process.argv.slice(2)) {
   const st = await decodeState(new Uint8Array(readFileSync(path)));
-  const hybrid = st.ocean.vertical === 'hybrid', mesh = stateGrid(st, topography).mesh, C = mesh.nCells, E = mesh.nEdges;
-  const geo = createGeography(mesh, topography), land = geo.land, oc = st.ocean, L = oc.densities.length, { h, u, T } = oc, at = (k, i) => k * C + i;
+  const hybrid = st.ocean.vertical === 'hybrid', ground = stateGeography(st), mesh = stateGrid(st, ground.topography).mesh, C = mesh.nCells, E = mesh.nEdges;
+  const geo = createGeography(mesh, ground.topography, ground.geography), land = geo.land, oc = st.ocean, L = oc.densities.length, { h, u, T } = oc, at = (k, i) => k * C + i;
   const sea = new Uint8Array(C); for (let i = 0; i < C; i++) { let col = 0; for (let k = 0; k < L; k++) col += h[at(k, i)]; sea[i] = !land[i] && col > 1 ? 1 : 0; }
   const lat = (i) => mesh.latCell[i] * deg, lon = (i) => mesh.lonCell[i] * deg, { cellsOnEdge, dvEdge } = mesh;
   const D = new Float64Array(C); for (let i = 0; i < C; i++) { let col = 0; for (let k = 0; k < L; k++) col += h[at(k, i)]; D[i] = col - (oc.eta ? oc.eta[i] : 0); }

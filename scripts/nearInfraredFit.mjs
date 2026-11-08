@@ -130,14 +130,12 @@ function standardColumns() {
 }
 
 async function modelColumns(file) {
-  const { topographyFromInt16 } = await import(join(REPO, 'js/geography.module.js'));
   const { decodeState, savedLevels } = await import(join(REPO, 'js/stateFile.module.js'));
   const { stateGrid } = await import(join(REPO, 'js/stateGrid.module.js'));
   const { ozoneWeights, ozoneAbove } = await import(join(REPO, 'js/physics/ozone.module.js'));
   const { GREENHOUSE_GASES } = await import(join(REPO, 'js/physics/radiation.module.js'));
-  const topography = topographyFromInt16(readFileSync(join(REPO, 'data/topography_0p25.bin')).buffer);
   const s = await decodeState(new Uint8Array(readFileSync(file)));
-  const mesh = stateGrid(s, topography).mesh, levels = savedLevels(s), K = levels.length - 1, C = mesh.latCell.length;
+  const mesh = stateGrid(s).mesh, levels = savedLevels(s), K = levels.length - 1, C = mesh.latCell.length;
   const kappa = 287.06 / 1003.5, p0 = 101325, f = ((s.day ?? 1825) % 365) / 365;
   return TARGETS.map(([name, lat, lon]) => {
     const rad = Math.PI / 180, x = Math.cos(lat * rad) * Math.cos(lon * rad), y = Math.cos(lat * rad) * Math.sin(lon * rad), z = Math.sin(lat * rad);

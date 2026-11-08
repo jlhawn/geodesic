@@ -25,7 +25,7 @@
 // layer between that top and the cloud-top layer's base; cloud-top;
 // coupled), each with its share and mean radiated cover.
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
@@ -38,8 +38,8 @@ const FILE = process.argv[2];
 const env = (name) => JSON.parse(process.env[name] ?? '{}');
 const RADIATION = env('RADIATION'), MOIST = env('MOIST'), BOUNDARY_LAYER = env('BOUNDARY_LAYER'), SURFACE = env('SURFACE');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, g, exnerLayer, geopotential } = core.diagnostics;
 const exnerLower = core.diagnostics.exnerLower ?? core.arrays.exnerLower, thetaV = core.arrays.thetaV;

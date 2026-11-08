@@ -12,7 +12,6 @@ import { placeCumulus } from '../../js/physics/moist.module.js';
 import { stateGrid } from '../../js/stateGrid.module.js';
 import { loadSavedLand } from '../savedLand.mjs';
 
-export const readTopography = (saved = null) => stateGeography(saved ?? {}).topography;
 export const readGeography = (saved) => stateGeography(saved);
 export const readState = async (file) => decodeState(new Uint8Array(readFileSync(file)));
 export const tagOf = (file) => basename(stateName(file)).replace(/_day\d+(?:_step\d+)?$/, '');

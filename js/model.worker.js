@@ -308,11 +308,11 @@ function savedCumulus(model) {
 }
 
 /*
- * A physics-free model on the saved run's mesh (stateGrid) and sigma
- * grid, with the current topography so its land mask can steer the
- * regrid, under the terrain options the run records; kept for the ocean
- * and land that follow the state, until the start is done. The saved
- * state keeps the grid found for it.
+ * The physics-free model a state saved at another N is regridded from:
+ * the saved run's mesh (stateGrid), sigma grid and ground (savedGround),
+ * whose land mask steers the regrid, under the terrain the state stands
+ * on; kept for the ocean and land that follow the state, until the start
+ * is done. The saved state keeps the grid found for it.
  */
 let sourceModel = null, sourceGround = null;
 const startTerrain = (message, saved) => (message.terrain === false ? false : savedTerrain(saved ?? {}) ?? true);

@@ -39,7 +39,7 @@
 // ice water path of order 20-70 g/m2 (CloudSat 2C-ICE, Waliser et al.
 // 2009); cloud effects -47 +- 4 and +26 +- 3 W/m2 (CERES EBAF).
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
@@ -56,8 +56,8 @@ const t0 = performance.now();
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const AT = Number(process.env.DAY ?? saved.day);
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, dSigma, g, exnerLayer } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
