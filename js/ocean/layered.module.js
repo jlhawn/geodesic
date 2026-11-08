@@ -589,6 +589,11 @@ export function displacedWeight(draft, sample, density = seawaterDensity, n = 64
   return sum * draft / n;
 }
 
+export function topLayerDensity(saved, i, classDensity) {
+  const h = saved.h[i], scale = Math.max(EPS, h) / h;
+  return h > 1e-6 ? seawaterDensity(scale * saved.T[i], scale * saved.S[i]) : classDensity;
+}
+
 export function createOcean(mesh, {
   minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
@@ -1864,7 +1869,7 @@ export function createOcean(mesh, {
       if (Math.abs(sum - H) > 1e-9) { const scale = H / sum; for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; } }
     }
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
-    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * eos(saved.T[i], saved.S[i]);
+    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * topLayerDensity(saved, i, rho[0]);
     for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     if (!own) regrid(Infinity);
     measureIce(ice, concentration, previousVolume);
