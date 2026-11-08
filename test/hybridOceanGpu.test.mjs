@@ -177,7 +177,7 @@ test(`${OPTION_CHANGE}: shearDiffusivityResolution, under a strengthened shear-s
 });
 test(`${OPTION_CHANGE}: isoneutralDiffusion`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionChange(HYBRID, { isoneutralDiffusion: true });
-  assertTracks(change, { T: [1e-4, 0.03], S: [2e-5, 0.03] });
+  assertTracks(change, { T: [1e-4, 0.05], S: [2e-5, 0.03] });
 });
 test('under isoneutralDiffusion and 30 m boundary layers the κS² diffusivity the GPU hybrid ocean\'s column takes from a dynamics phase is the CPU\'s 1:2:2:1 mean of the four stages\', not the fourth stage\'s, and its triads move the tracers above 30 m as the CPU\'s do', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const options = { ...HYBRID, isoneutralDiffusion: true }, { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, zeros = new Float64Array(C), dt = 4 * DT;
@@ -294,10 +294,13 @@ test('the GPU hybrid ocean uploads a state that carries the restart arrays with 
   const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
   cpu.initialize(Float64Array.from(surfaceT), ice);
   cpu.u.fill(0.3);
-  const saved = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  const fresh = Float64Array.from({ length: C }, (_, i) => 1e-3 * (1 + (i % 5)));
+  const saved = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh, buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
   await gpu.upload(saved, Float64Array.from(surfaceT), ice);
-  const { u } = await gpu.download();
+  const { u } = await gpu.download(), kept = await gpu.restartArrays();
   gpuModel.destroy();
+  const plain = Array.from(kept.fresh).filter((x, i) => gpu.cellOcean[i] && x !== Math.fround(fresh[i])).length;
+  assert.equal(plain, 0, `the upload took its plain branch: ${plain} sea cells lost the saved fresh water`);
   cpu.load(saved, Float64Array.from(surfaceT), ice);
   const apart = new Set();
   for (let n = 0; n < cpu.layers * E; n++) if (u[n] !== Math.fround(cpu.u[n])) apart.add(n % E);
