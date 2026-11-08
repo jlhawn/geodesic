@@ -1587,6 +1587,7 @@ export function createOcean(mesh, {
   }
 
   function advance(surfaceT, ice, oceanFlux, totalStress, dt, concentration = seaCover, time = null) {
+    seaFlux = oceanFlux;
     if (++counter % everySteps !== 0) return false;
     if (!initialised) initialize(surfaceT, ice, { concentration });
     const dtOcean = everySteps * dt;
@@ -1884,7 +1885,8 @@ export function createOcean(mesh, {
     layerDensitiesAll();
     mixedDepthsAll();
     publishTransmission();
-    if (restartable(saved)) {
+    const resumed = restartable(saved);
+    if (resumed) {
       previousT0.set(saved.previousT0); previousVolume.set(saved.previousIceVolume); fresh.set(saved.fresh); capacity.set(saved.capacity);
       if (saved.penetrated && saved.penetrated.length === C) penetrated.set(saved.penetrated);
       if (saved.calved && saved.calved.length === C) calved.set(saved.calved);
@@ -1894,9 +1896,9 @@ export function createOcean(mesh, {
     }
     if (restrat) {
       mleDepths.set(boundaryDepths);
-      if (saved.mleDepths && saved.mleDepths.length === C && restartable(saved)) mleDepths.set(saved.mleDepths);
+      if (saved.mleDepths && saved.mleDepths.length === C && resumed) mleDepths.set(saved.mleDepths);
     }
-    counter = 0;
+    counter = resumed && Number.isInteger(saved.phase) ? saved.phase : 0;
     initialised = true;
   }
   let seaFlux = null;
@@ -1907,14 +1909,16 @@ export function createOcean(mesh, {
       ...(penetration ? { transmission: copy(transmission) } : {}),
       ...(drift ? { iceVelocity: copy(drift.velocity), iceSigma: copy(drift.sigma) } : {}),
       ...(restrat ? { mleDepths: copy(mleDepths) } : {}),
-      ...(seaFlux ? { flux: copy(seaFlux) } : {}),
+      flux: seaFlux ? copy(seaFlux) : new Float64Array(C),
+      ...(counter % everySteps ? { phase: counter % everySteps } : {}),
     };
   }
 
-  function serialize() {
+  function serialize({ restart = false } = {}) {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
-    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
+    const saved = { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
+    return restart ? { ...saved, ...restartArrays() } : saved;
   }
 
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;

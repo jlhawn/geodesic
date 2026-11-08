@@ -2097,13 +2097,16 @@ ${core.fieldConstants}
     stericSurface(h, Q, W, eta);
     return { h, u, Q, W, eta, T0, previousT0, filled: atlas ? filled : null };
   }
-  function uploadArrays({ h, u, Q, Qref, W, Wref, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart) {
+  let counter = 0;
+  const tick = () => ++counter % o.everySteps === 0;
+  function uploadArrays({ h, u, Q, Qref, W, Wref, T, S, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart) {
+    counter = restart && Number.isInteger(restart.phase) ? restart.phase : 0;
     edgesCurrent = false;
     upwellingFolds = 0; upwellingTime = NaN; upwellingSeen = upwellingSteps;
     for (const name of RETAINED) delete outside[name];
     const velocity = Float32Array.from(u);
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) velocity[k * E + e] = 0;
-    const heat = Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), salt = Wref ?? Float64Array.from(W, (w, n) => w - SALT_REFERENCE * h[n]);
+    const heat = Qref ?? Float64Array.from(h, (hh, n) => (Q ? Q[n] : hh * T[n]) - HEAT_REFERENCE * hh), salt = Wref ?? Float64Array.from(h, (hh, n) => (W ? W[n] : hh * S[n]) - SALT_REFERENCE * hh);
     const packed = new Float32Array(OS.total);
     packed.set(toCells(h, L), OS.OH); packed.set(toEdges(velocity, L), OS.OU); packed.set(toCells(heat, L), OS.OQ); packed.set(toCells(salt, L), OS.OW);
     writeInPieces(device, ob.S, 0, packed);
@@ -2196,7 +2199,7 @@ ${core.fieldConstants}
   }
   const RESTART = [['previousT0', C], ['previousIceVolume', C], ['fresh', C], ['buoyancy', C], ['flux', C], ['capacity', C]];
   function restartable(saved) {
-    if (!saved || !saved.h || saved.h.length !== L * C || ![saved.Qref ?? saved.Q, saved.Wref ?? saved.W].every((store) => store && store.length === L * C) || !RESTART.every(([name, length]) => saved[name] && saved[name].length === length)) return false;
+    if (!saved || !saved.h || saved.h.length !== L * C || ![saved.Qref ?? saved.Q ?? saved.T, saved.Wref ?? saved.W ?? saved.S].every((store) => store && store.length === L * C) || !RESTART.every(([name, length]) => saved[name] && saved[name].length === length)) return false;
     for (let i = 0; i < C; i++) {
       let sum = 0;
       for (let k = 0; k < L; k++) sum += saved.h[k * C + i];
@@ -2336,7 +2339,8 @@ ${core.fieldConstants}
     const [iceVelocity, iceSigma] = driftOptions ? await readSections(['UICE', 'SIGMA']) : [null, null];
     const mleDepths = restrat ? (await readSections(['MLED']))[0] : null;
     const [shelfLoadRest, shelfLoadT, shelfLoadS] = hasShelves ? await readSections(['LOAD', 'LOADT', 'LOADS']) : [null, null, null];
-    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, calved, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}), ...(iceVelocity ? { iceVelocity, iceSigma } : {}), ...(mleDepths ? { mleDepths } : {}), ...(shelfLoadRest ? { shelfLoadRest, shelfLoadT, shelfLoadS } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
+    const arrays = Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, calved, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}), ...(iceVelocity ? { iceVelocity, iceSigma } : {}), ...(mleDepths ? { mleDepths } : {}), ...(shelfLoadRest ? { shelfLoadRest, shelfLoadT, shelfLoadS } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
+    return counter % o.everySteps ? { ...arrays, phase: counter % o.everySteps } : arrays;
   }
 
   function diagnosticsFrom(sums) {
@@ -2398,7 +2402,7 @@ ${core.fieldConstants}
     layers: L, everySteps: o.everySteps, options: o, D, sillEdge, cellOcean, edgeOcean, vertical: 'hybrid', generator: o.generator, table,
     useSeaIce(concentration) { seaCover = concentration; },
     initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
-    advance, advanceCoupled, accumulateFreshwater, forgetAccumulated, readShelfMelt, driftStep, setAirStress, iceDrift: driftOptions,
+    advance, advanceCoupled, accumulateFreshwater, tick, forgetAccumulated, readShelfMelt, driftStep, setAirStress, iceDrift: driftOptions,
     setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, salt, writeSurface, step, phases, eddyTransport,
     buffers: ob, layout: { OS, OD, B, MI: TMI, MF: TMF }, packing: pk,
     readSection: async (name) => (await readSections([name]))[0], putSection, readStores,

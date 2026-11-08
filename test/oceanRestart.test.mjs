@@ -62,3 +62,40 @@ test(`at N=${N} a model's ocean loaded from a GPU save, whose contents are store
   const at = (n) => [Qref[n] + HEAT_REFERENCE * h[n], Wref[n] + SALT_REFERENCE * h[n]];
   for (let n = 0; n < Q.length; n++) assert.deepEqual([resumed.ocean.Q[n], resumed.ocean.W[n]], at(n), `layer cell ${n}`);
 });
+
+test(`on ETOPO 2022 at N=${N}, an ocean saved between its steps as the page saves it, every array as float64, steps on in a fresh ocean bit for bit with one run whole`, () => {
+  const mesh = gridMesh(new Grid(N)), C = mesh.nCells, every = 4, dt = 1350, before = 2 * every + 2, after = 2 * every - 1;
+  const geography = createGeography(mesh, readTopography('etopo2022'), geographyOptions(FRESH_GEOGRAPHY, decodeLandIce(readFileSync(landIceUrl))).geography);
+  const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
+  const evaporation = Float64Array.from({ length: C }, (_, i) => 3e-5 * (1 + 0.5 * Math.sin(3 * i)));
+  const rain = Float64Array.from({ length: C }, (_, i) => 0.04 * (1 + 0.5 * Math.cos(5 * i)));
+  const discharge = Float64Array.from({ length: C }, (_, i) => (geography.land[i] ? 1e-3 : 0));
+  const polar = Float64Array.from({ length: C }, (_, i) => (Math.abs(mesh.latCell[i]) > 1.1 && !geography.land[i] ? 1 : 0));
+  const step = (ocean, n) => {
+    for (let i = 0; i < C; i++) { ocean.ice[i] = polar[i] * (0.5 + 0.02 * n); if (ocean.transmission) ocean.penetrated[i] += polar[i] * dt * 2 * ocean.transmission[i]; }
+    ocean.accumulate(evaporation, rain, dt, null, discharge);
+    ocean.advance(ocean.surfaceT, ocean.ice, ocean.flux, wind, dt);
+  };
+  const fresh = () => {
+    const ocean = createOcean(mesh, { geography, everySteps: every });
+    ocean.surfaceT = new Float64Array(C).fill(275); ocean.ice = Float64Array.from(polar, (p) => 0.5 * p); ocean.flux = new Float64Array(C);
+    ocean.initialize(ocean.surfaceT, ocean.ice);
+    return ocean;
+  };
+  const whole = fresh(), first = fresh();
+  for (let n = 0; n < before + after; n++) step(whole, n);
+  for (let n = 0; n < before; n++) step(first, n);
+  const saved = Object.fromEntries(Object.entries(first.serialize({ restart: true })).map(([name, v]) => [name, typeof v === 'object' && v.length && typeof v[0] === 'number' ? Float64Array.from(v) : v]));
+  assert.equal(saved.phase, before % every, 'the save falls between the ocean\'s steps');
+  for (const name of ['fresh', 'calved', 'penetrated']) assert.ok(saved[name].some((x) => x !== 0), `the save carries no ${name}`);
+  const second = createOcean(mesh, { geography, everySteps: every });
+  second.surfaceT = Float64Array.from(first.surfaceT); second.ice = Float64Array.from(first.ice); second.flux = Float64Array.from(saved.flux);
+  second.load(saved, second.surfaceT, second.ice);
+  for (let n = before; n < before + after; n++) step(second, n);
+  const a = { ...whole.serialize({ restart: true }), oceanFlux: whole.flux }, b = { ...second.serialize({ restart: true }), oceanFlux: second.flux };
+  assert.equal(b.phase, a.phase);
+  for (const [name, values] of Object.entries(a)) if (typeof values === 'object' && values.length && typeof values[0] === 'number') {
+    const at = Array.from(values).findIndex((x, i) => !Object.is(x, b[name][i]));
+    assert.equal(at, -1, `${name}[${at}]: ${values[at]} whole against ${b[name][at]} restored`);
+  }
+});
