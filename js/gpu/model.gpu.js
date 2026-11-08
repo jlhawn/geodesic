@@ -342,7 +342,7 @@ export async function createGpuModel(gridOrMesh, {
       if (started) gpu.uploadSurfaceTemperature(surfaceT);
       return started;
     },
-    load(saved, surfaceT, iceField) { oceanCounter = 0; if (gpuOcean.upload(saved, surfaceT, iceField)) gpu.uploadSurfaceTemperature(surfaceT); },
+    load(saved, surfaceT, iceField, concentration = null, phase = 0) { oceanCounter = phase; if (gpuOcean.upload(saved, surfaceT, iceField)) gpu.uploadSurfaceTemperature(surfaceT); },
     async serialize({ restart = false } = {}) { return restart ? { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) } : gpuOcean.serialize(); },
   } : null;
 

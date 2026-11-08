@@ -603,12 +603,14 @@ async function snapshot() {
   refresh();
 }
 
-// A save is exact only at a step that ends an ocean step, a held radiation interval and a held drag interval: what they hold is not saved.
+// Each cadence numbers its steps from the model's time, the ocean's from the phase its load is given.
 export function stepsToCadence(model, dt) {
   const { radiationEvery = 1, dragEvery = 1, oceanEvery = 1 } = model.cadence ?? {};
   const gcd = (a, b) => (b ? gcd(b, a % b) : a), every = [radiationEvery, dragEvery, oceanEvery].reduce((a, b) => (a * b) / gcd(a, b));
   return (every - (Math.round(model.time / dt) % every)) % every;
 }
+
+export const oceanPhase = (model, time, step) => Math.round(time / step) % (model.cadence?.oceanEvery ?? 1);
 
 export async function snapshotArrays(model) {
   if (model.sync) await model.sync();
@@ -723,13 +725,14 @@ async function start(message) {
   if (model.load) model.load({ ocean: false });
   await model.settle?.();
   if (model.ocean) {
-    if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(sourceFor(saved), model, saved.ocean, (fraction, text) => status(`regridding ${text}…`, 0.93)), model.state[3], model.state[6]);
+    if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(sourceFor(saved), model, saved.ocean, (fraction, text) => status(`regridding ${text}…`, 0.93)), model.state[3], model.state[6], undefined, oceanPhase(model, saved.time, dt));
     else model.ocean.initialize(model.state[3], model.state[6]);
   }
   await model.settle?.();
   placeLand(model, saved, N);
   await model.settle?.();
   placeEnergy(model, saved);
+  if (saved && saved.N === N && model.writeFreshwater) model.writeFreshwater(saved);
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
   serving = true;
@@ -738,7 +741,7 @@ async function start(message) {
   sourceModel = null;
 }
 
-export async function placeSaved(model, saved, N) {
+export async function placeSaved(model, saved, N, step = dt) {
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   placeIce(model, saved, N);
@@ -747,7 +750,7 @@ export async function placeSaved(model, saved, N) {
   if (model.load) model.load({ ocean: false });
   await model.settle?.();
   if (model.dragsDue) model.dragsDue();
-  if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
+  if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6], undefined, oceanPhase(model, saved.time, step)); else model.ocean.initialize(model.state[3], model.state[6]); }
   await model.settle?.();
   placeLand(model, saved, N);
   await model.settle?.();
@@ -772,7 +775,10 @@ export function savedCarried(model) {
   const ground = model.gpu ? null : model.surfaceGeopotential, saved = {};
   for (const [name, field, height] of CARRIED_FIELDS) {
     const values = field(model);
-    if (values) saved[name] = Float64Array.from(values, (v, i) => (height && ground ? v - ground[i] / model.core.diagnostics.g : v));
+    if (!values) continue;
+    saved[name] = Float64Array.from(values, (v, i) => (height && ground ? v - ground[i] / model.core.diagnostics.g : v));
+    // (h − a) + a can miss h by an ulp: the run steps on from the heights a restore places.
+    if (height && ground) for (let i = 0; i < values.length; i++) values[i] = saved[name][i] + ground[i] / model.core.diagnostics.g;
   }
   return saved;
 }
@@ -786,4 +792,6 @@ export function placeCarried(model, saved) {
     target.set(value);
     if (height && ground) for (let i = 0; i < target.length; i++) target[i] += ground[i] / model.core.diagnostics.g;
   }
+  const flux = model.gpu ? null : model.seaIce?.oceanFlux;
+  if (flux && saved.iceOceanFlux?.length === flux.length && !saved.ocean?.flux) flux.set(saved.iceOceanFlux);
 }

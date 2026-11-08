@@ -8,6 +8,8 @@
  * has been downloaded, runs that share chunks share the bytes, and the
  * least recently used runs go once the chunks pass RUN_STORE_LIMIT.
  */
+import { groupHeader, groupArrays } from './stateFile.module.js';
+import { pickGeography } from './geography.module.js';
 const DB_NAME = 'climate', VERSION = 2;
 export const RUN_STORE_LIMIT = 1024 * 1048576;
 const ORPHAN_AGE = 3600e3;
@@ -39,6 +41,25 @@ function transaction(db, stores, mode, work) {
 }
 
 const await1 = (request) => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+
+const f64 = (group) => Object.fromEntries(Object.entries(groupArrays(group)).map(([key, values]) => [key, new Float64Array(values)]));
+const buffers = (group) => Object.fromEntries(Object.entries(groupArrays(group)).map(([key, values]) => [key, Float64Array.from(values).buffer]));
+
+/*
+ * The page's side of a snapshot: the state a worker's snapshotData message
+ * holds; what the store keeps of a state, its header in `meta` and every
+ * array it holds, at the top level and in its ocean and land groups, as f64
+ * buffers in `data`; and the restore message for a stored snapshot.
+ */
+export const messageState = (message) => ({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, grid: message.grid, ...pickGeography(message), options: message.options, soilSeed: message.soilSeed, ...f64(message.arrays), ocean: message.ocean ? { ...groupHeader(message.ocean), ...f64(message.ocean) } : null, land: message.land ? f64(message.land) : null });
+
+export function toSnapshot(saved, source = null) {
+  const arrays = buffers(saved), ocean = saved.ocean ? { ...groupHeader(saved.ocean), ...buffers(saved.ocean) } : null, land = saved.land ? buffers(saved.land) : null;
+  const bytes = [arrays, ocean, land].reduce((sum, group) => sum + Object.values(groupArrays(group)).reduce((n, b) => n + b.byteLength, 0), 0);
+  return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, grid: saved.grid ?? null, ...pickGeography(saved), options: saved.options ?? null, soilSeed: saved.soilSeed ?? null, bytes, source }, data: { arrays, ocean, land } };
+}
+
+export const restoreMessage = (meta, data) => ({ N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, grid: meta.grid ?? null, ...pickGeography(meta), options: meta.options ?? null, soilSeed: meta.soilSeed ?? null, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null });
 
 export async function listSnapshots() {
   const db = await openStore();

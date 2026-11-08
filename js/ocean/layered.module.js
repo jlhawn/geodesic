@@ -1591,7 +1591,7 @@ export function createOcean(mesh, {
     }
   }
   let surfaceTAt = () => 288;
-  function load(saved, surfaceT, ice, concentration = seaCover) {
+  function load(saved, surfaceT, ice, concentration = seaCover, phase = 0) {
     restartUpwelling();
     if (!saved || !saved.h) { build(surfaceT, ice, climatology, concentration); return; }
     surfaceTAt = (i) => (ice[i] > 0 ? FREEZING_POINT : surfaceT[i]);
@@ -1633,7 +1633,7 @@ export function createOcean(mesh, {
       mleDepths.set(boundaryDepths);
       if (saved.mleDepths && saved.mleDepths.length === C && restartable(saved)) mleDepths.set(saved.mleDepths);
     }
-    counter = 0;
+    counter = phase;
     initialised = true;
   }
   let seaFlux = null;

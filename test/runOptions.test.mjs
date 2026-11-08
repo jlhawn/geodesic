@@ -82,6 +82,11 @@ test("the page's worker runs a saved state with the options it records, and its 
       assert.equal(placed.boundaryLayer.regime[i], kept.boundaryRegime[i]);
     }
     assert.ok(highest > 500, `the highest ground stands ${highest} m`);
+    const flux = Float64Array.from({ length: C }, (_, i) => (i % 9) - 4);
+    placeCarried(placed, { iceOceanFlux: flux, ocean: {} });
+    assert.deepEqual(placed.seaIce.oceanFlux, flux, 'a snapshot whose ocean has no restart flux places the top-level iceOceanFlux it carried before');
+    placeCarried(placed, { iceOceanFlux: new Float64Array(C), ocean: { flux } });
+    assert.deepEqual(placed.seaIce.oceanFlux, flux, 'the ocean\'s restart flux takes precedence');
   } finally {
     globalThis.fetch = fetched;
     delete globalThis.self;
@@ -89,7 +94,7 @@ test("the page's worker runs a saved state with the options it records, and its 
   }
 });
 
-test("a page save waits for the step that ends an ocean step, a held radiation interval and a held drag interval, and a model that has run 3 steps, restored from it through encodeState, decodeState and the page's restore, steps on as the run that did not stop over two ocean cadences and a step", async () => {
+test("a page save waits for the step that ends an ocean step, a held radiation interval and a held drag interval, and a model that has run 3 steps, restored from it through encodeState, decodeState and the page's restore, steps on as the run that did not stop over two ocean cadences and a step, with runoff and discharge in the ocean's totals at the save and more added after it", async () => {
   const stand = !globalThis.self;
   if (stand) globalThis.self = { postMessage() {} };
   try {
@@ -99,6 +104,8 @@ test("a page save waits for the step that ends an ocean step, a held radiation i
     const build = () => { const model = createModel(new Grid(16), options), init = initializeState(model, {}); for (let a = 0; a < init.length; a++) model.state[a].set(init[a]); return model; };
     const run = build(), dt = 1350, names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
     assert.deepEqual(run.cadence, { radiationEvery: 4, dragEvery: 2, oceanEvery: 4 });
+    const water = async (model, change) => { const held = await model.readFreshwater(); for (const name of ['runoff', 'discharge']) change(held[`${name}Total`], held[`${name}Seen`], name); model.writeFreshwater(held); };
+    await water(run, (total, seen, name) => { total.fill(name === 'runoff' ? 2 : 3); seen.fill(1); });
     for (let s = 0; s < 3; s++) run.step(dt);
     const wait = stepsToCadence(run, dt);
     assert.equal(wait, 1, 'a save asked for after 3 steps waits for the fourth');
@@ -110,6 +117,7 @@ test("a page save waits for the step that ends an ocean step, a held radiation i
     saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
     saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
     const back = await decodeState(encodeState(saved, { f64: f64Names(saved) }));
+    for (const key of ['runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen']) assert.ok(Math.min(...back[key]) > 0, `${key} is not 0 at the save`);
     const carried = ['boundaryDepth', 'mixingTop', 'boundaryRegime', 'boundaryBuoyancy', 'subcloudVirtual', 'windSpeed', 'evaporation', 'exchangeHeat', 'exchangeWind', 'runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen', 'rainStep'];
     const restart = ['Q', 'W', 'previousT0', 'previousIceVolume', 'fresh', 'calved', 'buoyancy', 'capacity', 'penetrated', 'flux'];
     for (const key of carried) assert.ok(back[key] && back[key].length > 0, `the snapshot carries ${key}`);
@@ -118,7 +126,7 @@ test("a page save waits for the step that ends an ocean step, a held radiation i
       const model = build(), kept = { ...back, ocean: { ...back.ocean } };
       for (let s = 0; s < 3; s++) model.step(dt);
       for (const key of drop) { delete kept[key]; delete kept.ocean[key]; }
-      await placeSaved(model, kept, 16);
+      await placeSaved(model, kept, 16, dt);
       return model;
     };
     const twin = await restored([]), bare = await restored([...carried, ...restart]);
@@ -126,6 +134,7 @@ test("a page save waits for the step that ends an ocean step, a held radiation i
     const oceanGap = (model) => Math.max(...['h', 'u', 'Q', 'W'].map((key) => run.ocean[key].reduce((d, v, i) => Math.max(d, Math.abs(model.ocean[key][i] - v)), 0)));
     const steps = 2 * run.cadence.oceanEvery + 1, worst = names.map(() => 0);
     let bareWorst = 0;
+    for (const model of [run, twin, bare]) await water(model, (total) => { for (let i = 0; i < total.length; i++) total[i] += 3; });
     for (let s = 0; s < steps; s++) {
       for (const model of [run, twin, bare]) model.step(dt);
       names.forEach((name, a) => { worst[a] = Math.max(worst[a], gap(twin, a)); bareWorst = Math.max(bareWorst, gap(bare, a)); });
