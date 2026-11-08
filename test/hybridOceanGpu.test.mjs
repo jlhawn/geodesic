@@ -744,3 +744,43 @@ test('the GPU hybrid ocean saved on its cadence as the page saves it, every arra
     assert.equal(at, -1, `${name}[${at}]: ${values[at]} whole against ${resumed[name][at]} resumed`);
   }
 });
+
+test('the GPU hybrid ocean saved as the page saves it, every array as float64 and no Qref or Wref, loads into a CPU ocean on its restart branch with every restart array the CPU keeps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, RESTRAT), C = mesh.nCells, E = mesh.nEdges;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = sea[e] * 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: RESTRAT }), gpu = gpuModel.oceanEngine;
+  await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
+  for (let n = 0; n < 3; n++) await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
+  const { Qref, Wref, ...kept } = { ...(await gpu.serialize()), ...(await gpu.restartArrays()) };
+  gpuModel.destroy();
+  const saved = Object.fromEntries(Object.entries(kept).map(([name, v]) => [name, (Array.isArray(v) || ArrayBuffer.isView(v)) && v.length > 0 && typeof v[0] === 'number' ? Float64Array.from(v) : v]));
+  const restored = createCpuOcean(mesh, { geography: cpuModel.geography, ...RESTRAT });
+  restored.useSeaIce(null, { oceanFlux: new Float64Array(C) });
+  restored.load(saved, Float64Array.from(surfaceT), ice);
+  const after = restored.restartArrays();
+  assert.ok(after.previousT0.some((x, i) => x !== restored.T0[i]), 'the load took its plain branch: previousT0 is the loaded top layer\'s temperature');
+  for (const name of ['previousT0', 'previousIceVolume', 'fresh', 'calved', 'capacity', 'penetrated', 'boundaryDepths', 'mleDepths', 'flux']) {
+    const at = Array.from(saved[name]).findIndex((x, i) => !Object.is(x, after[name][i]));
+    assert.equal(at, -1, `${name}[${at}]: saved ${saved[name][at]}, loaded ${after[name][at]}`);
+  }
+});
+
+test('the GPU hybrid ocean takes a save with T and S and neither stores nor mixed-layer depths up its restart branch, and builds the depths from T and S as from the CPU\'s Q and W', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice } = scenario(N), C = mesh.nCells;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  const state = { ...cpu.serialize(), previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  const mixed = [];
+  for (const saved of [{ ...state, Q: cpu.Q, W: cpu.W }, state]) {
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+    const marked = gpu.cellOcean.findIndex((x) => x > 0);
+    await gpu.upload({ ...saved, eta: Float64Array.from(saved.eta, (v, i) => (i === marked ? v + 0.5 : v)) }, Float64Array.from(surfaceT), ice);
+    const { h } = await gpu.download();
+    mixed.push((await gpu.restartArrays()).mixedDepths);
+    gpuModel.destroy();
+    assert.equal(h[marked], Math.fround(saved.h[marked]), `the upload of the save ${saved.Q ? 'with' : 'without'} Q and W took its plain branch: it refitted a column whose sea surface the save left 0.5 m off`);
+  }
+  assert.ok(mixed[0].some((x) => x > 0), 'no mixed layer from Q and W');
+  const at = Array.from(mixed[0]).findIndex((x, i) => !Object.is(x, mixed[1][i]));
+  assert.equal(at, -1, `mixedDepths[${at}]: ${mixed[0][at]} from Q and W, ${mixed[1][at]} from T and S`);
+});
