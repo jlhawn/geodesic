@@ -12,7 +12,7 @@ Each reference the scorecards compare the model with is a file here that records
 | `tao-adcp-equatorial-undercurrent.json` | mean zonal current profile and undercurrent core at 0°, 165°E, 170°W, 140°W, 110°W | TAO/TRITON daily ADCP (NOAA PMEL GTMBA, ERDDAP pmelTaoDyAdcp), public | each mooring's record, 1988–2024 | `scripts/referenceTaoAdcp.mjs` |
 | `woa23-sst-1991-2020.bin` (`.json`) | monthly SST on 1° | World Ocean Atlas 2023, 1991–2020 normal (decav91C0), doi:10.25923/54bh-1613, public domain | 1991–2020 | `scripts/packWoaMonthlySst.py … decav91C0` |
 
-`scripts/references.mjs` reads them for the scorecards: it checks each binary file against the sha256 its .json records and every file against its shape, and samples the grids (`test/references.test.mjs`).
+`scripts/references.mjs` reads them for the scorecards: it checks each binary file against the sha256 its .json records and every file against its shape, and samples the grids (`test/references.test.mjs`). `scripts/scorecard64.mjs`, the N=64 half of the per-merge gate, scores a run's 30-day day-mean windows against them, row by row as this file defines each, with the pair sigma of `data/scorecard64-sigma.json`.
 
 Definitions that the earlier scorecards got wrong, as the Nov 7 audit found them:
 

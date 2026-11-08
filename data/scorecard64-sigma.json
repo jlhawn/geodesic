@@ -1,0 +1,138 @@
+{
+ "name": "Pair sigma of the N=64 scorecard rows",
+ "definition": "per row, the RMS over the windows of the difference between two twin controls from one start, so a change between two runs moves a row only past 2 sigma; proxy: rows the twins could not give (no gridBoxSkin means, no daily sea-ice line) take surfaceT for Ts and the 30-day-mean concentration cut for sea ice",
+ "twins": [
+  "~/.cache/webgcm-scratch/pairs/ctl/S1",
+  "~/.cache/webgcm-scratch/pairs/ctl2/S1"
+ ],
+ "days": [
+  395,
+  425
+ ],
+ "n": 2,
+ "measured": "2026-11-08",
+ "expires": "remeasure with new twins whenever a row changes its instrument or the pairs are rerun",
+ "script": "scripts/scorecard64.mjs --sigma",
+ "rows": {
+  "sst30": {
+   "sigma": 0.03767375058517651,
+   "proxy": false
+  },
+  "sstCold": {
+   "sigma": 0.3159830427245589,
+   "proxy": false
+  },
+  "sstWarm": {
+   "sigma": 0.20599905670595162,
+   "proxy": false
+  },
+  "ts": {
+   "sigma": 0.1225658654186217,
+   "proxy": true
+  },
+  "landT": {
+   "sigma": 0.23156711253579304,
+   "proxy": false
+  },
+  "rain_amazon": {
+   "sigma": 1.0625371195330098,
+   "proxy": false
+  },
+  "rain_india": {
+   "sigma": 0.028926015408545978,
+   "proxy": false
+  },
+  "rain_tropLand": {
+   "sigma": 0.023685057041882625,
+   "proxy": false
+  },
+  "rain_tropSea": {
+   "sigma": 0.05742978140060341,
+   "proxy": false
+  },
+  "rain_io": {
+   "sigma": 0.47313255996953135,
+   "proxy": false
+  },
+  "rain_wp": {
+   "sigma": 0.8700932701647653,
+   "proxy": false
+  },
+  "rain_global": {
+   "sigma": 0.003546263793505811,
+   "proxy": false
+  },
+  "stress": {
+   "sigma": 3.1597085753278344,
+   "proxy": false
+  },
+  "slp": {
+   "sigma": 0.16980515684261183,
+   "proxy": false
+  },
+  "asr": {
+   "sigma": 0.332707746294596,
+   "proxy": false
+  },
+  "net": {
+   "sigma": 0.49760537689127887,
+   "proxy": false
+  },
+  "swcre": {
+   "sigma": 0.2698559286401275,
+   "proxy": false
+  },
+  "lwcre": {
+   "sigma": 0.20662634015160308,
+   "proxy": false
+  },
+  "iceNExtent": {
+   "sigma": 0.07956108488684498,
+   "proxy": true
+  },
+  "iceNArea": {
+   "sigma": 0.046704122551307764,
+   "proxy": true
+  },
+  "iceSExtent": {
+   "sigma": 0.24807961350296676,
+   "proxy": true
+  },
+  "iceSArea": {
+   "sigma": 0.09244093158544353,
+   "proxy": true
+  },
+  "euc_0n165e": {
+   "sigma": 0.04225481771519883,
+   "proxy": false
+  },
+  "eucDepth_0n165e": {
+   "sigma": 16.131240585085305,
+   "proxy": false
+  },
+  "euc_0n170w": {
+   "sigma": 0.009249852316357294,
+   "proxy": false
+  },
+  "eucDepth_0n170w": {
+   "sigma": 1.7544236793609722,
+   "proxy": false
+  },
+  "euc_0n140w": {
+   "sigma": 0.06349444531178904,
+   "proxy": false
+  },
+  "eucDepth_0n140w": {
+   "sigma": 5.118488485874428,
+   "proxy": false
+  },
+  "euc_0n110w": {
+   "sigma": 0.017366716203075915,
+   "proxy": false
+  },
+  "eucDepth_0n110w": {
+   "sigma": 3.1406659864458395,
+   "proxy": false
+  }
+ }
+}
