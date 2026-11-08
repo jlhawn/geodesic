@@ -11,23 +11,32 @@
  * refuses any other start without --any-start, copies START into the empty directory OUT as p64_day0365.bin, runs
  * LEVELS=bl48 N=64 TAG=p64 spinup.mjs on this tree to days 395 and 425, and scores the two saves; without the copy
  * spinup.mjs would start fresh and run 395 days. Saves already made are scored with
- *   node scripts/scorecard64.mjs [--json OUT.json] [--base BASE.json] [--start START] [--commit HASH] [--any-start] [--identical] DIR/p64_day0395.bin DIR/p64_day0425.bin
+ *   node scripts/scorecard64.mjs [--json OUT.json] [--base BASE.json] [--log FILE] [--start START] [--commit HASH] [--any-start] [--identical] DIR/p64_day0395.bin DIR/p64_day0425.bin
  * which takes the start from --start or from the save 30 days before the first one beside it. Each state's daily lines
- * (TOA fluxes and the sea-ice cuts) are read from TAG.log beside it, or from --log FILE. The JSON records the start's
- * sha256 and day, the save days, the saves' options, the scoring tree's HEAD (scoredOn) and the commit that made the
- * saves (commit: scoredOn with --run, else --commit, else null, since a save does not record it), and with --run the
- * spin-up's environment; a --base whose start or leads differ is refused without --any-start.
+ * (TOA fluxes and the sea-ice cuts) are read from TAG.log beside it, or from --log FILE; a missing log is an error.
+ * The JSON records the start's
+ * sha256 and day, the save days, each save's sha256, the saves' options, the scoring tree's HEAD (scoredOn) and the
+ * commit that made the saves (commit: with --run the tree's HEAD before the first segment, else --commit, else null,
+ * since a save does not record it), and with --run the spin-up's environment and treeChangedDuringRun when HEAD or the
+ * tracked js/, scripts/ and data/ differ at scoring. A --base whose start or leads differ is refused without
+ * --any-start, which prints what differs.
  *
  * With --base, a row moves when its two-window mean changed by more than t·sigma, t the two-sided 5 % quantile of
  * Student's t at sigma's degrees of freedom, and is unresolved otherwise; a re-pin cites the moved rows. Unresolved is not
- * unchanged: the count of rows whose two-window mean is bit-identical to the base's is printed beside the moved rows,
- * and --identical exits 1 unless all are, the check for a merge whose changes are off by default. The null is a
+ * unchanged: the count of rows whose two-window mean is bit-identical to the base's is printed beside the moved rows.
+ * A row with no number on either side (a log without the window's every day, a base that JSON wrote as null) is named
+ * as no value, never identical and never moved. --identical, the check for a merge whose changes are off by default,
+ * exits 0 only when every row has a value on both sides, the two are bit-identical and the recorded starts match, and
+ * says whether the saves are the base's own. The null is a
  * merge that changes a default and has no effect on the row: it perturbs from the first step, so the faster rows
  * (rain, TOA, clouds) have decorrelated within one window, and the change over sigma is t-distributed at sigma's
  * degrees of freedom; each such row then moves 5 % of the time where its March–May spread matches the year's that sigma
  * pools, about 1.5 of the 30 rows a merge if all had decorrelated. Where spring is noisier pooling narrows the
- * threshold: the March–June pairs carry 68 % of the 160–100W stress's sigma², and S2's saturated pair at the gate's own
- * windows is 1.67 sigma for the stress and 1.44 sigma for the SLP contrast, so those guards move more often than 5 %.
+ * threshold. The March–June pairs carry 68 % of the 160–100W stress's sigma², about 3 % likely were spring no noisier
+ * than the year (a season-free AR(1) null), so that guard likely moves more often than 5 %; they carry 52 % of the SLP
+ * contrast's, about 10 % likely under that null. S2's saturated pairs at the gate's own windows, 1.67 sigma for the
+ * stress and 1.44 for the SLP contrast, are single draws (8.7 % and 15.6 % likely with no season). All of it rests on
+ * one start's overlapping spring pairs.
  * A fixed 2 sigma would move 7.5–14 % at these degrees of freedom.
  *
  * Sigma (data/scorecard64-sigma.json) is the pair sigma of that two-window mean: the RMS, over adjacent windows at
@@ -40,7 +49,7 @@
  * where sigma's 95 % interval spans a factor of 0.56 to 3.9 at 2.9 degrees of freedom. Saturated and pooled over the
  * year, sigma costs power: a row reads unresolved up to its threshold (in the current record the cold tongue 2.3 K,
  * the 160–100W stress 23 mN/m², the SLP contrast 0.71 hPa, the 30S–30N SST 0.49 K, ASR 1.4 W/m²), and the seasons
- * that set a pooled sigma need not be the gate's: the June–July pairs give 79 % of India rain's sigma², the melt and
+ * that set a pooled sigma need not be the gate's: the June–July pairs give 80 % of India rain's sigma², the melt and
  * freeze pairs (Jun/Jul, Sep/Oct and Oct/Nov) 63 % of the Arctic extent's, and with the second July pair and Nov/Dec
  * 90 %. Twins at the gate's own leads move 0 of 30 rows.
  *   node scripts/scorecard64.mjs --sigma [--from LEAD] [--out PATH] [--cache FILE] A_DIR B_DIR START ...
@@ -117,6 +126,25 @@ export function undercurrentCore(profile) {
   return { speed, depth };
 }
 
+export const PROFILE_DEPTHS = Array.from({ length: 67 }, (_, j) => 20 + 5 * j);
+export const meshSpacing = (cells) => 0.9 * Math.sqrt(4 * Math.PI / cells) * DEG;
+export const inMooringWindow = (latDeg, lonDeg, stationLon, spacing) => Math.abs(latDeg) <= Math.max(1, spacing) && Math.abs(wrap(lonDeg - stationLon)) <= Math.max(1.5, spacing);
+
+export function mooringProfile(columns, Z = PROFILE_DEPTHS) {
+  const sum = new Float64Array(Z.length), weight = new Float64Array(Z.length);
+  for (const { area, z: zc, u: uc } of columns) {
+    for (let j = 0; j < Z.length; j++) {
+      const z = Z[j];
+      if (zc.length < 2 || z < zc[0] || z > zc[zc.length - 1]) continue;
+      let n = 0;
+      while (zc[n + 1] < z) n++;
+      const f = (z - zc[n]) / (zc[n + 1] - zc[n]);
+      sum[j] += area * (uc[n] + f * (uc[n + 1] - uc[n])); weight[j] += area;
+    }
+  }
+  return Z.map((z, j) => ({ z, u: weight[j] ? sum[j] / weight[j] : NaN }));
+}
+
 const meshes = new Map();
 function meshOf(saved) {
   const { topography, geography } = stateGeography(saved), key = `${saved.N} ${JSON.stringify(saved.grid ?? null)} ${JSON.stringify(geography)}`;
@@ -176,28 +204,20 @@ export function reduceState(saved, logText) {
   row('iceSArea', fromLog(ice, (x) => x.sArea), nsidc('area', 'S'), { proxy: cutS.area });
 
   const eastward = Array.from({ length: L }, (_, k) => cellVector(mesh, Float64Array.from(saved.ocean.u.subarray(k * E, (k + 1) * E))));
-  const Z = Array.from({ length: 67 }, (_, j) => 20 + 5 * j), spacing = 0.9 * Math.sqrt(4 * Math.PI / C) * DEG;
+  const spacing = meshSpacing(C);
   for (const s of R.TAO_STATIONS) {
-    const st = tao.stations[s], cs = cells((i) => sea[i] && Math.abs(lat(i)) <= Math.max(1, spacing) && Math.abs(wrap(lon(i) - st.longitude)) <= Math.max(1.5, spacing));
-    const sum = new Float64Array(Z.length), weight = new Float64Array(Z.length);
-    for (const i of cs) {
-      const zc = [], uc = [], sinL = Math.sin(mesh.lonCell[i]), cosL = Math.cos(mesh.lonCell[i]);
+    const st = tao.stations[s], cs = cells((i) => sea[i] && inMooringWindow(lat(i), lon(i), st.longitude, spacing));
+    const columns = cs.map((i) => {
+      const z = [], u = [], sinL = Math.sin(mesh.lonCell[i]), cosL = Math.cos(mesh.lonCell[i]);
       let top = 0;
       for (let k = 0; k < L; k++) {
         const h = saved.ocean.h[k * C + i];
-        if (h > 1e-3) { zc.push(top + h / 2); uc.push(-sinL * eastward[k][3 * i] + cosL * eastward[k][3 * i + 1]); }
+        if (h > 1e-3) { z.push(top + h / 2); u.push(-sinL * eastward[k][3 * i] + cosL * eastward[k][3 * i + 1]); }
         top += h;
       }
-      for (let j = 0; j < Z.length; j++) {
-        const z = Z[j];
-        if (zc.length < 2 || z < zc[0] || z > zc[zc.length - 1]) continue;
-        let n = 0;
-        while (zc[n + 1] < z) n++;
-        const f = (z - zc[n]) / (zc[n + 1] - zc[n]);
-        sum[j] += area[i] * (uc[n] + f * (uc[n + 1] - uc[n])); weight[j] += area[i];
-      }
-    }
-    const core = undercurrentCore(Z.map((z, j) => ({ z, u: weight[j] ? sum[j] / weight[j] : NaN })));
+      return { area: area[i], z, u };
+    });
+    const core = undercurrentCore(mooringProfile(columns));
     row(`euc_${s}`, core.speed, st.core.speed, { cells: cs.length });
     row(`eucDepth_${s}`, core.depth, st.core.depth, { cells: cs.length });
   }
@@ -308,13 +328,26 @@ export function designProblems(base, now) {
   return problems;
 }
 
+const valueOf = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+
 export function compareScores(base, now, sigma, { anyStart = false } = {}) {
   const problems = designProblems(base, now);
   if (problems.length && !anyStart) throw new Error(`not the same gate design: ${problems.join('; ')} (--any-start compares them anyway)`);
+  if (problems.length) console.warn(`--any-start: comparing anyway, though ${problems.join('; ')}`);
   return ROWS.map(([key]) => {
-    const [a, b] = [base.means[key].model, now.means[key].model], delta = b - a, s = sigma[key]?.sigma, threshold = s * studentCritical(sigma[key]?.dof);
-    return { key, delta, sigma: s, threshold, identical: a === b || (Number.isNaN(a) && Number.isNaN(b)), verdict: !Number.isFinite(delta) || !Number.isFinite(threshold) ? 'no value' : Math.abs(delta) > threshold ? 'moved' : 'unresolved' };
+    const a = valueOf(base.means?.[key]?.model), b = valueOf(now.means?.[key]?.model), s = sigma[key]?.sigma, threshold = s * studentCritical(sigma[key]?.dof);
+    if (a === null || b === null) return { key, delta: NaN, sigma: s, threshold, identical: false, missing: [...(a === null ? ['base'] : []), ...(b === null ? ['candidate'] : [])], verdict: 'no value' };
+    const delta = b - a;
+    return { key, delta, sigma: s, threshold, identical: a === b, verdict: !Number.isFinite(threshold) ? 'no sigma' : Math.abs(delta) > threshold ? 'moved' : 'unresolved' };
   });
+}
+
+export function identityCheck(base, now, comparison) {
+  const empty = comparison.filter((c) => c.verdict === 'no value').map((c) => `${c.key} (no value in the ${c.missing.join(' and ')})`);
+  const changed = comparison.filter((c) => c.verdict !== 'no value' && !c.identical).map((c) => c.key);
+  const sameStart = !!base.start?.sha256 && base.start.sha256 === now.start?.sha256;
+  const sameSaves = Array.isArray(base.saves) && Array.isArray(now.saves) && base.saves.length === now.saves.length && base.saves.every((h, k) => h === now.saves[k]);
+  return { ok: !empty.length && !changed.length && sameStart, empty, changed, sameStart, sameSaves };
 }
 
 export function formatTable(reductions, sigma, comparison = null) {
@@ -329,41 +362,62 @@ export function formatTable(reductions, sigma, comparison = null) {
   return lines.join('\n');
 }
 
-const readLog = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '');
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const readLog = (file) => { if (!existsSync(file)) throw new Error(`no log at ${file}; give the run's log with --log FILE`); return readFileSync(file, 'utf8'); };
 const logBeside = (path) => join(dirname(path), `${basename(path).replace(/_day\d+\.bin$/, '')}.log`);
 async function reduceFile(path, logFile) {
-  const saved = await decodeState(new Uint8Array(readFileSync(path)));
-  return { ...reduceState(saved, readLog(logFile ?? logBeside(path))), options: saved.options ?? null, given: saved.given ?? null };
+  const bytes = readFileSync(path), saved = await decodeState(new Uint8Array(bytes));
+  return { ...reduceState(saved, readLog(logFile ?? logBeside(path))), sha256: sha256(bytes), options: saved.options ?? null, given: saved.given ?? null };
 }
 
-const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 async function startOf(path) {
   if (!path || !existsSync(path)) return null;
   const bytes = readFileSync(path);
   return { path, sha256: sha256(bytes), day: (await decodeState(new Uint8Array(bytes))).day };
 }
 
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const git = (cmd) => execSync(cmd, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+
 function provenance(env) {
-  const root = fileURLToPath(new URL('..', import.meta.url)), run = (cmd) => execSync(cmd, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  let scoredOn = null;
-  try { scoredOn = `${run('git rev-parse --short=12 HEAD')}${run('git status --porcelain --untracked-files=no -- js scripts data') ? ' with changes' : ''}`; } catch {}
-  const source = readFileSync(join(root, 'scripts/spinup.mjs'), 'utf8');
-  return { scoredOn, env: env && Object.fromEntries(Object.keys(env).filter((k) => /^[A-Z][A-Z0-9_]+$/.test(k) && new RegExp(`\\b${k}\\b`).test(source)).sort().map((k) => [k, env[k]])) };
+  let scoredOn = null, tree = null;
+  try {
+    const head = git('git rev-parse --short=12 HEAD'), diff = git('git diff HEAD -- js scripts data');
+    scoredOn = `${head}${diff ? ' with changes' : ''}`;
+    tree = sha256(`${head}\n${diff}`).slice(0, 16);
+  } catch {}
+  const source = readFileSync(join(ROOT, 'scripts/spinup.mjs'), 'utf8');
+  return { scoredOn, tree, env: env && Object.fromEntries(Object.keys(env).filter((k) => /^[A-Z][A-Z0-9_]+$/.test(k) && new RegExp(`\\b${k}\\b`).test(source)).sort().map((k) => [k, env[k]])) };
 }
 
-function score({ reductions, start, env, ran = false, commit = null, baseFile, jsonOut, anyStart, identical = false, extra = {} }) {
-  const sigma = JSON.parse(readFileSync(SIGMA_FILE, 'utf8')).rows, means = windowMeans(reductions);
-  const now = { start: start && { sha256: start.sha256, day: start.day, path: start.path }, days: reductions.map((r) => r.day), ...provenance(env), commit: null, options: reductions[0]?.options ?? null, given: reductions[0]?.given ?? null, ...extra, means };
-  now.commit = ran ? now.scoredOn : commit;
-  if (identical && !baseFile) throw new Error('--identical needs --base');
-  const comparison = baseFile ? compareScores(JSON.parse(readFileSync(baseFile, 'utf8')), now, sigma, { anyStart }) : null;
-  if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ ...now, reductions, comparison }, null, 1) + '\n');
+function commitArg(value) {
+  if (value === null) return null;
+  if (!/^[0-9a-f]{7,40}$/.test(value)) throw new Error(`--commit ${value} is not a commit hash`);
+  try { return git(`git rev-parse --verify --short=12 ${value}^{commit}`); } catch {}
+  if (value.length < 12) throw new Error(`--commit ${value} is not a commit in this repository and too short to record as 12 characters`);
+  return value.slice(0, 12);
+}
+
+function score({ reductions, start, made, commit = null, baseFile, jsonOut, anyStart, identical = false, extra = {} }) {
+  const sigma = JSON.parse(readFileSync(SIGMA_FILE, 'utf8')).rows, means = windowMeans(reductions), scored = provenance(made?.env ?? null);
+  const now = {
+    start: start && { sha256: start.sha256, day: start.day, path: start.path }, days: reductions.map((r) => r.day), saves: reductions.map((r) => r.sha256),
+    commit: made ? made.scoredOn : commit, scoredOn: scored.scoredOn, tree: scored.tree, env: made?.env ?? null,
+    ...(made && made.tree !== scored.tree ? { treeChangedDuringRun: { before: made.scoredOn, after: scored.scoredOn } } : {}),
+    options: reductions[0]?.options ?? null, given: reductions[0]?.given ?? null, ...extra, means,
+  };
+  if (now.treeChangedDuringRun) console.warn(`warning: the tree changed during the run (${made.scoredOn} at the start, ${scored.scoredOn} at scoring); the saves are from the first`);
+  if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ ...now, reductions }, null, 1) + '\n');
+  const base = baseFile ? JSON.parse(readFileSync(baseFile, 'utf8')) : null, comparison = base ? compareScores(base, now, sigma, { anyStart }) : null;
+  if (jsonOut && comparison) writeFileSync(jsonOut, JSON.stringify({ ...now, reductions, comparison }, null, 1) + '\n');
   console.log(formatTable(reductions, sigma, comparison));
   if (!comparison) return;
-  const same = comparison.filter((c) => c.identical).length;
-  console.log(`moved: ${comparison.filter((c) => c.verdict === 'moved').map((c) => c.key).join(', ') || 'none'}; identical (Δ exactly 0): ${same} of ${comparison.length}`);
-  if (identical && same < comparison.length) {
-    console.error(`--identical: ${comparison.filter((c) => !c.identical).map((c) => c.key).join(', ')} changed`);
+  const check = identityCheck(base, now, comparison);
+  console.log(`moved: ${comparison.filter((c) => c.verdict === 'moved').map((c) => c.key).join(', ') || 'none'}; identical (Δ exactly 0): ${comparison.filter((c) => c.identical).length} of ${comparison.length}${check.empty.length ? `; no value: ${check.empty.join(', ')}` : ''}`);
+  if (!identical) return;
+  if (check.ok) console.log(`--identical: all ${comparison.length} rows bit-identical from the same start; ${check.sameSaves ? 'same saves (a rescore of the base\'s own saves)' : 'different saves'}`);
+  else {
+    console.error(`--identical: ${[!check.sameStart && 'the recorded starts differ', check.changed.length && `${check.changed.join(', ')} changed`, check.empty.length && `no value: ${check.empty.join(', ')}`].filter(Boolean).join('; ')}`);
     process.exitCode = 1;
   }
 }
@@ -374,7 +428,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs
   const anyStart = flag('--any-start'), identical = flag('--identical');
   if (args[0] === '--run') {
     const jsonOut = opt('--json'), baseFile = opt('--base'), [, start, outDir] = args;
-    if (!outDir) throw new Error('usage: --run START OUT [--base BASE.json] [--json OUT.json] [--any-start]');
+    if (!outDir) throw new Error('usage: --run START OUT [--base BASE.json] [--json OUT.json] [--any-start] [--identical]');
+    if (identical && !baseFile) throw new Error('--identical needs --base');
     const bytes = readFileSync(start), hash = sha256(bytes), first = await decodeState(new Uint8Array(bytes));
     if (first.N !== 64) throw new Error(`${start} is N=${first.N}, not 64`);
     if (hash !== STANDARD_START && !anyStart) throw new Error(`${start} is not the standard start (sha256 ${hash.slice(0, 12)}…, the standard ${STANDARD_START.slice(0, 12)}…); --any-start runs it anyway`);
@@ -382,14 +437,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs
     if (readdirSync(outDir).some((name) => /_day\d+\.bin$/.test(name))) throw new Error(`${outDir} already holds saves`);
     const D0 = first.day, days = [D0 + 30, D0 + 60], spinup = fileURLToPath(new URL('./spinup.mjs', import.meta.url));
     copyFileSync(start, join(outDir, `p64_day${String(D0).padStart(4, '0')}.bin`));
-    const env = { ...process.env, LEVELS: 'bl48', N: '64', TAG: 'p64', OUT: outDir, MINUTES: '100000', KEEP: '20' };
+    const env = { ...process.env, LEVELS: 'bl48', N: '64', TAG: 'p64', OUT: outDir, MINUTES: '100000', KEEP: '20' }, made = provenance(env);
     for (const d of days) {
       const run = spawnSync(process.execPath, ['--max-old-space-size=6000', spinup], { stdio: 'inherit', env: { ...env, DAYS: String(d) } });
       if (run.status !== 0) throw new Error(`spinup.mjs to day ${d} exited ${run.status}`);
     }
     const reductions = [];
     for (const d of days) reductions.push(await reduceFile(join(outDir, `p64_day${String(d).padStart(4, '0')}.bin`)));
-    score({ reductions, start: { path: start, sha256: hash, day: D0 }, env, ran: true, baseFile, jsonOut, anyStart, identical });
+    score({ reductions, start: { path: start, sha256: hash, day: D0 }, made, baseFile, jsonOut, anyStart, identical });
   } else if (args[0] === '--sigma') {
     const out = opt('--out') ?? SIGMA_FILE, from = Number(opt('--from') ?? 180), cacheFile = opt('--cache');
     const groups = args.slice(1), twins = [], cache = cacheFile && existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, 'utf8')) : {};
@@ -427,10 +482,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs
     for (const [key, name, units] of ROWS) { const r = rows[key]; console.log(`| ${name} (${units}) | ${f(r.sigma)}${r.proxy ? '*' : ''} | ${f(r.perWindow)} | ${f(r.lag1, 2)} | ${f(r.dof, 1)} | ${f(r.early[0])} / ${f(r.early[1])} | ${f(r.saturation, 2)} | ${r.nullAtLeads.map((x) => (x ? 'moved' : x === false ? '·' : '—')).join(' ')} | ${f(100 * r.normalTailRate, 1)} % |`); }
     console.log(`nulls: ${nulls.atLeads.map((n) => `${n.start}: ${n.moved} of ${n.rows} moved`).join('; ')}; normal tail at the twins' spread ${(100 * nulls.normalTailRate).toFixed(1)} %, in-sample ${(100 * nulls.inSampleRate).toFixed(1)} %; a saturated null at 2σ would move ${(100 * nulls.saturatedRateAtTwoSigma).toFixed(1)} %`);
   } else {
-    const jsonOut = opt('--json'), baseFile = opt('--base'), logFile = opt('--log'), startFile = opt('--start'), commit = opt('--commit');
+    const jsonOut = opt('--json'), baseFile = opt('--base'), logFile = opt('--log'), startFile = opt('--start'), commit = commitArg(opt('--commit'));
+    if (identical && !baseFile) throw new Error('--identical needs --base');
+    if (args.length !== 2 || !args.every((a) => /_day\d+\.bin$/.test(a))) throw new Error(`give the gate's two saves, not ${JSON.stringify(args)}: [--json OUT.json] [--base BASE.json] [--log FILE] [--start START] [--commit HASH] [--any-start] [--identical] DIR/p64_day0395.bin DIR/p64_day0425.bin`);
     const reductions = [];
     for (const path of args) reductions.push(await reduceFile(path, logFile));
     const first = args[0] && reductions[0], beside = first && join(dirname(args[0]), basename(args[0]).replace(/_day\d+\.bin$/, `_day${String(first.day - GATE_LEADS[0]).padStart(4, '0')}.bin`));
-    score({ reductions, start: await startOf(startFile ?? beside), env: null, commit, baseFile, jsonOut, anyStart, identical, extra: { states: args } });
+    score({ reductions, start: await startOf(startFile ?? beside), commit, baseFile, jsonOut, anyStart, identical, extra: { states: args } });
   }
 }

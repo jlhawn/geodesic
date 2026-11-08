@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { ROWS, BOXES, SIGMA_FILE, logDays, undercurrentCore, dayWeighted, monthAt, windowDays, windowMeans, calibrate, twoSidedTail, studentTail, studentCritical, sigmaDof, designProblems, compareScores } from '../scripts/scorecard64.mjs';
+import { ROWS, BOXES, SIGMA_FILE, logDays, undercurrentCore, dayWeighted, monthAt, windowDays, windowMeans, calibrate, twoSidedTail, studentTail, studentCritical, sigmaDof, designProblems, compareScores, identityCheck, inMooringWindow, mooringProfile, PROFILE_DEPTHS } from '../scripts/scorecard64.mjs';
 
 test('the log parser reads the day-mean TOA line and the daily sea-ice cut', () => {
   const text = [
@@ -61,10 +61,35 @@ test('sigma is the saturated spread of the two-window mean, with its serial corr
   assert.equal(base.means.sst30.model, 2);
   assert.ok(compareScores(base, moved, sigma).every((c) => c.verdict === 'moved'));
   assert.ok(compareScores(base, inside, sigma).every((c) => c.verdict === 'unresolved'));
-  assert.ok(compareScores(base, inside, sigma).every((c) => !c.identical) && compareScores(base, structuredClone(base), sigma).every((c) => c.identical && c.verdict === 'unresolved'));
-  const unscored = score([{ day: 395, rows: rows(NaN) }]);
-  assert.ok(compareScores(unscored, structuredClone(unscored), sigma).every((c) => c.identical));
-  assert.equal(compareScores(base, score([{ day: 395, rows: rows(NaN) }]), sigma)[0].verdict, 'no value');
+});
+
+test('identity: a base read back from JSON, bit-exact rows, rows with no value on either side, the starts and the saves', () => {
+  const sigma = Object.fromEntries(ROWS.map(([key]) => [key, { sigma: 1, dof: 8 }])), viaJson = (x) => JSON.parse(JSON.stringify(x));
+  const record = (value, extra = {}) => ({ start: { sha256: 'a'.repeat(64), day: 365 }, days: [395, 425], saves: ['s1', 's2'], means: Object.fromEntries(ROWS.map(([key]) => [key, { model: value, ref: 0 }])), ...extra });
+  const verdicts = (base, now) => { const comparison = compareScores(viaJson(base), now, sigma); return { comparison, check: identityCheck(viaJson(base), now, comparison) }; };
+  let { comparison, check } = verdicts(record(2), record(2));
+  assert.ok(comparison.every((c) => c.identical) && check.ok && check.sameSaves);
+  ({ check } = verdicts(record(2), record(2, { saves: ['t1', 't2'] })));
+  assert.ok(check.ok && !check.sameSaves, 'a fresh bit-identical run');
+  const ulp = record(2);
+  ulp.means.sst30.model = 2 + 2 ** -51;
+  ({ comparison, check } = verdicts(record(2), ulp));
+  assert.ok(!comparison[0].identical && comparison[0].verdict === 'unresolved' && !check.ok && check.changed.join() === 'sst30', 'one ulp is a change');
+  ({ comparison, check } = verdicts(record(NaN), record(NaN)));
+  assert.ok(comparison.every((c) => c.verdict === 'no value' && !c.identical && c.missing.join() === 'base,candidate') && !check.ok && check.empty.length === ROWS.length, 'empty on both sides is no value, not identical');
+  const oneSided = record(2);
+  oneSided.means.asr.model = NaN;
+  ({ comparison, check } = verdicts(record(2), oneSided));
+  const asr = comparison.find((c) => c.key === 'asr');
+  assert.ok(asr.verdict === 'no value' && !asr.identical && asr.missing.join() === 'candidate' && !check.ok && check.empty.length === 1);
+  ({ comparison } = verdicts(oneSided, record(2)));
+  assert.deepEqual(comparison.find((c) => c.key === 'asr').missing, ['base']);
+  const missingKey = record(2);
+  delete missingKey.means.slp;
+  ({ comparison } = verdicts(missingKey, record(2)));
+  assert.equal(comparison.find((c) => c.key === 'slp').verdict, 'no value');
+  const other = record(2, { start: { sha256: 'b'.repeat(64), day: 365 } }), withAny = compareScores(record(2), other, sigma, { anyStart: true });
+  assert.ok(withAny.every((c) => c.identical) && !identityCheck(record(2), other, withAny).ok, '--identical refuses another start even under --any-start');
 });
 
 test('a base from another start, other leads or no recorded start is refused unless --any-start', () => {
@@ -74,6 +99,17 @@ test('a base from another start, other leads or no recorded start is refused unl
   assert.match(designProblems(base, { ...base, start: { sha256: 'a'.repeat(64), day: 548 }, days: [578, 638] }).join(), /leads are \[30,60\], the candidate's \[30,90\]/);
   assert.match(designProblems({ means }, base).join(), /base records no start/);
   assert.throws(() => compareScores({ means }, base, {}), /not the same gate design/);
+});
+
+test('the mooring window: the N=64 floors of 1° and 1.5° bind below them, the mesh spacing above; the profile weighs columns by area', () => {
+  const at = (lat, lon, spacing) => inMooringWindow(lat, lon, -140, spacing);
+  assert.deepEqual([at(0.95, -140, 0.9), at(1.05, -140, 0.9), at(0, -138.55, 0.9), at(0, -138.45, 0.9), at(0, -141.45, 0.9)], [true, false, true, false, true]);
+  assert.deepEqual([at(3.5, -140, 3.6), at(3.7, -140, 3.6), at(0, -136.5, 3.6), at(0, -136.3, 3.6)], [true, false, true, false]);
+  assert.ok(at(0, 220, 0.9) && !at(0, 140, 3.6), 'longitudes wrap');
+  const Z = [20, 30], column = (area, u) => ({ area, z: [10, 40], u: [u, u] });
+  assert.deepEqual(mooringProfile([column(3, 1), column(1, 5)], Z).map((p) => p.u), [2, 2]);
+  assert.deepEqual(mooringProfile([column(1, 1), { area: 1, z: [25, 40], u: [3, 3] }], Z).map((p) => p.u), [1, 2], 'a column counts only within its own depths');
+  assert.equal(PROFILE_DEPTHS[0], 20);
 });
 
 test('the committed sigma covers every row with its design, twins, degrees of freedom and expiry, and the rows and boxes are named once', () => {
@@ -92,6 +128,7 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
   const { climatologyAt } = await import('../js/ocean/climatology.module.js');
   const { windowMonths } = await import('../scripts/woaSstBias.mjs');
   const { reduceState } = await import('../scripts/scorecard64.mjs');
+  const { cellVector } = await import('../js/dynamics/operators.module.js');
   const R = await import('../scripts/references.mjs');
   const header = { N: 16, ...gridHeader(new Grid(16)), ...FRESH_GEOGRAPHY }, { topography, geography } = stateGeography(header);
   const { mesh } = stateGrid(header, topography), made = createGeography(mesh, topography, geography), land = made.land;
@@ -121,6 +158,8 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
     `sea ice on day ${d}'s mean concentration, sea cells on the index's grids, 15 %: N extent ${(10 + j / 10).toFixed(2)} area ${(8 + j / 20).toFixed(2)}, S extent ${(3 - j / 20).toFixed(2)} area ${(2 - j / 50).toFixed(2)} Mkm²`,
   ]).join('\n');
   const { rows } = reduceState({ ...header, day: D, means, ocean: { h, u } }, log);
+  const gap = reduceState({ ...header, day: D, means, ocean: { h, u } }, log.split('\n').filter((line) => !line.includes(`day ${D - 10}`)).join('\n')).rows;
+  assert.ok(['asr', 'net', 'swcre', 'lwcre', 'iceNExtent', 'iceNArea', 'iceSExtent', 'iceSArea'].every((key) => Number.isNaN(gap[key].model)), 'a window missing a day has no log rows');
 
   const inBox = (s, n, w, e) => (i) => lat(i) >= s && lat(i) <= n && lon(i) >= w && lon(i) <= e;
   const mean = (field, keep) => { let sum = 0, area = 0; for (let i = 0; i < C; i++) if (keep(i) && Number.isFinite(field[i])) { sum += mesh.areaCell[i] * field[i]; area += mesh.areaCell[i]; } return sum / area; };
@@ -144,12 +183,20 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
   assert.ok(cut.N.extent > 0 && Math.abs(rows.iceNExtent.proxy - cut.N.extent) < 1e-9 && Math.abs(rows.iceNArea.proxy - 0.5 * cut.N.extent) < 1e-9 && Math.abs(rows.iceSArea.proxy - cut.S.extent) < 1e-9);
   const spacing = 0.9 * Math.sqrt(4 * Math.PI / C) / rad;
   assert.ok(spacing > 1.5 && spacing < 5, `N=16 spacing ${spacing}°: the window is the mesh's, not the N=64 floors`);
+  const unit = new Float64Array(E);
+  for (let e = 0; e < E; e++) {
+    const [x, y, z] = [mesh.xEdge[3 * e], mesh.xEdge[3 * e + 1], mesh.xEdge[3 * e + 2]], r = Math.hypot(x, y);
+    unit[e] = amplitude(Math.atan2(z, r) / rad, Math.atan2(y, x) / rad) * (-y * mesh.nEdge[3 * e] + x * mesh.nEdge[3 * e + 1]) / r;
+  }
+  const v = cellVector(mesh, unit), rebuilt = Float64Array.from({ length: C }, (_, i) => -Math.sin(mesh.lonCell[i]) * v[3 * i] + Math.cos(mesh.lonCell[i]) * v[3 * i + 1]);
+  const centers = Array.from({ length: L }, (_, k) => 10 * k + 5), layered = (z) => { const k = Math.min(Math.floor((z - 5) / 10), L - 2), t = (z - centers[k]) / 10; return core(centers[k]) + t * (core(centers[k + 1]) - core(centers[k])); };
   for (const s of R.TAO_STATIONS) {
     const window = (i) => !land[i] && Math.abs(lat(i)) <= Math.max(1, spacing) && Math.abs(wrap(lon(i) - tao.stations[s].longitude)) <= Math.max(1.5, spacing);
     const cs = Array.from({ length: C }, (_, i) => i).filter(window), built = mean(fill((i) => amplitude(lat(i), lon(i))), window);
     assert.equal(rows[`euc_${s}`].cells, cs.length, `${s}: the window holds ${rows[`euc_${s}`].cells} cells, built ${cs.length}`);
-    assert.ok(cs.length > 0 && Math.abs(rows[`euc_${s}`].model - built) < 0.02 * built, `${s}: core ${rows[`euc_${s}`].model} m/s, built ${built}`);
-    near(`eucDepth_${s}`, 120, 3);
+    const reconstructed = mean(rebuilt, window), expected = undercurrentCore(Array.from({ length: 67 }, (_, j) => 20 + 5 * j).map((z) => ({ z, u: reconstructed * layered(z) })));
+    assert.ok(cs.length > 0 && Math.abs(reconstructed - built) < 0.02 * built, `${s}: the reconstruction's mean amplitude ${reconstructed}, built ${built}`);
+    near(`euc_${s}`, expected.speed, 1e-9 * expected.speed); near(`eucDepth_${s}`, expected.depth, 1e-6);
   }
   assert.ok(Math.abs(rows.rain_global.ref - R.gridMean(R.gpcp().grid, 3)) < 0.2 && Math.abs(rows.ts.ref - 15.5) < 0.6, 'references for late April');
 });
