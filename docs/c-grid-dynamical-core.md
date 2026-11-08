@@ -469,9 +469,11 @@ exactly the `'exner'` ones.
 at every interface, and a diffusive limiter makes that term one-signed,
 a source of `c_p T`. At f83c292 the conservation test's row over a slab
 with `verticalAdvection` `'vanLeer'`, which limited θ, q and q_c until
-23e8253 dropped it, measured the dynamics' energy rate over the spun-up
-N=16 slab at 0.13 W/m² (its bound was 0.2), against 0.008 W/m² under
-the centered faces (the `'over a slab'` row, bounded at 0.02).
+23e8253 dropped it, measured the dynamics' energy rate over the N=16
+slab on bl36, the mean of 6 RK4 steps after 16 from initializeState
+with the option on, at 0.13 W/m² (its bound was 0.2), against
+0.008 W/m² in the same window under the centered faces (the
+`'over a slab'` row, bounded at 0.02).
 Balancing a limited face would need the geopotential and the pressure
 gradient to take a flow-dependent θ face.
 

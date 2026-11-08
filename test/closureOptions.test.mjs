@@ -15,7 +15,10 @@ const start = initializeState(model, {});
 const nu4 = (model.core.spacing / Math.PI) ** 4 / (3 * 3600);
 const core = (options) => createSigmaCore(mesh, { levels, splitClosure: true, surfaceGeopotential: phis, ...options });
 const largest = (a) => a.reduce((m, x) => Math.max(m, Math.abs(x)), 0);
-const difference = (a, b) => largest(a.map((x, n) => x - b[n]));
+const difference = (a, b) => {
+  assert.equal(a.length, b.length, `fields of ${a.length} and ${b.length} values`);
+  return largest(Float64Array.from(a, (x, n) => x - b[n]));
+};
 
 function closed(options, state, step = dt) {
   const c = core(options), s = state.map((a) => Float64Array.from(a));
