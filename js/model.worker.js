@@ -110,6 +110,21 @@ function refresh() {
   sendFrame().catch(report);
 }
 
+async function runFrame(steps) {
+  const landAge = model.land ? model.land.record[0] : -1;
+  if (model.beginFrame) {
+    const capturing = model.beginFrame(subscription);
+    capturing.catch(() => {}); // when a step fails first, its error is the one reported
+    await model.stepBatch(steps, dt, null, false);
+    await yieldToPage();
+    postFrame(await capturing);
+  } else {
+    for (let n = 0; n < steps; n++) await model.step(dt);
+    await sendFrame();
+  }
+  if (model.land && freshJumpDue(model.land.record, landAge, model.land.record[0])) await model.land.jump();
+}
+
 /*
  * Work on the model outside the loop (the start, a snapshot, a restore, a
  * profile, the device test) holds it, one holder at a time: the loop
@@ -178,18 +193,7 @@ async function loop() {
   let finish;
   batchDone = new Promise((resolve) => { finish = resolve; });
   try {
-    const landAge = model.land ? model.land.record[0] : -1;
-    if (model.beginFrame) {
-      const capturing = model.beginFrame(subscription);
-      capturing.catch(() => {}); // when a step fails first, its error is the one reported
-      await model.stepBatch(stepsPerFrame, dt, null, false);
-      await yieldToPage();
-      postFrame(await capturing);
-    } else {
-      for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
-      await sendFrame();
-    }
-    if (model.land && freshJumpDue(model.land.record, landAge, model.land.record[0])) await model.land.jump();
+    await runFrame(stepsPerFrame);
   } catch (error) {
     running = false;
     report(error);
@@ -284,7 +288,7 @@ function placeDeck(model, saved, N) {
   for (const name of Object.keys(RADIATION_FIELDS)) model.radiation[name].set(savedRadiationField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   placeCumulus(model, saved && saved.N === N ? saved : null);
   if (model.skin) model.skin.load(saved && saved.N === N ? saved : null);
-  placeBoundaryLayer(model, saved && saved.N === N ? saved : null);
+  placeCarried(model, saved && saved.N === N ? saved : null);
   if (model.seaFlow) { const flow = saved && saved.N === N ? saved.seaFlow : null; if (flow && flow.length === model.seaFlow.length) model.seaFlow.set(flow); else model.seaFlow.fill(0); }
 }
 
@@ -591,10 +595,19 @@ const oceanMessage = (model) => (model.ocean ? { ocean: true, generator: (model.
  * ocean as transferable buffers.
  */
 async function snapshot() {
+  const steps = stepsToCadence(model, dt);
+  if (steps) await runFrame(steps);
   const { arrays, ocean, land } = await snapshotArrays(model);
   const transfer = [...Object.values(arrays), ...(ocean ? Object.values(groupArrays(ocean)) : []), ...(land ? Object.values(land) : [])];
   self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), ...geographyHeader(currentGeography), options: currentOptions, arrays, ocean, land }, transfer);
   refresh();
+}
+
+// A save is exact only at a step that ends an ocean step, a held radiation interval and a held drag interval: what they hold is not saved.
+export function stepsToCadence(model, dt) {
+  const { radiationEvery = 1, dragEvery = 1, oceanEvery = 1 } = model.cadence ?? {};
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a), every = [radiationEvery, dragEvery, oceanEvery].reduce((a, b) => (a * b) / gcd(a, b));
+  return (every - (Math.round(model.time / dt) % every)) % every;
 }
 
 export async function snapshotArrays(model) {
@@ -610,10 +623,11 @@ export async function snapshotArrays(model) {
   if (model.seaFlow) arrays.seaFlow = Float64Array.from(model.seaFlow).buffer;
   if (model.skin) for (const [name, values] of Object.entries(model.skin.serialize())) arrays[name] = values.buffer;
   if (model.lake) for (const [name, values] of Object.entries(lakeArrays(await model.lake.serialize()))) arrays[name] = values.buffer;
-  for (const [name, values] of Object.entries(savedBoundaryLayer(model))) arrays[name] = values.buffer;
+  for (const [name, values] of Object.entries(savedCarried(model))) arrays[name] = values.buffer;
+  if (model.readFreshwater) for (const [name, values] of Object.entries(await model.readFreshwater())) arrays[name] = values.buffer;
   let ocean = null, land = null;
   if (model.ocean) {
-    const o = await model.ocean.serialize();
+    const o = await model.ocean.serialize({ restart: true });
     ocean = { ...groupHeader(o), ...Object.fromEntries(Object.entries(groupArrays(o)).map(([k, v]) => [k, Float64Array.from(v).buffer])) };
   }
   if (model.land) {
@@ -735,6 +749,7 @@ export async function placeSaved(model, saved, N) {
   placeLand(model, saved, N);
   await model.settle?.();
   placeEnergy(model, saved);
+  if (model.writeFreshwater) model.writeFreshwater(saved);
   model.time = saved.time;
 }
 
@@ -744,10 +759,13 @@ const CARRIED_FIELDS = [
   ['boundaryRegime', (model) => model.boundaryLayer?.regime, false],
   ['boundaryBuoyancy', (model) => model.boundaryLayer?.buoyancyFlux, false],
   ['subcloudVirtual', (model) => model.moist?.subcloudVirtual, false],
-  ['iceOceanFlux', (model) => (model.gpu ? null : model.seaIce?.oceanFlux), false],
+  ['windSpeed', (model) => model.surface?.windSpeed, false],
+  ['evaporation', (model) => model.radiation?.evaporation, false],
+  ['exchangeHeat', (model) => (model.exchange && !model.exchange.fixed ? model.exchange.heat : null), false],
+  ['exchangeWind', (model) => model.exchange?.wind, false],
 ];
 
-export function savedBoundaryLayer(model) {
+export function savedCarried(model) {
   const ground = model.gpu ? null : model.surfaceGeopotential, saved = {};
   for (const [name, field, height] of CARRIED_FIELDS) {
     const values = field(model);
@@ -756,7 +774,7 @@ export function savedBoundaryLayer(model) {
   return saved;
 }
 
-export function placeBoundaryLayer(model, saved) {
+export function placeCarried(model, saved) {
   const ground = model.gpu ? null : model.surfaceGeopotential;
   if (!saved) return;
   for (const [name, field, height] of CARRIED_FIELDS) {

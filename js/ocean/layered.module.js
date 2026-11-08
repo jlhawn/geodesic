@@ -1648,10 +1648,11 @@ export function createOcean(mesh, {
     };
   }
 
-  function serialize() {
+  function serialize({ restart = false } = {}) {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
-    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
+    const fields = { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
+    return restart ? { ...fields, ...restartArrays() } : fields;
   }
 
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;

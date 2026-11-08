@@ -139,6 +139,20 @@ export async function createGpuModel(gridOrMesh, {
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain, fogRain: moistCpu.fogRain, cumulusK0: K - cumulusLength / C, cumulusCover: new Float64Array(cumulusLength), cumulusWater: new Float64Array(cumulusLength), subcloudVirtual: new Float64Array(gpu.physics.subcloudLayers * C) };
   model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
   model.oceanEngine = gpuOcean;
+  model.cadence = { radiationEvery: gpu.physics.radiationEvery, dragEvery: gpu.physics.dragEvery, oceanEvery: gpuOcean ? gpuOcean.everySteps : 1 };
+  const freshwater = [['rain', 'RAIN', 'RAINSEEN'], ['runoff', 'RUNOFF', 'RUNOFFSEEN'], ['discharge', 'DISCHARGE', 'DISCHARGESEEN']];
+  model.readFreshwater = async () => {
+    const totals = await readRanges(gpu.device, gpu.buffers.PH, freshwater.map(([, key]) => ({ offset: gpu.layout.PH[key], length: C })));
+    const seen = gpuOcean ? await Promise.all(freshwater.map(([, , section]) => gpuOcean.readSection(section))) : null;
+    return Object.fromEntries(freshwater.flatMap(([name], n) => [[`${name}Total`, Float64Array.from(totals[n])], ...(seen ? [[`${name}Seen`, Float64Array.from(seen[n])]] : [])]));
+  };
+  model.writeFreshwater = (saved) => {
+    for (const [name, key, section] of freshwater) {
+      const total = saved[`${name}Total`], seen = saved[`${name}Seen`];
+      if (total && total.length === C) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH[key], Float32Array.from(total));
+      if (gpuOcean && seen && seen.length === C) gpuOcean.putSection(section, seen);
+    }
+  };
 
   function pushState(ocean) {
     gpu.upload(state);
@@ -328,7 +342,7 @@ export async function createGpuModel(gridOrMesh, {
       if (started) gpu.uploadSurfaceTemperature(surfaceT);
       return started;
     },
-    load(saved, surfaceT, iceField) { if (gpuOcean.upload(saved, surfaceT, iceField)) gpu.uploadSurfaceTemperature(surfaceT); },
+    load(saved, surfaceT, iceField) { oceanCounter = 0; if (gpuOcean.upload(saved, surfaceT, iceField)) gpu.uploadSurfaceTemperature(surfaceT); },
     async serialize({ restart = false } = {}) { return restart ? { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) } : gpuOcean.serialize(); },
   } : null;
 

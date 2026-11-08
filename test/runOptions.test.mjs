@@ -58,10 +58,10 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.equal((await snapshot()).arrays.seaFlow, undefined);
     assert.deepEqual((await restore(taken)).options, OPTIONS);
     assert.deepEqual(new Float64Array((await snapshot()).arrays.seaFlow), saved.seaFlow, 'the restore places it again');
-    const { placeBoundaryLayer } = await import('../js/model.worker.js');
+    const { placeCarried } = await import('../js/model.worker.js');
     const placed = createModel(new Grid(16), { topography: syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 1500 + 1000 * Math.cos(lat) : -4000)) }), { nCells: C } = placed.mesh, g = placed.core.diagnostics.g;
     const kept = { boundaryDepth: Float64Array.from({ length: C }, (_, i) => 300 + (i % 700)), mixingTop: Float64Array.from({ length: C }, (_, i) => 200 + (i % 500)), boundaryRegime: Float64Array.from({ length: C }, (_, i) => i % 4) };
-    placeBoundaryLayer(placed, kept);
+    placeCarried(placed, kept);
     let highest = 0;
     for (let i = 0; i < C; i++) {
       const ground = placed.surfaceGeopotential[i] / g;
@@ -78,39 +78,51 @@ test("the page's worker runs a saved state with the options it records, and its 
   }
 });
 
-test("a page snapshot carries what the first step reads before it computes its own through encodeState and decodeState to the page's restore, so that the first step after a restore matches the continued run", async () => {
+test("a page save waits for the step that ends an ocean step, a held radiation interval and a held drag interval, and a model that has run 3 steps, restored from it through encodeState, decodeState and the page's restore, steps on as the run that did not stop over two ocean cadences and a step", async () => {
   const stand = !globalThis.self;
   if (stand) globalThis.self = { postMessage() {} };
   try {
-    const { snapshotArrays, placeSaved } = await import('../js/model.worker.js');
+    const { snapshotArrays, placeSaved, stepsToCadence } = await import('../js/model.worker.js');
     const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 1500 + 1000 * Math.cos(lat) : -4000));
-    const build = () => { const model = createModel(new Grid(16), { topography }), init = initializeState(model, {}); for (let a = 0; a < init.length; a++) model.state[a].set(init[a]); return model; };
-    const run = build(), dt = 1350, C = run.mesh.nCells, carried = ['boundaryDepth', 'mixingTop', 'boundaryRegime', 'boundaryBuoyancy', 'subcloudVirtual', 'iceOceanFlux'];
-    for (let s = 0; s < 8; s++) run.step(dt);
+    const options = { topography, radiation: { radiationEvery: 4 }, dragEvery: 2, ocean: { everySteps: 4 } };
+    const build = () => { const model = createModel(new Grid(16), options), init = initializeState(model, {}); for (let a = 0; a < init.length; a++) model.state[a].set(init[a]); return model; };
+    const run = build(), dt = 1350, names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
+    assert.deepEqual(run.cadence, { radiationEvery: 4, dragEvery: 2, oceanEvery: 4 });
+    for (let s = 0; s < 3; s++) run.step(dt);
+    const wait = stepsToCadence(run, dt);
+    assert.equal(wait, 1, 'a save asked for after 3 steps waits for the fourth');
+    for (let s = 0; s < wait; s++) run.step(dt);
+    assert.equal(stepsToCadence(run, dt), 0);
     const { arrays, ocean, land } = await snapshotArrays(run);
     const saved = { N: 16, K: run.core.K, day: run.time / 86400, time: run.time, terrain: true };
     for (const [key, buffer] of Object.entries(arrays)) saved[key] = new Float64Array(buffer.slice(0));
     saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
     saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
     const back = await decodeState(encodeState(saved, { f64: f64Names(saved) }));
-    for (const key of carried) assert.equal(back[key]?.length, key === 'subcloudVirtual' ? run.moist.subcloudVirtual.length : C, `the snapshot carries ${key}`);
-    const restored = async (drop) => { const model = build(), kept = { ...back }; for (const key of drop) delete kept[key]; await placeSaved(model, kept, 16); return model; };
-    const twin = await restored([]), bare = await restored(carried);
-    const g = run.core.diagnostics.g;
-    for (let i = 0; i < C; i++) {
-      const ground = run.surfaceGeopotential[i] / g;
-      assert.ok(Math.abs(back.boundaryDepth[i] + ground - run.boundaryLayer.depth[i]) <= 1e-12 * Math.abs(run.boundaryLayer.depth[i]), `cell ${i}: the save holds the depth above the ground`);
-      for (const [mine, theirs] of [[twin.boundaryLayer.depth, run.boundaryLayer.depth], [twin.boundaryLayer.mixingTop, run.boundaryLayer.mixingTop]]) assert.ok(Math.abs(mine[i] - theirs[i]) <= 1e-12 * Math.abs(theirs[i]), `cell ${i}: a height comes back to round-off`);
-      for (const [mine, theirs] of [[twin.boundaryLayer.regime, run.boundaryLayer.regime], [twin.boundaryLayer.buoyancyFlux, run.boundaryLayer.buoyancyFlux], [twin.seaIce.oceanFlux, run.seaIce.oceanFlux]]) assert.equal(mine[i], theirs[i], `cell ${i}`);
-    }
-    assert.deepEqual(twin.moist.subcloudVirtual, run.moist.subcloudVirtual);
-    const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
-    for (const model of [run, twin, bare]) model.step(dt);
+    const carried = ['boundaryDepth', 'mixingTop', 'boundaryRegime', 'boundaryBuoyancy', 'subcloudVirtual', 'windSpeed', 'evaporation', 'exchangeHeat', 'exchangeWind', 'runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen', 'rainStep'];
+    const restart = ['Q', 'W', 'previousT0', 'previousIceVolume', 'fresh', 'calved', 'buoyancy', 'capacity', 'penetrated', 'flux'];
+    for (const key of carried) assert.ok(back[key] && back[key].length > 0, `the snapshot carries ${key}`);
+    for (const key of restart) assert.ok(back.ocean[key] && back.ocean[key].length > 0, `the snapshot carries the ocean's restart array ${key}`);
+    const restored = async (drop) => {
+      const model = build(), kept = { ...back, ocean: { ...back.ocean } };
+      for (let s = 0; s < 3; s++) model.step(dt);
+      for (const key of drop) { delete kept[key]; delete kept.ocean[key]; }
+      await placeSaved(model, kept, 16);
+      return model;
+    };
+    const twin = await restored([]), bare = await restored([...carried, ...restart]);
     const gap = (model, a) => { let d = 0, s = 0; for (let i = 0; i < run.state[a].length; i++) { d = Math.max(d, Math.abs(model.state[a][i] - run.state[a][i])); s = Math.max(s, Math.abs(run.state[a][i])); } return s > 0 ? d / s : d; };
-    const restoredGaps = names.map((_, a) => gap(twin, a)), bareGaps = names.map((_, a) => gap(bare, a));
-    console.log(`the first step after a restore against the continued run (largest gap over the field's largest value): ${names.map((name, a) => `${name} ${restoredGaps[a].toExponential(1)}`).join(', ')}; restored without the carried fields: ${names.map((name, a) => `${name} ${bareGaps[a].toExponential(1)}`).join(', ')}`);
-    names.forEach((name, a) => assert.ok(restoredGaps[a] <= 1e-12, `${name}: the first step after the restore parts from the continued run by ${restoredGaps[a]}`));
-    assert.ok(Math.max(...bareGaps) > 1e-3, `without the carried fields the first step parts by only ${Math.max(...bareGaps)}`);
+    const oceanGap = (model) => Math.max(...['h', 'u', 'Q', 'W'].map((key) => run.ocean[key].reduce((d, v, i) => Math.max(d, Math.abs(model.ocean[key][i] - v)), 0)));
+    const steps = 2 * run.cadence.oceanEvery + 1, worst = names.map(() => 0);
+    let bareWorst = 0;
+    for (let s = 0; s < steps; s++) {
+      for (const model of [run, twin, bare]) model.step(dt);
+      names.forEach((name, a) => { worst[a] = Math.max(worst[a], gap(twin, a)); bareWorst = Math.max(bareWorst, gap(bare, a)); });
+      assert.equal(oceanGap(twin), 0, `step ${s + 1}: the restored ocean parts from the continued run`);
+    }
+    console.log(`over ${steps} steps after a restore at step 4, the largest gap from the continued run over the field's largest value: ${names.map((name, a) => `${name} ${worst[a]}`).join(', ')}; restored without the carried fields and the ocean's restart arrays: ${bareWorst.toExponential(1)}`);
+    names.forEach((name, a) => assert.equal(worst[a], 0, `${name}: the restored run parts from the continued run by ${worst[a]}`));
+    assert.ok(bareWorst > 1e-6, `without the carried fields and the ocean's restart arrays the run parts by only ${bareWorst}`);
   } finally {
     if (stand) delete globalThis.self;
   }
