@@ -1,137 +1,694 @@
 {
- "name": "Pair sigma of the N=64 scorecard rows",
- "definition": "per row, the RMS over the windows of the difference between two twin controls from one start, so a change between two runs moves a row only past 2 sigma; proxy: rows the twins could not give (no gridBoxSkin means, no daily sea-ice line) take surfaceT for Ts and the 30-day-mean concentration cut for sea ice",
+ "name": "Pair sigma of the N=64 scorecard's gate statistic",
+ "design": "twin controls (the second perturbed by 1e-6 at its start) from 2 starts, each a year of 30-day windows; sigma is the RMS of the two-window mean difference (the gate's statistic) over the windows at leads of 180 days or more, where the twins have decorrelated, pooled over the starts",
+ "definition": "per row: sigma, the pair sigma of the mean of two adjacent windows (a merge moves a row past 2 sigma); perWindow, the RMS of one window's difference; lag1, the correlation of adjacent windows' differences; dof, the windows less their serial correlation, windows (1 − lag1) / (1 + lag1); early, the RMS at leads 30 and 60 days (the gate's), earlyGate their two-window mean, saturation earlyGate / sigma; nullAtLeads, whether each start's twins at the gate's leads would read moved; monteCarloRate, P(|mean| > 2 sigma) for normal differences at the early RMS with lag1; inSampleRate, the share of the late pairs past 2 sigma. proxy: the twins carry no gridBoxSkin or daily sea-ice line, so Ts takes surfaceT and sea ice the 30-day-mean cut on the index's grids",
  "twins": [
-  "~/.cache/webgcm-scratch/pairs/ctl/S1",
-  "~/.cache/webgcm-scratch/pairs/ctl2/S1"
+  {
+   "label": "ctl/S1 − ctl2/S1 from day 365",
+   "start": 365,
+   "days": [
+    395,
+    425,
+    455,
+    485,
+    515,
+    545,
+    575,
+    605,
+    635,
+    665,
+    695,
+    730
+   ]
+  },
+  {
+   "label": "ctl/S2 − ctl2/S2 from day 548",
+   "start": 548,
+   "days": [
+    578,
+    608,
+    638,
+    668,
+    698,
+    728,
+    758,
+    788,
+    818,
+    848,
+    878,
+    913
+   ]
+  }
  ],
- "days": [
-  395,
-  425
- ],
- "n": 2,
+ "from": 180,
  "measured": "2026-11-08",
- "expires": "remeasure with new twins whenever a row changes its instrument or the pairs are rerun",
+ "expires": "remeasure whenever a row changes its instrument or the control physics changes, and with more starts when they exist",
  "script": "scripts/scorecard64.mjs --sigma",
+ "nulls": {
+  "atLeads": [
+   {
+    "start": "ctl/S1 − ctl2/S1 from day 365",
+    "moved": 0,
+    "rows": 30
+   },
+   {
+    "start": "ctl/S2 − ctl2/S2 from day 548",
+    "moved": 0,
+    "rows": 30
+   }
+  ],
+  "monteCarloRate": 0.0015333300415629589,
+  "inSampleRate": 0.030555555555555558
+ },
  "rows": {
   "sst30": {
-   "sigma": 0.03767375058517651,
+   "sigma": 0.1496815761036721,
+   "perWindow": 0.15476971938777137,
+   "lag1": 0.8639781020308689,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 1.0216356992032403,
+   "early": [
+    0.015577929391674423,
+    0.08988109093520673
+   ],
+   "earlyGate": 0.050045482058277004,
+   "saturation": 0.3343463060785425,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 7.62183531831087e-9,
+   "inSampleRate": 0,
    "proxy": false
   },
   "sstCold": {
-   "sigma": 0.3159830427245589,
+   "sigma": 0.7996412855241182,
+   "perWindow": 0.8530576937204677,
+   "lag1": 0.7511581257828066,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 1.9894184241548019,
+   "early": [
+    0.02475760594309531,
+    0.38339947606673813
+   ],
+   "earlyGate": 0.1794705639583146,
+   "saturation": 0.2244388417747617,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 1.8818010834195887e-15,
+   "inSampleRate": 0,
    "proxy": false
   },
   "sstWarm": {
-   "sigma": 0.20599905670595162,
+   "sigma": 0.28511064740685227,
+   "perWindow": 0.30848045494439164,
+   "lag1": 0.7053692260729115,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 2.4187318335031835,
+   "early": [
+    0.033347400043673904,
+    0.20526417734605693
+   ],
+   "earlyGate": 0.11289768246900983,
+   "saturation": 0.395978485882027,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 7.120105581609438e-7,
+   "inSampleRate": 0,
    "proxy": false
   },
   "ts": {
-   "sigma": 0.1225658654186217,
+   "sigma": 0.09008488962057126,
+   "perWindow": 0.12723236072535565,
+   "lag1": 0.019803451040934672,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 13.456271079902521,
+   "early": [
+    0.0049942680587485855,
+    0.1558961597938654
+   ],
+   "earlyGate": 0.07559856271759738,
+   "saturation": 0.8391924887293655,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.020956872042506736,
+   "inSampleRate": 0.08333333333333333,
    "proxy": true
   },
   "landT": {
-   "sigma": 0.23156711253579304,
+   "sigma": 1.0427683626893642,
+   "perWindow": 1.361239128111304,
+   "lag1": 0.047901953591315355,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 12.720057066445815,
+   "early": [
+    0.033426639238453675,
+    1.6054796869280443
+   ],
+   "earlyGate": 0.792967671718466,
+   "saturation": 0.7604446971073742,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.009462606560627765,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
   "rain_amazon": {
-   "sigma": 1.0625371195330098,
+   "sigma": 1.4382475742313454,
+   "perWindow": 1.71880822379912,
+   "lag1": 0.2574705496242339,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 8.26692307693978,
+   "early": [
+    1.0292355643662998,
+    0.7265151233965772
+   ],
+   "earlyGate": 0.8771512443120375,
+   "saturation": 0.609875003460945,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.00004195809193891559,
+   "inSampleRate": 0,
    "proxy": false
   },
   "rain_india": {
-   "sigma": 0.028926015408545978,
+   "sigma": 0.6886136519995053,
+   "perWindow": 1.0078976822743304,
+   "lag1": -0.22052806753299792,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 14,
+   "early": [
+    0.8290749253634713,
+    0.04692122230388121
+   ],
+   "earlyGate": 0.3959703985748703,
+   "saturation": 0.5750254840651268,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.0007821672252548693,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
   "rain_tropLand": {
-   "sigma": 0.023685057041882625,
+   "sigma": 0.2705792136436619,
+   "perWindow": 0.3907251999735592,
+   "lag1": -0.06847878886463933,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 14,
+   "early": [
+    0.10338841944000424,
+    0.03319237152866139
+   ],
+   "earlyGate": 0.035134759326420566,
+   "saturation": 0.12985017900410906,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 2.6939468603773516e-24,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
   "rain_tropSea": {
-   "sigma": 0.05742978140060341,
+   "sigma": 0.2453366675899654,
+   "perWindow": 0.26617484127299507,
+   "lag1": 0.5897818956269181,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 3.6124788419221607,
+   "early": [
+    0.05596233255324632,
+    0.24498433874021688
+   ],
+   "earlyGate": 0.15000686137516764,
+   "saturation": 0.611432701229464,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.0004933194264161268,
+   "inSampleRate": 0,
    "proxy": false
   },
   "rain_io": {
-   "sigma": 0.47313255996953135,
+   "sigma": 0.8075945438060168,
+   "perWindow": 1.101804454297268,
+   "lag1": 0.031194874388457694,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 13.15296661710541,
+   "early": [
+    0.4654415824797201,
+    1.188508801607536
+   ],
+   "earlyGate": 0.6910081237765274,
+   "saturation": 0.8556374347453575,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.012263576092219904,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
   "rain_wp": {
-   "sigma": 0.8700932701647653,
+   "sigma": 1.2434652036749432,
+   "perWindow": 1.3896808735659865,
+   "lag1": 0.5576185048237102,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 3.976160345609796,
+   "early": [
+    0.2229116932320835,
+    0.9787063270260523
+   ],
+   "earlyGate": 0.42451612672180766,
+   "saturation": 0.34139767278343663,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.000008706220891552858,
+   "inSampleRate": 0,
    "proxy": false
   },
   "rain_global": {
-   "sigma": 0.003546263793505811,
+   "sigma": 0.02029845950708363,
+   "perWindow": 0.026023889308837984,
+   "lag1": 0.2010532676278719,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 9.312871089640444,
+   "early": [
+    0.009413639574243966,
+    0.007776745478591852
+   ],
+   "earlyGate": 0.0011505604967243035,
+   "saturation": 0.05668215838363439,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 1.231681915516356e-9,
+   "inSampleRate": 0,
    "proxy": false
   },
   "stress": {
-   "sigma": 3.1597085753278344,
+   "sigma": 9.776800991541192,
+   "perWindow": 12.199388468918311,
+   "lag1": 0.33792908490707757,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 6.927865546733869,
+   "early": [
+    1.0965651314980351,
+    6.80055215197021
+   ],
+   "earlyGate": 3.577396602498422,
+   "saturation": 0.36590666063404137,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 6.760816246771957e-8,
+   "inSampleRate": 0,
    "proxy": false
   },
   "slp": {
-   "sigma": 0.16980515684261183,
+   "sigma": 0.30918071094886057,
+   "perWindow": 0.409088218928984,
+   "lag1": 0.10686786810620551,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 11.296605680591826,
+   "early": [
+    0.19244922784805782,
+    0.30920963389470885
+   ],
+   "earlyGate": 0.13165538592051618,
+   "saturation": 0.4258201797792372,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.0011799994225747343,
+   "inSampleRate": 0,
    "proxy": false
   },
   "asr": {
-   "sigma": 0.332707746294596,
+   "sigma": 0.5608108382478968,
+   "perWindow": 0.651283835912313,
+   "lag1": 0.4601725121853073,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 5.175816395896228,
+   "early": [
+    0.2506214498224202,
+    0.31394443952887613
+   ],
+   "earlyGate": 0.16677080080156384,
+   "saturation": 0.29737442543477677,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.0000034970605355944596,
+   "inSampleRate": 0,
    "proxy": false
   },
   "net": {
-   "sigma": 0.49760537689127887,
+   "sigma": 0.9133010182847715,
+   "perWindow": 1.0154059318071798,
+   "lag1": 0.5971443277331404,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 3.531289761233396,
+   "early": [
+    0.04772607021092239,
+    0.614319858777894
+   ],
+   "earlyGate": 0.3144660377352202,
+   "saturation": 0.3443180632008977,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 1.4067722117112012e-8,
+   "inSampleRate": 0,
    "proxy": false
   },
   "swcre": {
-   "sigma": 0.2698559286401275,
+   "sigma": 0.6093292836602628,
+   "perWindow": 0.696929774877725,
+   "lag1": 0.5102713089628014,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 4.539715237806753,
+   "early": [
+    0.23486402685621394,
+    0.29158570304839654
+   ],
+   "earlyGate": 0.19193821343802756,
+   "saturation": 0.3149991615125533,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 1.0528883458293779e-7,
+   "inSampleRate": 0,
    "proxy": false
   },
   "lwcre": {
-   "sigma": 0.20662634015160308,
+   "sigma": 0.27481433126142824,
+   "perWindow": 0.3882704833669021,
+   "lag1": -0.01334649469158883,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 14,
+   "early": [
+    0.19046726169548742,
+    0.2689588981403893
+   ],
+   "earlyGate": 0.12147816447594503,
+   "saturation": 0.4420372253453697,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.0007891223339879081,
+   "inSampleRate": 0,
    "proxy": false
   },
   "iceNExtent": {
-   "sigma": 0.07956108488684498,
+   "sigma": 0.5348348580896202,
+   "perWindow": 0.6302603202295463,
+   "lag1": 0.3780254434471819,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 6.318928168667886,
+   "early": [
+    0.018668686481674482,
+    0.0814935615545429
+   ],
+   "earlyGate": 0.04375409043372169,
+   "saturation": 0.0818085989944769,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 2.9827828766051833e-124,
+   "inSampleRate": 0,
    "proxy": true
   },
   "iceNArea": {
-   "sigma": 0.046704122551307764,
+   "sigma": 0.3045568066037227,
+   "perWindow": 0.3185453622696271,
+   "lag1": 0.7149579720082044,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 2.3269307219302786,
+   "early": [
+    0.007663200906297013,
+    0.26030313322478754
+   ],
+   "earlyGate": 0.13391812092246913,
+   "saturation": 0.43971475277752736,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.000004596369626169308,
+   "inSampleRate": 0,
    "proxy": true
   },
   "iceSExtent": {
-   "sigma": 0.24807961350296676,
+   "sigma": 0.3940990126033587,
+   "perWindow": 0.432369133239124,
+   "lag1": 0.6199428949967164,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 3.2845598980553916,
+   "early": [
+    0.04411331946747291,
+    0.3306706543540618
+   ],
+   "earlyGate": 0.16863651485506737,
+   "saturation": 0.42790392632825935,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 0.00001173218642434102,
+   "inSampleRate": 0,
    "proxy": true
   },
   "iceSArea": {
-   "sigma": 0.09244093158544353,
+   "sigma": 0.2814343099203121,
+   "perWindow": 0.32735304670120974,
+   "lag1": 0.43473647319648934,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 5.51577904590243,
+   "early": [
+    0.008656288913862399,
+    0.09883858157016337
+   ],
+   "earlyGate": 0.046800117474298096,
+   "saturation": 0.1662914428860842,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 7.573277718854195e-28,
+   "inSampleRate": 0.08333333333333333,
    "proxy": true
   },
   "euc_0n165e": {
-   "sigma": 0.04225481771519883,
+   "sigma": 0.13881485169573207,
+   "perWindow": 0.17839785173006767,
+   "lag1": 0.12279716421208649,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 10.93771884403428,
+   "early": [
+    0.022610489285651132,
+    0.04443805363468989
+   ],
+   "earlyGate": 0.02849487455494002,
+   "saturation": 0.20527252096481624,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 2.4150335831055105e-26,
+   "inSampleRate": 0,
    "proxy": false
   },
   "eucDepth_0n165e": {
-   "sigma": 16.131240585085305,
+   "sigma": 65.59485394571935,
+   "perWindow": 78.55273447036141,
+   "lag1": 0.24905125398791542,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 8.417014442444088,
+   "early": [
+    41.25144836970674,
+    15.943476263696589
+   ],
+   "earlyGate": 21.665776199255653,
+   "saturation": 0.3302968891002392,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 4.0120929348905285e-8,
+   "inSampleRate": 0,
    "proxy": false
   },
   "euc_0n170w": {
-   "sigma": 0.009249852316357294,
+   "sigma": 0.12291815323572236,
+   "perWindow": 0.16254390166466326,
+   "lag1": 0.20650216693187812,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 9.207583680685545,
+   "early": [
+    0.008680199343752935,
+    0.023374097240385902
+   ],
+   "earlyGate": 0.014735926616466267,
+   "saturation": 0.11988405478405549,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 1.8016691210028508e-76,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
   "eucDepth_0n170w": {
-   "sigma": 1.7544236793609722,
+   "sigma": 16.14022494925382,
+   "perWindow": 17.047717748255874,
+   "lag1": 0.6692240805730962,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 2.7742607633522365,
+   "early": [
+    0.43299939510524116,
+    2.116701597496538
+   ],
+   "earlyGate": 0.9978498249940061,
+   "saturation": 0.06182378672734284,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 9.525407345772606e-156,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
   "euc_0n140w": {
-   "sigma": 0.06349444531178904,
+   "sigma": 0.10285618299380621,
+   "perWindow": 0.10821569022075204,
+   "lag1": 0.6783681771362242,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 2.682871125318881,
+   "early": [
+    0.00932241491361349,
+    0.07675282707043476
+   ],
+   "earlyGate": 0.041550100095123936,
+   "saturation": 0.4039630762656825,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 8.0026415835843e-7,
+   "inSampleRate": 0,
    "proxy": false
   },
   "eucDepth_0n140w": {
-   "sigma": 5.118488485874428,
+   "sigma": 13.268168896271535,
+   "perWindow": 16.989618363614262,
+   "lag1": 0.13965170740551014,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 10.568909797664224,
+   "early": [
+    0.7630592941492242,
+    5.061438182686
+   ],
+   "earlyGate": 2.911986103554399,
+   "saturation": 0.21947158845503476,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 3.007330468830185e-24,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
   "euc_0n110w": {
-   "sigma": 0.017366716203075915,
+   "sigma": 0.23151777525990622,
+   "perWindow": 0.2536332597740746,
+   "lag1": 0.5491196920803344,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 4.0747815311794335,
+   "early": [
+    0.010589603199133758,
+    0.05001482753460427
+   ],
+   "earlyGate": 0.026704726157749673,
+   "saturation": 0.11534633195127435,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 2.683269961567352e-60,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
   "eucDepth_0n110w": {
-   "sigma": 3.1406659864458395,
+   "sigma": 76.94723736415133,
+   "perWindow": 91.81454125830959,
+   "lag1": 0.5244761829138616,
+   "windows": 14,
+   "pairs": 12,
+   "dof": 4.366964544163103,
+   "early": [
+    2.885083859780626,
+    10.315667214890258
+   ],
+   "earlyGate": 6.366543108467491,
+   "saturation": 0.08273907324752866,
+   "nullAtLeads": [
+    false,
+    false
+   ],
+   "monteCarloRate": 3.9646550397417102e-143,
+   "inSampleRate": 0.08333333333333333,
    "proxy": false
   }
  }
