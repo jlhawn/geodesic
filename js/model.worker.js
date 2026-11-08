@@ -569,7 +569,7 @@ async function profile() {
   self.postMessage({ type: 'profile', result: { ...result, N: currentN, dt, queueDepth: QUEUE_DEPTH, pause: pace.pause } });
 }
 
-let lastStart = null, currentN = null, currentOptions = {};
+let lastStart = null, currentN = null, currentOptions = {}, currentSoilSeed = null;
 
 /*
  * The model options a run starts with: those its saved state records
@@ -599,7 +599,7 @@ async function snapshot() {
   if (steps) await runFrame(steps);
   const { arrays, ocean, land } = await snapshotArrays(model);
   const transfer = [...Object.values(arrays), ...(ocean ? Object.values(groupArrays(ocean)) : []), ...(land ? Object.values(land) : [])];
-  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), ...geographyHeader(currentGeography), options: currentOptions, arrays, ocean, land }, transfer);
+  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), ...geographyHeader(currentGeography), options: currentOptions, soilSeed: currentSoilSeed, arrays, ocean, land }, transfer);
   refresh();
 }
 
@@ -649,12 +649,14 @@ async function restore(snapshot) {
   if (snapshot.ocean) saved.ocean = { ...groupHeader(snapshot.ocean), ...Object.fromEntries(Object.entries(groupArrays(snapshot.ocean)).map(([k, buffer]) => [k, new Float64Array(buffer)])) };
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
   if (snapshot.options) saved.options = snapshot.options;
+  if (snapshot.soilSeed) saved.soilSeed = snapshot.soilSeed;
   const sameGeography = JSON.stringify(savedGeography(saved)) === JSON.stringify(currentGeography);
   if (model && saved.N === currentN && sameGeography && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
   if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || !sameOptions(runOptions(saved.options, lastStart.options), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   await placeSaved(model, saved, currentN);
+  currentSoilSeed = saved.soilSeed ?? null;
   restartRain();
   serving = true;
   self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
@@ -706,6 +708,7 @@ async function start(message) {
   if (built.gpu) built.gpu.device.lost.then((info) => { if (info.reason === 'destroyed' || model !== built) return; running = false; self.postMessage({ type: 'halted', day: model.time / 86400, reason: `the GPU device was lost (${info.message || info.reason}) — reload the page` }); });
   currentN = N;
   currentOptions = given;
+  currentSoilSeed = saved?.soilSeed ?? null;
   currentTopography = options.topography ?? null;
   currentGeography = geography;
   dt = step;

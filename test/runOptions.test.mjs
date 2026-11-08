@@ -10,13 +10,14 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 
+const SEED = 'soilWater_seed.bin sha256:0123abcd';
 const OPTIONS = {
   radiation: { cloudColumns: true, cloudSpread: 0.75, varianceCover: 'water', buoyancyLength: 0.53 },
   moist: { stratocumulusInversion: 7, cumulusEntrainmentHeight: 1, cumulusAscent: 'kinetic' },
   surface: { relativeWind: true },
 };
 
-test("the page's worker runs a saved state with the options it records, and its snapshots and restores carry them", async () => {
+test("the page's worker runs a saved state with the options it records, and its snapshots and restores carry them and the soil seed the state descends from", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'run-options-'));
   const messages = [], fetched = globalThis.fetch;
   globalThis.self = { postMessage: (message) => messages.push(message) };
@@ -42,8 +43,9 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.deepEqual((await start()).options, {});
     const fresh = await snapshot();
     assert.deepEqual(fresh.options, {});
+    assert.equal(fresh.soilSeed, null, 'a fresh start descends from no soil seed');
     assert.equal(fresh.arrays.seaFlow, undefined);
-    const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, ...(fresh.grid ? { grid: fresh.grid } : {}), options: OPTIONS };
+    const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, ...(fresh.grid ? { grid: fresh.grid } : {}), options: OPTIONS, soilSeed: SEED };
     for (const [key, buffer] of Object.entries(fresh.arrays)) saved[key] = new Float64Array(buffer.slice(0));
     saved.ocean = { ...groupHeader(fresh.ocean), ...Object.fromEntries(Object.entries(groupArrays(fresh.ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
     saved.land = Object.fromEntries(Object.entries(fresh.land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
@@ -53,11 +55,20 @@ test("the page's worker runs a saved state with the options it records, and its 
     assert.deepEqual((await start(file)).options, OPTIONS);
     const taken = await snapshot();
     assert.deepEqual(taken.options, OPTIONS);
+    assert.equal(taken.soilSeed, SEED, 'the snapshot records the soil seed of the state the run started from');
     assert.deepEqual(new Float64Array(taken.arrays.seaFlow), saved.seaFlow, 'the start places the sea\'s velocity under the air and the snapshot carries it');
     assert.deepEqual((await restore(fresh)).options, {});
-    assert.equal((await snapshot()).arrays.seaFlow, undefined);
+    const unseeded = await snapshot();
+    assert.equal(unseeded.arrays.seaFlow, undefined);
+    assert.equal(unseeded.soilSeed, null, "a restore that starts over takes the snapshot's record");
     assert.deepEqual((await restore(taken)).options, OPTIONS);
     assert.deepEqual(new Float64Array((await snapshot()).arrays.seaFlow), saved.seaFlow, 'the restore places it again');
+    const { soilSeed: recorded, ...unrecorded } = taken;
+    assert.equal(recorded, SEED);
+    await restore(unrecorded);
+    assert.equal((await snapshot()).soilSeed, null, "a restore into the running model takes the snapshot's record");
+    await restore(taken);
+    assert.equal((await snapshot()).soilSeed, SEED);
     const { placeCarried } = await import('../js/model.worker.js');
     const placed = createModel(new Grid(16), { topography: syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 1500 + 1000 * Math.cos(lat) : -4000)) }), { nCells: C } = placed.mesh, g = placed.core.diagnostics.g;
     const kept = { boundaryDepth: Float64Array.from({ length: C }, (_, i) => 300 + (i % 700)), mixingTop: Float64Array.from({ length: C }, (_, i) => 200 + (i % 500)), boundaryRegime: Float64Array.from({ length: C }, (_, i) => i % 4) };
