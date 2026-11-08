@@ -2742,21 +2742,21 @@ export function relativeWindKernels({ physics, pblDiagnose, mixMomentum }) {
   };
 }
 const VIRTUAL_DENSITY = [
-  ['\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);', '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));'],
-  ['\n    let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);', '\n    let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));'],
-  ['PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * ', 'PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) / (1.0 + VIRT * IN[S_Q + (K - 1) * C + i]) * '],
-  ['let rho = blDensity(K - 1, i, pi); let exchange', 'let rho = blDensity(K - 1, i, pi) / (1.0 + VIRT * IN[S_Q + (K - 1) * C + i]); let exchange'],
-  ['let density = surfaceP / (RGAS * surfaceT);', 'let density = surfaceP / (RGAS * surfaceT * (1.0 + VIRT * IN[S_Q + bottom * C + i]));'],
-  ['FOG_VMAX * pressure / (RGAS * temperature))', 'FOG_VMAX * pressure / (RGAS * temperature * (1.0 + VIRT * IN[S_Q + idx])))'],
+  ['\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);', '\n  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));', ['physicsSurface', 'column', 'columnLast']],
+  ['\n    let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);', '\n    let rho = pi * LV[L_SM + K - 1] / (RGAS * airT * (1.0 + VIRT * IN[S_Q + bottom]));', ['physics']],
+  ['PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * ', 'PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) / (1.0 + VIRT * IN[S_Q + (K - 1) * C + i]) * ', ['pblDiagnose']],
+  ['let rho = blDensity(K - 1, i, pi); let exchange', 'let rho = blDensity(K - 1, i, pi) / (1.0 + VIRT * IN[S_Q + (K - 1) * C + i]); let exchange', ['pblDiagnose']],
+  ['let density = surfaceP / (RGAS * surfaceT);', 'let density = surfaceP / (RGAS * surfaceT * (1.0 + VIRT * IN[S_Q + bottom * C + i]));', ['adjustMix', 'adjustPlume', 'adjustRain']],
+  ['FOG_VMAX * pressure / (RGAS * temperature))', 'FOG_VMAX * pressure / (RGAS * temperature * (1.0 + VIRT * IN[S_Q + idx])))', ['adjustRain']],
 ];
 export function virtualDensityKernels(bodies) {
+  for (const [from, , kernels] of VIRTUAL_DENSITY) for (const name of kernels) if (typeof bodies[name] === 'string' && !bodies[name].includes(from)) throw new Error(`virtualDensity: the ${name} kernel lays no surface density at ${JSON.stringify(from.trim())}`);
   const out = {};
   for (const [name, body] of Object.entries(bodies)) {
     if (typeof body !== 'string') continue;
     const text = VIRTUAL_DENSITY.reduce((t, [from, to]) => (t.includes(from) ? replacedOnce(t, from, to) : t), body);
     if (text !== body) out[name] = text;
   }
-  for (const name of ['physics', 'physicsSurface', 'pblDiagnose', 'column', 'columnLast', 'adjustPlume', 'adjustRain']) if (typeof bodies[name] === 'string' && !out[name]) throw new Error(`virtualDensity: the ${name} kernel lays no surface density`);
   return out;
 }
 const K_PROFILE_ANCHORS = [
