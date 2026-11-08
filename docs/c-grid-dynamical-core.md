@@ -984,16 +984,19 @@ Bare ice reflects 0.62 (`iceAlbedo`) while its skin is colder than
 −1 °C, falling linearly to 0.48 (`meltingIceAlbedo`) at the melting
 point, and ice thinner than 0.5 m blends toward the water's albedo
 (the zenith-angle form of Briegleb et al. 1986, 0.06 diffuse). The 0.48
-has no source read for it: it was set (e7812042, Oct 1) between CCSM3's
-melting bare ice, about 0.50 from memory of Briegleb et al. (2004), and
-SHEBA's ponded July ice, 0.45–0.55 as Perovich et al. (2002) were quoted
-(the snow and ice albedo review below). The Arctic's summer turns on
-it. In the Nov 7 audit's 60-year columns of this code, under the GCM's
-own fluxes north of 80°N, 0.48 melts the pack out by August (volume
-minimum 0) and 0.55 alone keeps 1.72 m (its sea-ice verification);
-under Maykut and Untersteiner's (1971) forcing, recalled rather than
-read, 0.55 with light through the ice (i0 0.3) and a brine reservoir
-keeps 1.02 m (its finding sea-ice-02).
+has no source read for it: it was set (e7812042, Oct 1) "as CCSM3's ice
+does", and the snow and ice albedo review below places it inside
+SHEBA's ponded July ice, 0.45–0.55 as Perovich et al. (2002) were
+quoted, just under CCSM3's melting bare ice, about 0.50 from memory of
+Briegleb et al. (2004). The Arctic's summer turns on it. The Nov 7
+audit ran 60-year columns of this code. Under the GCM's own fluxes
+north of 80°N (the mean of the pmin and ctl runs), 0.48 melts the pack
+out by September (August volume 0.14 m), and 0.55 alone keeps a 1.72 m
+minimum. Under Maykut and Untersteiner's (1971) Table 1 as printed,
+0.55 alone and 0.60 alone both melt out, and 0.64 keeps 0.11 m. With
+light through the ice (i0 0.3) and a brine reservoir added, 0.55 keeps
+1.02 m on the table as the auditor recalled it (finding sea-ice-02)
+and 1.85 m on the printed one (its sea-ice verification).
 Snow lies on the ice: precipitation that falls on an iced cell from air
 below the melting point accumulates in water equivalent in the ocean
 cells of the land surface's snow array (one field of snow on the
@@ -5126,20 +5129,28 @@ The work, in order:
      40–60°N and three to four times poleward of 60°N, so an observed
      start spends its first year refilling the land (global fill 0.335
      against the model's 0.51–0.55 at N = 128). `scripts/soilWater.mjs
-     --reference=a.bin,b.bin --out=file.bin` scales soilw/760 by a factor
+     soilw.dods --reference=a.bin,b.bin --out=file.bin` scales soilw/760 by a factor
      linear in latitude between 10° band centers, fitted so each band's
      mean fill over open land matches the reference states' (March 20
      saves of one grid, N, relax and recorded geography; bands under
      0.5 % of the land take their neighbors' factors; factors held to
-     0.5–5) and refuses to write without `--out`, so
+     0.5–5). It refuses a state whose open land holds the observed
+     seed itself (fill within 2 % of soilw/760 in every band) and
+     refuses to write without `--out`, so
      `data/soilwater_march.bin` stays the observed fill. Against
-     seventeen128 day 1095, combined128 day 1460 and pmin day 1825 the
+     seventeen128 day 1095, pmin day 1825 and combined128 day 1460 as
+     the run saved it (open-land fill 0.519; the page's
+     `runs/combined128_day1460.parts.json` and the pcape128 copies
+     hold CPC's water, seeded in e661831) the
      global fill goes from 0.335 to 0.527 (the states' 0.528), with
      factors 0.7–1.3 in the tropics, 1.6–2.1 at 20–60°N and 4.4–5
      poleward of 60°N. A fresh spin-up takes such a file as `SOIL_SEED`
-     (`seededGeography`), else the observed fill. `test/soilSeed.test.mjs`
-     holds the band fit, the refusals and the seed reaching the land at
-     N = 16.
+     (`startGeography` in `scripts/soilWater.mjs`), else the observed
+     fill; its log and saved headers name the file and its sha256
+     (`soilSeed`), and `SOIL_SEED` is refused with `FROM`, with
+     `LAND_FROM` and on a continuation of a state that does not record
+     the same file. `test/soilSeed.test.mjs` holds the band fit, the
+     clamp, the refusals and the seed reaching the land at N = 16.
    - `coverGoal` ('water', the default, or 'observed'; `scripts/spinup.mjs`
      gives 'observed' unless `LAND` says otherwise, a goal for spin-ups
      that the page never runs: a published state's cover follows the

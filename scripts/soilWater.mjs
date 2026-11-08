@@ -16,20 +16,23 @@
  * ROOT_ZONE) matches soilw / 760 in the tropics but runs 2 times it at 40–60N and 3 to 4 times it poleward of 60N. With
  * --reference, the model states listed (March 20 saves of one grid) set the scale: the fill is soilw / 760 times a factor
  * linear in latitude between 10° band centers, fitted so that each band's mean fill over the states' open land matches
- * the states' mean, clamped to 0–1, the factors held to SCALE_RANGE; a band with less than MINIMUM_BAND of the open land
+ * the states' mean, clamped to 0–1, the factors held to SCALE_RANGE; a state whose open land holds the observed seed itself
+ * (its fill within SEEDED_RATIO of soilw / 760 in every band) is refused; a band with less than MINIMUM_BAND of the open land
  * takes its factor from the fitted bands either side. --out writes elsewhere than data/soilwater_march.bin.
  *
  *   node scripts/soilWater.mjs soilw.dods
  *   node scripts/soilWater.mjs soilw.dods --reference=a.bin,b.bin --out=soilwater_march_model.bin
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
-import { encodeSoilWater, decodeSoilWater, soilWaterUrl, SOIL_SCALE, SOIL_NONE, createGeography, readTopography, geographyOptions, savedGeography } from '../js/geography.module.js';
+import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { basename } from 'node:path';
+import { createHash } from 'node:crypto';
+import { encodeSoilWater, decodeSoilWater, soilWaterUrl, SOIL_SCALE, SOIL_NONE, createGeography, readTopography, geographyOptions, savedGeography, seededGeography } from '../js/geography.module.js';
 import { Grid } from '../js/grid.module.js';
 import { gridMesh, savedRelax } from '../js/stateGrid.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 
-const COLS = 720, ROWS = 360, MONTHS = 12, CAPACITY = 760, ROOT_ZONE = 300, BAND = 10, SCALE_RANGE = [0.5, 5], MINIMUM_BAND = 0.005;
+const COLS = 720, ROWS = 360, MONTHS = 12, CAPACITY = 760, ROOT_ZONE = 300, BAND = 10, SCALE_RANGE = [0.5, 5], MINIMUM_BAND = 0.005, SEEDED_RATIO = 0.02;
 const MID = [15, 45, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349];
 
 function monthWeights(day) {
@@ -62,7 +65,7 @@ function readDods(path) {
 
 export async function referenceScale(raw, paths) {
   let mesh = null, geography = null, N = null, relax = null, ground = null;
-  const target = [];
+  const target = [], soils = [];
   for (const path of paths) {
     const saved = await decodeState(new Uint8Array(readFileSync(path)));
     if (!mesh) {
@@ -71,10 +74,18 @@ export async function referenceScale(raw, paths) {
       geography = createGeography(mesh, readTopography(record.topography), { ...geographyOptions(record).geography, landCover: null, soilWater: raw });
     } else if (saved.N !== N || savedRelax(saved) !== relax || JSON.stringify(savedGeography(saved)) !== ground) throw new Error(`${path}: N = ${saved.N}, relax ${savedRelax(saved)}, ${JSON.stringify(savedGeography(saved))}; the first reference is N = ${N}, relax ${relax}, ${ground}`);
     saved.land.soil.forEach((v, i) => { target[i] = (target[i] ?? 0) + v / ROOT_ZONE / paths.length; });
+    soils.push(saved.land.soil);
   }
   const { land, iceSheet, wetness } = geography, cells = [];
   for (let i = 0; i < mesh.nCells; i++) if (land[i] && !(iceSheet && iceSheet[i]) && Number.isFinite(wetness[i])) cells.push(i);
   const bands = 180 / BAND, knots = new Float64Array(bands).fill(1), latitude = (i) => mesh.latCell[i] * 180 / Math.PI;
+  soils.forEach((soil, k) => {
+    const area = new Float64Array(bands), own = new Float64Array(bands), seed = new Float64Array(bands);
+    for (const i of cells) { const b = Math.min(bands - 1, Math.floor((latitude(i) + 90) / BAND)), a = mesh.areaCell[i]; area[b] += a; own[b] += a * soil[i] / ROOT_ZONE; seed[b] += a * wetness[i]; }
+    const total = area.reduce((x, y) => x + y, 0), ratios = [];
+    for (let b = 0; b < bands; b++) if (area[b] >= MINIMUM_BAND * total && seed[b] > 0) ratios.push(own[b] / seed[b]);
+    if (ratios.every((r) => Math.abs(r - 1) < SEEDED_RATIO)) throw new Error(`${paths[k]}: its open land holds the observed seed (fill over soilw / ${CAPACITY} ${Math.min(...ratios).toFixed(3)}–${Math.max(...ratios).toFixed(3)} in every band), not the model's own water`);
+  });
   const factor = (la) => {
     const x = Math.min(bands - 1, Math.max(0, (la + 90) / BAND - 0.5)), b = Math.min(bands - 2, Math.floor(x));
     return knots[b] + (x - b) * (knots[b + 1] - knots[b]);
@@ -100,6 +111,15 @@ export async function referenceScale(raw, paths) {
   return factor;
 }
 
+export function startGeography(geography, env, { saved = null } = {}) {
+  const seed = env.SOIL_SEED;
+  if (!seed) return { geography, soilSeed: saved?.soilSeed ?? null };
+  const soilSeed = `${basename(seed)} sha256:${createHash('sha256').update(readFileSync(seed)).digest('hex')}`;
+  if (saved && saved.soilSeed !== soilSeed) throw new Error(`SOIL_SEED ${soilSeed} seeds a fresh start's land; the state continued holds its own land, ${saved.soilSeed ? `seeded from ${saved.soilSeed}` : 'not seeded from a file'}`);
+  if (!saved && (env.FROM || env.LAND_FROM)) throw new Error(`SOIL_SEED ${seed} seeds a fresh start's land; ${env.FROM ? `FROM ${env.FROM}` : `LAND_FROM ${env.LAND_FROM}`} gives this start's land`);
+  return { geography: seededGeography(geography, seed), soilSeed };
+}
+
 export function scaleFill(fill, factor) {
   for (let r = 0; r < ROWS; r++) {
     const scale = factor(-89.75 + 0.5 * r);
@@ -108,7 +128,7 @@ export function scaleFill(fill, factor) {
   return fill;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2), given = (name) => { const arg = args.find((a) => a.startsWith(`--${name}=`)); return arg ? arg.slice(name.length + 3) : null; };
   const inputs = args.filter((a) => !a.startsWith('--'));
   if (given('reference') && !given('out')) throw new Error('a seed scaled to reference states goes to its own file (--out); data/soilwater_march.bin stays the observed fill');

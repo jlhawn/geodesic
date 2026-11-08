@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,8 +8,8 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { encodeState as encode } from '../js/stateFile.module.js';
 import { gridHeader } from '../js/stateGrid.module.js';
-import { stateGeography, seededGeography, createGeography, encodeSoilWater, FRESH_GEOGRAPHY, SOIL_SCALE, SOIL_NONE } from '../js/geography.module.js';
-import { referenceScale, scaleFill } from '../scripts/soilWater.mjs';
+import { stateGeography, createGeography, encodeSoilWater, FRESH_GEOGRAPHY, SOIL_SCALE, SOIL_NONE } from '../js/geography.module.js';
+import { referenceScale, scaleFill, startGeography } from '../scripts/soilWater.mjs';
 import { reseedLand } from '../scripts/reseedSoil.mjs';
 import { decodeState } from '../js/stateFile.module.js';
 
@@ -47,21 +47,48 @@ test('a seed scaled to reference states takes each 10° band of open land to the
   assert.ok(factor(0) < factor(60) && factor(60) < 5, 'the factor follows the states\x27 fill poleward within its range');
 });
 
-test('the reference states must share one grid and ground, and a scaled seed must go to its own file', async () => {
-  await assert.rejects(referenceScale(raw, [references[0], save('relaxed.bin', new Float64Array(C), { grid: { relax: 3 } })]), /the first reference is N = 16/);
-  const script = new URL('../scripts/soilWater.mjs', import.meta.url).pathname;
-  const run = spawnSync(process.execPath, [script, join(dir, 'none.dods'), `--reference=${references[0]}`], { encoding: 'utf8' });
-  assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /goes to its own file \(--out\)/);
+test('the reference states must share one grid and ground and hold the model\x27s own water, and a scaled seed must go to its own file', async () => {
+  for (const [name, extra] of [['relaxed.bin', { grid: { relax: 3 } }], ['n32.bin', { N: 32 }], ['raster.bin', { mask: 'raster' }]]) {
+    await assert.rejects(referenceScale(raw, [references[0], save(name, new Float64Array(C), extra)]), /the first reference is N = 16/, name);
+  }
+  await assert.rejects(referenceScale(raw, [references[0], save('observed.bin', new Float64Array(C).fill(0.3 * ROOT_ZONE))]), /holds the observed seed/);
+  const script = new URL('../scripts/soilWater.mjs', import.meta.url).pathname, link = join(dir, 'linked.mjs');
+  symlinkSync(script, link);
+  for (const path of [script, link]) {
+    const run = spawnSync(process.execPath, [path, join(dir, 'none.dods'), `--reference=${references[0]}`], { encoding: 'utf8' });
+    assert.notEqual(run.status, 0, path);
+    assert.match(run.stderr, /goes to its own file \(--out\)/, path);
+  }
 });
 
-test('SOIL_SEED\x27s file replaces the observed fill of a fresh start, cell for cell', () => {
+test('a scaled fill is held at 1 where the factor would carry it past', async () => {
+  const wet = { cols: COLS, rows: ROWS, fill: Uint8Array.from({ length: COLS * ROWS }, (_, n) => (n % 997 === 0 ? SOIL_NONE : Math.round(0.6 * SOIL_SCALE))) };
+  const factor = await referenceScale(wet, [save('full.bin', new Float64Array(C).fill(0.98 * ROOT_ZONE))]);
+  const fitted = scaleFill(Uint8Array.from(wet.fill), factor), pushed = scaleFill(Uint8Array.from(wet.fill), () => 5);
+  wet.fill.forEach((v, n) => {
+    if (v === SOIL_NONE) { assert.ok(fitted[n] === SOIL_NONE && pushed[n] === SOIL_NONE, `point ${n}: no value`); return; }
+    assert.ok(fitted[n] >= 0.95 * SOIL_SCALE && fitted[n] <= SOIL_SCALE, `point ${n}: fitted ${fitted[n]}`);
+    assert.equal(pushed[n], SOIL_SCALE, `point ${n}: 0.6 times 5`);
+  });
+});
+
+test('SOIL_SEED\x27s file replaces the observed fill of a fresh start cell for cell, is recorded, and is refused where the land comes from elsewhere', async () => {
   const fill = Uint8Array.from({ length: COLS * ROWS }, (_, n) => (n % 997 === 0 ? SOIL_NONE : Math.round((0.2 + 0.6 * Math.floor(n / COLS) / ROWS) * SOIL_SCALE)));
   const path = join(dir, 'seed.bin');
   writeFileSync(path, new Uint8Array(encodeSoilWater({ cols: COLS, rows: ROWS, fill })));
-  assert.equal(seededGeography(geography, undefined), geography);
+  const start = startGeography(geography, { SOIL_SEED: path });
+  assert.equal(startGeography(geography, {}).geography, geography);
+  assert.equal(startGeography(geography, {}).soilSeed, null);
+  assert.match(start.soilSeed, /^seed\.bin sha256:[0-9a-f]{64}$/);
+  assert.throws(() => startGeography(geography, { SOIL_SEED: path, FROM: 'x.bin' }), /FROM x\.bin gives this start/);
+  assert.throws(() => startGeography(geography, { SOIL_SEED: path, LAND_FROM: 'y.bin' }), /LAND_FROM y\.bin gives this start/);
+  assert.throws(() => startGeography(geography, { SOIL_SEED: path }, { saved: {} }), /not seeded from a file/);
+  const recorded = await decodeState(encode({ ...header, K: model.core.K, day: 0, time: 0, soilSeed: start.soilSeed, land: { soil: new Float64Array(C) } }));
+  assert.equal(recorded.soilSeed, start.soilSeed);
+  assert.equal(startGeography(geography, { SOIL_SEED: path }, { saved: recorded }).soilSeed, start.soilSeed);
+  assert.equal(startGeography(geography, {}, { saved: recorded }).soilSeed, start.soilSeed);
   const soilOf = (geo) => { const m = createModel(grid, { topography, geography: geo, land }); m.land.initialize(); return { wetness: m.geography.wetness, soil: m.land.serialize().soil, land: m.geography.land }; };
-  const seeded = soilOf(seededGeography(geography, path)), twin = soilOf({ ...geography, soilWater: { cols: COLS, rows: ROWS, fill } }), observed = soilOf(geography);
+  const seeded = soilOf(start.geography), twin = soilOf({ ...geography, soilWater: { cols: COLS, rows: ROWS, fill } }), observed = soilOf(geography);
   let checked = 0, moved = 0;
   for (let i = 0; i < C; i++) {
     if (!seeded.land[i]) continue;
