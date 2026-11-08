@@ -18,6 +18,22 @@ const OPTIONS = {
   surface: { relativeWind: true },
 };
 const TERRAIN = { conserveVolume: true };
+const WATER = ['runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen', 'lakeSeen', 'rainStep', 'rainTotal', 'rainSeen', 'lakePending'];
+
+function synthetic() {
+  const model = createModel(new Grid(16), { topography: syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 1500 + 1000 * Math.cos(lat) : -4000)), radiation: { radiationEvery: 4 }, dragEvery: 2, ocean: { everySteps: 4 } });
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  return model;
+}
+
+async function pageSave(snapshotArrays, model) {
+  const { arrays, ocean, land } = await snapshotArrays(model);
+  const saved = { N: 16, K: model.core.K, day: model.time / 86400, time: model.time, terrain: true };
+  for (const [key, buffer] of Object.entries(arrays)) saved[key] = new Float64Array(buffer.slice(0));
+  saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
+  saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
+  return decodeState(encodeState(saved, { f64: f64Names(saved) }));
+}
 
 test("the page's worker runs a saved state with the options and the terrain it records, its surface pressure where it stands, and its snapshots and restores carry them and the soil seed the state descends from; a restore onto other terrain restarts the model", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'run-options-'));
@@ -127,10 +143,7 @@ test("a page save waits for the step that ends an ocean step, a held radiation i
   if (stand) globalThis.self = { postMessage() {} };
   try {
     const { snapshotArrays, placeSaved, stepsToCadence } = await import('../js/model.worker.js');
-    const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 1500 + 1000 * Math.cos(lat) : -4000));
-    const options = { topography, radiation: { radiationEvery: 4 }, dragEvery: 2, ocean: { everySteps: 4 } };
-    const build = () => { const model = createModel(new Grid(16), options), init = initializeState(model, {}); for (let a = 0; a < init.length; a++) model.state[a].set(init[a]); return model; };
-    const run = build(), dt = 1350, names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
+    const run = synthetic(), dt = 1350, names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
     assert.deepEqual(run.cadence, { radiationEvery: 4, dragEvery: 2, oceanEvery: 4 });
     const water = async (model, change) => { const held = await model.readFreshwater(); for (const name of ['runoff', 'discharge']) change(held[`${name}Total`], held[`${name}Seen`], name); model.writeFreshwater(held); };
     await water(run, (total, seen, name) => { total.fill(name === 'runoff' ? 2 : 3); seen.fill(1); });
@@ -140,19 +153,14 @@ test("a page save waits for the step that ends an ocean step, a held radiation i
     for (let s = 0; s < wait; s++) run.step(dt);
     assert.equal(stepsToCadence(run, dt), 0);
     await water(run, (total, seen, name) => { for (let i = 0; i < total.length; i++) total[i] += name === 'runoff' ? 2 : 3; });
-    const { arrays, ocean, land } = await snapshotArrays(run);
-    const saved = { N: 16, K: run.core.K, day: run.time / 86400, time: run.time, terrain: true };
-    for (const [key, buffer] of Object.entries(arrays)) saved[key] = new Float64Array(buffer.slice(0));
-    saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
-    saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
-    const back = await decodeState(encodeState(saved, { f64: f64Names(saved) }));
+    const back = await pageSave(snapshotArrays, run);
     for (const name of ['runoff', 'discharge']) assert.ok(Math.min(...back[`${name}Total`].map((total, i) => total - back[`${name}Seen`][i])) > 0, `${name} is pending at every cell at the save`);
     const carried = ['boundaryDepth', 'mixingTop', 'boundaryRegime', 'boundaryBuoyancy', 'subcloudVirtual', 'windSpeed', 'evaporation', 'exchangeHeat', 'exchangeWind', 'runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen', 'rainStep'];
     const restart = ['Q', 'W', 'previousT0', 'previousIceVolume', 'fresh', 'calved', 'buoyancy', 'capacity', 'penetrated', 'flux'];
     for (const key of carried) assert.ok(back[key] && back[key].length > 0, `the snapshot carries ${key}`);
     for (const key of restart) assert.ok(back.ocean[key] && back.ocean[key].length > 0, `the snapshot carries the ocean's restart array ${key}`);
     const restored = async (drop) => {
-      const model = build(), kept = { ...back, ocean: { ...back.ocean } };
+      const model = synthetic(), kept = { ...back, ocean: { ...back.ocean } };
       for (let s = 0; s < 3; s++) model.step(dt);
       for (const key of drop) { delete kept[key]; delete kept.ocean[key]; }
       await placeSaved(model, kept, 16, dt);
@@ -197,12 +205,7 @@ test("at N=16 with two lakes, a restore writes the saved lakeSeen only beside th
     const run = build();
     assert.deepEqual(run.lake.cells, lakes);
     for (let s = 0; s < 4; s++) run.step(dt);
-    const { arrays, ocean, land } = await snapshotArrays(run);
-    const saved = { N: 16, K: run.core.K, day: run.time / 86400, time: run.time, terrain: true };
-    for (const [key, buffer] of Object.entries(arrays)) saved[key] = new Float64Array(buffer.slice(0));
-    saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
-    saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
-    const back = await decodeState(encodeState(saved, { f64: f64Names(saved) }));
+    const back = await pageSave(snapshotArrays, run);
     for (const i of lakes) assert.ok(back.lakeSeen[i] !== 0 && back.lakePassed[i] !== back.lakeSeen[i], `lake cell ${i}: passed ${back.lakePassed[i]}, seen ${back.lakeSeen[i]}`);
     const lakeless = { ...back };
     for (const key of ['lakeMixed', 'lakeMean', 'lakeBottom', 'lakeShape', 'lakeMixedDepth', 'lakeIce', 'lakeIceT', 'lakePassed']) delete lakeless[key];
@@ -225,6 +228,40 @@ test("at N=16 with two lakes, a restore writes the saved lakeSeen only beside th
       assert.equal(whole.lake.passed[i], back.lakePassed[i], `lake cell ${i}: a whole save carries the lake's passed`);
       assert.equal(seen(whole)[i], back.lakeSeen[i], `lake cell ${i}: a whole save carries lakeSeen`);
     }
+  } finally {
+    if (stand) delete globalThis.self;
+  }
+});
+
+test("a save that holds none of the CPU's pending-water keys, as every save spinup.mjs makes at a day's end, restores at N=16 into a running model with no rain, runoff or discharge pending for the sea, as into a new model, and the sea takes the same fresh water on the next step; writeFreshwater given none of the keys leaves nothing pending", async () => {
+  const stand = !globalThis.self;
+  if (stand) globalThis.self = { postMessage() {} };
+  try {
+    const { snapshotArrays, placeSaved, stepsToCadence } = await import('../js/model.worker.js');
+    const run = synthetic(), running = synthetic(), fresh = synthetic(), dt = 1350;
+    for (let s = 0; s < 4; s++) run.step(dt);
+    for (let s = stepsToCadence(run, dt); s > 0; s--) run.step(dt);
+    const keyless = await pageSave(snapshotArrays, run);
+    for (const key of WATER) delete keyless[key];
+    for (let s = 0; s < 6; s++) running.step(dt);
+    const own = running.readFreshwater();
+    own.rainStep.fill(1e-3);
+    own.runoffSeen.fill(1);
+    own.dischargeSeen.fill(1);
+    running.writeFreshwater(own);
+    await placeSaved(running, keyless, 16, dt);
+    await placeSaved(fresh, keyless, 16, dt);
+    const held = running.readFreshwater();
+    assert.deepEqual(held, fresh.readFreshwater(), 'the running model holds the pending water a new model restored from the save holds');
+    for (const [name, values] of Object.entries(held)) assert.ok(values.every((value) => value === 0), `${name} holds nothing`);
+    running.step(dt);
+    fresh.step(dt);
+    assert.deepEqual(running.ocean.fresh, fresh.ocean.fresh, 'the sea takes the same fresh water on the next step');
+    const filled = running.readFreshwater();
+    for (const values of Object.values(filled)) values.fill(0.5);
+    running.writeFreshwater(filled);
+    running.writeFreshwater({});
+    for (const [name, values] of Object.entries(running.readFreshwater())) assert.ok(values.every((value) => value === 0), `given none of the keys, ${name} holds nothing`);
   } finally {
     if (stand) delete globalThis.self;
   }

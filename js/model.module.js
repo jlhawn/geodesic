@@ -343,7 +343,7 @@ export function createModel(gridOrMesh, {
   const freshwater = [['runoffTotal', land ? land.runoff : null], ['dischargeTotal', land ? land.discharge : null], ['runoffSeen', runoffSeen], ['dischargeSeen', dischargeSeen], ['lakeSeen', lake ? lake.seen : null], ['rainStep', moist ? moistPhysics.rain : null]].filter(([, values]) => values);
   model.readFreshwater = () => Object.fromEntries(freshwater.map(([name, values]) => [name, Float64Array.from(values)]));
   model.writeFreshwater = (saved) => {
-    for (const [name, target] of freshwater) if (saved[name] && saved[name].length === target.length) target.set(saved[name]);
+    for (const [name, target] of freshwater) { if (saved[name] && saved[name].length === target.length) target.set(saved[name]); else target.fill(0); }
     const rainTotal = saved.rainTotal && saved.rainTotal.length === C ? saved.rainTotal : null, rainSeen = saved.rainSeen && saved.rainSeen.length === C ? saved.rainSeen : null;
     if (moist && !(saved.rainStep && saved.rainStep.length === C) && rainTotal && rainSeen) for (let i = 0; i < C; i++) moistPhysics.rain[i] = rainTotal[i] >= rainSeen[i] ? rainTotal[i] - rainSeen[i] : rainTotal[i];
     const pending = saved.lakePending && saved.lakePending.length === C ? saved.lakePending : null;

@@ -15,6 +15,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const N = 32, STEPS = 16, DT = 1350 * 16 / N, topography = readTopography('etopo2022');
 const sheets = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'n1024' });
 const setup = (lake, surface = null) => ({ topography, geography: sheets.geography, land: sheets.land, ...(lake ? { lake } : {}), ...(surface ? { surface } : {}) });
+const WATER = ['runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen', 'lakeSeen', 'rainStep', 'rainTotal', 'rainSeen', 'lakePending'];
 
 function prepare(model) {
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
@@ -130,6 +131,37 @@ test(`at N=${N} on the n1024 mask, a page save with its lakes' outflow pending, 
     assert.deepEqual(sea(cpuOnGpu.rain), sea(cpuOwn.rain).map(Math.fround), "on the open sea the GPU holds the CPU save's rain as the CPU restored from it does, to float32");
     assert.deepEqual(sea(gpuOnCpu.rain).map(Math.fround), sea(gpuOwn.rain), "on the open sea the CPU holds the GPU save's rain as the GPU restored from it does, to float32");
     gpu.destroy();
+  } finally {
+    if (stand) delete globalThis.self;
+  }
+});
+
+test(`at N=${N} on the n1024 mask, a save that holds none of the GPU's pending-water keys, as every save spinup.mjs makes at a day's end, restores into a running GPU model with no rain, runoff, discharge or lake outflow pending for the sea, as into a new model, and the sea takes the same fresh water on the next step`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const stand = !globalThis.self;
+  if (stand) globalThis.self = { postMessage() {} };
+  try {
+    const { snapshotArrays, placeSaved, stepsToCadence } = await import('../js/model.worker.js');
+    const options = { ...setup({ model: 'flake' }), radiation: { radiationEvery: 4 }, ocean: { everySteps: 4 } };
+    const running = prepare(await createGpuModel(new Grid(N), options)), fresh = prepare(await createGpuModel(new Grid(N), options));
+    for (let n = 0; n < 4; n++) await running.step(DT);
+    for (let n = stepsToCadence(running, DT); n > 0; n--) await running.step(DT);
+    const keyless = await pageSave(snapshotArrays, running);
+    for (const key of WATER) delete keyless[key];
+    for (let n = 0; n < 2; n++) await running.step(DT);
+    const own = await running.readFreshwater();
+    assert.ok(own.rainTotal.some((rain) => rain > 0) && running.lake.cells.some((i) => own.lakePending[i] !== 0), 'the running model holds rain and lake outflow the sea has yet to take');
+    await placeSaved(running, keyless, N, DT);
+    await placeSaved(fresh, keyless, N, DT);
+    const held = await running.readFreshwater();
+    assert.deepEqual(held, await fresh.readFreshwater(), 'the running model holds the pending water a new model restored from the save holds');
+    for (const [name, values] of Object.entries(held)) assert.ok(values.every((value) => value === 0), `${name} holds nothing`);
+    await running.step(DT);
+    await fresh.step(DT);
+    const [mine, theirs] = await Promise.all([running.oceanEngine.readSection('FRESH'), fresh.oceanEngine.readSection('FRESH')]);
+    assert.ok(theirs.some((value) => value !== 0), 'the sea takes fresh water on the step');
+    assert.deepEqual(mine, theirs, 'the sea takes the same fresh water on the next step');
+    running.destroy();
+    fresh.destroy();
   } finally {
     if (stand) delete globalThis.self;
   }
