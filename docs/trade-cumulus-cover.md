@@ -519,25 +519,36 @@ inside 1.9 SE in every window: by 0.8 % of the control's moist error and
 stress at days 6–10 moves by 4.7 SE, 1.2 % of the control's −54.6
 mN/m². The other three settings give the same answer. Turning the
 kinetic overshoot and ascent off removes 26 % of the T850 error and 36 %
-of the q850 error on days 1–2 (2.2 and 2.6 SE, the same sign in all
-three starts), but it moves the anomaly down to 925 hPa, adding 70–90 %
-to the control's error there, and brightens the cloud, by 12–19 W/m² of
-reflected sunlight over 5S–5N 170E–100W. The halved closure removes
-15 % of the T850 error, and the doubled decay removes nothing. None of
-the four plume settings removes the layer. This is a 10-day transient
-result at observed SST, not a closed-loop one. It holds until the
-hindcast instrument, the starts or the control's physics change.
+of the q850 error on days 1–2 (2.3 and 2.6 SE, the same sign in all
+three starts). But it moves the anomaly down to 925 hPa, adding 70–90 %
+to the control's error there, and it brightens the cloud over 5S–5N
+170E–100W. The reflected sunlight there rises by 19 W/m² on days 1–2
+(29.5, 6.0 and 22.5 in the three starts) and by 12 W/m² on days 6–10.
+The halved closure removes 15 % of the T850 error, and the doubled
+decay removes nothing. None of the four plume settings removes the
+layer. This is a 10-day transient result at observed SST, not a
+closed-loop one. It holds until the hindcast instrument, the starts or
+the control's physics change.
 
 The open question has moved upstream, to where the extra water comes
 from. The audit's water budget gives the 1000–700 hPa surplus at
 160W–100W growing 0.54 kg/m²/day over days 0–10 (three starts): 0.38
-of it is an evaporation excess and 0.16 a shortfall in removal. The
-evaporation is 1.16–1.28 times ERA5's in August and December and
-0.87–0.98 in April, at 12 UTC by lead window and at nearly the right
-wind, while the momentum flux is 0.88 times ERA5's: against ERA5 the
-exchange moves moisture more strongly than momentum. That excess, and
-the dry lowest layer that feeds it, is being diagnosed in the boundary
-layer's surface exchange (Nov 7).
+of it is an evaporation excess and 0.16 a shortfall in removal. By lead
+window, at 160W–100W and 12 UTC, as model over ERA5:
+
+| lead days | evaporation (Aug / Apr / Dec) | zonal wind at 1000 hPa (Aug / Apr / Dec) | momentum flux (three starts) |
+|---|---|---|---|
+| 1–2 | 1.28 / 0.95 / 1.25 | 1.07 / 1.04 / 1.01 | 0.88 |
+| 3–5 | 1.17 / 0.98 / 1.22 | not read | 0.96 |
+| 6–10 | 1.16 / 0.87 / 1.21 | 1.28 / 1.09 / 1.11 | 1.11 |
+
+The wind is nearly right on days 1–2 only. Per unit of that wind and of
+the sea–air humidity difference at 1000 hPa, the evaporation is
+0.99–1.16 times ERA5's on days 1–2 and 6–10. On its own wind, the
+model's drag is 0.85–0.89 times ERA5's at every lead. So, against ERA5,
+the exchange moves moisture more strongly than momentum. That excess,
+and the dry lowest layer that feeds it, is being diagnosed in the
+boundary layer's surface exchange (Nov 7).
 
 ## Tests
 

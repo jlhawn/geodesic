@@ -1589,7 +1589,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   const threshold = new Set();
   const typedAtEdge = new Set(), forced = new Set();
   const departure = new Int16Array(C).fill(-1), kinds = new Array(C);
-  let midLevel = 0, deepened = 0, continued = 0, sentBack = 0, trimmed = 0, offsets = 0, dryEnds = 0, overshoots = 0, perturbedColumns = 0;
+  let midLevel = 0, deepened = 0, continued = 0, sentBack = 0, trimmed = 0, offsets = 0, dryEnds = 0, cloudEnds = 0, overshoots = 0, perturbedColumns = 0;
   const continuedColumns = [];
   const downdraftAtEdge = new Set(), { cp, exnerLayer } = core.diagnostics, phiLayer = core.diagnostics.geopotential;
   for (let i = 0; i < C; i++) {
@@ -1605,6 +1605,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     if (moist.deep.midLevel && moist.deep.midTrimmed) trimmed++;
     if (moist.deep.midLevel && moist.deep.midOffset) offsets++;
     if (moist.deep.midLevel && moist.deep.midDry) dryEnds++;
+    if (moist.deep.midLevel && moist.deep.midCloudEnd) cloudEnds++;
     if (moist.deep.midLevel && moist.deep.midOvershoot) overshoots++;
     if (moist.deep.deepened) deepened++;
     if (moist.deep.deepened && moist.deep.midLevel) sentBack++;
@@ -1751,7 +1752,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     const plumed = moist.cumulusBaseFlux[i] > 0 && pi[i] * sigmaMid[k] >= moist.cumulusTop[i];
     if (!plumed && Math.max(below ? (regime[i] === COUPLED_REGIME ? 1 : 0) : stratiform[i], iced) > 0) shared[k * C + i] = 1;
   }
-  return { midLevel, deepened, continued, continuedLeftOut, continuedApart, sentBack, trimmed, offsets, dryEnds, overshoots, perturbed: perturbedColumns, cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared, largeScale: Float64Array.from(moist.largeScalePrecipitation), gpuLargeScale: Float64Array.from(ph.COND.subarray(0, C)) };
+  return { midLevel, deepened, continued, continuedLeftOut, continuedApart, sentBack, trimmed, offsets, dryEnds, cloudEnds, overshoots, perturbed: perturbedColumns, cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared, largeScale: Float64Array.from(moist.largeScalePrecipitation), gpuLargeScale: Float64Array.from(ph.COND.subarray(0, C)) };
 }
 
 test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, carried through non-buoyant layers by its w² and entraining at 1/z, shut where the EIS of its column passes stratocumulusInversion, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -2064,6 +2065,20 @@ test("with midLevelConvection and condensation 'saturation' the engines agree on
   const { midLevel, offsets, dryEnds, overshoots, perturbed } = await parity({ midLevelConvection: true, condensation: 'saturation' }, { ascent: true, grid: sigmaInterfaces('bl48'), columns: placeMidLevel(placed, -0.2), perturb: () => { MID_LEVEL.overshootBuoyancy = Infinity; return () => { MID_LEVEL.overshootBuoyancy = limit; }; } });
   console.log(`${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: Bolton's LCL lies above the source layer's top in ${offsets}, the dry end ends a plume that still rises in ${dryEnds}, the overshoot limit in ${overshoots}; without the limit ${perturbed} columns step apart beyond the engines' tolerances`);
   assert.ok(offsets >= 10 && dryEnds >= 25 && overshoots >= 10 && perturbed >= 10, `${offsets} columns whose LCL lies above the source top, ${dryEnds} whose plume the dry end ends, ${overshoots} whose plume the overshoot limit ends, ${perturbed} that the limit moves beyond the engines' tolerances`);
+});
+const cloudTermGrid = Float64Array.from([...levels.filter((s) => s < 0.65), 0.675, 0.695, 0.7, 0.825, ...levels.filter((s) => s > 0.85)]);
+const cloudTermColumns = () => [8e-3, 8.5e-3].flatMap((lapse) => [0.81, 0.83].flatMap((source) => Array.from({ length: 42 }, (_, n) => (z, p) => { const T = 292 - lapse * Math.min(z, 11000), s = p / 101500; return { T, q: (s > 0.7 && s < 0.825 ? source : s > 0.695 && s < 0.7 ? 0.93 + 0.0015 * n : 0.3) * saturationHumidity(T, p) }; })));
+test('with midLevelConvection a plume from a thick source layer ends in the thin cloudy layer above it, its first cloud layer, where the vapor it takes in leaves the mixture short of saturation by less than (1 - full) qc of the cloud condensation left there: one run of that layer\'s humidity in each of four families', () => {
+  const model = createModel(new Grid(16), { ocean: false, levels: cloudTermGrid, moist: { midLevelConvection: true } }), { moist, core } = model, [pi, theta, , , q, qc] = model.state;
+  placeMidLevel(cloudTermColumns(), -0.2)(model, randomColumns(model));
+  const runs = [0, 1, 2, 3].map((family) => Array.from({ length: 42 }, (_, n) => n).filter((n) => { const i = 7 * (42 * family + n) + 3; core.diagnoseColumn(i, pi, theta, q, qc); model.phases.adjust(i, i + 1, 900); return moist.deep.midLevel && moist.deep.midCloudEnd && moist.deep.top === 23; }));
+  const spans = runs.map((run) => [run[0], run[run.length - 1]]);
+  assert.ok(runs.every((run) => run.length > 0 && run.length === run[run.length - 1] - run[0] + 1) && JSON.stringify(spans) === JSON.stringify([[12, 38], [11, 36], [9, 33], [8, 32]]), `under 8 and 8.5 K/km over sources at RH 0.81 and 0.83, the thin layer's humidity 0.93 + 0.0015 n ends the plume there by its cloud water for n in ${spans.map(([a, b]) => `${a}-${b}`).join(', ')}: ${runs.map((run) => run.join(' ')).join(' | ')}`);
+});
+test('with midLevelConvection the engines agree on random columns on a 36-layer grid among which are placed columns whose plume ends in a thin cloudy first cloud layer above a thick source, held there by the cloud water it takes in', async () => {
+  const placed = cloudTermColumns(), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
+  console.log(`${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: the dry end ends ${dryEnds} plumes, ${cloudEnds} of them where the cloud water the plume takes in decides`);
+  assert.ok(cloudEnds >= 80, `${cloudEnds} plumes whose end the cloud water they take in decides`);
 });
 
 test("a rainEvaporationLaw other than 'deficit', 'kessler' or 'cloudsc', a rainCover other than 'overlap' or a share in (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
