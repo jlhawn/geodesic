@@ -462,11 +462,11 @@ test('under isoneutralDiffusion the column takes the κS² diffusivity of the dy
 });
 
 const SHELF_MINIMUM = 0.5;
-const shelfSea = (boundary) => {
+const shelfSea = (boundary, edgeSill) => {
   const { lonCell, cellsOnEdge } = mesh, distance = Float64Array.from(latCell, (lat, i) => Math.acos(Math.min(1, Math.cos(lat) * Math.cos(lonCell[i]))) / DEGREE);
   const land = Uint8Array.from(distance, (d) => (d < 7 ? 1 : 0)), elevation = Float64Array.from(distance, (d) => (d < 7 ? 100 : -Math.min(4000, 40 * 1.6 ** ((d - 7) / 4))));
   const edgeOcean = Uint8Array.from({ length: E }, (_, e) => (land[cellsOnEdge[2 * e]] || land[cellsOnEdge[2 * e + 1]] ? 0 : 1));
-  const ocean = createOcean(mesh, { geography: { land, elevation, edgeOcean }, everySteps: 1, iceDrift: false, minimumLayer: SHELF_MINIMUM, isoneutralDiffusion: true });
+  const ocean = createOcean(mesh, { geography: { land, elevation, edgeOcean }, edgeSill, everySteps: 1, iceDrift: false, minimumLayer: SHELF_MINIMUM, isoneutralDiffusion: true });
   ocean.initialize(Float64Array.from(latCell, (lat) => 271.5 + 30 * Math.cos(lat) ** 2), new Float64Array(C));
   const { h, Q, W } = ocean;
   ocean.u.fill(0);
@@ -530,7 +530,7 @@ test('under the boundary taper a column whose thick layers end above its boundar
   assert.equal(moved, 0);
 });
 
-test('under isoneutralDiffusion a layer no thicker than twice minimumLayer sets no slope and takes no triad flux: no interface beside one takes κS² diffusivity, and the water of a shelf column\'s thin layers moves none of its layers thick in every column, nor their κS²', () => {
+test('under isoneutralDiffusion an interface at the top or bottom of a layer no thicker than twice minimumLayer takes no κS² diffusivity, and the water of a shelf column\'s thin layers moves none of its layers thick in every column, nor their κS²', () => {
   const { ocean, sea, thin } = shelfSea(10), F = ocean.table.fixed, { h } = ocean;
   const before = tracerTendency(ocean);
   let beside = 0, besideKappa = 0, thick = 0;
@@ -543,4 +543,34 @@ test('under isoneutralDiffusion a layer no thicker than twice minimumLayer sets 
   assert.ok(beside > 0 && shelf.length > 0 && thick > 0);
   assert.equal(besideKappa, 0);
   assert.equal(moved, 0);
+});
+
+const sillPocket = (boundary, sill) => {
+  const { lonCell, cellsOnEdge } = mesh, edges = [], edgeSill = new Float64Array(E).fill(1e4), lat = -60 * DEGREE, lon = Math.PI;
+  const closeness = (i) => Math.sin(latCell[i]) * Math.sin(lat) + Math.cos(latCell[i]) * Math.cos(lat) * Math.cos(lonCell[i] - lon);
+  let pocket = 0;
+  for (let i = 0; i < C; i++) if (closeness(i) > closeness(pocket)) pocket = i;
+  for (let e = 0; e < E; e++) if (cellsOnEdge[2 * e] === pocket || cellsOnEdge[2 * e + 1] === pocket) { edges.push(e); edgeSill[e] = sill; }
+  return { ...shelfSea(boundary, edgeSill), pocket, edges };
+};
+
+test('under the boundary taper no triad takes its slope from a base its edge\'s sill closes: a column whose edges a sill cuts to no more than twice minimumLayer of the layer above its boundary layer\'s base takes no κS² diffusivity, and the water of its layers from that one down moves no column\'s layers above it, nor any κS²; a sill that leaves more of that layer open keeps the column\'s κS²', () => {
+  const boundary = 64, { ocean, pocket, edges, thin } = sillPocket(boundary, 50), F = ocean.table.fixed, { h } = ocean, { cellsOnEdge } = mesh;
+  const before = tracerTendency(ocean), hEdge = Float64Array.from(ocean.hEdge);
+  let base = 0, below = 0, pocketKappa = 0, changed = 0;
+  while (base < F && below < boundary) below += h[base++ * C + pocket];
+  const cut = base - 1, top = below - h[cut * C + pocket];
+  const closed = edges.every((e) => hEdge[cut * E + e] <= thin && hEdge[e] > thin && h[cut * C + cellsOnEdge[2 * e]] > thin && h[cut * C + cellsOnEdge[2 * e + 1]] > thin);
+  for (let m = 0; m < F; m++) pocketKappa = Math.max(pocketKappa, before.k33[m * C + pocket]);
+  for (let k = cut; k < ocean.layers; k++) { const n = k * C + pocket; if (h[n] > 1e-6) { ocean.Q[n] += 0.3 * h[n]; ocean.W[n] += 0.05 * h[n]; changed++; } }
+  const after = tracerTendency(ocean), above = Array.from({ length: cut }, (_, k) => k), fixed = Array.from({ length: F }, (_, k) => k);
+  const moved = movedRows(before.dQ, after.dQ, above) + movedRows(before.dW, after.dW, above) + movedRows(before.k33, after.k33, fixed);
+  const halfway = top + 0.5 * h[cut * C + pocket], open = sillPocket(boundary, halfway), kept = tracerTendency(open.ocean), opened = edges.every((e) => open.ocean.hEdge[cut * E + e] > thin);
+  let keptKappa = Infinity;
+  for (let m = 0; m < cut; m++) keptKappa = Math.min(keptKappa, kept.k33[m * C + pocket]);
+  console.log(`a column whose ${edges.length} edges 50 m sills cut to ${Math.max(...edges.map((e) => hEdge[cut * E + e])).toFixed(2)} m at most of layer ${cut} (${top.toFixed(1)} m down), above its ${boundary} m boundary layer's base, takes κS² up to ${pocketKappa}; the water of its ${changed} layers from there down moves ${moved} tendencies above it and κS² values; a sill at ${halfway.toFixed(1)} m keeps its κS² above layer ${cut} at least ${keptKappa.toExponential(2)}`);
+  assert.ok(closed && opened, 'the sills do not cut the layer above the base as the row needs');
+  assert.equal(pocketKappa, 0);
+  assert.equal(moved, 0);
+  assert.ok(keptKappa > 0, `an open sill leaves κS² of ${keptKappa}`);
 });

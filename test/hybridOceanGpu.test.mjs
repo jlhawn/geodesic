@@ -249,14 +249,21 @@ test('under isoneutralDiffusion and 30 m boundary layers the κS² diffusivity t
   assert.ok(apart.rmsRel > 0 && toMean.rmsRel < 2e-3 && toMean.rmsRel < 0.5 * apart.rmsRel, `the GPU's κS² parts from the CPU's stage mean by ${toMean.rmsRel}, the fourth stage's from it by ${apart.rmsRel}`);
   assert.ok(turned.T < 2e-2 && turned.S < 2e-2, `the GPU misses the triads' change above 30 m by ${turned.T} in T and ${turned.S} in S`);
 });
-test('under isoneutralDiffusion the GPU hybrid ocean takes the CPU\'s κS² diffusivity on a shelf sea, where no column takes a slope from a shelf\'s thin layer at its boundary layer\'s base', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('under isoneutralDiffusion the GPU hybrid ocean takes the CPU\'s κS² diffusivity on a shelf sea, where no column takes a slope from a shelf\'s thin layer at its boundary layer\'s base, nor from a base its edge\'s sill closes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const shelf = syntheticTopography(90, 180, (lat, lon) => { const d = Math.acos(Math.max(-1, Math.min(1, Math.cos(lat) * Math.cos(lon)))) * 180 / Math.PI; return d < 7 ? 100 : -Math.min(4000, 40 * 1.6 ** ((d - 7) / 4)); });
-  const options = { ...HYBRID, isoneutralDiffusion: true }, cpuModel = createModel(new Grid(N), { topography: shelf }), init = initializeState(cpuModel, {});
+  const cpuModel = createModel(new Grid(N), { topography: shelf }), init = initializeState(cpuModel, {});
   for (let a = 0; a < init.length; a++) cpuModel.state[a].set(init[a]);
-  const { mesh, geography } = cpuModel, C = mesh.nCells, surfaceT = Float64Array.from(cpuModel.state[3]), ice = new Float64Array(C), zeros = new Float64Array(C);
+  const { mesh, geography } = cpuModel, { latCell, lonCell, cellsOnEdge } = mesh, C = mesh.nCells, surfaceT = Float64Array.from(cpuModel.state[3]), ice = new Float64Array(C), zeros = new Float64Array(C);
+  const edgeSill = Float64Array.from(geography.edgeSill), near = new Set();
+  const closeness = (i) => Math.sin(latCell[i]) * Math.sin(-Math.PI / 3) + Math.cos(latCell[i]) * Math.cos(-Math.PI / 3) * Math.cos(lonCell[i] - Math.PI);
+  let pocket = 0;
+  for (let i = 0; i < C; i++) if (closeness(i) > closeness(pocket)) pocket = i;
+  for (let e = 0; e < mesh.nEdges; e++) if (cellsOnEdge[2 * e] === pocket || cellsOnEdge[2 * e + 1] === pocket) { edgeSill[e] = 50; near.add(cellsOnEdge[2 * e]); near.add(cellsOnEdge[2 * e + 1]); }
+  const options = { ...HYBRID, isoneutralDiffusion: true, edgeSill };
   const cpu = createCpuOcean(mesh, { geography, ...options }), F = cpu.table.fixed, thin = 2 * H_MIN;
   cpu.initialize(Float64Array.from(surfaceT), ice);
   cpu.boundaryDepths.fill(30);
+  for (const i of near) cpu.boundaryDepths[i] = 64;
   const h = Float64Array.from(cpu.h), start = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: zeros, buoyancy: zeros, flux: zeros, capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths };
   const gpuModel = await createGpuModel(new Grid(N), { topography: shelf, ocean: options }), gpu = gpuModel.oceanEngine;
   await gpu.upload(start, Float64Array.from(surfaceT), ice);
@@ -277,9 +284,14 @@ test('under isoneutralDiffusion the GPU hybrid ocean takes the CPU\'s κS² diff
     }
   }
   const miss = (entries) => { let d = 0, s = 0; for (const n of entries) { d += (kappa[n] - cpu.isoKappa[n]) ** 2; s += cpu.isoKappa[n] ** 2; } return Math.sqrt(d / s); };
-  console.log(`κS² on a shelf sea under 30 m boundary layers, the GPU's rms miss of the CPU's: ${miss(all).toExponential(2)} over ${all.length} interfaces, ${miss(beside).toExponential(2)} over the ${beside.length} above the base of a column beside a shelf's thin layer`);
-  assert.ok(beside.length > 0, 'no column beside a shelf');
-  assert.ok(miss(all) < 1e-2 && miss(beside) < 1e-2, `the GPU misses the CPU's κS² by ${miss(all)}, and beside the shelves by ${miss(beside)}`);
+  const sill = [];
+  let pocketKappa = 0;
+  for (let m = 0; m < F; m++) pocketKappa = Math.max(pocketKappa, Math.abs(kappa[m * C + pocket]), cpu.isoKappa[m * C + pocket]);
+  for (const i of near) if (i !== pocket) for (let m = 0; m < F; m++) if (cpu.isoKappa[m * C + i] > 0) sill.push(m * C + i);
+  console.log(`κS² on a shelf sea under 30 m boundary layers, the GPU's rms miss of the CPU's: ${miss(all).toExponential(2)} over ${all.length} interfaces, ${miss(beside).toExponential(2)} over the ${beside.length} above the base of a column beside a shelf's thin layer; a column whose edges 50 m sills close under 64 m boundary layers takes κS² up to ${pocketKappa} on either engine, and the GPU misses its neighbors' by ${miss(sill).toExponential(2)} over ${sill.length}`);
+  assert.ok(beside.length > 0 && sill.length > 0, 'no column beside a shelf or a sill');
+  assert.equal(pocketKappa, 0);
+  assert.ok(miss(all) < 1e-2 && miss(beside) < 1e-2 && miss(sill) < 1e-2, `the GPU misses the CPU's κS² by ${miss(all)}, beside the shelves by ${miss(beside)} and beside the sills by ${miss(sill)}`);
 });
 test(`${OPTION_CHANGE}: backgroundLatitude equatorial, under a strengthened background diffusivity`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionChange({ ...HYBRID, backgroundDiffusivity: 1e-3 }, { backgroundLatitude: 'equatorial' });

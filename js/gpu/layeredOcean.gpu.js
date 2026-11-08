@@ -783,7 +783,7 @@ fn isoSlope(c: i32, l: i32, m: i32, along: vec2<f32>, dc: f32) -> vec2<f32> {
   let slope = -rx / rz; let s1 = slope / (1.0 + exp(2.0 * (abs(slope) - ISOCAP) / ISOWIDTH));
   return vec2<f32>(s1, s1 * slope);
 }
-fn isoTriad(c: i32, ca: i32, cb: i32, l: i32, m: i32, along: vec2<f32>, dc: f32) -> vec4<f32> {
+fn isoTriad(c: i32, ca: i32, cb: i32, e: i32, l: i32, m: i32, along: vec2<f32>, dc: f32) -> vec4<f32> {
   if (m < 1 || m >= L) { return vec4<f32>(0.0); }
   let hu = IN[hOff(m - 1) + c]; let hl = IN[hOff(m) + c];
   if (!(hu > THINEDGE && hl > THINEDGE)) { return vec4<f32>(0.0); }
@@ -796,7 +796,7 @@ fn isoTriad(c: i32, ca: i32, cb: i32, l: i32, m: i32, along: vec2<f32>, dc: f32)
     var base = m; var below = z;
     while (base < ISOFIXED && below < layer) { below += IN[hOff(base) + c]; base++; }
     let r = z / layer;
-    if (IN[hOff(base - 1) + ca] > THINEDGE && IN[hOff(base - 1) + cb] > THINEDGE) { s = isoSlope(c, base - 1, base, isoValue(cb, base - 1) - isoValue(ca, base - 1), dc) * vec2<f32>(r, r * r); }
+    if (OD[O_HEDGE + (base - 1) * E + e] > THINEDGE) { s = isoSlope(c, base - 1, base, isoValue(cb, base - 1) - isoValue(ca, base - 1), dc) * vec2<f32>(r, r * r); }
   } else { s = isoSlope(c, l, m, along, dc); }` : `
   let s = isoSlope(c, l, m, along, dc);`}
   return vec4<f32>(s.x * (up.x - down.x) / dz, s.x * (up.y - down.y) / dz, s.x / dz, s.y / dz);
@@ -919,7 +919,7 @@ ${iso ? '  var carryQ = 0.0; var carryW = 0.0; var carry33 = 0.0; var heldQ = 0.
         ${iso ? `if (k < ISOFIXED) {
           let own = i == MI[COE + 2 * e]; let ca = select(j, i, own); let cb = select(i, j, own);
           let along = vec2<f32>(select(Ti, Tj, own) - select(Tj, Ti, own), select(Si, Sj, own) - select(Sj, Si, own));
-          let t1 = isoTriad(ca, ca, cb, k, k, along, dc); let t2 = isoTriad(ca, ca, cb, k, k + 1, along, dc); let t3 = isoTriad(cb, ca, cb, k, k, along, dc); let t4 = isoTriad(cb, ca, cb, k, k + 1, along, dc);
+          let t1 = isoTriad(ca, ca, cb, e, k, k, along, dc); let t2 = isoTriad(ca, ca, cb, e, k, k + 1, along, dc); let t3 = isoTriad(cb, ca, cb, e, k, k, along, dc); let t4 = isoTriad(cb, ca, cb, e, k, k + 1, along, dc);
           let turnT = 0.25 * dc * (((t1.x + t2.x) + t3.x) + t4.x);
           let turnS = 0.25 * dc * (((t1.y + t2.y) + t3.y) + t4.y);
           let sense = select(-1.0, 1.0, own);
