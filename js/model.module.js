@@ -416,6 +416,11 @@ export function createModel(gridOrMesh, {
    * radiation.meanShortwaveCloudEffect and meanLongwaveCloudEffect.
    */
   let lastPrecipTime = 0;
+  model.diffuseAlbedoAt = (i) => {
+    if (land && landMask[i]) return land.albedo(i);
+    const h = state[6][i], lakeIce = lakeCell && lakeCell[i] ? lake.albedo(h, state[3][i]) : null;
+    return lakeIce ?? seaIce.albedo(h, null, seaIce.snow[i], seaIce.cover(i, h), state[3][i], seaIce.snowAlbedo[i]);
+  };
   model.diagnostics = function diagnostics(sums = totals) {
     const [pi, theta, u, surfaceT, q, qc, ice] = state;
     const precipitation = moistPhysics.precipitation;
@@ -439,7 +444,7 @@ export function createModel(gridOrMesh, {
       rain += a * precipitation[i];
       const cover = seaIce.cover(i, ice[i]);
       if (ice[i] > 0) { iceArea += a * cover; iceVolume += a * cover * ice[i]; }
-      albedoSum += a * (land && landMask[i] ? land.albedo(i) : seaIce.albedo(ice[i], null, seaIce.snow[i], cover, surfaceT[i], seaIce.snowAlbedo[i]));
+      albedoSum += a * model.diffuseAlbedoAt(i);
     }
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
     const interval = model.time - lastPrecipTime, steps = model.radiationSteps;

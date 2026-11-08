@@ -62,7 +62,7 @@ export function cpuFrameFields(model, { level = 'surface', depth = 'surface', fi
   if (rain && want.has('rain')) out.rain = Float32Array.from(rain);
   if (want.has('ice')) out.ice = Float32Array.from(iceField);
   if (want.has('concentration')) out.concentration = Float32Array.from(model.seaIce.concentration);
-  if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h, null, model.seaIce.snow[i], model.seaIce.cover(i, h), model.state[3][i], model.seaIce.snowAlbedo[i])));
+  if (want.has('albedo')) out.albedo = Float32Array.from({ length: C }, (_, i) => model.diffuseAlbedoAt(i));
   if (want.has('shortwave')) out.shortwave = Float32Array.from(model.radiation.surfaceShortwave);
   if (want.has('longwave')) out.longwave = Float32Array.from(model.radiation.outgoing);
   if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil, (w, i) => w + model.land.surface[i] + (model.land.deepWater ? model.land.deepWater[i] : 0));
