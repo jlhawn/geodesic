@@ -73,7 +73,8 @@ function geopotentialHeightAt(core, i, pi, pressure) {
  * is instead the observed March ice, its concentration, the thickness of
  * its covered part and the snow on it, at the freezing point. Either way
  * the sea's cells of the snow array (the land's, which holds the snow on
- * the sea ice, or the sea ice's own without land) take the start's snow.
+ * the sea ice, or the sea ice's own without land) take the start's snow,
+ * and a lake's cells none.
  */
 /*
  * Initial humidity: a relative humidity that falls from
