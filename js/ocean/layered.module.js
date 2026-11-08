@@ -589,9 +589,9 @@ export function displacedWeight(draft, sample, density = seawaterDensity, n = 64
   return sum * draft / n;
 }
 
-export function wettedLayer(h, L, C, i) {
+export function wettedLayer(h, L, C, i, thinnest = 1e-6) {
   let n = i;
-  while (n + C < L * C && !(h[n] > 1e-6)) n += C;
+  while (n + C < L * C && !(h[n] > thinnest)) n += C;
   return n;
 }
 
@@ -1920,7 +1920,7 @@ export function createOcean(mesh, {
     return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
   }
 
-  const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;
+  const thermoclineDepth = new Float64Array(C), surfaceSalinity = new Float64Array(C), sst = T0, sss = S0;
   function thermocline(i) {
     let z = 0, previous = -Infinity, center = 0;
     for (let k = 0; k < L; k++) {
@@ -1981,9 +1981,9 @@ export function createOcean(mesh, {
   }
   function fields(depth = 0, upwellingDepth = depth) {
     layerDensitiesAll();
-    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN;
+    for (let i = 0; i < C; i++) { thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN; const n = wettedLayer(h, L, C, i, 0); surfaceSalinity[i] = W[n] / h[n]; }
     const layerT = (k, i) => (k === 0 ? T0[i] : Q[at(k, i)] / h[at(k, i)]);
-    return { h1: mixedDepths, T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0, upwellingDepth: null }), upwelling: upwellingAt(depth, upwellingDepth) };
+    return { h1: mixedDepths, T1: T0, S1: S0, surfaceSalinity, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0, upwellingDepth: null }), upwelling: upwellingAt(depth, upwellingDepth) };
   }
 
   function diagnostics() {
@@ -1991,8 +1991,8 @@ export function createOcean(mesh, {
     let area = 0, depth = 0, heat = 0, thermo = 0, salinity = 0, ssh = 0, speed = 0, transport = 0, interiorT = 0, interiorH = 0;
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
-      const a = areaCell[i];
-      area += a; depth += a * mixedDepths[i]; salinity += a * (W[i] / h[i]); ssh = Math.max(ssh, Math.abs(eta[i]));
+      const a = areaCell[i], top = wettedLayer(h, L, C, i, 0);
+      area += a; depth += a * mixedDepths[i]; salinity += a * (W[top] / h[top]); ssh = Math.max(ssh, Math.abs(eta[i]));
       thermo += a * thermocline(i);
       for (let k = 0; k < L; k++) heat += a * rhoCp * Q[at(k, i)];
       for (let k = 1; k < L; k++) { interiorT += Q[at(k, i)] * a; interiorH += h[at(k, i)] * a; }

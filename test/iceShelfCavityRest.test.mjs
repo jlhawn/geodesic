@@ -61,15 +61,16 @@ test('with a 20 m melt layer, as in Losch (2008), the melt reads T_w and S_w as 
 
 test('with the melt off, a homogeneous ocean under a sloping shelf with a front stays as still for a month as it does with the shelves as land, on the CPU', () => restingShelf(['cpu']));
 
-test('a save without the shelves\' load gives the CPU each shelf\'s load from the first layer thicker than 1e-6 m under it, at that layer\'s own Q/h and W/h: a 5 mm top layer, the layer below an empty one, and the rebuilt top layer of an emptied column', async () => {
+test('a save without the shelves\' load gives the CPU each shelf\'s load from the first layer thicker than 1e-6 m under it, at that layer\'s own Q/h and W/h: a 5 mm top layer, the layer below a top layer of 1e-7 m, 1e-6 m or none, and the rebuilt top layer of an emptied column', async () => {
   const source = await prepareShelfModel(shelfModel());
-  const { C, thin, empty, dry, Q, W, saved } = shelfTops(source.ocean, source.state[6]);
+  const { C, thin, empty, dry, submicron, micron, Q, W, saved } = shelfTops(source.ocean, source.state[6]);
   const model = await prepareShelfModel(shelfModel()), { iceDraft } = model.geography, { ocean } = model;
   ocean.load(saved, Float64Array.from(model.state[3]), Float64Array.from(model.state[6]));
   const { shelfLoad } = ocean.serialize();
   assert.ok(ocean.h[dry] > 1e-6, `the load left the emptied column's top layer at ${ocean.h[dry]} m`);
-  for (const [i, n, [q, w, h]] of [[thin, thin, [Q, W, saved.h]], [empty, C + empty, [Q, W, saved.h]], [dry, dry, [ocean.Q, ocean.W, ocean.h]]]) {
+  for (const [i, n, [q, w, h]] of [[thin, thin, [Q, W, saved.h]], [empty, C + empty, [Q, W, saved.h]], [submicron, C + submicron, [Q, W, saved.h]], [micron, C + micron, [Q, W, saved.h]], [dry, dry, [ocean.Q, ocean.W, ocean.h]]]) {
     const weight = iceDraft[i] * seawaterDensity(q[n] / h[n], w[n] / h[n]);
+    if (i === submicron || i === micron) assert.ok(Math.abs(iceDraft[i] * seawaterDensity(Q[i] / saved.h[i], W[i] / saved.h[i]) - weight) > 1e-9 * weight, `the ${saved.h[i]} m top layer's own water at ${i} loads its shelf as the layer below does`);
     assert.ok(Math.abs(shelfLoad[i] - weight) <= 1e-12 * weight, `the shelf at ${i}, over a ${saved.h[i]} m top layer, loads at ${shelfLoad[i]}; the water under it gives ${weight}`);
   }
 });
