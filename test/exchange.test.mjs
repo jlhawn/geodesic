@@ -519,14 +519,14 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
   assert.deepEqual(failures, []);
 });
 
-test('the offline surface exchange diagnoses a diagnoseFirst layer at the run\'s step, and where nothing is deposited as the plain layer does', async () => {
+test('the offline surface exchange diagnoses the state as it stands and takes no step: a diagnoseFirst layer holding deposits as the plain layer does, and after a step', async () => {
   const { diagnoseExchange } = await import('../scripts/surfaceExchange.mjs');
   const [first, plain] = [{ diagnoseFirst: true }, {}].map((boundaryLayer) => prepare(createModel(new Grid(16), { topography, boundaryLayer })));
-  diagnoseExchange(first, 900); diagnoseExchange(plain, 900);
+  first.radiation.sensibleHeat.fill(150); first.radiation.evaporation.fill(6e-5);
+  diagnoseExchange(first); diagnoseExchange(plain);
   for (const name of ['depth', 'regime', 'friction', 'buoyancyFlux']) assert.deepEqual(first.boundaryLayer[name], plain.boundaryLayer[name], name);
   first.step(900);
-  assert.throws(() => diagnoseExchange(first), /diagnoseFirst withholds/);
-  diagnoseExchange(first, 900);
+  diagnoseExchange(first);
   assert.ok(first.boundaryLayer.depth.every(Number.isFinite));
 });
 
