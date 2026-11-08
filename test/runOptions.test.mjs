@@ -266,3 +266,24 @@ test("a save that holds none of the CPU's pending-water keys, as every save spin
     if (stand) delete globalThis.self;
   }
 });
+
+test("a GPU save, which holds the rain it has yet to hand the sea as rainTotal less rainSeen, or rainTotal where its frame has since started the total again, restores at N=16 into a running CPU model with that rain pending for the sea", async () => {
+  const stand = !globalThis.self;
+  if (stand) globalThis.self = { postMessage() {} };
+  try {
+    const { snapshotArrays, placeSaved, stepsToCadence } = await import('../js/model.worker.js');
+    const run = synthetic(), running = synthetic(), dt = 1350;
+    for (let s = 0; s < 4; s++) run.step(dt);
+    for (let s = stepsToCadence(run, dt); s > 0; s--) run.step(dt);
+    const back = await pageSave(snapshotArrays, run), C = back.rainStep.length;
+    const gpuShaped = { ...back, rainStep: undefined, rainTotal: Float64Array.from({ length: C }, (_, i) => (i % 2 ? 0.75 : 0.125)), rainSeen: Float64Array.from({ length: C }, (_, i) => (i % 2 ? 0.25 : 0.5)) };
+    for (let s = 0; s < 6; s++) running.step(dt);
+    const own = running.readFreshwater();
+    own.rainStep.fill(1e-3);
+    running.writeFreshwater(own);
+    await placeSaved(running, gpuShaped, 16, dt);
+    assert.deepEqual(Array.from(running.readFreshwater().rainStep), Array.from({ length: C }, (_, i) => (i % 2 ? 0.5 : 0.125)));
+  } finally {
+    if (stand) delete globalThis.self;
+  }
+});
