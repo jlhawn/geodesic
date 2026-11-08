@@ -23,7 +23,8 @@
  * ice, the land, the ocean, the lakes, the boundary layer, the sea skin and the decks (the groups it hashed are listed).
  * Six hours from rest and a dry initial atmosphere are a transient, not a climate: the rows detect a change to the
  * physics and size it; the N = 64 scorecard is what judges the model against observation.
- * test/helpers/physicsDigest.json is the digest of record, with the Node version and commit it was made on;
+ * test/helpers/physicsDigest.json is the digest of record, with the Node version, the commit and the data/ tree it was
+ * made on and a hash per group;
  * test/physicsDigest.test.mjs runs the digest and fails on any moved row or state, and a change that moves it re-pins
  * it (--out) and cites the rows --compare lists.
  */
@@ -79,17 +80,23 @@ export function stateHash(model) {
     ['ocean', typedArrays(model.ocean?.serialize?.())], ['lakes', typedArrays(model.lake?.serialize?.())], ['boundary layer', typedArrays(model.boundaryLayer)],
     ['sea skin', typedArrays(model.skin)], ['decks', typedArrays({ stratus: model.radiation.stratus, stratusFraction: model.radiation.stratusFraction, mlmTop: model.radiation.mlmTop })],
   ].filter(([, arrays]) => arrays.length);
-  const hash = createHash('sha256');
-  for (const [, arrays] of parts) for (const a of arrays) hash.update(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
-  return { hash: hash.digest('hex').slice(0, 32), groups: parts.map(([name, arrays]) => `${name} ${arrays.length}`) };
+  const hash = createHash('sha256'), groupHashes = {};
+  for (const [name, arrays] of parts) {
+    const group = createHash('sha256');
+    for (const a of arrays) { const bytes = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); hash.update(bytes); group.update(bytes); }
+    groupHashes[name] = group.digest('hex').slice(0, 16);
+  }
+  return { hash: hash.digest('hex').slice(0, 32), groups: parts.map(([name, arrays]) => `${name} ${arrays.length}`), groupHashes };
 }
 
-function commitOf() {
+function gitOf(command, paths) {
   try {
     const run = (cmd) => execSync(cmd, { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return `${run('git rev-parse --short=12 HEAD')}${run('git status --porcelain --untracked-files=no -- js scripts') ? ' with changes' : ''}`;
+    return `${run(command)}${run(`git status --porcelain --untracked-files=no -- ${paths}`) ? ' with changes' : ''}`;
   } catch { return null; }
 }
+const commitOf = () => gitOf('git rev-parse --short=12 HEAD', 'js scripts data');
+const dataOf = () => gitOf('git rev-parse --short=12 HEAD:data', 'data');
 
 export function formatValue(x) {
   return !Number.isFinite(x) ? String(x) : Math.abs(x) >= 100 ? x.toFixed(2) : Math.abs(x) >= 1 ? x.toFixed(3) : x.toPrecision(4);
@@ -158,8 +165,8 @@ export async function runDigest({ steps = 16 } = {}) {
   row('global net TOA', 'W/m²', areaMean(mesh, radiation.meanAbsorbedSolar) - areaMean(mesh, radiation.meanOutgoingLongwave));
   row('global planetary albedo', 'fraction', total('reflectedSolar') / total('insolation'));
   row('largest wind', 'm/s', state[2].reduce((m, x) => Math.max(m, Math.abs(x)), 0));
-  const { hash, groups } = stateHash(model);
-  return { N: 16, steps, dt: DT, hours: steps * DT / 3600, node: process.version, commit: commitOf(), stateHash: hash, hashed: groups, rows };
+  const { hash, groups, groupHashes } = stateHash(model);
+  return { N: 16, steps, dt: DT, hours: steps * DT / 3600, node: process.version, commit: commitOf(), data: dataOf(), stateHash: hash, hashed: groups, groupHashes, rows };
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

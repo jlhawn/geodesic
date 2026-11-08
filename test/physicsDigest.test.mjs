@@ -55,8 +55,9 @@ test('one step of the default-physics digest gives every row a finite value, the
 test('the 16-step digest reproduces the digest of record: the same state, no row moved, added or dropped', async () => {
   const record = JSON.parse(readFileSync(new URL('./helpers/physicsDigest.json', import.meta.url), 'utf8'));
   const now = await runDigest({ steps: record.steps }), { moved, added, removed, sameState } = compareDigests(record, now);
-  const made = `the record was made on ${record.commit} under Node ${record.node}; this run is ${now.commit} under Node ${now.node}`;
+  const made = `the record was made on ${record.commit} (data/ ${record.data}) under Node ${record.node}; this run is ${now.commit} (data/ ${now.data}) under Node ${now.node}`;
+  const groups = Object.keys(now.groupHashes).filter((name) => now.groupHashes[name] !== record.groupHashes?.[name]);
   assert.deepEqual([moved.map((m) => `${m.name} ${m.before} → ${m.after}`), added, removed], [[], [], []], made);
-  assert.ok(sameState, `state ${now.stateHash} against the record's ${record.stateHash}; ${made}`);
+  assert.ok(sameState, `state ${now.stateHash} against the record's ${record.stateHash}, differing in ${groups.join(', ') || 'no group'}; ${made}`);
   assert.deepEqual(now.hashed, record.hashed);
 });
