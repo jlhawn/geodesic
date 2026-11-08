@@ -22,41 +22,41 @@ const imports = (file) => [...text.get(file).matchAll(/\bfrom\s*['"](\.{1,2}\/[^
 const script = (file) => /process\.argv/.test(text.get(file));
 const readsGroups = (file, seen = new Set()) => !seen.has(file) && (seen.add(file), /JSON\.parse\(\s*(process\.env|env\()/.test(text.get(file)) || imports(file).some((helper) => !script(helper) && readsGroups(helper, seen)));
 const imported = new Set(files.flatMap(imports));
-const groupsRead = (file, seen = new Set()) => {
-  if (seen.has(file)) return [];
-  seen.add(file);
-  const own = [...text.get(file).matchAll(/JSON\.parse\(\s*process\.env\.([A-Z][A-Z0-9_]*)|\benv\(\s*'([A-Z][A-Z0-9_]*)'|\[\s*'[a-z][A-Za-z]*'\s*,\s*'([A-Z][A-Z0-9_]*)'\s*\]/g)].map((match) => match[1] ?? match[2] ?? match[3]);
-  return [...new Set([...own, ...imports(file).filter((helper) => !script(helper)).flatMap((helper) => groupsRead(helper, seen))])];
-};
 
-test('every script that reads option groups from the environment, itself or through a helper it imports, refuses one under a name it does not read before it does anything else, and names only that one beside every group it reads', () => {
+test('every script that reads option groups from the environment, itself or through a helper it imports, refuses one under a name it does not read before it does anything else, and takes beside it the groups it reads', () => {
   const entries = files.filter((file) => (script(file) || !imported.has(file)) && readsGroups(file)).map((file) => relative(scripts, file));
   for (const name of ['spinup.mjs', 'fixedSst.mjs', 'oceanSpinup.mjs', 'upperAtmosphere.mjs', 'figures/stateMaps.mjs']) assert.ok(entries.includes(name), name);
-  for (const [name, group] of [['spinup.mjs', 'DYNAMICS'], ['fixedSst.mjs', 'GIVEN'], ['fixedSst.mjs', 'MOIST'], ['figures/stateMaps.mjs', 'BOUNDARY_LAYER'], ['armMetrics.mjs', 'SURFACE']]) assert.ok(groupsRead(join(scripts, name)).includes(group), `${name} ${group}`);
-  const left = entries.filter((name) => {
-    const result = run(join(scripts, name), ['/nonexistent/state.bin'], { ...Object.fromEntries(groupsRead(join(scripts, name)).map((group) => [group, '{}'])), UNREAD_GROUP: '{"x":1}' });
-    return result.status === 0 || !result.stderr.includes(`${name.split('/').pop()} does not read UNREAD_GROUP, given as an option group`);
-  });
-  assert.deepEqual(left, []);
+  const refusesOnlyUnread = (name, groups = {}) => {
+    const result = run(join(scripts, name), ['/nonexistent/state.bin'], { ...groups, UNREAD_GROUP: '{"x":1}' });
+    return result.status !== 0 && result.stderr.includes(`${name.split('/').pop()} does not read UNREAD_GROUP, given as an option group`);
+  };
+  assert.deepEqual(entries.filter((name) => !refusesOnlyUnread(name)), []);
+  const read = { 'spinup.mjs': ['DYNAMICS', 'GRAVITY_WAVES', 'MOIST', 'LAND'], 'fixedSst.mjs': ['GIVEN', 'MOIST', 'OROGRAPHY'], 'figures/stateMaps.mjs': ['BOUNDARY_LAYER', 'OCEAN'], 'armMetrics.mjs': ['SURFACE'] };
+  assert.deepEqual(Object.keys(read).filter((name) => !refusesOnlyUnread(name, Object.fromEntries(read[name].map((group) => [group, '{}'])))), []);
 });
 
-test('a script reads the names its text shows and those of the helpers it imports that are not scripts of their own, and refuses an option group under any other name only when node runs it', () => {
+test('a script reads the names its text shows and those of the helpers it imports that are not scripts of their own, and refuses an option group under any other name, one it builds at run time among them, only when node runs it; the command line names the groups none of its scripts reads', () => {
   const check = pathToFileURL(join(scripts, 'optionEnvironment.mjs')).href;
   writeFileSync(join(dir, 'helper.mjs'), "export const helped = () => JSON.parse(process.env.HELPED ?? '{}');\n");
   writeFileSync(join(dir, 'tool.mjs'), "export const tooled = 1;\nif (process.argv[2] === 'tool') console.log(JSON.parse(process.env.TOOLED ?? '{}'));\n");
-  writeFileSync(join(dir, 'main.mjs'), `import { refuseUnreadOptions } from '${check}';\nimport { helped } from './helper.mjs';\nimport { tooled } from './tool.mjs';\n\nrefuseUnreadOptions(import.meta.url);\nconst env = (name) => JSON.parse(process.env[name] ?? '{}');\nconsole.log('ran', JSON.stringify([process.env.OWN ?? null, env('QUOTED'), helped(), tooled]));\n`);
+  writeFileSync(join(dir, 'main.mjs'), `import { refuseUnreadOptions } from '${check}';\nimport { helped } from './helper.mjs';\nimport { tooled } from './tool.mjs';\n\nrefuseUnreadOptions(import.meta.url);\nconst env = (name) => JSON.parse(process.env[name] ?? '{}');\nconst paired = Object.fromEntries([['moist', 'PAIRED']].map(([group, name]) => [group, JSON.parse(process.env[name] ?? '{}')]));\nconst built = JSON.parse(process.env[['BU', 'ILT'].join('')] ?? '{}');\nconsole.log('ran', JSON.stringify([process.env.OWN ?? null, env('QUOTED'), paired, helped(), tooled, built]));\n`);
   writeFileSync(join(dir, 'outer.mjs'), "import './main.mjs';\n");
   const main = pathToFileURL(join(dir, 'main.mjs'));
-  assert.deepEqual(unreadOptions(main, { OWN: '{}', QUOTED: '{"a":1}', HELPED: '{}', TOOLED: '{}', OTHER: ' {"b":2}', PLAIN: 'x', LIST: '[1]' }), ['OTHER', 'TOOLED']);
-  const given = { OWN: '{}', QUOTED: '{"a":1}', HELPED: '{"c":3}' }, ran = run(main.pathname, [], given);
+  assert.deepEqual(unreadOptions(main, { OWN: '{}', QUOTED: '{"a":1}', PAIRED: '{}', HELPED: '{}', TOOLED: '{}', BUILT: '{}', OTHER: ' {"b":2}', PLAIN: 'x', LIST: '[1]' }), ['BUILT', 'OTHER', 'TOOLED']);
+  const given = { OWN: '{}', QUOTED: '{"a":1}', PAIRED: '{"d":4}', HELPED: '{"c":3}' }, ran = run(main.pathname, [], given);
   assert.equal(ran.status, 0, ran.stderr);
-  assert.match(ran.stdout, /^ran \["\{\}",\{"a":1\},\{"c":3\},1\]/);
-  const refused = run(main.pathname, [], { ...given, TOOLED: '{}' });
-  assert.notEqual(refused.status, 0);
-  assert.match(refused.stderr, /main\.mjs does not read TOOLED, given as an option group: unset or rename it/);
-  assert.doesNotMatch(refused.stdout, /ran/);
+  assert.match(ran.stdout, /^ran \["\{\}",\{"a":1\},\{"moist":\{"d":4\}\},\{"c":3\},1,\{\}\]/);
+  for (const name of ['TOOLED', 'BUILT']) {
+    const refused = run(main.pathname, [], { ...given, [name]: '{}' });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, new RegExp(`main\\.mjs does not read ${name}, given as an option group: unset or rename it`));
+    assert.doesNotMatch(refused.stdout, /ran/);
+  }
   const outer = run(join(dir, 'outer.mjs'), [], { TOOLED: '{}' });
   assert.equal(outer.status, 0, outer.stderr);
+  const cli = (...names) => run(join(scripts, 'optionEnvironment.mjs'), names.map((name) => join(dir, name)), { OWN: '{}', TOOLED: ' {}', OTHER: '{}', PLAIN: 'x' }).stdout.trim();
+  assert.equal(cli('main.mjs'), '-u OTHER -u TOOLED');
+  assert.equal(cli('main.mjs', 'tool.mjs'), '-u OTHER');
 });
 
 test('fixedSst.mjs refuses a state whose header records no given options, and an ocean group, which a run over a fixed sea does not read, before it builds anything, and takes GIVEN in place of the record with each group the environment gives over it, but not beside a record it differs from', () => {
