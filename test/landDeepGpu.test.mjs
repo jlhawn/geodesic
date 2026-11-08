@@ -37,14 +37,15 @@ function prepare(model) {
 
 const apart = (a, b, keep) => { let worst = 0; for (let i = 0; i < a.length; i++) if (keep(i)) worst = Math.max(worst, Math.abs(a[i] - b[i])); return worst; };
 
-test('the deep store adds one slot of C floats at the end of the physics buffer and moves no other', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
+test('the deep store adds one slot of C floats before the 2 m temperature, the last slot of the physics buffer, and moves no slot but that one', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
   const mesh = buildMesh(new Grid(16)), C = mesh.nCells, args = [8, 0, 0, 0, null, false, 0, 0, false, false, false, false, false, 3, false, true];
   const without = layoutFor(mesh, ...args), plain = layoutFor(mesh, ...args, false), deep = layoutFor(mesh, ...args, true);
   assert.equal(without.PH.DEEP, undefined);
   assert.deepEqual(plain.PH, without.PH);
-  assert.equal(deep.PH.DEEP, without.PH.total);
+  assert.equal(deep.PH.DEEP, without.PH.T2M);
+  assert.equal(deep.PH.T2M, deep.PH.total - C);
   assert.equal(deep.PH.total, without.PH.total + C);
-  for (const name of Object.keys(without.PH)) if (name !== 'total') assert.equal(deep.PH[name], without.PH[name], name);
+  for (const name of Object.keys(without.PH)) if (name !== 'total') assert.equal(deep.PH[name], without.PH[name] + (name === 'T2M' ? C : 0), name);
 });
 
 test('from an observed start both engines recharge the deep store from the root zone and let the trees draw on it alike, to rounding after a step and over 16 steps in all but a handful of cells, and the GPU saves and reloads it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
