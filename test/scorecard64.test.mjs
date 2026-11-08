@@ -82,12 +82,29 @@ test('identity: a base read back from JSON, bit-exact rows, rows with no value o
   ({ comparison, check } = verdicts(record(2), oneSided));
   const asr = comparison.find((c) => c.key === 'asr');
   assert.ok(asr.verdict === 'no value' && !asr.identical && asr.missing.join() === 'candidate' && !check.ok && check.empty.length === 1);
-  ({ comparison } = verdicts(oneSided, record(2)));
-  assert.deepEqual(comparison.find((c) => c.key === 'asr').missing, ['base']);
+  ({ comparison, check } = verdicts(oneSided, record(2)));
+  assert.ok(comparison.find((c) => c.key === 'asr').missing.join() === 'base' && !check.ok && check.empty.join() === 'asr (no value in the base)');
   const missingKey = record(2);
   delete missingKey.means.slp;
-  ({ comparison } = verdicts(missingKey, record(2)));
-  assert.equal(comparison.find((c) => c.key === 'slp').verdict, 'no value');
+  ({ comparison, check } = verdicts(missingKey, record(2)));
+  assert.ok(comparison.find((c) => c.key === 'slp').verdict === 'no value' && !check.ok && check.empty.join() === 'slp (no value in the base)');
+  const half = record(0.5), halfUlp = record(0.5);
+  halfUlp.means.sst30.model = 0.5 + 2 ** -53;
+  ({ comparison, check } = verdicts(half, halfUlp));
+  assert.ok(!comparison[0].identical && !check.ok && check.changed.join() === 'sst30', 'one ulp below 1 is a change');
+  const startless = record(2, { start: undefined }), bothStartless = compareScores(startless, record(2, { start: undefined }), sigma, { anyStart: true });
+  assert.ok(bothStartless.every((c) => c.identical) && !identityCheck(startless, record(2, { start: undefined }), bothStartless).sameStart && !identityCheck(startless, record(2, { start: undefined }), bothStartless).ok, 'two records with no start are not the same start');
+  const partial = Object.fromEntries(Object.entries(sigma).filter(([key]) => key !== 'landT2m')), newRow = record(2);
+  newRow.means.landT2m.model = 285;
+  const withoutT2m = record(2);
+  delete withoutT2m.means.landT2m;
+  const ungated = compareScores(viaJson(withoutT2m), newRow, partial), t2mRow = ungated.find((c) => c.key === 'landT2m'), ungatedCheck = identityCheck(viaJson(withoutT2m), newRow, ungated);
+  assert.ok(!t2mRow.gated && t2mRow.verdict === 'no value' && ungatedCheck.ok && ungatedCheck.ungated.join() === 'landT2m (no value in the base)', 'an ungated row is reported but does not decide --identical');
+  assert.equal(compareScores(newRow, structuredClone(newRow), partial).find((c) => c.key === 'landT2m').verdict, 'ungated');
+  const committed = JSON.parse(readFileSync(SIGMA_FILE, 'utf8')).rows, onRecord = compareScores(viaJson(withoutT2m), newRow, committed);
+  assert.ok(onRecord.filter((c) => !c.gated).map((c) => c.key).join() === 'landT2m' && identityCheck(viaJson(withoutT2m), newRow, onRecord).ok, 'the committed record leaves exactly the 2 m row ungated');
+  ({ check } = verdicts(record(2, { saves: undefined }), record(2)));
+  assert.ok(check.ok && !check.baseHasSaves && !check.sameSaves);
   const other = record(2, { start: { sha256: 'b'.repeat(64), day: 365 } }), withAny = compareScores(record(2), other, sigma, { anyStart: true });
   assert.ok(withAny.every((c) => c.identical) && !identityCheck(record(2), other, withAny).ok, '--identical refuses another start even under --any-start');
 });
@@ -114,7 +131,8 @@ test('the mooring window: the N=64 floors of 1° and 1.5° bind below them, the 
 
 test('the committed sigma covers every row with its design, twins, degrees of freedom and expiry, and the rows and boxes are named once', () => {
   const record = JSON.parse(readFileSync(SIGMA_FILE, 'utf8'));
-  assert.ok(ROWS.every(([key]) => Number.isFinite(record.rows[key]?.sigma) && record.rows[key].sigma > 0 && record.rows[key].dof >= 2 && record.rows[key].threshold > record.rows[key].sigma && record.rows[key].windows > 0), ROWS.filter(([key]) => !(record.rows[key]?.sigma > 0)).map(([key]) => key).join(', '));
+  assert.deepEqual(ROWS.map(([key]) => key).filter((key) => record.rows[key]?.ungated), ['landT2m']);
+  assert.ok(ROWS.filter(([key]) => !record.rows[key]?.ungated).every(([key]) => Number.isFinite(record.rows[key]?.sigma) && record.rows[key].sigma > 0 && record.rows[key].dof >= 2 && record.rows[key].threshold > record.rows[key].sigma && record.rows[key].windows > 0), ROWS.filter(([key]) => !(record.rows[key]?.sigma > 0)).map(([key]) => key).join(', '));
   assert.ok(record.twins.length >= 1 && record.twins.every((t) => Number.isFinite(t.start) && t.days.length > 0) && record.design && record.expires && record.measured && record.definition && record.nulls);
   assert.equal(new Set(ROWS.map(([key]) => key)).size, ROWS.length);
   assert.ok(Object.values(BOXES).every(([kind, s, n, w, e]) => ['land', 'sea', 'all'].includes(kind) && s < n && w < e));
@@ -138,7 +156,8 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
   const wave = (i) => Math.sin(lon(i) * rad) * Math.cos(lat(i) * rad) + lat(i) / 90;
   const concentration = fill((i) => (land[i] ? 0 : lat(i) > 75 ? 0.5 : lat(i) < -70 ? 1 : 0));
   const means = {
-    fields: ['sst', 'surfaceT', 'gridBoxSkin', 'temperature', 'precipitation', 'zonalStress', 'mslp', 'concentration'],
+    fields: ['sst', 'surfaceT', 'gridBoxSkin', 'temperature', 't2m', 'precipitation', 'zonalStress', 'mslp', 'concentration'],
+    t2m: fill((i) => (land[i] ? 266 + 3 * wave(i) : 291)),
     sst: fill((i) => (land[i] ? 250 : 300 + 3 * wave(i))), surfaceT: fill(() => 290), gridBoxSkin: fill((i) => 288 + 5 * wave(i)),
     temperature: fill((i) => (land[i] ? 270 + 4 * wave(i) : 300)), precipitation: fill((i) => 3 + 2 * wave(i) + (land[i] ? 1 : 0)),
     zonalStress: fill((i) => -0.05 + 0.03 * wave(i)), mslp: fill((i) => 100000 + 400 * wave(i)), concentration,
@@ -158,7 +177,9 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
     `sea ice on day ${d}'s mean concentration, sea cells on the index's grids, 15 %: N extent ${(10 + j / 10).toFixed(2)} area ${(8 + j / 20).toFixed(2)}, S extent ${(3 - j / 20).toFixed(2)} area ${(2 - j / 50).toFixed(2)} Mkm²`,
   ]).join('\n');
   const { rows } = reduceState({ ...header, day: D, means, ocean: { h, u } }, log);
-  const gap = reduceState({ ...header, day: D, means, ocean: { h, u } }, log.split('\n').filter((line) => !line.includes(`day ${D - 10}`)).join('\n')).rows;
+  const { t2m: _, ...withoutT2m } = means;
+  const gap = reduceState({ ...header, day: D, means: { ...withoutT2m, fields: means.fields.filter((name) => name !== 't2m') }, ocean: { h, u } }, log.split('\n').filter((line) => !line.includes(`day ${D - 10}`)).join('\n')).rows;
+  assert.ok(Number.isNaN(gap.landT2m.model) && Number.isFinite(gap.landT.model) && gap.landT2m.ref === rows.landT2m.ref, 'a save without t2m means has no 2 m row');
   assert.ok(['asr', 'net', 'swcre', 'lwcre', 'iceNExtent', 'iceNArea', 'iceSExtent', 'iceSArea'].every((key) => Number.isNaN(gap[key].model)), 'a window missing a day has no log rows');
 
   const inBox = (s, n, w, e) => (i) => lat(i) >= s && lat(i) <= n && lon(i) >= w && lon(i) <= e;
@@ -171,6 +192,8 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
   near('sstWarm', mean(means.sst, seaBox(-10, 10, 130, 160)) - 273.15);
   near('ts', mean(means.gridBoxSkin, () => true) - 273.15);
   near('landT', mean(means.temperature, (i) => land[i] && lat(i) >= 40 && lat(i) <= 60));
+  near('landT2m', mean(means.t2m, (i) => land[i] && lat(i) >= 40 && lat(i) <= 60));
+  assert.equal(rows.landT2m.ref, rows.landT.ref);
   const boxes = { amazon: ['land', -10, 3, -70, -50], india: ['land', 15, 28, 72, 88], tropLand: ['land', -15, 15, -180, 180], tropSea: ['sea', -15, 15, -180, 180], io: ['sea', -10, 10, 50, 100], wp: ['sea', -10, 10, 120, 160], global: ['all', -90, 90, -180, 180] };
   for (const [box, [kind, s, n, w, e]] of Object.entries(boxes)) near(`rain_${box}`, mean(means.precipitation, (i) => inBox(s, n, w, e)(i) && (kind === 'all' || (kind === 'land') === !!land[i])));
   const equator = (w, e) => (i) => !land[i] && Math.abs(lat(i)) <= 3 && lon(i) >= w && lon(i) <= e;
@@ -198,5 +221,9 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
     assert.ok(cs.length > 0 && Math.abs(reconstructed - built) < 0.02 * built, `${s}: the reconstruction's mean amplitude ${reconstructed}, built ${built}`);
     near(`euc_${s}`, expected.speed, 1e-9 * expected.speed); near(`eucDepth_${s}`, expected.depth, 1e-6);
   }
+  const fine = reduceState({ ...header, day: D, means, ocean: { h, u } }, log, { spacing: 0.9 }).rows;
+  const floored = (s, latMax, lonMax) => Array.from({ length: C }, (_, i) => i).filter((i) => !land[i] && Math.abs(lat(i)) <= latMax && Math.abs(wrap(lon(i) - tao.stations[s].longitude)) <= lonMax).length;
+  assert.deepEqual(R.TAO_STATIONS.map((s) => fine[`euc_${s}`].cells), R.TAO_STATIONS.map((s) => floored(s, 1, 1.5)), 'at a spacing of 0.9° the windows are the 1° and 1.5° floors');
+  assert.ok(R.TAO_STATIONS.some((s) => floored(s, 1, 1.5) > floored(s, 0.9, 0.9)), 'the floors hold cells the bare spacing would not');
   assert.ok(Math.abs(rows.rain_global.ref - R.gridMean(R.gpcp().grid, 3)) < 0.2 && Math.abs(rows.ts.ref - 15.5) < 0.6, 'references for late April');
 });
