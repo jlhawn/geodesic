@@ -2098,13 +2098,13 @@ ${core.fieldConstants}
     stericSurface(h, Q, W, eta);
     return { h, u, Q, W, eta, T0, previousT0, filled: atlas ? filled : null };
   }
-  function uploadArrays({ h, u, Q, Qref, W, Wref, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart) {
+  function uploadArrays({ h, u, Q, Qref, W, Wref, T, S, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart) {
     edgesCurrent = false;
     upwellingFolds = 0; upwellingTime = NaN; upwellingSeen = upwellingSteps;
     for (const name of RETAINED) delete outside[name];
     const velocity = Float32Array.from(u);
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) velocity[k * E + e] = 0;
-    const heat = Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), salt = Wref ?? Float64Array.from(W, (w, n) => w - SALT_REFERENCE * h[n]);
+    const heat = Qref ?? Float64Array.from(h, (hh, n) => (Q ? Q[n] : Math.max(EPS, hh) * T[n]) - HEAT_REFERENCE * hh), salt = Wref ?? Float64Array.from(h, (hh, n) => (W ? W[n] : Math.max(EPS, hh) * S[n]) - SALT_REFERENCE * hh);
     const packed = new Float32Array(OS.total);
     packed.set(toCells(h, L), OS.OH); packed.set(toEdges(velocity, L), OS.OU); packed.set(toCells(heat, L), OS.OQ); packed.set(toCells(salt, L), OS.OW);
     writeInPieces(device, ob.S, 0, packed);
@@ -2154,7 +2154,7 @@ ${core.fieldConstants}
       if (restart && restart.iceSigma && restart.iceSigma.length === C) putSection('SIGMA', restart.iceSigma);
       driftCalls = 0;
     }
-    putSection('MIXED', restart && restart.mixedDepths && restart.mixedDepths.length === C ? restart.mixedDepths : mixedDepthsOf(h, Q, W));
+    putSection('MIXED', restart && restart.mixedDepths && restart.mixedDepths.length === C ? restart.mixedDepths : mixedDepthsOf(h, Q ?? Float64Array.from(h, (hh, n) => Math.max(EPS, hh) * T[n]), W ?? Float64Array.from(h, (hh, n) => Math.max(EPS, hh) * S[n])));
     if (restart && restart.boundaryDepths && restart.boundaryDepths.length === C) putSection('BLD', restart.boundaryDepths);
     device.queue.writeBuffer(ob.OD, 4 * OD.DRAINSTART, drainStart);
     if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
@@ -2197,7 +2197,7 @@ ${core.fieldConstants}
   }
   const RESTART = [['previousT0', C], ['previousIceVolume', C], ['fresh', C], ['buoyancy', C], ['flux', C], ['capacity', C]];
   function restartable(saved) {
-    if (!saved || !saved.h || saved.h.length !== L * C || ![saved.Qref ?? saved.Q, saved.Wref ?? saved.W].every((store) => store && store.length === L * C) || !RESTART.every(([name, length]) => saved[name] && saved[name].length === length)) return false;
+    if (!saved || !saved.h || saved.h.length !== L * C || ![saved.Qref ?? saved.Q ?? saved.T, saved.Wref ?? saved.W ?? saved.S].every((store) => store && store.length === L * C) || !RESTART.every(([name, length]) => saved[name] && saved[name].length === length)) return false;
     for (let i = 0; i < C; i++) {
       let sum = 0;
       for (let k = 0; k < L; k++) sum += saved.h[k * C + i];

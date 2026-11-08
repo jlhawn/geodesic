@@ -1587,6 +1587,7 @@ export function createOcean(mesh, {
   }
 
   function advance(surfaceT, ice, oceanFlux, totalStress, dt, concentration = seaCover, time = null) {
+    seaFlux = oceanFlux;
     if (++counter % everySteps !== 0) return false;
     if (!initialised) initialize(surfaceT, ice, { concentration });
     const dtOcean = everySteps * dt;
@@ -1907,7 +1908,7 @@ export function createOcean(mesh, {
       ...(penetration ? { transmission: copy(transmission) } : {}),
       ...(drift ? { iceVelocity: copy(drift.velocity), iceSigma: copy(drift.sigma) } : {}),
       ...(restrat ? { mleDepths: copy(mleDepths) } : {}),
-      ...(seaFlux ? { flux: copy(seaFlux) } : {}),
+      flux: seaFlux ? copy(seaFlux) : new Float64Array(C),
     };
   }
 
