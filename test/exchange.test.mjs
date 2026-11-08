@@ -406,7 +406,7 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
   await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
 });
 
-test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cases = [
     ['defaults', {}, []],
     ['ground, stable profile, Prandtl coefficient 3.6, countergradient', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6, countergradient: 7.2 }, ['mixing stable', 'mixing convective', 'scalarMixing stable', 'scalarMixing convective']],
@@ -415,17 +415,19 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
     ['capped scale, countergradient', { velocityScale: 'capped', countergradient: 7.2 }, ['mixing convective']],
     ['diagnoseFirst, surfaceExcess 8.5', { diagnoseFirst: true, surfaceExcess: 8.5 }, ['mixing stable', 'mixing convective', 'scalarMixing convective']],
     ['the subsidence share', { entrainment: { subsidence: true } }, []],
+    ['the search ceiling raised to sigma 0.3', { searchTop: 0.3 }, []],
+    ['the search ceiling lowered to sigma 0.9', { searchTop: 0.9 }, ['mixing convective']],
   ];
   const apartBound = { stable: 1e-3, convective: 5e-4, entraining: 1e-3 }, failures = [];
   for (const [label, surface] of [['roughness', {}], ['fixed', { exchange: 'fixed' }]]) {
     const runs = {};
-    let C = 0, K = 0, kTop = 0, g = 0, ground = null;
+    let C = 0, K = 0, kTop = Infinity, g = 0, ground = null;
     for (const [name, boundaryLayer] of cases) {
       const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer }));
       for (let s = 0; s < 2; s++) { cpu.step(900); await gpu.step(900); }
       await gpu.settle(); await gpu.sync();
       const bl = cpu.boundaryLayer, PH = gpu.gpu.layout.PH, key = { mixing: 'MIX', scalarMixing: 'MIXH', nonlocal: 'CG' };
-      C = cpu.mesh.nCells; K = cpu.core.K; kTop = bl.kTop; g = cpu.core.diagnostics.g; ground = Float64Array.from(cpu.surfaceGeopotential, (p) => p / g);
+      C = cpu.mesh.nCells; K = cpu.core.K; kTop = Math.min(kTop, bl.kTop); g = cpu.core.diagnostics.g; ground = Float64Array.from(cpu.surfaceGeopotential, (p) => p / g);
       const low = (K - 1) * C, fields = Object.keys(key).filter((field) => bl[field]);
       const read = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [...fields.map((field) => ({ offset: PH[key[field]], length: bl[field].length })), { offset: PH.DEPTH, length: C }]);
       runs[name] = {
@@ -463,15 +465,17 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
           const own = columnGap(mine, theirs, i), controlGap = base ? columnGap(base[0], base[1], i) : 0;
           if (own > 1e-2 || controlGap > 1e-2) {
             parted++;
-            const unexplained = [];
+            const unexplained = [], atTop = [];
             const why = [own > 1e-2 && [run, own], controlGap > 1e-2 && [control, controlGap]].filter(Boolean).map(([r, gap]) => {
               const apart = topsApart(r, i), room = clearance(r, i);
-              if (room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) { topRatio = Math.max(topRatio, gap * room / (2 * apart)); topRoom = Math.max(topRoom, room); topApart = Math.max(topApart, apart); return 'top'; }
+              if (room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) { atTop.push([gap * room / (2 * apart), room, apart]); return 'top'; }
               if (flipped(r, i)) return 'flip';
               unexplained.push(`column ${i}${r === control ? ' in the defaults' : ''} ${gap.toExponential(1)} apart, its top ${room.toFixed(2)} m from the lowest interface and ${(1e3 * apart).toFixed(1)} mm from the GPU's`);
               return 'loose';
             });
-            if (why.includes('loose')) loose.push(unexplained.join(', ')); else if (why.includes('flip')) flips++; else tops++;
+            if (why.includes('loose')) loose.push(unexplained.join(', '));
+            else if (why.includes('flip')) flips++;
+            else { tops++; for (const [ratio, room, apart] of atTop) { topRatio = Math.max(topRatio, ratio); topRoom = Math.max(topRoom, room); topApart = Math.max(topApart, apart); } }
             continue;
           }
           kept[i] = 1;

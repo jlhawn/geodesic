@@ -12083,7 +12083,7 @@ exchange, drag and ice drift (`GUSTO`) as well as the CPU's.
 `boundaryLayer.searchTop` (0.5): the Richardson search for the top
 stops at the highest level whose midpoint σ exceeds it (σ 0.531 on bl48).
 A column that has found no top below it takes that level's height. The
-GPU's form drag ends at the same σ.
+form drag (`orography.formDrag`) acts on the same levels on both engines.
 
 Where it binds was measured on the two page states. Each is one save at
 12 UTC near the March equinox, and the count is of columns whose saved
