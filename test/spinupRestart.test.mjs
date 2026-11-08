@@ -10,6 +10,8 @@ import { withoutMeans } from '../js/intervalMeans.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 import { loadSeaIceStart, SEA_ICE_START_FILE } from '../js/physics/seaIceStart.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { stateGeography, createGeography } from '../js/geography.module.js';
+import { seaCells, seaIceExtent } from '../js/seaIceExtent.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -76,6 +78,27 @@ test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed insi
     assert.deepEqual(snowed.map((i) => fresh.land.snow[i]), snowed.map((i) => whole.land.snow[i]), `day 1, land.snow at lake cells ${snowed.join(', ')}: the fresh run against its restart`);
     const restarted = apart(fresh, whole, [...means, 'energyRecord']);
     assert.deepEqual(restarted, [], `day 1, fresh against whole: ${restarted.join(', ')}`);
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extents of the day's save, with FLake over the sea cells and saying its frozen lakes are left out, and with the lake model off over every cell off land and saying nothing of lakes", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const out = mkdtempSync(join(tmpdir(), 'spinup-extents-'));
+  try {
+    for (const [tag, lake] of [['flake', {}], ['off', { LAKE: '{"model":"off"}' }]]) {
+      execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: '64', MINUTES: '100', OUT: out, DAYS: '1', TAG: tag, ...lake }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const line = readFileSync(join(out, `${tag}.log`), 'utf8').split('\n').find((l) => l.startsWith('day 1 ('));
+      const printed = line?.match(/, ice [\d.]+% \(N ([\d.]+) S ([\d.]+) Mkm²(, lakes left out)?\), albedo /);
+      assert.ok(printed, `${tag}: the day-1 line gives the extents: ${line}`);
+      const saved = await decoded(join(out, `${tag}_day0001.bin`)), { mesh } = stateGrid(saved), g = stateGeography(saved), geography = createGeography(mesh, g.topography, g.geography);
+      const left = seaIceExtent(mesh, seaCells({ geography, lake: { isLake: geography.lake } }), saved.concentration);
+      const counted = seaIceExtent(mesh, seaCells({ geography, lake: null }), saved.concentration);
+      console.log(`${tag}: day 1 line N ${printed[1]} S ${printed[2]} Mkm²${printed[3] ?? ''}; the save, lakes left out N ${left[0].toFixed(3)} S ${left[1].toFixed(3)}, counted N ${counted[0].toFixed(3)} S ${counted[1].toFixed(3)}`);
+      assert.ok(counted[0] - left[0] >= 0.1, `${tag}: the frozen lakes hold ${(counted[0] - left[0]).toFixed(3)} Mkm² of the northern extent, enough to show in its tenths`);
+      const want = tag === 'flake' ? [...left.map((x) => x.toFixed(1)), ', lakes left out'] : [...counted.map((x) => x.toFixed(1)), ''];
+      assert.deepEqual([printed[1], printed[2], printed[3] ?? ''], want, `${tag}: the extents and the label`);
+    }
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
