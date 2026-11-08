@@ -5,6 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { LAKE_FIELDS } from '../js/physics/lake.module.js';
+import { encodeState, decodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -53,4 +54,47 @@ test(`at N=${N} on the n1024 mask the GPU model runs FLake unless told the lake 
   assert.equal(off.lake, null);
   assert.equal(off.gpu.layout.PH.LAKE, undefined);
   assert.ok(plain.gpu.layout.PH.total > off.gpu.layout.PH.total);
+});
+
+test(`at N=${N} on the n1024 mask, a GPU model saved through the page's snapshot with its lakes' outflow pending, and a model that has run 3 steps restored from it through encodeState, decodeState and the page's restore, step on frame by frame as the run that did not stop, in the lakes and the ocean they drain to`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const stand = !globalThis.self;
+  if (stand) globalThis.self = { postMessage() {} };
+  try {
+    const { snapshotArrays, placeSaved, stepsToCadence } = await import('../js/model.worker.js');
+    const options = { ...setup({ model: 'flake' }), radiation: { radiationEvery: 4 }, ocean: { everySteps: 4 } };
+    const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'], subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false };
+    const frame = async (model, steps) => { const capturing = model.beginFrame(subscription); await model.stepBatch(steps, DT, null, false); await capturing; };
+    const run = prepare(await createGpuModel(new Grid(N), options)), twin = prepare(await createGpuModel(new Grid(N), options));
+    await frame(run, 3);
+    await frame(run, stepsToCadence(run, DT));
+    const { arrays, ocean, land } = await snapshotArrays(run);
+    const saved = { N, K: run.core.K, day: run.time / 86400, time: run.time, terrain: true };
+    for (const [key, buffer] of Object.entries(arrays)) saved[key] = new Float64Array(buffer.slice(0));
+    saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
+    if (land) saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
+    const back = await decodeState(encodeState(saved, { f64: f64Names(saved) }));
+    const pending = run.lake.cells.filter((i) => back.lakePending[i] !== 0).length;
+    assert.ok(pending > 0, 'the save holds lake outflow not yet drained to the sea');
+    await frame(twin, 3);
+    await placeSaved(twin, back, N, DT);
+    const largest = (mine, theirs) => { let d = 0, s = 0; for (let i = 0; i < theirs.length; i++) { d = Math.max(d, Math.abs(mine[i] - theirs[i])); s = Math.max(s, Math.abs(theirs[i])); } return s > 0 ? d / s : d; };
+    const worst = {}, parted = [], note = (field, gap, s) => { worst[field] = Math.max(worst[field] ?? 0, gap); if (gap > 0 && !parted.some(([name]) => name === field)) parted.push([field, s]); };
+    const steps = 2 * run.cadence.oceanEvery + 1;
+    for (let s = 1; s <= steps; s++) {
+      await frame(run, 1);
+      await frame(twin, 1);
+      await Promise.all([run.sync(), twin.sync()]);
+      names.forEach((name, a) => note(name, largest(twin.state[a], run.state[a]), s));
+      const [mine, theirs] = await Promise.all([twin.ocean.serialize(), run.ocean.serialize()]);
+      for (const key of ['h', 'u', 'T', 'S', 'eta']) note(`ocean ${key}`, largest(mine[key], theirs[key]), s);
+      const [ours, others] = await Promise.all([twin.lake.serialize(), run.lake.serialize()]);
+      for (const key of [...LAKE_FIELDS, 'passed']) note(`lake ${key}`, largest(ours[key], others[key]), s);
+    }
+    console.log(`N=${N}, ${pending} of ${run.lake.cells.length} lake cells with outflow pending at the save; over ${steps} steps after the restore, first parting steps: ${parted.map(([name, s]) => `${name} ${s}`).join(', ') || 'none'}`);
+    assert.deepEqual(Object.entries(worst).filter(([, gap]) => gap > 0), [], 'the restored run parts from the run that did not stop');
+    run.destroy();
+    twin.destroy();
+  } finally {
+    if (stand) delete globalThis.self;
+  }
 });

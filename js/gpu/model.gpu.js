@@ -141,10 +141,11 @@ export async function createGpuModel(gridOrMesh, {
   model.oceanEngine = gpuOcean;
   model.cadence = { radiationEvery: gpu.physics.radiationEvery, dragEvery: gpu.physics.dragEvery, oceanEvery: gpuOcean ? gpuOcean.everySteps : 1 };
   const freshwater = [['rain', 'RAIN', 'RAINSEEN'], ['runoff', 'RUNOFF', 'RUNOFFSEEN'], ['discharge', 'DISCHARGE', 'DISCHARGESEEN']];
+  const lakePending = lakeCpu ? gpu.layout.PH.LAKE + LAKE_SLOTS.indexOf('pending') * C : null;
   model.readFreshwater = async () => {
-    const totals = await readRanges(gpu.device, gpu.buffers.PH, freshwater.map(([, key]) => ({ offset: gpu.layout.PH[key], length: C })));
+    const totals = await readRanges(gpu.device, gpu.buffers.PH, [...freshwater.map(([, key]) => gpu.layout.PH[key]), ...(lakeCpu ? [lakePending] : [])].map((offset) => ({ offset, length: C })));
     const seen = gpuOcean ? await Promise.all(freshwater.map(([, , section]) => gpuOcean.readSection(section))) : null;
-    return Object.fromEntries(freshwater.flatMap(([name], n) => [[`${name}Total`, Float64Array.from(totals[n])], ...(seen ? [[`${name}Seen`, Float64Array.from(seen[n])]] : [])]));
+    return Object.fromEntries([...freshwater.flatMap(([name], n) => [[`${name}Total`, Float64Array.from(totals[n])], ...(seen ? [[`${name}Seen`, Float64Array.from(seen[n])]] : [])]), ...(lakeCpu ? [['lakePending', Float64Array.from(totals[freshwater.length])]] : [])]);
   };
   model.writeFreshwater = (saved) => {
     for (const [name, key, section] of freshwater) {
@@ -152,6 +153,7 @@ export async function createGpuModel(gridOrMesh, {
       if (total && total.length === C) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH[key], Float32Array.from(total));
       if (gpuOcean && seen && seen.length === C) gpuOcean.putSection(section, seen);
     }
+    if (lakeCpu && saved.lakePending && saved.lakePending.length === C) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * lakePending, Float32Array.from(saved.lakePending));
   };
 
   function pushState(ocean) {
