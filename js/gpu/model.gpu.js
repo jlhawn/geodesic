@@ -153,7 +153,8 @@ export async function createGpuModel(gridOrMesh, {
       if (total && total.length === C) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH[key], Float32Array.from(total));
       if (gpuOcean && seen && seen.length === C) gpuOcean.putSection(section, seen);
     }
-    if (lakeCpu && saved.lakePending && saved.lakePending.length === C) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * lakePending, Float32Array.from(saved.lakePending));
+    const owed = saved.lakePending && saved.lakePending.length === C ? saved.lakePending : saved.lakePassed && saved.lakePassed.length === C && saved.lakeSeen && saved.lakeSeen.length === C ? Float64Array.from(saved.lakePassed, (passed, i) => passed - saved.lakeSeen[i]) : null;
+    if (lakeCpu && owed) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * lakePending, Float32Array.from(owed));
   };
 
   function pushState(ocean) {

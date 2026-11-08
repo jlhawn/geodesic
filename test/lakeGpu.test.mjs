@@ -24,6 +24,15 @@ function prepare(model) {
   return model;
 }
 
+async function pageSave(snapshotArrays, model) {
+  const { arrays, ocean, land } = await snapshotArrays(model);
+  const saved = { N, K: model.core.K, day: model.time / 86400, time: model.time, terrain: true };
+  for (const [key, buffer] of Object.entries(arrays)) saved[key] = new Float64Array(buffer.slice(0));
+  saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
+  if (land) saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
+  return decodeState(encodeState(saved, { f64: f64Names(saved) }));
+}
+
 const spread = (a, b, cells) => { let s = 0, r = 0; for (const i of cells) { s += (a[i] - b[i]) ** 2; r += a[i] ** 2; } return Math.sqrt(s / Math.max(r, 1e-300)); };
 
 for (const [lake, surface] of [[{ model: 'flake' }, null], [{ model: 'flake' }, { virtualDensity: true }], [{ model: 'flake', missingBed: 'hydrolakes' }, null]]) test(`FLake at N=${N} on the n1024 mask${lake.missingBed ? ' with the HydroLAKES depths' : ''}${surface ? ' under surface.virtualDensity' : ''}: both engines carry the lakes' columns, surface temperature and ice in step over ${STEPS} steps, as closely as the sea's surface`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -66,12 +75,7 @@ test(`at N=${N} on the n1024 mask, a GPU model saved through the page's snapshot
     const run = prepare(await createGpuModel(new Grid(N), options)), twin = prepare(await createGpuModel(new Grid(N), options));
     await frame(run, 3);
     await frame(run, stepsToCadence(run, DT));
-    const { arrays, ocean, land } = await snapshotArrays(run);
-    const saved = { N, K: run.core.K, day: run.time / 86400, time: run.time, terrain: true };
-    for (const [key, buffer] of Object.entries(arrays)) saved[key] = new Float64Array(buffer.slice(0));
-    saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
-    if (land) saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
-    const back = await decodeState(encodeState(saved, { f64: f64Names(saved) }));
+    const back = await pageSave(snapshotArrays, run);
     const pending = run.lake.cells.filter((i) => back.lakePending[i] !== 0).length;
     assert.ok(pending > 0, 'the save holds lake outflow not yet drained to the sea');
     await frame(twin, 3);
@@ -93,6 +97,32 @@ test(`at N=${N} on the n1024 mask, a GPU model saved through the page's snapshot
     assert.deepEqual(Object.entries(worst).filter(([, gap]) => gap > 0), [], 'the restored run parts from the run that did not stop');
     run.destroy();
     twin.destroy();
+  } finally {
+    if (stand) delete globalThis.self;
+  }
+});
+
+test(`at N=${N} on the n1024 mask, a page save with its lakes' outflow pending, restored on the other engine through encodeState, decodeState and the page's restore, holds the outflow a restore on its own engine holds: a CPU save's lakePassed less lakeSeen on the GPU, and a GPU save's lakePending on the CPU`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const stand = !globalThis.self;
+  if (stand) globalThis.self = { postMessage() {} };
+  try {
+    const { snapshotArrays, placeSaved } = await import('../js/model.worker.js');
+    const options = { ...setup({ model: 'flake' }), radiation: { radiationEvery: 4 }, ocean: { everySteps: 4 } };
+    const cpu = prepare(createModel(new Grid(N), options)), gpu = prepare(await createGpuModel(new Grid(N), options));
+    for (let n = 0; n < 3; n++) { cpu.step(DT); await gpu.step(DT); }
+    const fromCpu = await pageSave(snapshotArrays, cpu), fromGpu = await pageSave(snapshotArrays, gpu), lakes = cpu.lake.cells;
+    assert.equal(fromCpu.lakePending, undefined, 'a CPU save holds the outflow as lakePassed less lakeSeen');
+    assert.equal(fromGpu.lakeSeen, undefined, 'a GPU save holds the outflow as lakePending');
+    assert.ok(lakes.some((i) => fromCpu.lakePassed[i] !== fromCpu.lakeSeen[i]) && lakes.some((i) => fromGpu.lakePending[i] !== 0), 'both saves hold lake outflow not yet drained to the sea');
+    const held = async (model, saved) => {
+      await placeSaved(model, saved, N, DT);
+      return model === gpu ? Array.from((await gpu.readFreshwater()).lakePending) : Array.from(cpu.lake.passed, (passed, i) => passed - cpu.lake.seen[i]);
+    };
+    const cpuOwn = await held(cpu, fromCpu), cpuOnGpu = await held(gpu, fromCpu), gpuOwn = await held(gpu, fromGpu), gpuOnCpu = await held(cpu, fromGpu);
+    console.log(`N=${N}, lake cells ${lakes.join(', ')}: the CPU save's outflow ${lakes.map((i) => cpuOwn[i].toExponential(3)).join(', ')} kg/m², on the GPU ${lakes.map((i) => cpuOnGpu[i].toExponential(3)).join(', ')}; the GPU save's ${lakes.map((i) => gpuOwn[i].toExponential(3)).join(', ')}, on the CPU ${lakes.map((i) => gpuOnCpu[i].toExponential(3)).join(', ')}`);
+    assert.deepEqual(cpuOnGpu, cpuOwn.map(Math.fround), "the GPU holds the CPU save's outflow as the CPU restored from it does, to float32");
+    assert.deepEqual(gpuOnCpu, gpuOwn, "the CPU holds the GPU save's outflow as the GPU restored from it does");
+    gpu.destroy();
   } finally {
     if (stand) delete globalThis.self;
   }
