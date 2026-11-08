@@ -4,7 +4,8 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
-import { bathymetryFrom, createOcean, displacedWeight, inertialStepLimit } from '../js/ocean/layered.module.js';
+import { bathymetryFrom, createOcean, displacedWeight, inertialStepLimit, EPS } from '../js/ocean/layered.module.js';
+import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { N, shelfBands, warmOcean, restingShelf, steppedDraft } from './helpers/iceShelf.mjs';
 import { basalMelt, baseFreezing, SHELF_MELT } from '../js/ocean/iceShelfMelt.module.js';
 import { decodeClimatology, encodeClimatology } from '../js/ocean/climatology.module.js';
@@ -210,6 +211,31 @@ test(`a saved state keeps the shelves' load at f64, so on each engine a restart 
     const second = await prepare(await make());
     second.ocean.load(ocean, Float64Array.from(second.state[3]), Float64Array.from(second.state[6]));
     assert.deepEqual(await liquidus(second), await liquidus(first));
+  }
+});
+
+test('a save without the shelves\' load gives each engine a shelf\'s load from its top layer\'s own water, Q/h and W/h, when that layer is thinner than EPS, and the layer\'s class density when it is empty', { skip: !gpuAvailable && 'webgpu not available' }, async () => {
+  const { raster, options } = shelfBands(), setup = { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { iceDrift: false } };
+  const cpu = await prepare(createModel(new Grid(N), setup)), C = cpu.mesh.nCells, { ocean } = cpu, { iceDraft } = cpu.geography;
+  const { shelfLoad, ...served } = ocean.serialize();
+  const h = Float64Array.from(served.h), T = Float64Array.from(served.T), S = Float64Array.from(served.S), Q = Float64Array.from(ocean.Q), W = Float64Array.from(ocean.W);
+  const thin = shelfLoad.findIndex((weight, i) => weight > 0 && h[i] > 1), empty = shelfLoad.findIndex((weight, i) => weight > 0 && h[i] > 1 && i !== thin);
+  assert.ok(thin >= 0 && empty >= 0, 'no two shelves over top layers thicker than 1 m');
+  for (const [i, top] of [[thin, 0.005], [empty, 0]]) {
+    h[C + i] += h[i] - top;
+    h[i] = top;
+    for (const n of [i, C + i]) {
+      const span = Math.max(EPS, h[n]);
+      [T[n], S[n]] = [(h[n] / span) * served.T[n], (h[n] / span) * served.S[n]];
+      [Q[n], W[n]] = [span * T[n], span * S[n]];
+    }
+  }
+  const expected = [[thin, iceDraft[thin] * seawaterDensity(Q[thin] / h[thin], W[thin] / h[thin])], [empty, iceDraft[empty] * ocean.densities[0]]];
+  for (const make of [() => createModel(new Grid(N), setup), () => createGpuModel(new Grid(N), setup)]) {
+    const model = await prepare(await make());
+    await model.ocean.load({ ...served, h, T, S }, Float64Array.from(model.state[3]), Float64Array.from(model.state[6]));
+    const loaded = (await model.ocean.serialize()).shelfLoad;
+    for (const [i, weight] of expected) assert.ok(Math.abs(loaded[i] - weight) <= 1e-12 * weight, `${model.oceanEngine ? 'GPU' : 'CPU'}: the shelf over the ${i === thin ? '5 mm' : 'empty'} top layer loads at ${loaded[i]}, its water gives ${weight}`);
   }
 });
 

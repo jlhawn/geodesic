@@ -2,7 +2,7 @@ import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReductio
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, NEUTRAL_STRATIFICATION, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, NEUTRAL_STRATIFICATION, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, topLayerDensity, layerMeans, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare, INTERIOR_SHEARS, LMD94_RICHARDSON, LMD94_VISCOSITY } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -1536,8 +1536,8 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const OF = seq([['SST', nC], ['SSS', nC], ['H1', nC], ['THD', nC], ['ETA', nC], ['CUR', 3 * nC], ['CSPD', nC], ['UPW', nC], ['PART', reduced.length * reductionGroups(nC)]]);
   kernels.oFrame = `${HYBRID_THERMOCLINE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
-  let h0 = max(EPSO, IN[hOff(0) + i]);
-  OUT[${OF.SSS} + i] = IN[wOff(0) + i] / h0 + SREF;
+  let h0 = IN[hOff(0) + i];
+  OUT[${OF.SSS} + i] = select(LABEL_S[0], IN[wOff(0) + i] / h0 + SREF, h0 > 1e-6);
   OUT[${OF.H1} + i] = OD[O_MIXED + i];
   OUT[${OF.THD} + i] = thermoclineDepthOf(i);
   OUT[${OF.ETA} + i] = OD[O_ETA + i];
@@ -1549,7 +1549,8 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
     OUT[${OF.CUR} + 3 * i] = 0.0; OUT[${OF.CUR} + 3 * i + 1] = 0.0; OUT[${OF.CUR} + 3 * i + 2] = 0.0; OUT[${OF.CSPD} + i] = DRY;
     return;
   }
-  OUT[${OF.SST} + i] = IN[qOff(layer) + i] / max(EPSO, IN[hOff(layer) + i]) + TREF;
+  let hl = IN[hOff(layer) + i];
+  OUT[${OF.SST} + i] = select(LABEL_T[layer], IN[qOff(layer) + i] / hl + TREF, hl > 1e-6);
   var w = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m]; let s = f32(MI[ESC + MAXE * i + m]);
@@ -2171,7 +2172,7 @@ ${core.fieldConstants}
     const out = new Float32Array(C), hCol = new Float64Array(L), rhoCol = new Float64Array(L);
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
-      for (let k = 0; k < L; k++) { const n = k * C + i, hk = Math.max(EPS, h[n]); hCol[k] = h[n]; rhoCol[k] = eos(Q[n] / hk, W[n] / hk); }
+      for (let k = 0; k < L; k++) { const n = k * C + i, hk = h[n]; hCol[k] = hk; rhoCol[k] = hk > 1e-6 ? eos(Q[n] / hk, W[n] / hk) : rho[k]; }
       out[i] = mixedLayerDepth(hCol, rhoCol, L);
     }
     return out;
@@ -2220,7 +2221,7 @@ ${core.fieldConstants}
     const at = (k, i) => k * C + i;
     const start = () => { const arrays = initializeArrays(surfaceT, ice, o.climatology ?? null); uploadArrays(arrays, surfaceT, ice, null, concentration); putSection('PREVT0', arrays.previousT0); };
     if (!saved || !saved.h) { start(); return; }
-    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * seawaterDensity(saved.T[i], saved.S[i]);
+    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * topLayerDensity(saved, i, rho[0]);
     for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     const classes = savedDensities(saved, C), own = classes && sameDensities(classes, labels) && saved.h.length === L * C;
     if (own && restartable(saved)) {
@@ -2233,11 +2234,11 @@ ${core.fieldConstants}
     if (own) {
       h.set(saved.h); u.set(saved.u);
       const Qs = saved.Qref ? Float64Array.from(saved.Qref, (q, n) => q + HEAT_REFERENCE * h[n]) : null, Ws = saved.Wref ? Float64Array.from(saved.Wref, (w, n) => w + SALT_REFERENCE * h[n]) : null;
-      for (let n = 0; n < L * C; n++) { Q[n] = Qs ? Qs[n] : h[n] * saved.T[n]; W[n] = Ws ? Ws[n] : h[n] * saved.S[n]; }
+      for (let n = 0; n < L * C; n++) { Q[n] = Qs ? Qs[n] : Math.max(EPS, h[n]) * saved.T[n]; W[n] = Ws ? Ws[n] : Math.max(EPS, h[n]) * saved.S[n]; }
     } else {
       const Ls = classes ? classes.length + 1 : Math.round(saved.h.length / C);
       if (saved.h.length !== Ls * C) throw new Error(`a saved ocean on ${Ls} layers holds ${Ls * C} thicknesses, not ${saved.h.length}`);
-      const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), hNew = new Float64Array(L), amount = new Float64Array(L);
+      const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), hNew = new Float64Array(L), amount = new Float64Array(L), [meanT, meanS] = layerMeans(saved, Ls, C);
       for (let i = 0; i < C; i++) {
         if (!cellOcean[i]) continue;
         const H = hybridGrid(i, eta, zCol);
@@ -2246,10 +2247,10 @@ ${core.fieldConstants}
         if (!(sum > 0)) { for (let k = 0; k < L; k++) { const n = at(k, i), hk = zCol[k + 1] - zCol[k]; h[n] = hk; Q[n] = hk * surfaceAt(i); W[n] = hk * o.referenceS; } continue; }
         for (let j = 0; j < Ls; j++) hs[j] *= H / sum;
         for (let k = 0; k < L; k++) hNew[k] = zCol[k + 1] - zCol[k];
-        for (let j = 0; j < Ls; j++) qs[j] = saved.T[j * C + i];
+        for (let j = 0; j < Ls; j++) qs[j] = meanT(j * C + i);
         remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
         for (let k = 0; k < L; k++) Q[at(k, i)] = amount[k];
-        for (let j = 0; j < Ls; j++) qs[j] = saved.S[j * C + i];
+        for (let j = 0; j < Ls; j++) qs[j] = meanS(j * C + i);
         remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
         for (let k = 0; k < L; k++) { W[at(k, i)] = amount[k]; h[at(k, i)] = hNew[k]; }
       }
@@ -2291,15 +2292,17 @@ ${core.fieldConstants}
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); T[n] = (Qraw[n] + HEAT_REFERENCE * h[n]) / hh; S[n] = (Wraw[n] + SALT_REFERENCE * h[n]) / hh; }
     const eta = Float64Array.from(etaRange);
     const shelfFields = hasShelves ? await readSections(['MELTSUM', 'DRAW']) : null;
-    const h1 = Float64Array.from((await readSections(['MIXED']))[0]), T1 = T.subarray(0, C), S1 = S.subarray(0, C), u1 = u.subarray(0, E);
+    const h1 = Float64Array.from((await readSections(['MIXED']))[0]), u1 = u.subarray(0, E);
+    const top = (store, reference, label) => Float64Array.from({ length: C }, (_, i) => (h[i] > 1e-6 ? (store[i] + reference * h[i]) / h[i] : label));
+    const T1 = top(Qraw, HEAT_REFERENCE, labelT[0]), S1 = top(Wraw, SALT_REFERENCE, labelS[0]);
     const thermoclineDepth = new Float64Array(C);
-    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermoclineOf(h, T, S, i) : NaN;
+    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermoclineOf(h, Qraw, Wraw, i) : NaN;
     return { h, u, T, S, eta, h1, T1, S1, u1, thermoclineDepth, layers: L, ...(shelfFields ? { shelfMelted: Float64Array.from(shelfFields[0]), shelfDraw: Float64Array.from(shelfFields[1]) } : {}) };
   }
-  function thermoclineOf(h, T, S, i) {
+  function thermoclineOf(h, Qraw, Wraw, i) {
     let z = 0, previous = -Infinity, center = 0;
     for (let k = 0; k < L; k++) {
-      const n = k * C + i, hv = h[n], rk = Math.max(previous, hv > 1e-6 ? eos(T[n], S[n]) : rho[k]), c = z + 0.5 * hv;
+      const n = k * C + i, hv = h[n], rk = Math.max(previous, hv > 1e-6 ? eos((Qraw[n] + HEAT_REFERENCE * hv) / hv, (Wraw[n] + SALT_REFERENCE * hv) / hv) : rho[k]), c = z + 0.5 * hv;
       if (rk >= THERMOCLINE_DENSITY) return k === 0 ? 0 : center + (THERMOCLINE_DENSITY - previous) / Math.max(rk - previous, 1e-12) * (c - center);
       previous = rk; center = c; z += hv;
     }
@@ -2322,10 +2325,11 @@ ${core.fieldConstants}
    * sizes, the last two and `calved` optional, its columns within a meter of this
    * bathymetry and dry on land, is uploaded as it is, without fitting its
    * columns. From T, S and h its heat and salt stores come back to the last
-   * bit, except within about 3e-6 K of HEAT_REFERENCE (273.15 K rounded to
-   * f32) or 4e-7 psu of 35: there a store can miss, by more ulps the nearer
-   * it lies to the reference, but never by more than about 2e-13·h. Qref and
-   * Wref, when a save carries them, are uploaded as they are.
+   * bit, except where a layer's temperature, Q/h, lies within about 3e-6 K of
+   * HEAT_REFERENCE (273.15 K rounded to f32) or its salinity, W/h, within
+   * 4e-7 psu of 35: there a store can miss, by more ulps the nearer it lies
+   * to the reference, but never by more than about 2e-13·h. Qref and Wref,
+   * when a save carries them, are uploaded as they are.
    */
   async function restartArrays() {
     const PHL = core.layout.PH;

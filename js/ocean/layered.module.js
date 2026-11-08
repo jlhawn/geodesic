@@ -589,6 +589,17 @@ export function displacedWeight(draft, sample, density = seawaterDensity, n = 64
   return sum * draft / n;
 }
 
+export function topLayerDensity(saved, i, classDensity) {
+  const h = saved.h[i], scale = Math.max(EPS, h) / h;
+  return h > 1e-6 ? seawaterDensity(scale * saved.T[i], scale * saved.S[i]) : classDensity;
+}
+
+export function layerMeans(saved, layers, C) {
+  const stores = saved.Q && saved.Q.length === layers * C && saved.W && saved.W.length === layers * C;
+  const mean = (store, value) => (n) => (stores && saved.h[n] > 0 ? store[n] / saved.h[n] : value[n]);
+  return [mean(saved.Q, saved.T), mean(saved.W, saved.S)];
+}
+
 export function createOcean(mesh, {
   minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
@@ -1816,7 +1827,7 @@ export function createOcean(mesh, {
   function convertSlab(saved, classes) {
     const Ls = classes.length + 1;
     if (saved.h.length !== Ls * C) throw new Error(`a slab state on ${classes.length} classes holds ${Ls * C} thicknesses, not ${saved.h.length}`);
-    const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), { z: zCol, hNew, amount } = cols;
+    const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), { z: zCol, hNew, amount } = cols, [meanT, meanS] = layerMeans(saved, Ls, C);
     eta.set(saved.eta);
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } continue; }
@@ -1826,10 +1837,10 @@ export function createOcean(mesh, {
       if (!(sum > 0)) { for (let k = 0; k < L; k++) { const n = at(k, i), hk = zCol[k + 1] - zCol[k]; h[n] = hk; Q[n] = hk * surfaceTAt(i); W[n] = hk * referenceS; } continue; }
       for (let j = 0; j < Ls; j++) hs[j] *= H / sum;
       for (let k = 0; k < L; k++) hNew[k] = zCol[k + 1] - zCol[k];
-      for (let j = 0; j < Ls; j++) qs[j] = saved.T[j * C + i];
+      for (let j = 0; j < Ls; j++) qs[j] = meanT(j * C + i);
       remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
       for (let k = 0; k < L; k++) Q[at(k, i)] = amount[k];
-      for (let j = 0; j < Ls; j++) qs[j] = saved.S[j * C + i];
+      for (let j = 0; j < Ls; j++) qs[j] = meanS(j * C + i);
       remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
       for (let k = 0; k < L; k++) { W[at(k, i)] = amount[k]; h[at(k, i)] = hNew[k]; }
     }
@@ -1851,7 +1862,7 @@ export function createOcean(mesh, {
     const classes = savedDensities(saved, C), own = classes && sameDensities(classes, labels) && saved.h.length === L * C;
     if (own) {
       h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
-      for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
+      for (let n = 0; n < L * C; n++) { Q[n] = Math.max(EPS, h[n]) * saved.T[n]; W[n] = Math.max(EPS, h[n]) * saved.S[n]; }
       if (saved.Q && saved.Q.length === L * C && saved.W && saved.W.length === L * C) { Q.set(saved.Q); W.set(saved.W); }
       else if (saved.Qref && saved.Qref.length === L * C && saved.Wref && saved.Wref.length === L * C) for (let n = 0; n < L * C; n++) { Q[n] = saved.Qref[n] + HEAT_REFERENCE * h[n]; W[n] = saved.Wref[n] + SALT_REFERENCE * h[n]; }
     } else convertSlab(saved, classes);
@@ -1864,7 +1875,7 @@ export function createOcean(mesh, {
       if (Math.abs(sum - H) > 1e-9) { const scale = H / sum; for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; } }
     }
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
-    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * eos(saved.T[i], saved.S[i]);
+    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * topLayerDensity(saved, i, rho[0]);
     for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     if (!own) regrid(Infinity);
     measureIce(ice, concentration, previousVolume);
