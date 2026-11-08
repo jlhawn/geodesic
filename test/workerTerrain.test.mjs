@@ -76,14 +76,14 @@ test('a page without terrain keeps its model on the restore of a snapshot over t
   assert.deepEqual(state[0], pressure(raised));
 });
 
-test('a state saved over terrain of other options and started at another resolution has its surface pressure moved from that terrain\'s surface, regridded, onto the page\'s', async () => {
+test('a state saved over terrain of other options and started at another resolution has its surface pressure moved from that terrain\'s surface on its own geography, regridded, onto the page\'s', async () => {
   await start(16);
   const fresh = await snapshot();
   for (const [name, terrain] of [['default', true], ['conserveVolume', TERRAIN]]) {
     const file = saveFile(`regrid-${name}`, fresh, terrain === true ? {} : { terrainOptions: terrain });
     await start(32, file);
     const taken = await snapshot(), saved = await readSave(file), levels = savedLevels(saved), { topography, geography } = stateGeography(saved);
-    const source = createModel(stateGrid(saved, topography).mesh, { physics: false, levels, terrain, topography });
+    const source = createModel(stateGrid(saved, topography).mesh, { physics: false, levels, terrain, topography, geography });
     const target = createModel(stateGrid(taken, topography).mesh, { physics: false, levels, terrain, topography, geography });
     const carried = regridState(source, target, ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].map((key) => Float64Array.from(saved[key])), null, { land: saved.land });
     target.core.diagnose(carried[0], carried[1], null, null);
