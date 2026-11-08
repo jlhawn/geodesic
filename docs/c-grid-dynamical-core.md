@@ -10141,7 +10141,8 @@ C_d 1, G 0.5, H_n,crit 0.5, Ri_c 1 (p. 110) with H = 2μ and no cut-off
 documents H_n,crit 0.5 and Ri_crit 0.25 too, but C_d 2 (eq. 4.17) and
 H_eff doubled since Cy32r2 (eq. 4.8), with a G that the chapter does not
 state (G ≈ 1.23 for the elliptical mountain of eq. 4.2; the operational
-GKDRAG is 0.3, Part II §3.5); those are not taken.
+GKDRAG, the G of eq. 4.19 in §4.2.2, is 0.3, set in SUGWD); those are
+not taken.
 Each layer's wave drag in a step is at most what stops its own wind along
 the stress, the rest passing to the layer above, a limit the IFS's
 explicit tendencies do not have. An edge steps as u ← (u + Δt a)/(1 + Δt β); the kinetic energy
@@ -10631,10 +10632,10 @@ only value the chapter gives, for the elliptical mountain of eq. 4.2 that
 the scheme assumes; it calls G "a function of the mountain sharpness" and
 states no operational value), H_n,crit 0.5, Ri_crit 0.25
 (`OROGRAPHY_DEFAULTS`; `LOTT_MILLER` keeps C_d 1, G 1, factor 1; orography
-`constants` 'cy41r2' takes the IFS's operational G, GKDRAG 0.3 (Cy41r2
-Part II §3.5, set in SUGWD), with the other defaults, a launched stress
-of 1.2 against 4.92 ρUNμσD at Z_b = 0, and constants given by name win
-over it). The
+`constants` 'cy41r2' takes the IFS's operational G, GKDRAG 0.3 (the G of
+Cy41r2 Part IV §4.2.2, eq. 4.19; the value is set in SUGWD), with the
+other defaults, a launched stress of 1.2 against 4.92 ρUNμσD at Z_b = 0,
+and constants given by name win over it). The
 doubled H_eff enters the wave's launch amplitude δz as well as its stress.
 Eq. 4.37's remark that its /9 equals eq. 4.19's /4 at Z_blk = 0 holds only
 without the factor; taken as eq. 4.8 states it. Against `LOTT_MILLER`'s
@@ -10860,7 +10861,8 @@ all pass but parallel.test (its speedup, 1.0× under the load of other
 jobs), which passes alone (3.7×).
 
 What still misses: the IFS's G for its operational fields is GKDRAG 0.3
-(Cy41r2 Part II §3.5, set in SUGWD; Part IV gives no value), so G 1.23,
+(the G of Cy41r2 Part IV §4.2.2, eq. 4.19, which gives no value; 0.3 is
+set in SUGWD), so G 1.23,
 the textbook mountain's, launches 4.1 times the IFS's stress (orography
 `constants` 'cy41r2' takes 0.3), and the doubled H_eff rests on eq. 4.8
 against eq. 4.37's remark; with them the December land westerlies at
