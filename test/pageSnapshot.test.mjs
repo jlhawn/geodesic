@@ -18,7 +18,7 @@ function lakeMask(bytes) {
   return Buffer.concat(parts.map((part) => new Uint8Array(part.buffer, part.byteOffset, part.byteLength)));
 }
 
-test("the page's store keeps every array the worker's snapshot holds, and runs restored through the worker's own snapshot and restore, the page's store and its restore message, into the running model and into a new one, step on as the run that saved, from a state loaded off the ocean's cadence with runoff and discharge pending, and with two lakes' outflow pending at every save", async () => {
+test("the page's store keeps every array the worker's snapshot holds, and runs restored through the worker's own snapshot and restore, the page's store and its restore message, into the running model and into a new one, step on as the run that saved, from a state loaded off the ocean's cadence with runoff and discharge pending, and with two lakes' outflow pending at every save; and a save that holds the water its lakes handed the sea but not the lakes, restored into a new model, steps on as it does restored into a running model that has not stepped", async () => {
   const messages = [], fetched = globalThis.fetch;
   globalThis.self = { postMessage: (message) => messages.push(message) };
   globalThis.fetch = async (url, init) => {
@@ -29,7 +29,7 @@ test("the page's store keeps every array the worker's snapshot holds, and runs r
   };
   try {
     const workers = {};
-    for (const name of ['A', 'B', 'C', 'D']) { await import(`../js/model.worker.js?page${name}`); workers[name] = self.onmessage; }
+    for (const name of ['A', 'B', 'C', 'D', 'E', 'F']) { await import(`../js/model.worker.js?page${name}`); workers[name] = self.onmessage; }
     const arrived = async (type) => { for (let wait = 0; wait < 12000 && !messages.some((m) => m.type === type); wait++) await new Promise((resolve) => setTimeout(resolve, 10)); };
     const send = async (name, data, type) => {
       messages.length = 0;
@@ -109,6 +109,21 @@ test("the page's store keeps every array the worker's snapshot holds, and runs r
     }
     assert.deepEqual(parted(later.C, later.B), [], 'loaded at step 6 into a new model, the run parts at step 20 from the run that loaded it into the running model');
     assert.deepEqual(parted(later.D, later.B), [], 'restored from the step-12 save into the running model, the run parts at step 20 from the run that saved');
+    const lakeArrays = ['lakeMixed', 'lakeMean', 'lakeBottom', 'lakeShape', 'lakeMixedDepth', 'lakeIce', 'lakeIceT', 'lakePassed'];
+    const lakeless = { meta: record.meta, data: { ...record.data, arrays: Object.fromEntries(Object.entries(record.data.arrays).filter(([key]) => !lakeArrays.includes(key))) } };
+    for (const i of LAKES) assert.notEqual(new Float64Array(lakeless.data.arrays.lakeSeen)[i], 0, `the save holds the water lake ${i} handed the sea`);
+    const unlaked = () => ({ type: 'restore', snapshot: restoreMessage(lakeless.meta, structuredClone(lakeless.data)) });
+    await send('E', { ...start, options: { ocean: options.ocean } }, 'ready');
+    assert.deepEqual((await send('E', unlaked(), 'ready')).options, options, 'the restore starts a new model');
+    await send('F', start, 'ready');
+    await send('F', unlaked(), 'ready');
+    const unlakedLater = {};
+    for (const name of ['E', 'F']) {
+      await frame(name);
+      unlakedLater[name] = await send(name, { type: 'snapshot' }, 'snapshotData');
+      assert.equal(stepOf(unlakedLater[name]), 8);
+    }
+    assert.deepEqual(parted(unlakedLater.E, unlakedLater.F), [], 'a save without its lakes, restored at step 4 into a new model, parts at step 8 from the same save restored into a running model that has not stepped');
   } finally {
     globalThis.fetch = fetched;
     delete globalThis.self;

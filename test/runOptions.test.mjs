@@ -69,7 +69,14 @@ test("the page's worker runs a saved state with the options and the terrain it r
       assert.equal(record.soilSeed, SEED, `${path} keeps the soil seed`);
       assert.deepEqual(record.options, OPTIONS, `${path} keeps the options`);
     }
-    assert.deepEqual(Object.keys(imported.data.arrays).sort(), Object.keys(store.data.arrays).sort(), 'an export and import keeps every array');
+    for (const [group, mine, theirs] of [['top-level', imported.data.arrays, store.data.arrays], ['ocean', groupArrays(imported.data.ocean), groupArrays(store.data.ocean)], ['land', imported.data.land ?? {}, store.data.land ?? {}]]) {
+      assert.ok(Object.keys(theirs).length > 0, `the store holds ${group} arrays`);
+      assert.deepEqual(Object.keys(mine).sort(), Object.keys(theirs).sort(), `an export and import keeps every ${group} array`);
+      for (const [key, buffer] of Object.entries(theirs)) {
+        const x = new Float64Array(mine[key]), y = new Float64Array(buffer);
+        assert.ok(x.length === y.length && y.every((value, i) => Object.is(x[i], value)), `an export and import keeps the ${group} array ${key} bit for bit`);
+      }
+    }
     assert.deepEqual(new Float64Array(taken.arrays.pi), saved.pi);
     assert.deepEqual((await restore(fresh)).options, {});
     const unseeded = await snapshot();
