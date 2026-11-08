@@ -83,7 +83,7 @@ test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed insi
   }
 });
 
-test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extents of the day's save, with FLake over the sea cells and saying its frozen lakes are left out, and with the lake model off over every cell off land and saying nothing of lakes, and a surface shortwave over the save's iced sea cells poleward of 60° in each hemisphere above 0 and below the line's own mean over the sea",{ skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extents of the day's save, with FLake over the sea cells and saying its frozen lakes are left out, and with the lake model off over every cell off land and saying nothing of lakes, and a surface shortwave over the save's iced sea cells poleward of 60° within a factor of 2 of N 17.3 and S 41.9 W/m²",{ skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'spinup-extents-'));
   try {
     for (const [tag, lake] of [['flake', {}], ['off', { LAKE: '{"model":"off"}' }]]) {
@@ -102,7 +102,7 @@ test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extent
       const shortwave = line.match(/surface shortwave ([-\d.]+) net longwave [-\d.]+ W\/m² \(iced cells poleward of 60°: N ([-\d.]+) S ([-\d.]+)\)/);
       console.log(`${tag}: iced sea cells poleward of 60° in the save N ${north} S ${iced.length - north}; the line gives ${shortwave?.[0]}`);
       assert.ok(north > 0 && iced.length > north, `${tag}: the save holds sea ice poleward of 60° in each hemisphere`);
-      assert.ok(shortwave && [shortwave[2], shortwave[3]].every((x) => +x > 0 && +x < +shortwave[1]), `${tag}: the line gives the iced cells poleward of 60° a surface shortwave in each hemisphere above 0 and below its mean over the sea: ${shortwave?.[0]}`);
+      assert.ok(shortwave && [[shortwave[2], 17.3], [shortwave[3], 41.9]].every(([x, near]) => +x > near / 2 && +x < near * 2), `${tag}: the line gives the iced cells poleward of 60° a surface shortwave within a factor of 2 of N 17.3 and S 41.9 W/m²: ${shortwave?.[0]}`);
     }
   } finally {
     rmSync(out, { recursive: true, force: true });
