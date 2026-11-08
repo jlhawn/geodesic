@@ -49,19 +49,20 @@ test('the 2 m temperature\'s heat profile is the exchange\'s: at the lowest laye
   assert.ok(largest > 30, `the largest ζ is ${largest}`);
 });
 
-test('the 2 m temperature lies along that profile with the WMO\'s open-terrain roughness wherever z0m exceeds 0.03 m and the profile uniform above z/L = 5, as the IFS interpolates its own (Cy41r2 Part IV eq. 3.95, section 3.2)', () => {
+test('the 2 m temperature lies along that profile with the WMO\'s open-terrain roughness wherever z0m exceeds 0.03 m and, in stable air, the profile uniform above z/L = 5, as the IFS interpolates its own (Cy41r2 Part IV eq. 3.95, section 3.2)', () => {
   const g = 9.80616, cp = 1004.64, z = 21, surfaceT = 280, airT = 284;
   const share = (zeta, z0m, z0h, top = z) => (profileTemperature(2, surfaceT, airT, top, zeta, z0m, z0h, g, cp) + 2 * g / cp - surfaceT) / (airT + g * top / cp - surfaceT);
-  for (const zeta of [-2, -0.5, 0, 1, 3, 20, 400]) {
+  for (const zeta of [-20, -10, -2, -0.5, 0, 1, 3, 20, 400]) {
     assert.equal(share(zeta, 2, 2), share(zeta, 0.1, 1e-3), `ζ ${zeta}: forest and grass both take the WMO roughness`);
     assert.equal(share(zeta, 0.1, 1e-3), share(zeta, 0.03, 0.003), `ζ ${zeta}: the WMO roughness is z0m 0.03 m and z0h 0.003 m`);
-    assert.ok(zeta >= 5 * z / 2 || share(zeta, 0.013, 1.3e-4) !== share(zeta, 0.03, 0.003), `ζ ${zeta}: a cell under 0.03 m keeps its own roughness`);
+    assert.equal(share(zeta, 0.031, 3.1e-4), share(zeta, 0.03, 0.003), `ζ ${zeta}: a cell of z0m 0.031 m takes the WMO roughness`);
+    for (const [z0m, z0h] of [[0.013, 1.3e-4], [0.029, 2.9e-4], [0.03, 3e-4]]) assert.ok(zeta >= 5 * z / 2 || share(zeta, z0m, z0h) !== share(zeta, 0.03, 0.003), `ζ ${zeta}: a cell of z0m ${z0m} m keeps its own roughness`);
     close(profileTemperature(z, surfaceT, airT, z, zeta, 0.1, 1e-3, g, cp), airT, 1e-12, `ζ ${zeta}: the lowest layer's air at its height`);
   }
   close(share(0, 0.013, 1.3e-4), Math.log(2.013 / 1.3e-4) / Math.log(21.013 / 1.3e-4), 1e-12, 'neutral: the cell\'s own log law');
   close(share(0, 2, 2), Math.log(2.03 / 0.003) / Math.log(21.03 / 0.003), 1e-12, 'neutral: the WMO roughness\'s log law');
   for (const zeta of [6, 20, 50]) close(share(zeta, 0.1, 1e-3), share(2 * zeta, 0.1, 1e-3, 2 * z), 1e-12, `ζ ${zeta}: uniform above h = 5 L, a lowest layer twice as high at the same L gives the same share`);
-  assert.ok(Math.abs(share(3, 0.1, 1e-3) - share(6, 0.1, 1e-3, 2 * z)) > 1e-3, 'below h = 5 L the lowest layer\'s height matters');
+  for (const zeta of [3, -0.5, -2, -10, -20]) assert.ok(Math.abs(share(zeta, 0.1, 1e-3) - share(2 * zeta, 0.1, 1e-3, 2 * z)) > 1e-3, `ζ ${zeta}: below h = 5 L, and at any height in unstable air, the lowest layer's height matters`);
   for (const zeta of [5 * z / 2, 400]) close(share(zeta, 0.1, 1e-3), 1, 1e-12, `ζ ${zeta}: with 5 L at or under 2 m the 2 m air is the lowest layer's`);
   for (const [zeta, weight] of [[0, 0.736], [-0.5, 0.832], [1, 0.526], [10, 0.438], [20, 0.596]]) assert.ok(Math.abs(share(zeta, 2, 2) - weight) < 5e-4, `ζ ${zeta}: ${share(zeta, 2, 2)} against the review's IFS construction, ${weight}`);
 });

@@ -9565,14 +9565,16 @@ The 2 m temperature (`t2m`, a frame field and one of the interval
 means) is interpolated as the IFS interpolates its 2 m temperature
 (Cy41r2 Part IV eq. 3.95). The dry static energy c_p T + g h at
 h = 2 m lies between the skin's and the lowest layer's at the share
-F(min(2 m, 5L))/F(min(z₁, 5L)) of the heat profile F(h) =
-ln((h + z₀m)/z₀h) − ψh((h + z₀m)/L) + ψh(z₀h/L).
+F(min(2 m, H))/F(min(z₁, H)) of the heat profile F(h) =
+ln((h + z₀m)/z₀h) − ψh((h + z₀m)/L) + ψh(z₀h/L), where H = 5L for
+L > 0 and is unbounded otherwise.
 - L = z₁/ζ is the step's, from the exchange's own ζ above, which no cap
   limits. The IFS caps z/L in its exchange too, so its L would differ.
-- Where the cell's blended z₀m exceeds 0.03 m (90 % of 40–60N land by
-  area in seventeen64's day-365 state), the profile takes the WMO's
-  open-terrain z₀m 0.03 m and z₀h 0.003 m in place of the cell's
-  (eq. 3.91). Below that it takes the cell's own.
+- Where the cell's blended z₀m exceeds 0.03 m (90.3 % of the 2436
+  40–60N land cells, by area, in the exchange's blended z₀m at the
+  first CPU step from seventeen64's day-365 state), the profile takes
+  the WMO's open-terrain z₀m 0.03 m and z₀h 0.003 m in place of the
+  cell's (eq. 3.91). At or below 0.03 m it takes the cell's own.
 - In stable air the profile is uniform above h = 5L: the IFS limits z/L
   to 5 in its post-processing (section 3.2). Where 5L is under 2 m,
   t2m takes the lowest layer's dry static energy.
