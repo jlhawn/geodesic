@@ -8,15 +8,15 @@
 // surface, the water the rescale spreads through each column.
 import { readFileSync } from 'node:fs';
 const R = new URL('../', import.meta.url).pathname;
-const [{ decodeState }, { stateGrid }, { topographyFromInt16 }, { createParallelModel }] = await Promise.all([
+const [{ decodeState, savedLevels, stateTerrain }, { stateGrid }, { stateGeography }, { createParallelModel }] = await Promise.all([
   import(R + 'js/stateFile.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/geography.module.js'), import(R + 'js/parallel.module.js')]);
 const FROM = process.env.FROM, STEPS = Number(process.env.STEPS ?? 32), STEP = Number(process.env.STEP ?? 1350), WORKERS = Number(process.env.WORKERS ?? 12), EVERY = Number(process.env.EVERY ?? 8);
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
 const [la0, la1, lo0, lo1] = (process.env.BOX ?? '0,12,125,150').split(',').map(Number);
-const topography = topographyFromInt16(readFileSync(R + 'data/topography_0p25.bin').buffer);
 const saved = await decodeState(new Uint8Array(readFileSync(FROM)));
+const ground = stateGeography(saved), { topography } = ground;
 const mesh = stateGrid(saved, topography).mesh, C = mesh.nCells, E = mesh.nEdges, deg = 180 / Math.PI;
-const parallel = await createParallelModel(mesh, { topography, ocean: { vertical: 'hybrid', everySteps: 1, ...OCEAN } }, WORKERS);
+const parallel = await createParallelModel(mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: { vertical: 'hybrid', everySteps: 1, ...OCEAN } }, WORKERS);
 const ocean = parallel.ocean, L = ocean.layers, { h, u } = ocean, avgEta = new Float64Array(ocean.shared.baroAvgEta);
 const ice = Float64Array.from(saved.ice), concentration = saved.concentration ? Float64Array.from(saved.concentration) : null;
 ocean.load(saved.ocean, Float64Array.from(saved.surfaceT), ice, concentration);

@@ -23,7 +23,7 @@
 // scripts/verticalAudit.mjs; the radiation must use longwaveScheme
 // 'correlated'.
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
@@ -44,8 +44,8 @@ const t0 = performance.now();
 const say = (s = '') => console.log(s);
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, surface } = model;
 const { K, C, levels, sigmaMid, dSigma, g, exnerLayer, geopotential } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));

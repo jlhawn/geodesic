@@ -75,7 +75,7 @@
 // shortwave and +26 +- 3 W/m2 longwave (CERES EBAF); the surface classes'
 // references in scripts/clearSkyClasses.mjs.
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
@@ -97,8 +97,8 @@ const t0 = performance.now();
 const say = (s = '') => console.log(s);
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const ground = stateGeography(saved), { topography } = ground;
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land } = model;
 const { K, C, E, levels, sigmaMid, sigmaLower, dSigma, R, g, cp, p0, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;
