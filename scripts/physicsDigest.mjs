@@ -1,24 +1,36 @@
 #!/usr/bin/env node
 /*
- * The default-physics digest: a fresh start at N = 16 on today's defaults (createModel's own options, with the observed
- * geography, the ocean atlas's March and the observed sea ice of a spin-up's fresh start, and the clear-sky pass for the
- * cloud effects), stepped STEPS steps of 1350 s on the CPU, then reduced to a fixed table of physical rows: global and
- * 30S–30N means of the step-mean fields. A change to any default path moves some row; --compare lists the rows that
- * moved against an earlier digest, so a re-pin can cite them.
+ * The default-physics digest: a fresh start at N = 16 on createModel's own defaults (so the land's coverGoal is 'water',
+ * the model default; 'observed' is a spin-up option), with the observed geography, the ocean atlas's March and the
+ * observed sea ice with its concentration, as a spin-up's fresh start takes them, and the clear-sky pass for the cloud
+ * effects; stepped STEPS steps of 1350 s on the CPU from 00 UTC on day 0, then reduced to a fixed table of physical rows:
+ * global and 30S–30N means of the step-mean fields. A change to a default path that this run executes moves the state
+ * hash and, past its first steps, rows; --compare lists the rows that moved against an earlier digest, so a re-pin can
+ * cite them.
+ *
+ * What it cannot see: the held radiation and drags of the page and spin-ups (radiationEvery and dragEvery are 1 at
+ * N = 16, against 8 or 16 and 2 or 4 at N = 64 and 128); the ocean's cadence at N >= 64; WGSL-only code (the GPU
+ * engine's parity tests cover it); restore, regrid and re-seed paths, since it starts fresh; and any dated input outside
+ * 00–06 UTC of day 0. Those need the N = 64 scorecard (scripts/scorecard64.mjs) or their own tests.
  *
  *   node scripts/physicsDigest.mjs [--steps=16] [--out=digest.json] [--compare=earlier.json]
  *
  * Rows are area-weighted means over all cells unless named otherwise: land and sea split by the geography's land mask,
  * sea ice over sea cells (not lakes) by hemisphere, the soil fill over open land (off the ice sheets). Radiation is the
- * model's own mean over its radiation steps (readMeans), precipitation its own mean since the start (readRain), and
- * every other row the mean of the field after each step. The state hash fingerprints the state arrays at the end.
+ * model's own mean over its radiation steps (readMeans), precipitation the accumulated rain over the elapsed time, and
+ * every other row the mean of the field after each step. "sea-cell surface temperature" is surfaceT over sea cells, the
+ * ice's skin on iced cells, not the SST. The state hash fingerprints, at the end, the atmosphere's state arrays, the sea
+ * ice, the land, the ocean, the lakes, the boundary layer, the sea skin and the decks (the groups it hashed are listed).
  * Six hours from rest and a dry initial atmosphere are a transient, not a climate: the rows detect a change to the
  * physics and size it; the N = 64 scorecard is what judges the model against observation.
- * test/helpers/physicsDigest.json is the digest of record; a change that moves it re-pins it and cites the rows --compare lists.
+ * test/helpers/physicsDigest.json is the digest of record, with the Node version and commit it was made on;
+ * test/physicsDigest.test.mjs runs the digest and fails on any moved row or state, and a change that moves it re-pins
+ * it (--out) and cites the rows --compare lists.
  */
 import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { execSync } from 'node:child_process';
 
 const DAY = 86400, DT = 1350, MOVED = 1e-9;
 
@@ -54,6 +66,31 @@ export function compareDigests(earlier, later) {
   return { moved, added, removed: [...before.keys()], sameState: earlier.stateHash === later.stateHash };
 }
 
+const typedArrays = (object) => Object.keys(object ?? {}).sort().flatMap((key) => {
+  const value = object[key];
+  if (ArrayBuffer.isView(value)) return [value];
+  if (Array.isArray(value) && value.length && value.every((x) => typeof x === 'number')) return [Float64Array.from(value)];
+  return [];
+});
+
+export function stateHash(model) {
+  const parts = [
+    ['atmosphere', model.state], ['sea ice', typedArrays(model.seaIce)], ['land', typedArrays(model.land?.serialize?.())],
+    ['ocean', typedArrays(model.ocean?.serialize?.())], ['lakes', typedArrays(model.lake?.serialize?.())], ['boundary layer', typedArrays(model.boundaryLayer)],
+    ['sea skin', typedArrays(model.skin)], ['decks', typedArrays({ stratus: model.radiation.stratus, stratusFraction: model.radiation.stratusFraction, mlmTop: model.radiation.mlmTop })],
+  ].filter(([, arrays]) => arrays.length);
+  const hash = createHash('sha256');
+  for (const [, arrays] of parts) for (const a of arrays) hash.update(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
+  return { hash: hash.digest('hex').slice(0, 32), groups: parts.map(([name, arrays]) => `${name} ${arrays.length}`) };
+}
+
+function commitOf() {
+  try {
+    const run = (cmd) => execSync(cmd, { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return `${run('git rev-parse --short=12 HEAD')}${run('git status --porcelain --untracked-files=no -- js scripts') ? ' with changes' : ''}`;
+  } catch { return null; }
+}
+
 export function formatValue(x) {
   return !Number.isFinite(x) ? String(x) : Math.abs(x) >= 100 ? x.toFixed(2) : Math.abs(x) >= 1 ? x.toFixed(3) : x.toPrecision(4);
 }
@@ -73,7 +110,6 @@ export async function runDigest({ steps = 16 } = {}) {
   initializeState(model, { geostrophic: !model.surfaceGeopotential, seaIce: await loadSeaIceStart(repo(SEA_ICE_START_FILE)) }).forEach((values, a) => state[a].set(values));
   const landMask = model.geography.land, lake = model.geography.lake;
   for (let i = 0; i < C; i++) if (landMask[i]) state[6][i] = 0;
-  model.seaIce.load(state[6]);
   model.ocean.initialize(state[3], state[6]);
   model.land.initialize(model.time);
   const fields = ['surfaceT', 'evaporation', 'sensible', 'vapor', 'cloud', 'wind', 'ice', 'lowCover'], sum = Object.fromEntries(fields.map((f) => [f, new Float64Array(C)]));
@@ -113,7 +149,7 @@ export async function runDigest({ steps = 16 } = {}) {
     row(`${label} surface wind speed`, 'm/s', areaMean(mesh, mean.wind, mask));
   }
   row('land surface temperature', '°C', areaMean(mesh, mean.surfaceT, landOnly) - C2K);
-  row('sea surface temperature', '°C', areaMean(mesh, mean.surfaceT, sea) - C2K);
+  row('sea-cell surface temperature', '°C', areaMean(mesh, mean.surfaceT, sea) - C2K);
   row('30S-30N land precipitation', 'mm/day', mmDay(areaMean(mesh, precip, bandMask(mesh, -30, 30, landOnly))));
   row('30S-30N sea precipitation', 'mm/day', mmDay(areaMean(mesh, precip, bandMask(mesh, -30, 30, sea))));
   row('Arctic sea-ice area', 'Mkm²', hemisphereArea(mesh, mean.ice, sea, true));
@@ -122,9 +158,8 @@ export async function runDigest({ steps = 16 } = {}) {
   row('global net TOA', 'W/m²', areaMean(mesh, radiation.meanAbsorbedSolar) - areaMean(mesh, radiation.meanOutgoingLongwave));
   row('global planetary albedo', 'fraction', total('reflectedSolar') / total('insolation'));
   row('largest wind', 'm/s', state[2].reduce((m, x) => Math.max(m, Math.abs(x)), 0));
-  const hash = createHash('sha256');
-  for (const a of state) hash.update(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
-  return { N: 16, steps, dt: DT, hours: steps * DT / 3600, stateHash: hash.digest('hex').slice(0, 32), rows };
+  const { hash, groups } = stateHash(model);
+  return { N: 16, steps, dt: DT, hours: steps * DT / 3600, node: process.version, commit: commitOf(), stateHash: hash, hashed: groups, rows };
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
