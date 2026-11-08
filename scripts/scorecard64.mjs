@@ -7,22 +7,28 @@
  * The gate run starts from the standard start, seventeen64_day0365.bin (the March equinox; sha256 STANDARD_START, kept at
  * ~/.cache/webgcm-scratch/seventeen/out64/ on this Mac: the page's runs/seventeen64_day0365 parts drop its means and SST
  * ring). Under gpu_run (about 6 GPU minutes, level 2):
- *   node scripts/scorecard64.mjs --run START OUT [--base BASE.json] [--json OUT.json] [--any-start]
+ *   node scripts/scorecard64.mjs --run START OUT [--base BASE.json] [--json OUT.json] [--any-start] [--identical]
  * refuses any other start without --any-start, copies START into the empty directory OUT as p64_day0365.bin, runs
  * LEVELS=bl48 N=64 TAG=p64 spinup.mjs on this tree to days 395 and 425, and scores the two saves; without the copy
  * spinup.mjs would start fresh and run 395 days. Saves already made are scored with
- *   node scripts/scorecard64.mjs [--json OUT.json] [--base BASE.json] [--start START] [--any-start] DIR/p64_day0395.bin DIR/p64_day0425.bin
+ *   node scripts/scorecard64.mjs [--json OUT.json] [--base BASE.json] [--start START] [--commit HASH] [--any-start] [--identical] DIR/p64_day0395.bin DIR/p64_day0425.bin
  * which takes the start from --start or from the save 30 days before the first one beside it. Each state's daily lines
  * (TOA fluxes and the sea-ice cuts) are read from TAG.log beside it, or from --log FILE. The JSON records the start's
- * sha256 and day, the save days, the tree's commit, the spin-up's environment (with --run) and the saves' options; a
- * --base whose start or leads differ is refused without --any-start.
+ * sha256 and day, the save days, the saves' options, the scoring tree's HEAD (scoredOn) and the commit that made the
+ * saves (commit: scoredOn with --run, else --commit, else null, since a save does not record it), and with --run the
+ * spin-up's environment; a --base whose start or leads differ is refused without --any-start.
  *
  * With --base, a row moves when its two-window mean changed by more than t·sigma, t the two-sided 5 % quantile of
- * Student's t at sigma's degrees of freedom, and is unresolved otherwise; a re-pin cites the moved rows. The null is a
+ * Student's t at sigma's degrees of freedom, and is unresolved otherwise; a re-pin cites the moved rows. Unresolved is not
+ * unchanged: the count of rows whose two-window mean is bit-identical to the base's is printed beside the moved rows,
+ * and --identical exits 1 unless all are, the check for a merge whose changes are off by default. The null is a
  * merge that changes a default and has no effect on the row: it perturbs from the first step, so the faster rows
  * (rain, TOA, clouds) have decorrelated within one window, and the change over sigma is t-distributed at sigma's
- * degrees of freedom; each such row then moves 5 % of the time, about 1.5 of the 30 rows a merge if all had
- * decorrelated. A fixed 2 sigma would move 7.5–14 % at these degrees of freedom.
+ * degrees of freedom; each such row then moves 5 % of the time where its March–May spread matches the year's that sigma
+ * pools, about 1.5 of the 30 rows a merge if all had decorrelated. Where spring is noisier pooling narrows the
+ * threshold: the March–June pairs carry 68 % of the 160–100W stress's sigma², and S2's saturated pair at the gate's own
+ * windows is 1.67 sigma for the stress and 1.44 sigma for the SLP contrast, so those guards move more often than 5 %.
+ * A fixed 2 sigma would move 7.5–14 % at these degrees of freedom.
  *
  * Sigma (data/scorecard64-sigma.json) is the pair sigma of that two-window mean: the RMS, over adjacent windows at
  * leads of 180 days or more, of the difference between twin controls (the second perturbed by 1e-6 at its start), from
@@ -35,7 +41,8 @@
  * year, sigma costs power: a row reads unresolved up to its threshold (in the current record the cold tongue 2.3 K,
  * the 160–100W stress 23 mN/m², the SLP contrast 0.71 hPa, the 30S–30N SST 0.49 K, ASR 1.4 W/m²), and the seasons
  * that set a pooled sigma need not be the gate's: the June–July pairs give 79 % of India rain's sigma², the melt and
- * freeze pairs about 63 % of the Arctic extent's. Twins at the gate's own leads move 0 of 30 rows.
+ * freeze pairs (Jun/Jul, Sep/Oct and Oct/Nov) 63 % of the Arctic extent's, and with the second July pair and Nov/Dec
+ * 90 %. Twins at the gate's own leads move 0 of 30 rows.
  *   node scripts/scorecard64.mjs --sigma [--from LEAD] [--out PATH] [--cache FILE] A_DIR B_DIR START ...
  * rewrites it from twin pairs; rows the twins cannot give (no gridBoxSkin or daily ice line) take the named proxy.
  *
@@ -305,8 +312,8 @@ export function compareScores(base, now, sigma, { anyStart = false } = {}) {
   const problems = designProblems(base, now);
   if (problems.length && !anyStart) throw new Error(`not the same gate design: ${problems.join('; ')} (--any-start compares them anyway)`);
   return ROWS.map(([key]) => {
-    const delta = now.means[key].model - base.means[key].model, s = sigma[key]?.sigma, threshold = s * studentCritical(sigma[key]?.dof);
-    return { key, delta, sigma: s, threshold, verdict: !Number.isFinite(delta) || !Number.isFinite(threshold) ? 'no value' : Math.abs(delta) > threshold ? 'moved' : 'unresolved' };
+    const [a, b] = [base.means[key].model, now.means[key].model], delta = b - a, s = sigma[key]?.sigma, threshold = s * studentCritical(sigma[key]?.dof);
+    return { key, delta, sigma: s, threshold, identical: a === b || (Number.isNaN(a) && Number.isNaN(b)), verdict: !Number.isFinite(delta) || !Number.isFinite(threshold) ? 'no value' : Math.abs(delta) > threshold ? 'moved' : 'unresolved' };
   });
 }
 
@@ -338,25 +345,33 @@ async function startOf(path) {
 
 function provenance(env) {
   const root = fileURLToPath(new URL('..', import.meta.url)), run = (cmd) => execSync(cmd, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  let commit = null;
-  try { commit = `${run('git rev-parse --short=12 HEAD')}${run('git status --porcelain --untracked-files=no -- js scripts data') ? ' with changes' : ''}`; } catch {}
+  let scoredOn = null;
+  try { scoredOn = `${run('git rev-parse --short=12 HEAD')}${run('git status --porcelain --untracked-files=no -- js scripts data') ? ' with changes' : ''}`; } catch {}
   const source = readFileSync(join(root, 'scripts/spinup.mjs'), 'utf8');
-  return { commit, env: env && Object.fromEntries(Object.keys(env).filter((k) => /^[A-Z][A-Z0-9_]+$/.test(k) && new RegExp(`\\b${k}\\b`).test(source)).sort().map((k) => [k, env[k]])) };
+  return { scoredOn, env: env && Object.fromEntries(Object.keys(env).filter((k) => /^[A-Z][A-Z0-9_]+$/.test(k) && new RegExp(`\\b${k}\\b`).test(source)).sort().map((k) => [k, env[k]])) };
 }
 
-function score({ reductions, start, env, baseFile, jsonOut, anyStart, extra = {} }) {
+function score({ reductions, start, env, ran = false, commit = null, baseFile, jsonOut, anyStart, identical = false, extra = {} }) {
   const sigma = JSON.parse(readFileSync(SIGMA_FILE, 'utf8')).rows, means = windowMeans(reductions);
-  const now = { start: start && { sha256: start.sha256, day: start.day, path: start.path }, days: reductions.map((r) => r.day), ...provenance(env), options: reductions[0]?.options ?? null, given: reductions[0]?.given ?? null, ...extra, means };
+  const now = { start: start && { sha256: start.sha256, day: start.day, path: start.path }, days: reductions.map((r) => r.day), ...provenance(env), commit: null, options: reductions[0]?.options ?? null, given: reductions[0]?.given ?? null, ...extra, means };
+  now.commit = ran ? now.scoredOn : commit;
+  if (identical && !baseFile) throw new Error('--identical needs --base');
   const comparison = baseFile ? compareScores(JSON.parse(readFileSync(baseFile, 'utf8')), now, sigma, { anyStart }) : null;
   if (jsonOut) writeFileSync(jsonOut, JSON.stringify({ ...now, reductions, comparison }, null, 1) + '\n');
   console.log(formatTable(reductions, sigma, comparison));
-  if (comparison) console.log(`moved: ${comparison.filter((c) => c.verdict === 'moved').map((c) => c.key).join(', ') || 'none'}`);
+  if (!comparison) return;
+  const same = comparison.filter((c) => c.identical).length;
+  console.log(`moved: ${comparison.filter((c) => c.verdict === 'moved').map((c) => c.key).join(', ') || 'none'}; identical (Δ exactly 0): ${same} of ${comparison.length}`);
+  if (identical && same < comparison.length) {
+    console.error(`--identical: ${comparison.filter((c) => !c.identical).map((c) => c.key).join(', ')} changed`);
+    process.exitCode = 1;
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs')).realpathSync(process.argv[1])) {
   const args = process.argv.slice(2), opt = (name) => { const k = args.indexOf(name); return k < 0 ? null : args.splice(k, 2)[1]; };
   const flag = (name) => { const k = args.indexOf(name); if (k >= 0) args.splice(k, 1); return k >= 0; };
-  const anyStart = flag('--any-start');
+  const anyStart = flag('--any-start'), identical = flag('--identical');
   if (args[0] === '--run') {
     const jsonOut = opt('--json'), baseFile = opt('--base'), [, start, outDir] = args;
     if (!outDir) throw new Error('usage: --run START OUT [--base BASE.json] [--json OUT.json] [--any-start]');
@@ -374,7 +389,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs
     }
     const reductions = [];
     for (const d of days) reductions.push(await reduceFile(join(outDir, `p64_day${String(d).padStart(4, '0')}.bin`)));
-    score({ reductions, start: { path: start, sha256: hash, day: D0 }, env, baseFile, jsonOut, anyStart });
+    score({ reductions, start: { path: start, sha256: hash, day: D0 }, env, ran: true, baseFile, jsonOut, anyStart, identical });
   } else if (args[0] === '--sigma') {
     const out = opt('--out') ?? SIGMA_FILE, from = Number(opt('--from') ?? 180), cacheFile = opt('--cache');
     const groups = args.slice(1), twins = [], cache = cacheFile && existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, 'utf8')) : {};
@@ -400,22 +415,22 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs
     const record = {
       name: 'Pair sigma of the N=64 scorecard\'s gate statistic',
       design: `twin controls (the second perturbed by 1e-6 at its start) from ${twins.length} starts, each a year of 30-day windows; sigma is the RMS of the two-window mean difference (the gate's statistic) over the windows at leads of ${from} days or more, where the twins have decorrelated, pooled over the starts`,
-      definition: 'per row: sigma, the pair sigma of the mean of two adjacent windows; perWindow, the RMS of one window\'s difference; lag1, the correlation of adjacent windows\' differences; dof, sigma\'s degrees of freedom, (tr C)² / tr(C²) for the pair means\' covariance C under a Gaussian AR(1) at lag1 with the starts independent; critical, the two-sided 5 % quantile of Student\'s t at dof; threshold, critical × sigma, past which a row moves; early, the RMS at leads 30 and 60 days (the gate\'s), earlyGate their two-window mean, saturation earlyGate / sigma; nullAtLeads, whether each start\'s twins at the gate\'s leads would read moved; normalTailRate, P(|mean| > threshold) for normal differences at the early RMS with lag1, a closed form; inSampleRate, the share of the late pairs past threshold. proxy: the twins carry no gridBoxSkin or daily sea-ice line, so Ts takes surfaceT and sea ice the 30-day-mean cut on the index\'s grids',
+      definition: 'per row: sigma, the pair sigma of the mean of two adjacent windows; perWindow, the RMS of one window\'s difference; lag1, the correlation of adjacent windows\' differences; dof, sigma\'s degrees of freedom, (tr C)² / tr(C²) for the pair means\' covariance C under a Gaussian AR(1) at lag1 with the starts independent; critical, the two-sided 5 % quantile of Student\'s t at dof; threshold, critical × sigma, past which a row moves; early, the RMS at leads 30 and 60 days (the gate\'s), earlyGate their two-window mean, saturation earlyGate / sigma; nullAtLeads, whether each start\'s twins at the gate\'s leads would read moved; normalTailRate, P(|mean| > threshold) for normal differences at the early RMS with lag1, a closed form; inSampleRate, the share of the late pairs past threshold. nulls: atLeads, the rows each start\'s twins move at the gate\'s leads; normalTailRate and inSampleRate, their means over rows; saturatedRateAtTwoSigma, the mean over rows of P(|t| > 2) at dof, what a fixed 2 sigma would move under a decorrelated null. proxy: the twins carry no gridBoxSkin or daily sea-ice line, so Ts takes surfaceT and sea ice the 30-day-mean cut on the index\'s grids',
       twins: twins.map((t) => ({ label: t.label, start: t.start, days: t.a.map((r) => r.day) })), from, measured: new Date().toISOString().slice(0, 10),
       expires: 'remeasure whenever a row changes its instrument or the control physics changes, and with more starts when they exist',
       script: 'scripts/scorecard64.mjs --sigma', nulls, rows,
     };
     writeFileSync(out, JSON.stringify(record, null, 1) + '\n');
     const f = (x, n = 3) => (Number.isFinite(x) ? x.toFixed(n) : '—');
-    console.log('| row | σ (gate) | per window | lag1 | dof | early 30 / 60 | saturation | null at leads | MC rate |');
+    console.log('| row | σ (gate) | per window | lag1 | dof | early 30 / 60 | saturation | null at leads | normal tail |');
     console.log('|---|---|---|---|---|---|---|---|---|');
-    for (const [key, name, units] of ROWS) { const r = rows[key]; console.log(`| ${name} (${units}) | ${f(r.sigma)}${r.proxy ? '*' : ''} | ${f(r.perWindow)} | ${f(r.lag1, 2)} | ${f(r.dof, 1)} | ${f(r.early[0])} / ${f(r.early[1])} | ${f(r.saturation, 2)} | ${r.nullAtLeads.map((x) => (x ? 'moved' : x === false ? '·' : '—')).join(' ')} | ${f(100 * r.monteCarloRate, 1)} % |`); }
+    for (const [key, name, units] of ROWS) { const r = rows[key]; console.log(`| ${name} (${units}) | ${f(r.sigma)}${r.proxy ? '*' : ''} | ${f(r.perWindow)} | ${f(r.lag1, 2)} | ${f(r.dof, 1)} | ${f(r.early[0])} / ${f(r.early[1])} | ${f(r.saturation, 2)} | ${r.nullAtLeads.map((x) => (x ? 'moved' : x === false ? '·' : '—')).join(' ')} | ${f(100 * r.normalTailRate, 1)} % |`); }
     console.log(`nulls: ${nulls.atLeads.map((n) => `${n.start}: ${n.moved} of ${n.rows} moved`).join('; ')}; normal tail at the twins' spread ${(100 * nulls.normalTailRate).toFixed(1)} %, in-sample ${(100 * nulls.inSampleRate).toFixed(1)} %; a saturated null at 2σ would move ${(100 * nulls.saturatedRateAtTwoSigma).toFixed(1)} %`);
   } else {
-    const jsonOut = opt('--json'), baseFile = opt('--base'), logFile = opt('--log'), startFile = opt('--start');
+    const jsonOut = opt('--json'), baseFile = opt('--base'), logFile = opt('--log'), startFile = opt('--start'), commit = opt('--commit');
     const reductions = [];
     for (const path of args) reductions.push(await reduceFile(path, logFile));
     const first = args[0] && reductions[0], beside = first && join(dirname(args[0]), basename(args[0]).replace(/_day\d+\.bin$/, `_day${String(first.day - GATE_LEADS[0]).padStart(4, '0')}.bin`));
-    score({ reductions, start: await startOf(startFile ?? beside), env: null, baseFile, jsonOut, anyStart, extra: { states: args } });
+    score({ reductions, start: await startOf(startFile ?? beside), env: null, commit, baseFile, jsonOut, anyStart, identical, extra: { states: args } });
   }
 }

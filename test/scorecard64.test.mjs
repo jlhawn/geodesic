@@ -61,6 +61,9 @@ test('sigma is the saturated spread of the two-window mean, with its serial corr
   assert.equal(base.means.sst30.model, 2);
   assert.ok(compareScores(base, moved, sigma).every((c) => c.verdict === 'moved'));
   assert.ok(compareScores(base, inside, sigma).every((c) => c.verdict === 'unresolved'));
+  assert.ok(compareScores(base, inside, sigma).every((c) => !c.identical) && compareScores(base, structuredClone(base), sigma).every((c) => c.identical && c.verdict === 'unresolved'));
+  const unscored = score([{ day: 395, rows: rows(NaN) }]);
+  assert.ok(compareScores(unscored, structuredClone(unscored), sigma).every((c) => c.identical));
   assert.equal(compareScores(base, score([{ day: 395, rows: rows(NaN) }]), sigma)[0].verdict, 'no value');
 });
 
@@ -103,17 +106,19 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
     temperature: fill((i) => (land[i] ? 270 + 4 * wave(i) : 300)), precipitation: fill((i) => 3 + 2 * wave(i) + (land[i] ? 1 : 0)),
     zonalStress: fill((i) => -0.05 + 0.03 * wave(i)), mslp: fill((i) => 100000 + 400 * wave(i)), concentration,
   };
-  const amplitude = (lonDeg) => 1 + 0.3 * Math.sin(lonDeg * rad), core = (z) => 1 - ((z - 120) / 60) ** 2;
+  const tao = R.tao(), wrap = (x) => ((x + 540) % 360) - 180, core = (z) => 1 - ((z - 120) / 60) ** 2;
+  const offStation = (lonDeg) => Math.min(...R.TAO_STATIONS.map((st) => Math.abs(wrap(lonDeg - tao.stations[st].longitude))));
+  const amplitude = (latDeg, lonDeg) => (1 + 0.3 * Math.sin(lonDeg * rad)) * (1 + 0.004 * offStation(lonDeg) ** 2 + 0.004 * latDeg ** 2);
   const u = new Float64Array(L * E), h = new Float64Array(L * C);
   for (let i = 0; i < C; i++) if (!land[i]) for (let k = 0; k < L; k++) h[k * C + i] = 10;
   for (let e = 0; e < E; e++) {
-    const [x, y] = [mesh.xEdge[3 * e], mesh.xEdge[3 * e + 1]], r = Math.hypot(x, y), across = (-y * mesh.nEdge[3 * e] + x * mesh.nEdge[3 * e + 1]) / r;
-    for (let k = 0; k < L; k++) u[k * E + e] = amplitude(Math.atan2(y, x) / rad) * core(10 * k + 5) * across;
+    const [x, y, z] = [mesh.xEdge[3 * e], mesh.xEdge[3 * e + 1], mesh.xEdge[3 * e + 2]], r = Math.hypot(x, y), across = (-y * mesh.nEdge[3 * e] + x * mesh.nEdge[3 * e + 1]) / r;
+    for (let k = 0; k < L; k++) u[k * E + e] = amplitude(Math.atan2(z, r) / rad, Math.atan2(y, x) / rad) * core(10 * k + 5) * across;
   }
   const days = Array.from({ length: 30 }, (_, j) => D - 29 + j);
-  const log = days.flatMap((d) => [
-    `day ${d} (1.0 min): Ts 15.00 °C, ASR 240.0 (atmosphere 70.0) OLR 238.0 W/m², ps 500–1040 hPa, albedo 0.300, SWCRE -45.0 LWCRE 25.0, clear-sky reflectance 0.15`,
-    `sea ice on day ${d}'s mean concentration, sea cells on the index's grids, 15 %: N extent 10.00 area 8.00, S extent 3.00 area 2.00 Mkm²`,
+  const log = days.flatMap((d, j) => [
+    `day ${d} (1.0 min): Ts 15.00 °C, ASR ${(230 + j).toFixed(1)} (atmosphere 70.0) OLR ${(238 - j / 2).toFixed(1)} W/m², ps 500–1040 hPa, albedo 0.300, SWCRE ${(-40 - j / 2).toFixed(1)} LWCRE ${(20 + j / 4).toFixed(2)}, clear-sky reflectance 0.15`,
+    `sea ice on day ${d}'s mean concentration, sea cells on the index's grids, 15 %: N extent ${(10 + j / 10).toFixed(2)} area ${(8 + j / 20).toFixed(2)}, S extent ${(3 - j / 20).toFixed(2)} area ${(2 - j / 50).toFixed(2)} Mkm²`,
   ]).join('\n');
   const { rows } = reduceState({ ...header, day: D, means, ocean: { h, u } }, log);
 
@@ -132,14 +137,18 @@ test('reduceState on an N=16 fixture whose fields vary by place and mask: every 
   const equator = (w, e) => (i) => !land[i] && Math.abs(lat(i)) <= 3 && lon(i) >= w && lon(i) <= e;
   near('stress', 1e3 * mean(means.zonalStress, equator(-160, -100)));
   near('slp', (mean(means.mslp, equator(-180, -160)) - mean(means.mslp, equator(-120, -100))) / 100);
-  near('asr', 240); near('net', 2); near('swcre', -45); near('lwcre', 25);
-  near('iceNExtent', 10); near('iceNArea', 8); near('iceSExtent', 3); near('iceSArea', 2);
+  const meanOver = (g) => days.reduce((a, _, j) => a + g(j), 0) / days.length;
+  near('asr', meanOver((j) => 230 + j)); near('net', meanOver((j) => 230 + j - (238 - j / 2))); near('swcre', meanOver((j) => -40 - j / 2)); near('lwcre', meanOver((j) => 20 + j / 4));
+  near('iceNExtent', meanOver((j) => 10 + j / 10)); near('iceNArea', meanOver((j) => 8 + j / 20)); near('iceSExtent', meanOver((j) => 3 - j / 20)); near('iceSArea', meanOver((j) => 2 - j / 50));
   const cut = seaIceIndexCut(mesh, indexCells(mesh, made), concentration);
   assert.ok(cut.N.extent > 0 && Math.abs(rows.iceNExtent.proxy - cut.N.extent) < 1e-9 && Math.abs(rows.iceNArea.proxy - 0.5 * cut.N.extent) < 1e-9 && Math.abs(rows.iceSArea.proxy - cut.S.extent) < 1e-9);
-  const tao = R.tao();
+  const spacing = 0.9 * Math.sqrt(4 * Math.PI / C) / rad;
+  assert.ok(spacing > 1.5 && spacing < 5, `N=16 spacing ${spacing}°: the window is the mesh's, not the N=64 floors`);
   for (const s of R.TAO_STATIONS) {
-    const built = amplitude(tao.stations[s].longitude);
-    assert.ok(rows[`euc_${s}`].cells > 0 && Math.abs(rows[`euc_${s}`].model - built) < 0.05 * built, `${s}: core ${rows[`euc_${s}`].model} m/s, built ${built}`);
+    const window = (i) => !land[i] && Math.abs(lat(i)) <= Math.max(1, spacing) && Math.abs(wrap(lon(i) - tao.stations[s].longitude)) <= Math.max(1.5, spacing);
+    const cs = Array.from({ length: C }, (_, i) => i).filter(window), built = mean(fill((i) => amplitude(lat(i), lon(i))), window);
+    assert.equal(rows[`euc_${s}`].cells, cs.length, `${s}: the window holds ${rows[`euc_${s}`].cells} cells, built ${cs.length}`);
+    assert.ok(cs.length > 0 && Math.abs(rows[`euc_${s}`].model - built) < 0.02 * built, `${s}: core ${rows[`euc_${s}`].model} m/s, built ${built}`);
     near(`eucDepth_${s}`, 120, 3);
   }
   assert.ok(Math.abs(rows.rain_global.ref - R.gridMean(R.gpcp().grid, 3)) < 0.2 && Math.abs(rows.ts.ref - 15.5) < 0.6, 'references for late April');
