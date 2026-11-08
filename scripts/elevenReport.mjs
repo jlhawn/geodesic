@@ -21,7 +21,7 @@ const DIR = process.argv[2] ?? 'runs/verda-eleven', PREFIX = process.argv[3] ?? 
 const PRICE = Number(process.env.PRICE ?? 1.8911), UNTIL = Number(process.env.UNTIL ?? 1095);
 const WIND = 180, COURANT = 0.7, DRIFT = 1.5, STALL = 20;
 const text = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '');
-const DAY = /^day (\d+) \(([\d.]+) min\): Ts ([-\d.]+) °C, ASR ([-\d.]+) \(atmosphere ([-\d.]+)\) OLR ([-\d.]+) W\/m².*?max wind ([-\d.]+) m\/s, precip ([-\d.]+) mm\/d, ice ([-\d.]+)% \(N ([-\d.]+) S ([-\d.]+) Mkm²\), albedo ([-\d.]+)(?:, SWCRE ([-\d.]+) LWCRE ([-\d.]+))?.*?(?:ocean h1 (\d+) m, interior ([-\d.]+) °C, currents ≤ ([-\d.]+) m\/s, transport ([-\d.]+) Sv, clamped (\d+))?/;
+const DAY = /^day (\d+) \(([\d.]+) min\): Ts ([-\d.]+) °C, ASR ([-\d.]+) \(atmosphere ([-\d.]+)\) OLR ([-\d.]+) W\/m².*?max wind ([-\d.]+) m\/s, precip ([-\d.]+) mm\/d, .*?ice ([-\d.]+)% \(N ([-\d.]+) S ([-\d.]+) Mkm²(?:, lakes left out)?\), albedo ([-\d.]+)(?:, SWCRE ([-\d.]+) LWCRE ([-\d.]+))?.*?(?:ocean h1 (\d+) m, interior ([-\d.]+) °C, currents ≤ ([-\d.]+) m\/s, transport ([-\d.]+) Sv, clamped (\d+))?/;
 
 function readLog(file) {
   const days = new Map(), lines = text(file).split('\n');
@@ -29,7 +29,7 @@ function readLog(file) {
   for (const line of lines) {
     const m = line.match(DAY);
     const b = m && line.match(/; balance (.*?) W\/m²/);
-    if (m) days.set(+m[1], { day: +m[1], minutes: +m[2], ts: +m[3], asr: +m[4], olr: +m[6], wind: +m[7], precip: +m[8], ice: +m[9], iceN: +m[10], iceS: +m[11], albedo: +m[12], swcre: m[13] === undefined ? NaN : +m[13], lwcre: m[14] === undefined ? NaN : +m[14], h1: m[15] === undefined ? NaN : +m[15], interior: m[16] === undefined ? NaN : +m[16], current: m[17] === undefined ? NaN : +m[17], transport: m[18] === undefined ? NaN : +m[18], clamped: m[19] === undefined ? NaN : +m[19], balance: b ? b[1] : null });
+    if (m) days.set(+m[1], { day: +m[1], minutes: +m[2], ts: +m[3], asr: +m[4], olr: +m[6], wind: +m[7], precip: +m[8], ice: +m[9], iceN: +m[10], iceS: +m[11], lakesOut: line.includes('Mkm², lakes left out)'), albedo: +m[12], swcre: m[13] === undefined ? NaN : +m[13], lwcre: m[14] === undefined ? NaN : +m[14], h1: m[15] === undefined ? NaN : +m[15], interior: m[16] === undefined ? NaN : +m[16], current: m[17] === undefined ? NaN : +m[17], transport: m[18] === undefined ? NaN : +m[18], clamped: m[19] === undefined ? NaN : +m[19], balance: b ? b[1] : null });
     if (/NaN on day/.test(line) && !nan) nan = line;
     if (/^land jump at the end of day/.test(line)) jumps.push(line);
     if (/^upper winds day/.test(line)) upper = line;
@@ -84,7 +84,7 @@ export function report(now = new Date()) {
     const back = l.days.filter((x) => x.day <= d.day - 30).pop();
     const drift = back ? d.ts - back.ts : null;
     const t = top(l.upper);
-    out.push(`N=${n} day ${d.day}: Ts ${d.ts.toFixed(2)} °C${drift !== null ? ` (${signed(drift, 2)} K over ${d.day - back.day} d)` : ''}, ASR ${d.asr.toFixed(1)} OLR ${d.olr.toFixed(1)}${d.balance ? `; balance ${d.balance}` : ''}; albedo ${d.albedo.toFixed(3)}${Number.isFinite(d.swcre) ? `, SWCRE ${d.swcre.toFixed(1)} LWCRE ${d.lwcre.toFixed(1)}` : ''}; rain ${d.precip.toFixed(2)} mm/d; ice N ${d.iceN.toFixed(1)} S ${d.iceS.toFixed(1)} Mkm²; max wind ${d.wind.toFixed(0)} m/s${Number.isFinite(d.current) ? `; ocean h1 ${d.h1} m, interior ${d.interior.toFixed(2)} °C, currents ≤ ${d.current.toFixed(2)} m/s, transport ${d.transport.toFixed(0)} Sv, clamped ${d.clamped}` : ''}${t ? `; top ${t.pressure} hPa wind ${t.wind.toFixed(0)} m/s Courant ${t.courant} (worst in the top layers ${t.worstWind.toFixed(0)} m/s, ${t.worstCourant.toFixed(2)}, day ${t.day})` : ''}`);
+    out.push(`N=${n} day ${d.day}: Ts ${d.ts.toFixed(2)} °C${drift !== null ? ` (${signed(drift, 2)} K over ${d.day - back.day} d)` : ''}, ASR ${d.asr.toFixed(1)} OLR ${d.olr.toFixed(1)}${d.balance ? `; balance ${d.balance}` : ''}; albedo ${d.albedo.toFixed(3)}${Number.isFinite(d.swcre) ? `, SWCRE ${d.swcre.toFixed(1)} LWCRE ${d.lwcre.toFixed(1)}` : ''}; rain ${d.precip.toFixed(2)} mm/d; ice N ${d.iceN.toFixed(1)} S ${d.iceS.toFixed(1)} Mkm²${d.lakesOut ? '' : ' (frozen lakes counted)'}; max wind ${d.wind.toFixed(0)} m/s${Number.isFinite(d.current) ? `; ocean h1 ${d.h1} m, interior ${d.interior.toFixed(2)} °C, currents ≤ ${d.current.toFixed(2)} m/s, transport ${d.transport.toFixed(0)} Sv, clamped ${d.clamped}` : ''}${t ? `; top ${t.pressure} hPa wind ${t.wind.toFixed(0)} m/s Courant ${t.courant} (worst in the top layers ${t.worstWind.toFixed(0)} m/s, ${t.worstCourant.toFixed(2)}, day ${t.day})` : ''}`);
     if (l.nan) flags.push(`N=${n}: ${l.nan.trim()}`);
     if (Number.isFinite(d.clamped) && d.clamped > 0) flags.push(`N=${n}: ${d.clamped} clamped ocean edges on day ${d.day}`);
     if (d.wind > WIND) flags.push(`N=${n}: max wind ${d.wind.toFixed(0)} m/s on day ${d.day}`);

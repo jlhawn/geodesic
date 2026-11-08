@@ -12,13 +12,13 @@ cal = lambda d: (date(2001, 3, 20) + timedelta(days=d)).strftime('%b %-d')
 qend = lambda k: int(k * YEAR / PER_YEAR + 0.5)
 EARTH = {'ts': 14.85, 'albedo': 0.30, 'rain': 2.7}
 EARTH_RAIN = {'sahara': 0.2, 'arabia': 0.2, 'sahel': 1.5, 'india': 3.0, 'congo': 4.5, 'amazon': 6.0, 'seAsia': 5.0, 'borneo': 8.0, 'europe': 2.0, 'eastUS': 3.0, 'siberia': 1.2, 'ausInterior': 0.7, 'kalahari': 1.0, 'gobi': 0.5, 'usSouthwest': 0.8, 'cerrado': 4.0, 'ausNorth': 2.7, 'ausEast': 2.5, 'ausSoutheast': 1.8, 'ausWest': 0.7, 'newGuinea': 8.0}
-DAY = re.compile(r'day (\d+) .*Ts (-?[\d.]+) °C, ASR ([\d.]+)(?: \(atmosphere [\d.]+\))? OLR ([\d.]+).*precip ([\d.]+) mm/d, .*?ice ([\d.]+)% \(N ([\d.]+) S ([\d.]+) Mkm²\), albedo ([\d.]+)')
+DAY = re.compile(r'day (\d+) .*Ts (-?[\d.]+) °C, ASR ([\d.]+)(?: \(atmosphere [\d.]+\))? OLR ([\d.]+).*precip ([\d.]+) mm/d, .*?ice ([\d.]+)% \(N ([\d.]+) S ([\d.]+) Mkm²(?:, lakes left out)?\), albedo ([\d.]+)')
 
 def load(tag):
     rows, segments, last = [], [], 0
     for line in open(tag if tag.endswith('.log') else f'{RUNS}/{tag}.log'):
         m = DAY.match(line)
-        if m: rows.append([float(x) for x in m.groups()]); last = int(rows[-1][0])
+        if m: rows.append([float(x) for x in m.groups()] + [float('Mkm², lakes left out)' in line)]); last = int(rows[-1][0])
         elif line.startswith('regions after'):
             days = int(re.match(r'regions after (\d+) days', line).group(1))
             segments.append({'end': last, 'days': days, 'regions': {k: tuple(float(x) for x in v.split('/')) for k, v in re.findall(r'(\w+) ([\d.]+/[\d.]+/-?[\d.]+)', line)}})
@@ -28,7 +28,9 @@ def summary(rows, a, b):
     win = [r for r in rows if a < r[0] <= b]
     if len(win) < (b - a) - 2: return None
     n = len(win); mean = lambda k: sum(r[k] for r in win) / n
-    return f"Ts {mean(1):.2f} °C, TOA {mean(2)-mean(3):+.1f} W/m², albedo {mean(8):.3f}, rain {mean(4):.2f} mm/d, ice N {min(r[6] for r in win):.1f}–{max(r[6] for r in win):.1f} S {min(r[7] for r in win):.1f}–{max(r[7] for r in win):.1f} Mkm² (mean N {mean(6):.1f} S {mean(7):.1f})"
+    counted = sum(1 for r in win if not r[9])
+    lakes = '' if not counted else '; frozen lakes counted' if counted == n else f'; frozen lakes counted on {counted} of {n} days'
+    return f"Ts {mean(1):.2f} °C, TOA {mean(2)-mean(3):+.1f} W/m², albedo {mean(8):.3f}, rain {mean(4):.2f} mm/d, ice N {min(r[6] for r in win):.1f}–{max(r[6] for r in win):.1f} S {min(r[7] for r in win):.1f}–{max(r[7] for r in win):.1f} Mkm² (mean N {mean(6):.1f} S {mean(7):.1f}{lakes})"
 
 def regional(segments, a, b):
     inside = [s for s in segments if a < s['end'] <= b]
