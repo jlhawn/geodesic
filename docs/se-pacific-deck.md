@@ -524,15 +524,19 @@ run, so there is no sigma.
 - Cutting the entrainment at the lid instead leaves all 144.
 
 The audit estimated the flips' effect from an N=128 state in which 100
-of 3560 deck columns jump:
+of 3560 deck columns jump, without recording over what window it
+counted them:
 - no more than 0.015 W/m² globally;
 - about 5·10⁻³ K of SST a swing, undone by the next swing.
 
-The same arithmetic on the probe's N=64 count, 144 jumping columns of
-40962, gives about 0.09 W/m². 'layer' stays the default. Making
-'interpolate' the default is Joshua's call, and its climate effect has
-not been measured since the Oct 3 passage found the interpolation as
-built to be a climate change.
+That arithmetic takes the columns chattering at any one time. The
+probe's N=64 count is of its whole run: 144 of 40962 columns jumped at
+least once in 23 step pairs, 56 of them only once, in 675 jumps. At its
+29.3 jumps a step pair the same arithmetic gives 0.018 W/m², about
+N=128's bound. 'layer' stays the default. Making 'interpolate' the
+default is Joshua's call, and its climate effect has not been measured
+since the Oct 3 passage found the interpolation as built to be a
+climate change.
 `test/gpuModel.test.mjs`'s deck row seeds the deck at 1436 m, half a
 layer above the inversion. There 'interpolate' moves the gate on more
 columns than the engines may part by, and the row compares the GPU's own
