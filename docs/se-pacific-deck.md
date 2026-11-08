@@ -513,7 +513,7 @@ stayed the default are in `c-grid-dynamical-core.md`, "The cumulus
 memory and the deck's reference (Oct 3)".
 
 A CPU probe measured the flip (Nov 7). It ran 24 steps at N=64 from the
-amz64 day-487 state (August) and counted the deck columns whose cover
+amz64 day-487 state (late July) and counted the deck columns whose cover
 jumps by more than 0.2 between deck steps. That is one state and one
 run, so there is no sigma.
 - Under 'layer', 144 of 1219 deck columns jump. The worst alternate
@@ -523,10 +523,11 @@ run, so there is no sigma.
 - Under 'interpolate', 39 of 1292 jump.
 - Cutting the entrainment at the lid instead leaves all 144.
 
-The audit put the flips' radiative effect under 0.05 W/m². 'layer'
-stays the default. Making 'interpolate' the default is Joshua's call,
-and its climate effect has not been measured since the Oct 3 passage
-found the interpolation as built to be a climate change.
+The audit estimated the flips' effect from the counts of an N=128 state
+at no more than 0.015 W/m² globally and about 0.1 K of SST in patches.
+'layer' stays the default. Making 'interpolate' the default is Joshua's
+call, and its climate effect has not been measured since the Oct 3
+passage found the interpolation as built to be a climate change.
 `test/gpuModel.test.mjs`'s deck row seeds the deck at 1436 m, half a
 layer above the inversion. There 'interpolate' moves the gate on more
 columns than the engines may part by, and the row compares the GPU's own

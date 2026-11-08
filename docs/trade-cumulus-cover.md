@@ -484,14 +484,15 @@ the pair, sit within one realization of those means.
 
 The Nov 7 audit found a cool, moist layer at the base of the trade
 inversion (875–815 hPa) over 3S–3N 160W–100W within days of an ERA5
-start at observed SST. By days 1–2 the control is 1.3–1.5 K cold and
-1.3–2.5 g/kg moist at 850 hPa against ERA5, and the shallow plume
-detrains into the layer. Four plume settings were tested as its cause,
-each against one shared control: the closure halved (`cumulusClosure`
-0.015), the kinetic overshoot and ascent off (`cumulusAscent`
-'buoyant', `cumulusOvershoot` 0), the mass-flux decay doubled
-(`cumulusDetrainment` 3.5·10⁻³) and the 1/z entrainment doubled
-(`cumulusEntrainmentHeight` 2).
+start at observed SST. At 850 hPa and 12 UTC the control is 1.53 K
+cold and 1.31 g/kg moist against ERA5 on days 1–2, 1.38 K and 1.85 g/kg
+on days 3–5, and 1.34 K and 2.52 g/kg on days 6–10 (means of the three
+starts below), and the shallow plume detrains into the layer. Four plume
+settings were tested as its cause, each against one shared control: the
+closure halved (`cumulusClosure` 0.015), the kinetic overshoot and
+ascent off (`cumulusAscent` 'buoyant', `cumulusOvershoot` 0), the
+mass-flux decay doubled (`cumulusDetrainment` 3.5·10⁻³) and the 1/z
+entrainment doubled (`cumulusEntrainmentHeight` 2).
 
 The instrument was the same for all four, and the 1/z arm ran at
 fa61952. It ran N=64 hindcasts of 10 days, each holding its start's own
@@ -512,26 +513,30 @@ n = 3, so 95 % needs 4.3 SE. The 1/z arm:
 | stress, mN/m² | −1.2 ± 0.6 | +0.02 ± 0.37 | +0.65 ± 0.14 |
 
 Doubling the 1/z rate does not remove the layer. q850 and T850 move
-inside 1.9 SE, under 1 % of the control's moist error and 0.5 % of its
-cold one. T925 cools by 2.0–3.2 SE, below 95 %. The stress at days
-6–10 moves by 4.7 SE, 1.2 % of the control's −54.6 mN/m². The other
-three settings give the same answer. The kinetic overshoot and ascent
-removes about a quarter of the T850 error and a third of the q850 error
-on days 1–2, but it moves the anomaly down to 925 hPa and brightens the
-cloud. The halved closure removes 15 % of the T850 error, and the
-doubled decay removes nothing. None of the four plume settings removes
-the layer. This is a 10-day transient result at observed SST, not a
-closed-loop one. It holds until the hindcast instrument, the starts or
-the control's physics change.
+inside 1.9 SE in every window: by 0.8 % of the control's moist error and
+0.4 % of its cold one on days 1–2, 6.6 % and 1.2 % on days 3–5, and
+0.3 % and 2.7 % on days 6–10. T925 cools by 2.0–3.2 SE, below 95 %. The
+stress at days 6–10 moves by 4.7 SE, 1.2 % of the control's −54.6
+mN/m². The other three settings give the same answer. Turning the
+kinetic overshoot and ascent off removes 26 % of the T850 error and 36 %
+of the q850 error on days 1–2 (2.2 and 2.6 SE, the same sign in all
+three starts), but it moves the anomaly down to 925 hPa, adding 70–90 %
+to the control's error there, and brightens the cloud, by 12–19 W/m² of
+reflected sunlight over 5S–5N 170E–100W. The halved closure removes
+15 % of the T850 error, and the doubled decay removes nothing. None of
+the four plume settings removes the layer. This is a 10-day transient
+result at observed SST, not a closed-loop one. It holds until the
+hindcast instrument, the starts or the control's physics change.
 
 The open question has moved upstream, to where the extra water comes
 from. The audit's water budget gives the 1000–700 hPa surplus at
 160W–100W growing 0.54 kg/m²/day over days 0–10 (three starts): 0.38
 of it is an evaporation excess and 0.16 a shortfall in removal. The
 evaporation is 1.16–1.28 times ERA5's in August and December and
-0.87–0.98 in April, at 12 UTC by lead window, while the momentum flux
-is 0.88 times ERA5's, so the wind is nearly right. That excess, and the
-dry lowest layer that feeds it, is being diagnosed in the boundary
+0.87–0.98 in April, at 12 UTC by lead window and at nearly the right
+wind, while the momentum flux is 0.88 times ERA5's: against ERA5 the
+exchange moves moisture more strongly than momentum. That excess, and
+the dry lowest layer that feeds it, is being diagnosed in the boundary
 layer's surface exchange (Nov 7).
 
 ## Tests

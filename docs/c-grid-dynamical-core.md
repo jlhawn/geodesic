@@ -962,13 +962,17 @@ engines. Their defaults give the law above.
   flux into the layer and a_P the share of the cell it falls in. a_clr
   = a_P − a is the part of a_P outside the layer's cloud cover a, and
   q_e = (q − a q_s)/(1 − a) is the humidity outside the cloud.
-- 'cloudsc' takes at most the IFS code's semi-implicit step (cloudsc.F90,
-  IEVAPRAIN 1): a_clr β′ (q_s − q_e) Δt / (1 + β′ Δt (1 + γ)), with γ =
-  L/c_p dq_s/dT and β′ = β/2. The halving is the code's own: line 2160
-  multiplies the rain's rate by 0.5 (`RG*RPECONS` is α1). Eq. 7.70 has no
-  such factor, and neither does the code's snow sublimation (line 2323),
-  which the documentation says uses the same formula. So 'cloudsc' runs
-  at half the documented rate because cloudsc.F90 does.
+- 'cloudsc' takes at most the IFS code's semi-implicit step: a_clr β′
+  (q_s − q_e) Δt / (1 + β′ Δt (1 + γ)), with γ = L/c_p dq_s/dT and β′ =
+  β/2. The code read is the cloudsc.F90 of ECMWF's CLOUDSC dwarf
+  (dwarf-p-cloudsc, whose modification history ends in 2015 and whose
+  default is IEVAPRAIN 2, Abel and Boutle); the step is its IEVAPRAIN 1
+  (Sundqvist) branch, lines 2128–2196. The halving is that branch's own:
+  line 2160 multiplies the rain's rate by 0.5 (`RG*RPECONS` is α1). Eq.
+  7.70 has no such factor, and neither does the snow sublimation's
+  Sundqvist branch (IEVAPSNOW 1, line 2323), which the documentation says
+  uses the same formula. So 'cloudsc' runs at half the documented rate
+  because the code does.
 - `rainCover` 'overlap' (the default) makes a_P the maximum-random
   overlap of the cloud cover from the rain's top down (eq. 7.65), at
   least 0.1 (RCOVPMIN). It is reduced in proportion to what evaporates,
@@ -9760,16 +9764,19 @@ b913e99; over the treeline test's 48 GPU steps the lowest air parts by
 **A trace of cloud in the chain (Nov 7).** The chain takes a layer's
 cover f whatever its water, so a layer whose cloud water is a rounding
 trace joins the overlap of the cloud around it as fully as a real one.
-In a CPU test column a 10⁻¹⁵ kg/kg trace moved the OLR by 0.043 W/m², a cliff
-the audit put at no more than 0.015 W/m² in the model's states.
+In a CPU test column a 10⁻¹⁵ kg/kg trace moved the OLR by 0.043 W/m².
+In the model's states the audit put the cliff below 0.15 W/m² of
+reflected sunlight, and its check, zeroing the traces in an N=64 state,
+moved the shortwave and longwave cloud effects by under 0.05 W/m².
 `traceCloudPath` t (a radiation option in kg/m², default none, on both
 engines) gives a layer whose in-cloud path W/f is under t the cover W/t,
 with the same mean emissivity. The cover stops at TRACE_CHAIN_FLOOR
 (10⁻⁶, or the layer's chain cover if that is less), below which the
 GPU's f32 joint covers lose it. At t = 10⁻⁶ the trace's 0.043 W/m²
-becomes 2.1·10⁻⁶. In `test/gpuModel.test.mjs`'s row on 4214 layers
-near half the trace path, the option moves the OLR by up to 0.148 W/m²,
-and the engines' changes differ by 6.7·10⁻⁵.
+becomes 4.3·10⁻⁶ W/m² in `test/longwaveOverlap.test.mjs`'s row. In
+`test/gpuModel.test.mjs`'s row on 4214 layers near half the trace path,
+the option moves the OLR by up to 0.148 W/m², and the engines' changes
+differ by 6.7·10⁻⁵ W/m².
 
 **Independent checks of the Q1 metric and the overlap (Oct 2).** The
 longwave's chain against the expectation over every sub-column pattern
