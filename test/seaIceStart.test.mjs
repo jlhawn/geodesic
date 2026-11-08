@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { initializeState, surfaceTemperature } from '../js/physics/init.module.js';
+import { initializeState } from '../js/physics/init.module.js';
 import { readTopography, geographyOptions, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { encodeSeaIceStart, decodeSeaIceStart, loadSeaIceStart, SEA_ICE_START_FILE, EDGE_CONCENTRATION, NO_SEA } from '../js/physics/seaIceStart.module.js';
@@ -72,13 +72,14 @@ test(`a fresh start at N=${N} takes the observed March ice, its concentration an
   assert.ok(snowy > 0.8 * iced && partial > 0, `${snowy} of ${iced} iced cells carry snow, ${partial} partly covered`);
 });
 
-test('a fresh start at N=32 on the n1024 mask lays none of the observed March ice on a lake cell: no ice, cover or snow, and the surface temperature the land starts from', async () => {
+test('a fresh start at N=32 on the n1024 mask gives each lake cell the sea\'s start but its snow: the observed March ice, its cover and the sea\'s surface temperature, which FLake replaces at its first step, and no snow, which nothing would', async () => {
   const start = decodeSeaIceStart(readFileSync(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url)));
   const topography = readTopography(FRESH_GEOGRAPHY.topography), sheets = geographyOptions(FRESH_GEOGRAPHY);
   const model = createModel(new Grid(32), { topography, geography: sheets.geography, ocean: false, land: { ...sheets.land }, levels: sigmaInterfaces('bl48') });
-  const { state, mesh } = model, lakes = model.lake.cells;
-  initializeState(model, { geostrophic: !model.surfaceGeopotential, seaIce: start }).forEach((values, a) => state[a].set(values));
+  const { state, mesh } = model, lakes = model.lake.cells, options = { geostrophic: !model.surfaceGeopotential, seaIce: start };
+  const sea = initializeState({ ...model, lake: null }, options), seaCover = Float64Array.from(model.seaIce.concentration), seaSnow = Float64Array.from(model.land.snow);
+  initializeState(model, options).forEach((values, a) => state[a].set(values));
   model.land.initialize();
-  assert.ok(lakes.some((i) => { const observed = start.at(mesh.latCell[i], mesh.lonCell[i]); return observed.thickness > 0 && observed.snow > 0; }), 'the observed ice and its snow reach a lake cell');
-  for (const i of lakes) assert.deepEqual([state[6][i], model.seaIce.concentration[i], model.land.snow[i], state[3][i]], [0, 0, 0, surfaceTemperature(mesh.latCell[i])], `lake cell ${i}`);
+  assert.ok(lakes.some((i) => seaSnow[i] > 0 && sea[6][i] > 0), 'the sea\'s start lays the observed ice and its snow on a lake cell');
+  for (const i of lakes) assert.deepEqual([state[6][i], model.seaIce.concentration[i], state[3][i], model.land.snow[i]], [sea[6][i], seaCover[i], sea[3][i], 0], `lake cell ${i}: ice, cover, surface temperature and snow`);
 });

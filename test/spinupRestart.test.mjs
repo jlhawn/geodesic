@@ -53,7 +53,7 @@ for (const [arm, env] of Object.entries(arms)) {
   });
 }
 
-test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed inside a day and run to its end whole, and stopped again inside it with lake outflow not yet drained to the sea, saved, then resumed, ends on the same state bit for bit but for the day\'s rain and radiation means, which cover the steps each run took; and a run from a fresh start, which lays none of the observed sea ice on a lake, ends the day on the state of its own restart from step 32 but for those means and the energy record, which holds day 0 only for the run that took it whole', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed inside a day and run to its end whole, and stopped again inside it with lake outflow not yet drained to the sea, saved, then resumed, ends on the same state bit for bit but for the day\'s rain and radiation means, which cover the steps each run took; and a run from a fresh start, which lays no observed sea-ice snow on a lake, ends the day on the state of its own restart from step 32 but for those means and the energy record, which holds day 0 only for the run that took it whole', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'restart-lakes-'));
   try {
     const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: '32', MINUTES: '100', OUT: out, DAYS: '1', ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
