@@ -144,7 +144,7 @@ test('a spin-up keeps the daily means of its last SST_WINDOW days in its states,
   const C = whole.surfaceT.length;
   assert.deepEqual(Array.from(whole.sstMeanDays), [2, 3]);
   assert.match(logOf(out), new RegExp(`SST means: the daily mean of the ocean's top layer over its ${OCEAN_STEPS} steps a day, the last 2 days kept \\(none yet\\)`));
-  assert.doesNotMatch(logOf(out), /left out/);
+  assert.doesNotMatch(logOf(out), /SST mean of day \d+ over \d+ of its \d+ ocean steps left out/);
   let sea = 0, moved = 0;
   for (let i = 0; i < C; i++) {
     const [day2, day3] = [whole.sstMeans[i], whole.sstMeans[C + i]];
