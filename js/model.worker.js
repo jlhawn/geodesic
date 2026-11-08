@@ -297,9 +297,12 @@ function placeDeck(model, saved, N) {
  * each starts mixed at its surface temperature on its first step.
  */
 function placeLake(model, saved, N) {
-  if (!model.lake || !saved || saved.N !== N || !savedLake(saved)) return;
+  if (!model.lake || !saved || saved.N !== N || !savedLake(saved)) return false;
   model.lake.load(savedLake(saved));
+  return true;
 }
+
+const lakeWater = (saved, placed) => (placed ? saved : { ...saved, lakeSeen: null, lakePending: null });
 
 function savedCumulus(model) {
   const C = model.mesh.nCells, K = model.core.K, K0 = model.moist.cumulusK0 ?? 0, out = {};
@@ -720,7 +723,7 @@ async function start(message) {
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   placeIce(model, saved, N);
   placeDeck(model, saved, N);
-  placeLake(model, saved, N);
+  const lakePlaced = placeLake(model, saved, N);
   status('uploading the state…', 0.92);
   if (model.load) model.load({ ocean: false });
   await model.settle?.();
@@ -732,7 +735,7 @@ async function start(message) {
   placeLand(model, saved, N);
   await model.settle?.();
   placeEnergy(model, saved);
-  if (saved && saved.N === N && model.writeFreshwater) model.writeFreshwater(saved);
+  if (saved && saved.N === N && model.writeFreshwater) model.writeFreshwater(lakeWater(saved, lakePlaced));
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
   serving = true;
@@ -746,7 +749,7 @@ export async function placeSaved(model, saved, N, step = dt) {
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   placeIce(model, saved, N);
   placeDeck(model, saved, N);
-  placeLake(model, saved, N);
+  const lakePlaced = placeLake(model, saved, N);
   if (model.load) model.load({ ocean: false });
   await model.settle?.();
   if (model.dragsDue) model.dragsDue();
@@ -755,7 +758,7 @@ export async function placeSaved(model, saved, N, step = dt) {
   placeLand(model, saved, N);
   await model.settle?.();
   placeEnergy(model, saved);
-  if (model.writeFreshwater) model.writeFreshwater(saved);
+  if (model.writeFreshwater) model.writeFreshwater(lakeWater(saved, lakePlaced));
   model.time = saved.time;
 }
 

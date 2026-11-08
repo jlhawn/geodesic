@@ -334,7 +334,11 @@ export function createModel(gridOrMesh, {
   model.cadence = { radiationEvery: radiationOptions.radiationEvery ?? 1, dragEvery, oceanEvery: ocean ? ocean.everySteps : 1 };
   const freshwater = [['runoffTotal', land ? land.runoff : null], ['dischargeTotal', land ? land.discharge : null], ['runoffSeen', runoffSeen], ['dischargeSeen', dischargeSeen], ['lakeSeen', lakeSeen], ['rainStep', moist ? moistPhysics.rain : null]].filter(([, values]) => values);
   model.readFreshwater = () => Object.fromEntries(freshwater.map(([name, values]) => [name, Float64Array.from(values)]));
-  model.writeFreshwater = (saved) => { for (const [name, target] of freshwater) if (saved[name] && saved[name].length === target.length) target.set(saved[name]); };
+  model.writeFreshwater = (saved) => {
+    for (const [name, target] of freshwater) if (saved[name] && saved[name].length === target.length) target.set(saved[name]);
+    const pending = saved.lakePending && saved.lakePending.length === C ? saved.lakePending : null;
+    if (lake && !(saved.lakeSeen && saved.lakeSeen.length === C)) for (let i = 0; i < C; i++) lakeSeen[i] = lake.passed[i] - (pending ? pending[i] : 0);
+  };
   model.dragsDue = () => dragStep.fill(-1);
   model.cloudWater = (i) => moistPhysics.columnWater(state[0], state[5], i) + moistPhysics.cumulusCloudPath(state[0], i) + radiation.stratusFraction[i] * radiation.stratus[i];
   model.cloudParts = (i) => {
