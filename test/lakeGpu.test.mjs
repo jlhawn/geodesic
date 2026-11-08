@@ -169,7 +169,7 @@ test(`at N=${N} on the n1024 mask, a save that holds none of the GPU's pending-w
   }
 });
 
-test(`at N=${N} on the n1024 mask with FLake, after the fresh start with the observed March ice, the sea-ice diagnostics count the ice on the sea and not a frozen lake's, on the GPU as on the CPU`, async () => {
+test(`at N=${N} on the n1024 mask after the fresh start with the observed March ice, the sea-ice diagnostics count the ice on the sea and not a frozen lake's under FLake, and with the lake model off count the lake's ice as the sea's, on the GPU as on the CPU`, async () => {
   const start = decodeSeaIceStart(readFileSync(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url)));
   const begin = (model) => {
     initializeState(model, { seaIce: start }).forEach((values, a) => model.state[a].set(values));
@@ -178,23 +178,27 @@ test(`at N=${N} on the n1024 mask with FLake, after the fresh start with the obs
     model.land.initialize();
     return model;
   };
-  const cpu = begin(createModel(new Grid(N), setup({ model: 'flake' }))), gpu = begin(await createGpuModel(new Grid(N), setup({ model: 'flake' })));
-  const { state, mesh, seaIce } = cpu, land = cpu.geography.land, lakeCell = cpu.lake.isLake;
-  assert.deepEqual(Array.from(gpu.lake.isLake), Array.from(lakeCell));
-  let area = 0, sea = 0, volume = 0, lakes = 0;
-  for (let i = 0; i < mesh.nCells; i++) {
-    const a = mesh.areaCell[i], h = state[6][i], c = seaIce.concentration[i];
-    area += a;
-    if (!(h > 0)) continue;
-    if (lakeCell[i]) lakes += a * c;
-    else if (!land[i]) { sea += a * c; volume += a * c * h; }
+  for (const lake of [{ model: 'flake' }, { model: 'off' }]) {
+    const cpu = begin(createModel(new Grid(N), setup(lake))), gpu = begin(await createGpuModel(new Grid(N), setup(lake))), on = lake.model !== 'off';
+    assert.deepEqual([Boolean(cpu.lake), Boolean(gpu.lake)], [on, on], `${lake.model}: the lake model on both engines`);
+    const { state, mesh, seaIce } = cpu, land = cpu.geography.land, lakeCell = on ? cpu.lake.isLake : cpu.geography.lake;
+    if (on) assert.deepEqual(Array.from(gpu.lake.isLake), Array.from(lakeCell));
+    let area = 0, sea = 0, volume = 0, lakes = 0, lakeVolume = 0;
+    for (let i = 0; i < mesh.nCells; i++) {
+      const a = mesh.areaCell[i], h = state[6][i], c = seaIce.concentration[i];
+      area += a;
+      if (!(h > 0)) continue;
+      if (lakeCell[i]) { lakes += a * c; lakeVolume += a * c * h; }
+      else if (!land[i]) { sea += a * c; volume += a * c * h; }
+    }
+    const [iced, held] = on ? [sea, volume] : [sea + lakes, volume + lakeVolume];
+    assert.ok(lakes / sea > 5e-4, `${lake.model}: the start freezes a lake: its ice ${lakes / area} of the area against the sea's ${sea / area}`);
+    const engines = { CPU: [cpu.diagnostics(), 1e-12], GPU: [(await gpu.beginFrame({ diagnostics: true })).diagnostics, 1e-5] };
+    console.log(`${lake.model}: sea ice ${(100 * sea / area).toFixed(4)} % of the area, ${(volume / sea).toFixed(3)} m thick, the frozen lakes' ${(100 * lakes / area).toFixed(4)} %; ${Object.entries(engines).map(([name, [d]]) => `${name} ${(100 * d.iceFraction).toFixed(4)} %, ${d.iceThickness.toFixed(3)} m`).join('; ')}`);
+    for (const [name, [d, relative]] of Object.entries(engines)) {
+      assert.ok(Math.abs(d.iceFraction - iced / area) <= relative * iced / area, `${lake.model}, ${name}: iceFraction ${d.iceFraction} against ${iced / area}`);
+      assert.ok(Math.abs(d.iceThickness - held / iced) <= relative * held / iced, `${lake.model}, ${name}: iceThickness ${d.iceThickness} against ${held / iced}`);
+    }
+    gpu.destroy();
   }
-  assert.ok(lakes / sea > 5e-4, `the start freezes a lake: its ice ${lakes / area} of the area against the sea's ${sea / area}`);
-  const engines = { CPU: [cpu.diagnostics(), 1e-12], GPU: [(await gpu.beginFrame({ diagnostics: true })).diagnostics, 1e-5] };
-  console.log(`sea ice ${(100 * sea / area).toFixed(3)} % of the area, ${(volume / sea).toFixed(3)} m thick, the frozen lakes' ${(100 * lakes / area).toFixed(4)} %; ${Object.entries(engines).map(([name, [d]]) => `${name} ${(100 * d.iceFraction).toFixed(3)} %, ${d.iceThickness.toFixed(3)} m`).join('; ')}`);
-  for (const [name, [d, relative]] of Object.entries(engines)) {
-    assert.ok(Math.abs(d.iceFraction - sea / area) <= relative * sea / area, `${name} iceFraction ${d.iceFraction} against the sea's ${sea / area}`);
-    assert.ok(Math.abs(d.iceThickness - volume / sea) <= relative * volume / sea, `${name} iceThickness ${d.iceThickness} against the sea's ${volume / sea}`);
-  }
-  gpu.destroy();
 });

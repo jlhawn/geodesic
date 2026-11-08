@@ -19,10 +19,10 @@ const synthetic = () => encodeSeaIceStart({
   thickness: Uint8Array.from({ length: 12 }, (_, n) => [40, 20, 0][Math.floor(n / 4)]),
   snow: Uint8Array.from({ length: 12 }, (_, n) => [50, 25, 0][Math.floor(n / 4)]),
 });
-const observedStart = (n) => {
+const observedStart = (n, lake = null) => {
   const start = decodeSeaIceStart(readFileSync(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url)));
   const topography = readTopography(FRESH_GEOGRAPHY.topography), sheets = geographyOptions(FRESH_GEOGRAPHY);
-  const model = createModel(new Grid(n), { topography, geography: sheets.geography, ocean: false, land: { ...sheets.land }, levels: sigmaInterfaces('bl48') });
+  const model = createModel(new Grid(n), { topography, geography: sheets.geography, ocean: false, land: { ...sheets.land }, levels: sigmaInterfaces('bl48'), ...(lake ? { lake } : {}) });
   initializeState(model, { geostrophic: !model.surfaceGeopotential, seaIce: start }).forEach((values, a) => model.state[a].set(values));
   model.land.initialize();
   return model;
@@ -126,19 +126,24 @@ test('at N=32 on the n1024 mask after the fresh start, the CPU\'s surface-albedo
   }
 });
 
-test('at N=32 on the n1024 mask after the fresh start, the CPU\'s sea-ice diagnostics count the ice on the sea and not a frozen lake\'s', () => {
-  const model = observedStart(32), { state, mesh, seaIce } = model, land = model.geography.land, lakeCell = model.lake.isLake;
-  let area = 0, sea = 0, volume = 0, lakes = 0;
-  for (let i = 0; i < mesh.nCells; i++) {
-    const a = mesh.areaCell[i], h = state[6][i], c = seaIce.concentration[i];
-    area += a;
-    if (!(h > 0)) continue;
-    if (lakeCell[i]) lakes += a * c;
-    else if (!land[i]) { sea += a * c; volume += a * c * h; }
+test('at N=32 on the n1024 mask after the fresh start, the CPU\'s sea-ice diagnostics count the ice on the sea and not a frozen lake\'s, and with the lake model off count the lake\'s ice as the sea\'s', () => {
+  for (const lake of [null, { model: 'off' }]) {
+    const model = observedStart(32, lake), { state, mesh, seaIce } = model, land = model.geography.land, name = model.lake ? 'FLake' : 'the lake model off';
+    assert.equal(model.lake === null, lake !== null, 'the lake model runs unless it is off');
+    const lakeCell = model.lake ? model.lake.isLake : model.geography.lake;
+    let area = 0, sea = 0, volume = 0, lakes = 0, lakeVolume = 0;
+    for (let i = 0; i < mesh.nCells; i++) {
+      const a = mesh.areaCell[i], h = state[6][i], c = seaIce.concentration[i];
+      area += a;
+      if (!(h > 0)) continue;
+      if (lakeCell[i]) { lakes += a * c; lakeVolume += a * c * h; }
+      else if (!land[i]) { sea += a * c; volume += a * c * h; }
+    }
+    const [iced, held] = model.lake ? [sea, volume] : [sea + lakes, volume + lakeVolume];
+    console.log(`${name}: sea ice ${(100 * sea / area).toFixed(3)} % of the area, ${(volume / sea).toFixed(3)} m thick; the frozen lakes' ice ${(100 * lakes / area).toFixed(4)} %`);
+    assert.ok(lakes / sea > 5e-4, `${name}: the start freezes a lake: its ice ${lakes / area} of the area against the sea's ${sea / area}`);
+    const d = model.diagnostics();
+    assert.ok(Math.abs(d.iceFraction - iced / area) < 1e-12, `${name}: iceFraction ${d.iceFraction} against ${iced / area}`);
+    assert.ok(Math.abs(d.iceThickness - held / iced) < 1e-12, `${name}: iceThickness ${d.iceThickness} against ${held / iced}`);
   }
-  console.log(`sea ice ${(100 * sea / area).toFixed(3)} % of the area, ${(volume / sea).toFixed(3)} m thick; the frozen lakes' ice ${(100 * lakes / area).toFixed(4)} %`);
-  assert.ok(lakes / sea > 5e-4, `the start freezes a lake: its ice ${lakes / area} of the area against the sea's ${sea / area}`);
-  const d = model.diagnostics();
-  assert.ok(Math.abs(d.iceFraction - sea / area) < 1e-12, `iceFraction ${d.iceFraction} against the sea's ${sea / area}`);
-  assert.ok(Math.abs(d.iceThickness - volume / sea) < 1e-12, `iceThickness ${d.iceThickness} against the sea's ${volume / sea}`);
 });
