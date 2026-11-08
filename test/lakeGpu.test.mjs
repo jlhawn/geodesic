@@ -5,6 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { LAKE_FIELDS } from '../js/physics/lake.module.js';
+import { oceanCells } from '../js/ocean/layered.module.js';
 import { encodeState, decodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
 
 let gpuAvailable = true;
@@ -102,7 +103,7 @@ test(`at N=${N} on the n1024 mask, a GPU model saved through the page's snapshot
   }
 });
 
-test(`at N=${N} on the n1024 mask, a page save with its lakes' outflow pending, restored on the other engine through encodeState, decodeState and the page's restore, holds the outflow a restore on its own engine holds: a CPU save's lakePassed less lakeSeen on the GPU, and a GPU save's lakePending on the CPU`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test(`at N=${N} on the n1024 mask, a page save with its lakes' outflow pending, restored on the other engine through encodeState, decodeState and the page's restore, holds the outflow a restore on its own engine holds: a CPU save's lakePassed less lakeSeen on the GPU, and a GPU save's lakePending on the CPU; and it holds the rain the open sea has yet to take that a restore on its own engine holds: a CPU save's rainStep on the GPU, and a GPU save's rainTotal less rainSeen on the CPU`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const stand = !globalThis.self;
   if (stand) globalThis.self = { postMessage() {} };
   try {
@@ -116,12 +117,18 @@ test(`at N=${N} on the n1024 mask, a page save with its lakes' outflow pending, 
     assert.ok(lakes.some((i) => fromCpu.lakePassed[i] !== fromCpu.lakeSeen[i]) && lakes.some((i) => fromGpu.lakePending[i] !== 0), 'both saves hold lake outflow not yet drained to the sea');
     const held = async (model, saved) => {
       await placeSaved(model, saved, N, DT);
-      return model === gpu ? Array.from((await gpu.readFreshwater()).lakePending) : Array.from(cpu.lake.passed, (passed, i) => passed - cpu.lake.seen[i]);
+      if (model === cpu) return { lake: Array.from(cpu.lake.passed, (passed, i) => passed - cpu.lake.seen[i]), rain: Array.from(cpu.readFreshwater().rainStep) };
+      const { lakePending, rainTotal, rainSeen } = await gpu.readFreshwater();
+      return { lake: Array.from(lakePending), rain: Array.from(rainTotal, (total, i) => Math.fround(total >= rainSeen[i] ? total - rainSeen[i] : total)) };
     };
     const cpuOwn = await held(cpu, fromCpu), cpuOnGpu = await held(gpu, fromCpu), gpuOwn = await held(gpu, fromGpu), gpuOnCpu = await held(cpu, fromGpu);
-    console.log(`N=${N}, lake cells ${lakes.join(', ')}: the CPU save's outflow ${lakes.map((i) => cpuOwn[i].toExponential(3)).join(', ')} kg/m², on the GPU ${lakes.map((i) => cpuOnGpu[i].toExponential(3)).join(', ')}; the GPU save's ${lakes.map((i) => gpuOwn[i].toExponential(3)).join(', ')}, on the CPU ${lakes.map((i) => gpuOnCpu[i].toExponential(3)).join(', ')}`);
-    assert.deepEqual(cpuOnGpu, cpuOwn.map(Math.fround), "the GPU holds the CPU save's outflow as the CPU restored from it does, to float32");
-    assert.deepEqual(gpuOnCpu, gpuOwn, "the CPU holds the GPU save's outflow as the GPU restored from it does");
+    console.log(`N=${N}, lake cells ${lakes.join(', ')}: the CPU save's outflow ${lakes.map((i) => cpuOwn.lake[i].toExponential(3)).join(', ')} kg/m², on the GPU ${lakes.map((i) => cpuOnGpu.lake[i].toExponential(3)).join(', ')}; the GPU save's ${lakes.map((i) => gpuOwn.lake[i].toExponential(3)).join(', ')}, on the CPU ${lakes.map((i) => gpuOnCpu.lake[i].toExponential(3)).join(', ')}`);
+    assert.deepEqual(cpuOnGpu.lake, cpuOwn.lake.map(Math.fround), "the GPU holds the CPU save's outflow as the CPU restored from it does, to float32");
+    assert.deepEqual(gpuOnCpu.lake, gpuOwn.lake, "the CPU holds the GPU save's outflow as the GPU restored from it does");
+    const { cellOpen } = oceanCells(cpu.mesh.nCells, cpu.geography), sea = (rain) => rain.filter((_, i) => cellOpen[i] && cpu.ocean.cellOcean[i]);
+    assert.ok(sea(cpuOwn.rain).some((rain) => rain > 0) && sea(gpuOwn.rain).some((rain) => rain > 0), 'both saves hold rain the open sea has yet to take');
+    assert.deepEqual(sea(cpuOnGpu.rain), sea(cpuOwn.rain).map(Math.fround), "on the open sea the GPU holds the CPU save's rain as the CPU restored from it does, to float32");
+    assert.deepEqual(sea(gpuOnCpu.rain).map(Math.fround), sea(gpuOwn.rain), "on the open sea the CPU holds the GPU save's rain as the GPU restored from it does, to float32");
     gpu.destroy();
   } finally {
     if (stand) delete globalThis.self;

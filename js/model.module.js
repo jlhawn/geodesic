@@ -344,6 +344,8 @@ export function createModel(gridOrMesh, {
   model.readFreshwater = () => Object.fromEntries(freshwater.map(([name, values]) => [name, Float64Array.from(values)]));
   model.writeFreshwater = (saved) => {
     for (const [name, target] of freshwater) if (saved[name] && saved[name].length === target.length) target.set(saved[name]);
+    const rainTotal = saved.rainTotal && saved.rainTotal.length === C ? saved.rainTotal : null, rainSeen = saved.rainSeen && saved.rainSeen.length === C ? saved.rainSeen : null;
+    if (moist && !(saved.rainStep && saved.rainStep.length === C) && rainTotal && rainSeen) for (let i = 0; i < C; i++) moistPhysics.rain[i] = rainTotal[i] >= rainSeen[i] ? rainTotal[i] - rainSeen[i] : rainTotal[i];
     const pending = saved.lakePending && saved.lakePending.length === C ? saved.lakePending : null;
     if (lake && !(saved.lakeSeen && saved.lakeSeen.length === C)) for (let i = 0; i < C; i++) lake.seen[i] = lake.passed[i] - (pending ? pending[i] : 0);
   };
