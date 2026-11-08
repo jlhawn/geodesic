@@ -972,7 +972,13 @@ engines. Their defaults give the law above.
   7.70 has no such factor, and neither does the snow sublimation's
   Sundqvist branch (IEVAPSNOW 1, line 2323), which the documentation says
   uses the same formula. So 'cloudsc' runs at half the documented rate
-  because the code does.
+  because the code does. It departs from the branch in two ways:
+  - Saturation: its q_s is the one `iceSaturation` selects, mixed-phase
+    below freezing by default. The branch uses the liquid saturation
+    ZQSLIQ and its ZCORQSLIQ (line 943).
+  - Frozen precipitation: the model's one precipitation stream takes
+    the rain's half rate in sub-freezing layers too. cloudsc.F90 sends
+    that precipitation to IEVAPSNOW 1 at the full rate.
 - `rainCover` 'overlap' (the default) makes a_P the maximum-random
   overlap of the cloud cover from the rain's top down (eq. 7.65), at
   least 0.1 (RCOVPMIN). It is reduced in proportion to what evaporates,
@@ -9766,8 +9772,11 @@ cover f whatever its water, so a layer whose cloud water is a rounding
 trace joins the overlap of the cloud around it as fully as a real one.
 In a CPU test column a 10⁻¹⁵ kg/kg trace moved the OLR by 0.043 W/m².
 In the model's states the audit put the cliff below 0.15 W/m² of
-reflected sunlight, and its check, zeroing the traces in an N=64 state,
-moved the shortwave and longwave cloud effects by under 0.05 W/m².
+reflected sunlight. Its check zeroed the 3437 positive traces under
+10⁻⁹ kg/kg in an N=64 state. Rerun at five decimals, it moved the
+shortwave cloud effect by 0.0017 W/m² globally and by at most
+0.0076 W/m² over the 10S–10N ocean. It moved the longwave by under
+10⁻⁴ W/m².
 `traceCloudPath` t (a radiation option in kg/m², default none, on both
 engines) gives a layer whose in-cloud path W/f is under t the cover W/t,
 with the same mean emissivity. The cover stops at TRACE_CHAIN_FLOOR
