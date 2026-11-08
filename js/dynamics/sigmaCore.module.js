@@ -47,10 +47,9 @@ export const THETA_FACES = ['exner', 'arakawaSuarez'];
  * [θ_k(Π_{k+½} − Π_k) + θ_{k+1}(Π_{k+1} − Π_{k+½})]/ΔΠ, the one face
  * whose vertical transport of c_p θ the pressure work balances. The
  * 'exner' face swaps those weights and differs from it by
- * (2t − 1)(θ_{k+1} − θ_k), so it carries an energy residual of its own,
- * −3.3×10⁻³ W/m² on bl48 and +7.1×10⁻³ on bl36 in a dry N=16 core
- * tendency (docs/c-grid-dynamical-core.md, section 4.3); a limited θ face
- * would add a one-signed c_p T source to it. The last four are returned
+ * (2t − 1)(θ_{k+1} − θ_k), so it carries an energy residual of its own
+ * (docs/c-grid-dynamical-core.md, section 4.3); a limited θ face would
+ * add a one-signed c_p T source to it. The last four are returned
  * only when given.
  */
 export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscosity, temperatureClosure, verticalAdvection, thetaFace, ...rest } = {}) {

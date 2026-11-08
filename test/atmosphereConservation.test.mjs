@@ -323,11 +323,11 @@ test('the CPU dynamics changes the energy of moist air as it changes its dry twi
   assert.ok(Math.abs(wet - plain) < 0.2 * work, `moist ${wet} against dry ${plain} W/m², virtual work ${work}`);
 });
 
-test("in double precision a CPU core tendency keeps the dry twin's c_p T and kinetic energy to 1e-5 W/m² under dynamics.thetaFace 'arakawaSuarez', the face whose vertical transport of c_p θ the hydrostatic pressure work balances, on bl36 and bl48, where the 'exner' face leaves a residual of its own", () => {
-  const bl48 = createModel(new Grid(N), { ...OPTIONS, levels: sigmaInterfaces('bl48') });
-  initializeState(bl48).forEach((values, s) => bl48.state[s].set(values));
-  for (let n = 0; n < SPINUP_STEPS; n++) bl48.step(DT);
-  for (const [name, model] of [['bl36', spunUp()], ['bl48', bl48]]) {
+test(`in double precision a CPU core tendency keeps the dry twin's c_p T and kinetic energy to 1e-5 W/m² under dynamics.thetaFace 'arakawaSuarez', the face whose vertical transport of c_p θ the hydrostatic pressure work balances, on bl36 and bl48 ${SPINUP_STEPS} steps from initializeState, where the 'exner' face leaves a residual of its own`, () => {
+  for (const name of ['bl36', 'bl48']) {
+    const model = createModel(new Grid(N), { ...OPTIONS, levels: sigmaInterfaces(name) });
+    initializeState(model).forEach((values, s) => model.state[s].set(values));
+    for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
     const { dry } = twins(model), rates = {};
     for (const thetaFace of THETA_FACES) {
       const core = createSigmaCore(model.mesh, { levels: model.core.levels, surfaceGeopotential: model.surfaceGeopotential, ...dynamicsOptions({ thetaFace }) });
@@ -335,7 +335,10 @@ test("in double precision a CPU core tendency keeps the dry twin's c_p T and kin
       core.tendency(dry, out);
       rates[thetaFace] = energyTendency(model, dry, out);
     }
-    console.log(`CPU ${name}, the dry twin's energy tendency: 'exner' ${rates.exner.toExponential(3)} W/m², 'arakawaSuarez' ${rates.arakawaSuarez.toExponential(3)}`);
+    const { K, C, exnerLayer, exnerLower } = model.core.diagnostics;
+    let spread = 0;
+    for (let n = 0; n < (K - 1) * C; n++) spread = Math.max(spread, Math.abs(2 * (exnerLower[n] - exnerLayer[n]) / (exnerLayer[n + C] - exnerLayer[n]) - 1));
+    console.log(`CPU ${name}, the dry twin's energy tendency: 'exner' ${rates.exner.toExponential(3)} W/m², 'arakawaSuarez' ${rates.arakawaSuarez.toExponential(3)}; |2t − 1| up to ${spread.toFixed(3)}`);
     assert.ok(Math.abs(rates.exner) > 1e-3, `${name} 'exner': ${rates.exner} W/m²`);
     assert.ok(Math.abs(rates.arakawaSuarez) < 1e-5, `${name} 'arakawaSuarez': ${rates.arakawaSuarez} W/m²`);
   }
