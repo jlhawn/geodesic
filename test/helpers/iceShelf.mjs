@@ -126,9 +126,9 @@ export async function prepareShelfModel(model) {
 
 export function shelfTops(ocean, ice) {
   const { shelfLoad, h } = ocean.serialize(), C = shelfLoad.length;
-  const [thin, empty, dry] = [...shelfLoad.keys()].filter((i) => shelfLoad[i] > 0 && h[i] > 1);
-  const { Q, W, state } = thinTopLayers(ocean, ice, [[thin, 0.005], [empty, 0]]);
+  const [thin, empty, dry, submicron, micron, twoMicron] = [...shelfLoad.keys()].filter((i) => shelfLoad[i] > 0 && h[i] > 1);
+  const { Q, W, state } = thinTopLayers(ocean, ice, [[thin, 0.005], [empty, 0], [submicron, 1e-7], [micron, 1e-6], [twoMicron, 2e-6]]);
   for (let n = dry; n < state.h.length; n += C) [state.h[n], state.T[n], state.S[n], Q[n], W[n]] = [0, 0, 0, 0, 0];
   const restart = new Set(['shelfLoad', 'previousT0', 'previousIceVolume', 'fresh', 'buoyancy', 'flux', 'capacity']);
-  return { C, thin, empty, dry, Q, W, saved: Object.fromEntries(Object.entries(state).filter(([name]) => !restart.has(name))) };
+  return { C, thin, empty, dry, submicron, micron, twoMicron, Q, W, saved: Object.fromEntries(Object.entries(state).filter(([name]) => !restart.has(name))) };
 }

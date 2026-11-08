@@ -1360,12 +1360,17 @@ ${o.lakes ? LAKE_DRAIN_WGSL : ''}    }
  * the edge's first cell.
  */
 const HYBRID_REDUCED = [
-  ['area', 'sum', 'wet * a'], ['depth', 'sum', 'wet * a * OD[O_MIXED + i]'], ['salinity', 'sum', 'wet * a * (select(0.0, IN[wOff(0) + i] / h0, h0 > 0.0) + SREF)'],
+  ['area', 'sum', 'wet * a'], ['depth', 'sum', 'wet * a * OD[O_MIXED + i]'], ['salinity', 'sum', 'surfaceArea * surface'], ['surfaceArea', 'sum', 'surfaceArea'],
   ['thermocline', 'sum', 'wet * a * thermo'], ['heat', 'sum', 'wet * a * RHOCP * heat'],
   ['interiorT', 'sum', 'wet * a * interiorQ'], ['interiorH', 'sum', 'wet * a * interiorH'],
   ['ssh', 'max', 'wet * abs(OD[O_ETA + i])'], ['speed', 'max', 'speed'], ['limited', 'sum', 'limited'], ['transport', 'max', 'transport'],
   ['dried', 'sum', 'wet * OD[O_DRIED + i]'],
 ];
+const HYBRID_SURFACE = `fn surfaceSalinityOf(i: i32) -> f32 {
+  for (var k = 0; k < L; k++) { let hk = IN[hOff(k) + i]; if (hk > 0.0) { return IN[wOff(k) + i] / hk + SREF; } }
+  return DRY;
+}
+`;
 // The depth at which the column's density, its layer means held from decreasing with depth, reaches THERMOCLINE_DENSITY.
 const HYBRID_THERMOCLINE = `const THERMOA: f32 = ${(THERMOCLINE_DENSITY - SEAWATER.rho0).toExponential(10)};
 fn thermoclineDepthOf(i: i32) -> f32 {
@@ -1382,7 +1387,8 @@ fn thermoclineDepthOf(i: i32) -> f32 {
 `;
 const hybridReducedSetup = `    let a = MF[F_AREA + i];
     let wet = select(0.0, 1.0, OD[O_CMASK + i] > 0.5);
-    let h0 = IN[hOff(0) + i];
+    let surface = surfaceSalinityOf(i);
+    let surfaceArea = select(0.0, wet * a, surface > DRY);
     let thermo = select(0.0, thermoclineDepthOf(i), wet > 0.5);
     var heat = 0.0; var interiorQ = 0.0; var interiorH = 0.0;
     for (var k = 0; k < L; k++) {
@@ -1534,10 +1540,9 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const kernels = oceanKernels({ ...o, restrat, iso, table, L, C: nC, E: nE, V: nV, OS, OD, B, rho, labelT, labelS, nu4, omega: mesh.omega, implicitStress, virtualAir, drift: driftPlan, lakes: core.layout.PH.LAKE !== undefined, seaFlow: core.layout.PH.UO !== undefined });
   const reduced = HYBRID_REDUCED;
   const OF = seq([['SST', nC], ['SSS', nC], ['H1', nC], ['THD', nC], ['ETA', nC], ['CUR', 3 * nC], ['CSPD', nC], ['UPW', nC], ['PART', reduced.length * reductionGroups(nC)]]);
-  kernels.oFrame = `${HYBRID_THERMOCLINE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  kernels.oFrame = `${HYBRID_THERMOCLINE}${HYBRID_SURFACE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
-  let h0 = IN[hOff(0) + i];
-  OUT[${OF.SSS} + i] = select(0.0, IN[wOff(0) + i] / h0, h0 > 0.0) + SREF;
+  OUT[${OF.SSS} + i] = surfaceSalinityOf(i);
   OUT[${OF.H1} + i] = OD[O_MIXED + i];
   OUT[${OF.THD} + i] = thermoclineDepthOf(i);
   OUT[${OF.ETA} + i] = OD[O_ETA + i];
@@ -1595,7 +1600,7 @@ ${slots.map((m) => `    { let ha = IN[hOff(k) + a${m}]; let hb = IN[hOff(k) + b$
     OD[n] = select(OD[n] + alpha * (velocity - OD[n]), velocity, folds < 0.5);
   }
 }`;
-  kernels.oReduce = HYBRID_THERMOCLINE + reductionKernel(HYBRID_REDUCED, { count: nC, base: OF.PART, setup: hybridReducedSetup });
+  kernels.oReduce = HYBRID_THERMOCLINE + HYBRID_SURFACE + reductionKernel(HYBRID_REDUCED, { count: nC, base: OF.PART, setup: hybridReducedSetup });
   const ob = {}, own = (name, size) => { const b = emptyBuffer(device, size); b.label = 'layeredOcean' + name; return b; };
   ob.S = own('S', 4 * OS.total);
   for (const name of ['T', 'K1', 'K2', 'K3', 'K4']) ob[name] = registers && registers[name] && registers[name].size >= 4 * OS.total ? registers[name] : own(name, 4 * OS.total);
@@ -2347,8 +2352,8 @@ ${core.fieldConstants}
   }
 
   function diagnosticsFrom(sums) {
-    const { area, depth, heat, interiorT, interiorH, speed, thermocline, salinity, ssh, transport, limited, dried } = sums;
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermocline / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried };
+    const { area, depth, heat, interiorT, interiorH, speed, thermocline, salinity, surfaceArea, ssh, transport, limited, dried } = sums;
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermocline / area, oceanSalinity: salinity / surfaceArea, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried };
   }
 
   /*

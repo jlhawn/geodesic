@@ -80,7 +80,7 @@ export function cpuFrameFields(model, { level = 'surface', depth = 'surface', fi
   }
   const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields(depth === 'surface' ? 0 : Number(depth), depth === 'surface' ? SURFACE_UPWELLING_DEPTH : Number(depth)) : null;
   if (ocean) {
-    for (const [name, values] of Object.entries({ sst: ocean.temperature, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta, current: ocean.speed, upwelling: ocean.upwelling })) if (want.has(name) && (name !== 'upwelling' || memories)) out[name] = sea(values);
+    for (const [name, values] of Object.entries({ sst: ocean.temperature, sss: ocean.surfaceSalinity, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta, current: ocean.speed, upwelling: ocean.upwelling })) if (want.has(name) && (name !== 'upwelling' || memories)) out[name] = sea(values);
     if (want.has('currents')) {
       const vector = ocean.current;
       if (onLand) for (let i = 0; i < C; i++) if (onLand[i]) vector.fill(0, 3 * i, 3 * i + 3);

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
-import { createOcean, HEAT_REFERENCE, SALT_REFERENCE } from '../js/ocean/layered.module.js';
+import { createOcean, depthFields, HEAT_REFERENCE, SALT_REFERENCE } from '../js/ocean/layered.module.js';
+import { cpuFrameFields } from '../js/cpuFrame.module.js';
 import { createGeography, decodeLandIce, geographyOptions, landIceUrl, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { zonalWindOnEdges } from './helpers/layered.mjs';
 import { createModel } from '../js/model.module.js';
@@ -93,6 +94,44 @@ test(`at N=${N} a CPU ocean takes a layer of 1e-6 m or thinner at its class dens
   for (const i of [submicron, micron]) assert.equal(ocean.layerRho[i], ocean.densities[0], `the ${state.h[i]} m top layer at ${i} weighs ${ocean.layerRho[i]}, not its class's ${ocean.densities[0]}`);
   const own = seawaterDensity(Q[above] / state.h[above], W[above] / state.h[above]);
   assert.ok(Math.abs(ocean.layerRho[above] - own) <= 1e-12 * own, `the 2e-6 m top layer at ${above} weighs ${ocean.layerRho[above]}, its water ${own}`);
+});
+
+test(`at N=${N} the CPU frame's SSS and the CPU ocean's mean surface salinity take each sea column's W/h at the SST's layer, the first with water, over top layers of 1e-7 m and below empty ones`, () => {
+  const model = createModel(new Grid(N), { ocean: { everySteps: 1 } }), { ocean, state, mesh } = model, C = mesh.nCells, L = ocean.layers, bound = 1e-12;
+  initializeState(model, {}).forEach((values, a) => state[a].set(values));
+  ocean.initialize(state[3], state[6]);
+  const sea = [...Array(C).keys()].filter((i) => ocean.cellOcean[i]);
+  for (const cut of [1e-7, 0]) {
+    ocean.initialize(state[3], state[6]);
+    ocean.load(thinTopLayers(ocean, state[6], sea.map((i) => [i, cut])).state, state[3], state[6]);
+    const { h, W } = ocean, { sss } = cpuFrameFields(model, { depth: 'surface', fields: ['sss'] });
+    const sstLayer = depthFields(mesh, L, { h, u: new Float64Array(L * mesh.nEdges), temperature: (k) => k, cellOcean: ocean.cellOcean }, 0, { upwellingDepth: null }).temperature;
+    let surface = 0, thicker = 0, area = 0;
+    for (const i of sea) {
+      const n = sstLayer[i] * C + i;
+      let m = i;
+      while (!(h[m] > 1e-6)) m += C;
+      assert.ok(h[n] > 0 && Object.is(sss[i], Math.fround(W[n] / h[n])), `the CPU frame's SSS at ${i}, over a ${h[i]} m top layer: ${sss[i]}; the SST's layer, ${sstLayer[i]}, holds ${W[n] / h[n]}`);
+      surface += mesh.areaCell[i] * (W[n] / h[n]); thicker += mesh.areaCell[i] * (W[m] / h[m]); area += mesh.areaCell[i];
+    }
+    const mean = ocean.diagnostics().oceanSalinity, expected = surface / area;
+    if (cut > 0) assert.ok(Math.abs(thicker / area - expected) > 10 * bound * expected, `over top layers of ${cut} m the first layer thicker than 1e-6 m gives a mean of ${thicker / area}, within ten bounds of the SST's layer's ${expected}`);
+    assert.ok(Math.abs(mean - expected) <= bound * expected, `the CPU ocean's mean surface salinity over top layers of ${cut} m is ${mean}; the SST's layer gives ${expected}`);
+  }
+});
+
+test(`at N=${N} a sea column with no water, whatever heat and salt its arrays still hold, gives the CPU frame no SST or SSS and takes no weight in the CPU ocean's mean surface salinity`, () => {
+  const model = createModel(new Grid(N), { ocean: { everySteps: 1 } }), { ocean, state, mesh } = model, C = mesh.nCells, L = ocean.layers;
+  initializeState(model, {}).forEach((values, a) => state[a].set(values));
+  ocean.initialize(state[3], state[6]);
+  const sea = [...Array(C).keys()].filter((i) => ocean.cellOcean[i]), emptied = sea.filter((_, n) => n % 2 === 0);
+  for (const i of emptied) for (let k = 0; k < L; k++) ocean.h[k * C + i] = 0;
+  const { sst, sss } = cpuFrameFields(model, { depth: 'surface', fields: ['sst', 'sss'] });
+  for (const i of emptied) assert.ok(Number.isNaN(sst[i]) && Number.isNaN(sss[i]), `the column at ${i}, with no water: SST ${sst[i]} and SSS ${sss[i]} in the CPU frame`);
+  let sum = 0, area = 0;
+  for (const i of sea) if (ocean.h[i] > 0) { sum += mesh.areaCell[i] * (ocean.W[i] / ocean.h[i]); area += mesh.areaCell[i]; }
+  const mean = ocean.diagnostics().oceanSalinity, expected = sum / area;
+  assert.ok(Math.abs(mean - expected) <= 1e-12 * expected, `with ${emptied.length} of ${sea.length} sea columns empty the CPU ocean's mean surface salinity is ${mean}; the columns with water give ${expected}`);
 });
 
 test(`at N=${N} a CPU ocean converts a save on other labels with the heat and salt its layers hold: from Q and W, or from Qref and Wref as a GPU save carries them, top layers thinner than EPS and empty included, and from h·T and h·S when it carries neither`, () => {
