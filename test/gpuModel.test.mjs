@@ -494,6 +494,58 @@ test('with traceCloudPath a trace of cloud water between two cloudy runs of laye
   assert.ok(flooredOlr < 2e-5 * 300 && flooredHeating < 1e-5 * scale, `with 1e-22 kg/kg in the gaps, where the chain cover W/t stops at TRACE_CHAIN_FLOOR, the engines' OLR differs by ${flooredOlr} W/m2 and their heating by ${flooredHeating} K/day`);
 });
 
+test('with traceCloudPath the engines agree on trace layers between two cloudy runs of layers whose in-cloud path is near half the trace path, where the chain takes half their cover at twice their in-cloud emissivity', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const t = 1e-3, traced = cloudyState().base, [pi, theta, , , q, qc] = traced.state, { K } = traced.core, C = traced.mesh.nCells;
+  traced.core.diagnose(pi, theta, q, qc);
+  const { exnerLayer, sigmaMid, dSigma, g } = traced.core.diagnostics;
+  const traceLayers = new Map();
+  for (let i = 0; i < C; i += 2) {
+    let highest = -1, lowest = -1;
+    for (let k = 0; k < K; k++) if (qc[k * C + i] > 0) { if (highest < 0) highest = k; lowest = k; }
+    for (let k = highest + 1; k < lowest; k++) {
+      const x = k * C + i;
+      if (qc[x] > 0) continue;
+      q[x] = 0.97 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]); qc[x] = Math.fround(1e-6);
+      if (!traceLayers.has(i)) traceLayers.set(i, []);
+      traceLayers.get(i).push(k);
+    }
+  }
+  const physics = { ...PREVIOUS_RADIATION, ...PREVIOUS_MOIST, stratus: true, mixedLayerDeck: false, ...CAPPED };
+  const probe = createModel(traced.mesh, { ocean: false, levels: traced.core.levels, radiation: physics, moist: physics, ice: physics, boundaryLayer: CAPPED });
+  const shares = () => {
+    probe.state.forEach((a, n) => a.set(traced.state[n]));
+    probe.boundaryLayer.depth.set(traced.boundaryLayer.depth);
+    const [ppi, ptheta, , surface, pq, pqc] = probe.state;
+    probe.core.diagnose(ppi, ptheta, pq, pqc);
+    probe.radiation.setTime(traced.time);
+    const out = [];
+    for (const [i, layers] of traceLayers) {
+      probe.radiation.column(i, ppi[i], ptheta, surface[i], 5, undefined, undefined, pq[(K - 1) * C + i], pq, pqc, 0.07, 0.07);
+      for (const k of layers) out.push([k * C + i, pqc[k * C + i] * ppi[i] * dSigma[k] / g / (probe.radiation.layerCover[k] * t)]);
+    }
+    return out;
+  };
+  for (let n = 0; n < 6; n++) for (const [x, share] of shares()) qc[x] = Math.fround(qc[x] * 0.5 / share);
+  const near = shares().map(([, share]) => share), within = near.filter((s) => Math.abs(s - 0.5) < 0.05).length;
+  const plain = await physicsHeating(traced, {}), trace = await physicsHeating(traced, { traceCloudPath: t });
+  let engines = 0, scale = 0, change = 0, olr = 0, moved = 0, olrChange = 0;
+  for (let i = 0; i < C; i++) {
+    olr = Math.max(olr, ...[plain, trace].map((r) => Math.abs(r.cpuOutgoing[i] - r.gpuOutgoing[i])));
+    moved = Math.max(moved, Math.abs(trace.cpuOutgoing[i] - plain.cpuOutgoing[i]));
+    olrChange = Math.max(olrChange, Math.abs((trace.cpuOutgoing[i] - plain.cpuOutgoing[i]) - (trace.gpuOutgoing[i] - plain.gpuOutgoing[i])));
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i;
+      engines = Math.max(engines, ...[plain, trace].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
+      scale = Math.max(scale, Math.abs(plain.cpu[x]));
+      change = Math.max(change, Math.abs((trace.cpu[x] - plain.cpu[x]) - (trace.gpu[x] - plain.gpu[x])));
+    }
+  }
+  console.log(`${near.length} trace layers in ${traceLayers.size} columns at N=${N}, ${within} with W/f within 0.05 t of t/2 (${Math.min(...near).toFixed(3)} t to ${Math.max(...near).toFixed(3)} t): the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}, the OLR by ${olr.toExponential(1)} W/m2; traceCloudPath ${t} moves the OLR by up to ${moved.toFixed(3)} W/m2, the engines' changes apart by ${olrChange.toExponential(1)}`);
+  assert.ok(near.length > 0 && within > 0.9 * near.length && moved > 1e-3, `${within} of ${near.length} trace layers near t/2; the option moves the OLR by ${moved} W/m2`);
+  assert.ok(engines < 1e-5 * scale && change < 1e-5 * scale, `layer heating differs by ${engines} K/day, its change by ${change}, against ${scale}`);
+  assert.ok(olr < 2e-5 * 300 && olrChange < 2e-5 * 300, `OLR apart by ${olr}, its change by ${olrChange} W/m2`);
+});
+
 test('the shortwave\'s independent columns of the overlap, with the water inside each cloud uniform or spread, heat the layers, absorb the sunlight and emit alike in both engines, and the columns absorb more than the pooled column', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { base } = cloudyState();
   const pooled = await physicsHeating(base, {}), columns = await physicsHeating(base, { cloudColumns: true }), spread = await physicsHeating(base, { cloudColumns: true, cloudSpread: 0.75 });
