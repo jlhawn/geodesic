@@ -94,8 +94,8 @@ test('a fresh start at N=32 on the n1024 mask gives each lake cell the sea\'s st
   for (const i of lakes) assert.deepEqual([state[6][i], model.seaIce.concentration[i], state[3][i], model.land.snow[i]], [sea[6][i], seaCover[i], sea[3][i], 0], `lake cell ${i}: ice, cover, surface temperature and snow`);
 });
 
-test('at N=32 on the n1024 mask after the fresh start, the CPU\'s albedo map takes at every cell the diffuse albedo its radiation uses, on land, open sea, snowy sea ice, an open lake and a frozen one, where the ice\'s albedo is the lake ice\'s and not the sea ice\'s, and its surface-albedo diagnostic is the map\'s mean', () => {
-  const model = observedStart(32), { state, mesh, seaIce } = model, land = model.geography.land, lakeCell = model.lake.isLake, h = state[6];
+test('at N=32 on the n1024 mask after the fresh start, the CPU\'s surface-albedo diagnostic is its albedo map\'s mean, and in the first step the map shows at every cell the diffuse albedo the radiation takes, on land, open sea, snowy sea ice, an open lake and a frozen one, where that is the lake ice\'s and not the sea ice\'s', () => {
+  const model = observedStart(32), { state, mesh, seaIce, radiation } = model, land = model.geography.land, lakeCell = model.lake.isLake, h = state[6];
   const lake = (i) => lakeIceAlbedo(state[3][i]);
   const sea = (i) => seaIce.albedo(h[i], null, seaIce.snow[i], seaIce.cover(i, h[i]), state[3][i], seaIce.snowAlbedo[i]);
   const radiated = (i) => (land[i] ? model.land.albedo(i) : lakeCell[i] && h[i] > 0 ? lake(i) : sea(i));
@@ -108,11 +108,22 @@ test('at N=32 on the n1024 mask after the fresh start, the CPU\'s albedo map tak
   };
   for (const [kind, holds] of Object.entries(kinds)) assert.ok(cells.some(holds), `the start holds ${kind}`);
   const { albedo } = cpuFrameFields(model, { fields: ['albedo'] });
-  for (const i of cells) assert.equal(albedo[i], Math.fround(radiated(i)), `cell ${i}`);
   let sum = 0, area = 0;
   for (const i of cells) { sum += mesh.areaCell[i] * albedo[i]; area += mesh.areaCell[i]; }
   const { surfaceAlbedo } = model.diagnostics();
   assert.ok(Math.abs(surfaceAlbedo - sum / area) < 1e-7, `the diagnostic ${surfaceAlbedo} against the map's mean ${sum / area}`);
+  const apply = radiation.apply, taken = new Float64Array(mesh.nCells).fill(NaN), shown = new Float32Array(mesh.nCells), written = new Float64Array(mesh.nCells);
+  radiation.apply = function spied(...args) {
+    const [, , , , iFrom, iTo, , diffuse] = args, map = cpuFrameFields(model, { fields: ['albedo'] }).albedo;
+    for (let i = iFrom; i < iTo; i++) { taken[i] = diffuse[i]; shown[i] = map[i]; written[i] = radiated(i); }
+    return apply.apply(this, args);
+  };
+  try { model.step(1350 * 16 / 32); } finally { radiation.apply = apply; }
+  for (const i of cells) {
+    assert.ok(!Number.isNaN(taken[i]), `the radiation takes cell ${i}`);
+    assert.equal(shown[i], Math.fround(taken[i]), `cell ${i}: the map against the radiation`);
+    assert.equal(taken[i], written[i], `cell ${i}: the radiation against the formula`);
+  }
 });
 
 test('at N=32 on the n1024 mask after the fresh start, the CPU\'s sea-ice diagnostics count the ice on the sea and not a frozen lake\'s', () => {
