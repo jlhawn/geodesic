@@ -248,10 +248,11 @@ export function shearResolution(mesh, { scale, power }) {
  * the layer above that interface, times its depth over the boundary
  * layer's, a NEMO-like mixed-layer slope. A triad needs both layers at its
  * interface thicker than twice minimumLayer, and a triad whose slope comes
- * from a base needs the layer above that base as thick in both cells of
- * its edge; where one is missing, at the surface, a thin layer or a shelf,
- * its quarter of the flux stays horizontal. The triads below the last
- * fixed layer reach the first isopycnal layer.
+ * from a base needs the layer above that base as thick across its edge,
+ * the thinner cell's layer cut at the edge's sill; where one is missing,
+ * at the surface, a thin layer, a shelf or a sill, its quarter of the flux
+ * stays horizontal. The triads below the last fixed layer reach the first
+ * isopycnal layer.
  */
 export const ISONEUTRAL = { slopeCap: 0.01, slopeWidth: 0.001, boundaryTaper: true }, NEUTRAL_STRATIFICATION = 1e-9;
 export function isoneutralOptions(o) {
@@ -846,7 +847,7 @@ export function createOcean(mesh, {
       const slope = -rx / rz;
       s1 = slope / (1 + Math.exp(2 * (Math.abs(slope) - cap) / width)); s2 = s1 * slope;
     };
-    const triad = (c, a, b, l, m, dT, dS, dc, o) => {
+    const triad = (c, a, b, e, l, m, dT, dS, dc, o) => {
       tri[o] = 0; tri[o + 1] = 0; tri[o + 2] = 0; tri[o + 3] = 0;
       if (m < 1 || m >= L) return;
       const hu = hIn[(m - 1) * C + c], hl = hIn[m * C + c];
@@ -855,7 +856,7 @@ export function createOcean(mesh, {
       if (boundaryTaper && layer > z) {
         let base = m, below = z;
         while (base < F && below < layer) below += hIn[base++ * C + c];
-        if (hIn[(base - 1) * C + a] > thin && hIn[(base - 1) * C + b] > thin) slopeAt(c, base - 1, base, valueT(base - 1, b) - valueT(base - 1, a), valueS(base - 1, b) - valueS(base - 1, a), dc);
+        if (hEdge[(base - 1) * E + e] > thin) slopeAt(c, base - 1, base, valueT(base - 1, b) - valueT(base - 1, a), valueS(base - 1, b) - valueS(base - 1, a), dc);
         else { s1 = 0; s2 = 0; }
         const r = z / layer;
         s1 *= r; s2 *= r * r;
@@ -873,7 +874,7 @@ export function createOcean(mesh, {
           const dT = valueT(l, b) - valueT(l, a), dS = valueS(l, b) - valueS(l, a), weight = 0.25 * rows[l - k + 1][e] * dv * hEdge[l * E + e];
           for (let side = 0; side < 2; side++) {
             const c = side ? b : a;
-            triad(c, a, b, l, m, dT, dS, dc, 0);
+            triad(c, a, b, e, l, m, dT, dS, dc, 0);
             out[c] -= weight * tri[2] * dT; out[C + c] -= weight * tri[2] * dS;
             if (kappa33) kappa33[c] += weight * dc * tri[3];
           }
@@ -889,7 +890,7 @@ export function createOcean(mesh, {
         const weight = edgeOcean[e] ? kap[e] * hEdge[oe + e] / dc : 0, dT = T[b] - T[a], dS = S[b] - S[a];
         let turnT = 0, turnS = 0;
         if (weight) {
-          triad(a, a, b, k, k, dT, dS, dc, 0); triad(a, a, b, k, k + 1, dT, dS, dc, 4); triad(b, a, b, k, k, dT, dS, dc, 8); triad(b, a, b, k, k + 1, dT, dS, dc, 12);
+          triad(a, a, b, e, k, k, dT, dS, dc, 0); triad(a, a, b, e, k, k + 1, dT, dS, dc, 4); triad(b, a, b, e, k, k, dT, dS, dc, 8); triad(b, a, b, e, k, k + 1, dT, dS, dc, 12);
           turnT = 0.25 * dc * (((tri[0] + tri[4]) + tri[8]) + tri[12]);
           turnS = 0.25 * dc * (((tri[1] + tri[5]) + tri[9]) + tri[13]);
         }
