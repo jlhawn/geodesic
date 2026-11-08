@@ -1,7 +1,9 @@
-// The ocean's momentum budget on chosen edges of one saved state, layer by
-// layer, term by term as the tendency computes it, on the CPU (1e-5 m/s2;
-// 'drag+rest' is the tendency less the other terms):
+// The layered isopycnal ocean's momentum budget on chosen edges of one saved
+// state, layer by layer, term by term as its tendency computes it, on the CPU
+// (1e-5 m/s2; 'drag+rest' is the tendency less the other terms):
 //   EDGES=20091,20281 node scripts/edgeBudget.mjs <state.bin>
+// The model's ocean is the hybrid one, whose tendency is not split this way
+// (it has no gradRho and no windAcceleration), so the tool refuses its states.
 import { readFileSync } from 'node:fs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
@@ -16,6 +18,10 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const N = saved.N, { topography, geography, land: landOptions } = stateGeography(saved);
 const model = createModel(stateGrid(saved, topography).mesh, { topography, geography, land: landOptions, levels: savedLevels(saved), ocean: OCEAN });
 const { mesh, core, state, surface, seaIce, ocean } = model;
+if (!ocean.shared?.gradRho || typeof ocean.windAcceleration !== 'function') {
+  console.error('edgeBudget splits the layered isopycnal ocean\'s momentum tendency (a mixed layer over isopycnal layers, gradRho, windAcceleration). The hybrid ocean has none of these terms, so there is no budget to print.');
+  process.exit(1);
+}
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 model.time = saved.time;
