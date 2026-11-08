@@ -19,6 +19,14 @@ const synthetic = () => encodeSeaIceStart({
   thickness: Uint8Array.from({ length: 12 }, (_, n) => [40, 20, 0][Math.floor(n / 4)]),
   snow: Uint8Array.from({ length: 12 }, (_, n) => [50, 25, 0][Math.floor(n / 4)]),
 });
+const observedStart = (n, lake = null) => {
+  const start = decodeSeaIceStart(readFileSync(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url)));
+  const topography = readTopography(FRESH_GEOGRAPHY.topography), sheets = geographyOptions(FRESH_GEOGRAPHY);
+  const model = createModel(new Grid(n), { topography, geography: sheets.geography, ocean: false, land: { ...sheets.land }, levels: sigmaInterfaces('bl48'), ...(lake ? { lake } : {}) });
+  initializeState(model, { geostrophic: !model.surfaceGeopotential, seaIce: start }).forEach((values, a) => model.state[a].set(values));
+  model.land.initialize();
+  return model;
+};
 
 test('a sea-ice start decodes as written and samples bilinearly over sea, nearest within reach, nothing below the edge', () => {
   const start = decodeSeaIceStart(synthetic());
@@ -86,21 +94,56 @@ test('a fresh start at N=32 on the n1024 mask gives each lake cell the sea\'s st
   for (const i of lakes) assert.deepEqual([state[6][i], model.seaIce.concentration[i], state[3][i], model.land.snow[i]], [sea[6][i], seaCover[i], sea[3][i], 0], `lake cell ${i}: ice, cover, surface temperature and snow`);
 });
 
-test('at N=32 on the n1024 mask, on a lake the fresh start freezes, the CPU\'s albedo map and its surface-albedo diagnostic take the albedo of the lake\'s ice, as its radiation does, not the sea ice\'s', async () => {
-  const start = decodeSeaIceStart(readFileSync(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url)));
-  const topography = readTopography(FRESH_GEOGRAPHY.topography), sheets = geographyOptions(FRESH_GEOGRAPHY);
-  const model = createModel(new Grid(32), { topography, geography: sheets.geography, ocean: false, land: { ...sheets.land }, levels: sigmaInterfaces('bl48') });
-  const { state, mesh, seaIce } = model;
-  initializeState(model, { geostrophic: !model.surfaceGeopotential, seaIce: start }).forEach((values, a) => state[a].set(values));
-  model.land.initialize();
-  const frozen = model.lake.cells.filter((i) => state[6][i] > 0), lake = (i) => lakeIceAlbedo(state[3][i]);
-  const sea = (i) => seaIce.albedo(state[6][i], null, seaIce.snow[i], seaIce.cover(i, state[6][i]), state[3][i], seaIce.snowAlbedo[i]);
+test('at N=32 on the n1024 mask after the fresh start, the CPU\'s surface-albedo diagnostic is its albedo map\'s mean, and in the first step the map shows at every cell the diffuse albedo the radiation takes, on land, open sea, snowy sea ice, an open lake and a frozen one, where that is the lake ice\'s and not the sea ice\'s', () => {
+  const model = observedStart(32), { state, mesh, seaIce, radiation } = model, land = model.geography.land, lakeCell = model.lake.isLake, h = state[6];
+  const lake = (i) => lakeIceAlbedo(state[3][i]);
+  const sea = (i) => seaIce.albedo(h[i], null, seaIce.snow[i], seaIce.cover(i, h[i]), state[3][i], seaIce.snowAlbedo[i]);
+  const radiated = (i) => (land[i] ? model.land.albedo(i) : lakeCell[i] && h[i] > 0 ? lake(i) : sea(i));
+  const cells = [...mesh.areaCell.keys()], frozen = model.lake.cells.filter((i) => h[i] > 0);
   console.log(`frozen lake cells ${frozen.join(', ')}: the lake ice's albedo ${frozen.map((i) => lake(i).toFixed(3)).join(', ')}, the sea ice's ${frozen.map((i) => sea(i).toFixed(3)).join(', ')}`);
   assert.ok(frozen.some((i) => Math.abs(lake(i) - sea(i)) > 0.05), "the start freezes a lake where the two ices' albedos differ");
+  const kinds = {
+    land: (i) => land[i], 'open sea': (i) => !land[i] && !lakeCell[i] && !(h[i] > 0),
+    'snowy sea ice': (i) => !land[i] && !lakeCell[i] && h[i] > 0 && seaIce.snow[i] > 0, 'an open lake': (i) => lakeCell[i] && !(h[i] > 0),
+  };
+  for (const [kind, holds] of Object.entries(kinds)) assert.ok(cells.some(holds), `the start holds ${kind}`);
   const { albedo } = cpuFrameFields(model, { fields: ['albedo'] });
-  for (const i of frozen) assert.equal(albedo[i], Math.fround(lake(i)), `lake cell ${i}`);
   let sum = 0, area = 0;
-  for (let i = 0; i < mesh.nCells; i++) { sum += mesh.areaCell[i] * albedo[i]; area += mesh.areaCell[i]; }
+  for (const i of cells) { sum += mesh.areaCell[i] * albedo[i]; area += mesh.areaCell[i]; }
   const { surfaceAlbedo } = model.diagnostics();
   assert.ok(Math.abs(surfaceAlbedo - sum / area) < 1e-7, `the diagnostic ${surfaceAlbedo} against the map's mean ${sum / area}`);
+  const apply = radiation.apply, taken = new Float64Array(mesh.nCells).fill(NaN), shown = new Float32Array(mesh.nCells), written = new Float64Array(mesh.nCells);
+  radiation.apply = function spied(...args) {
+    const [, , , , iFrom, iTo, , diffuse] = args, map = cpuFrameFields(model, { fields: ['albedo'] }).albedo;
+    for (let i = iFrom; i < iTo; i++) { taken[i] = diffuse[i]; shown[i] = map[i]; written[i] = radiated(i); }
+    return apply.apply(this, args);
+  };
+  try { model.step(1350 * 16 / 32); } finally { radiation.apply = apply; }
+  for (const i of cells) {
+    assert.ok(!Number.isNaN(taken[i]), `the radiation takes cell ${i}`);
+    assert.equal(shown[i], Math.fround(taken[i]), `cell ${i}: the map against the radiation`);
+    assert.equal(taken[i], written[i], `cell ${i}: the radiation against the formula`);
+  }
+});
+
+test('at N=32 on the n1024 mask after the fresh start, the CPU\'s sea-ice diagnostics count the ice on the sea and not a frozen lake\'s, and with the lake model off count the lake\'s ice as the sea\'s', () => {
+  for (const lake of [null, { model: 'off' }]) {
+    const model = observedStart(32, lake), { state, mesh, seaIce } = model, land = model.geography.land, name = model.lake ? 'FLake' : 'the lake model off';
+    assert.equal(model.lake === null, lake !== null, 'the lake model runs unless it is off');
+    const lakeCell = model.lake ? model.lake.isLake : model.geography.lake;
+    let area = 0, sea = 0, volume = 0, lakes = 0, lakeVolume = 0;
+    for (let i = 0; i < mesh.nCells; i++) {
+      const a = mesh.areaCell[i], h = state[6][i], c = seaIce.concentration[i];
+      area += a;
+      if (!(h > 0)) continue;
+      if (lakeCell[i]) { lakes += a * c; lakeVolume += a * c * h; }
+      else if (!land[i]) { sea += a * c; volume += a * c * h; }
+    }
+    const [iced, held] = model.lake ? [sea, volume] : [sea + lakes, volume + lakeVolume];
+    console.log(`${name}: sea ice ${(100 * sea / area).toFixed(3)} % of the area, ${(volume / sea).toFixed(3)} m thick; the frozen lakes' ice ${(100 * lakes / area).toFixed(4)} %`);
+    assert.ok(lakes / sea > 5e-4, `${name}: the start freezes a lake: its ice ${lakes / area} of the area against the sea's ${sea / area}`);
+    const d = model.diagnostics();
+    assert.ok(Math.abs(d.iceFraction - iced / area) < 1e-12, `${name}: iceFraction ${d.iceFraction} against ${iced / area}`);
+    assert.ok(Math.abs(d.iceThickness - held / iced) < 1e-12, `${name}: iceThickness ${d.iceThickness} against ${held / iced}`);
+  }
 });

@@ -413,7 +413,7 @@ const everySteps = model.oceanEngine ? model.oceanEngine.everySteps : 1, radiati
 const gcd = (a, b) => (b ? gcd(b, a % b) : a), lcm = (a, b) => a * b / gcd(a, b), cadence = lcm(lcm(everySteps, radiationEvery), DRAG_EVERY);
 if (startStep % everySteps) throw new Error(`the snapshot stopped at step ${startStep}, off the ocean's ${everySteps}-step cadence`);
 
-const deg = 180 / Math.PI, land = model.geography.land;
+const deg = 180 / Math.PI, land = model.geography.land, lakeCell = model.lake ? model.lake.isLake : null, onLake = (i) => Boolean(lakeCell && lakeCell[i]);
 const onIndexGrids = indexCells(mesh, model.geography), seaIceCut = (concentration) => seaIceIndexCut(mesh, onIndexGrids, concentration);
 const inBox = Object.fromEntries(Object.entries(BOXES).map(([k, [a, b, c, e]]) => [k, [...Array(C).keys()].filter((i) => land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e)]));
 const PH = model.gpu.layout.PH;
@@ -445,7 +445,7 @@ const lowestCloudLine = async (day) => {
   const over = (x) => foggy.filter((v) => v > x).length;
   return `lowest-layer cloud day ${day}: ${foggy.length} cells over 0.01 g/kg, p50 ${at(0.5).toFixed(3)} p90 ${at(0.9).toFixed(3)} p99 ${at(0.99).toFixed(3)} max ${(foggy.length ? 1e3 * foggy[foggy.length - 1] : 0).toFixed(3)} g/kg; over 0.5/1/5 g/kg ${over(5e-4)}/${over(1e-3)}/${over(5e-3)} cells`;
 };
-const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12, fields.ice]; };
+const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15 && !onLake(i)) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12, fields.ice]; };
 await model.diagnostics();
 if (startStep && saved.rainTotal) model.writeFreshwater(saved);
 const RECORD = process.env.RECORD;
@@ -543,7 +543,7 @@ async function dayEnd(day, stepsToday, jump) {
     await splitRead;
     const [north, south, iceNow] = await ice;
     const iceSolar = [0, 0], icedArea = [0, 0];
-    for (let i = 0; i < C; i++) if (!land[i] && iceNow[i] > 0 && Math.abs(mesh.latCell[i] * deg) >= 60) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
+    for (let i = 0; i < C; i++) if (!land[i] && !onLake(i) && iceNow[i] > 0 && Math.abs(mesh.latCell[i] * deg) >= 60) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
     const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
     iceNorth += north; iceSouth += south;
     const iceDay = dayIce ? await dayIce : null, seaIceDay = iceDay ? seaIceCut(iceDay.values.concentration) : null;
