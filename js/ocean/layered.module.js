@@ -589,15 +589,17 @@ export function displacedWeight(draft, sample, density = seawaterDensity, n = 64
   return sum * draft / n;
 }
 
-export function topLayerDensity(saved, i, classDensity) {
-  const h = saved.h[i], scale = Math.max(EPS, h) / h;
-  return h > 1e-6 ? seawaterDensity(scale * saved.T[i], scale * saved.S[i]) : classDensity;
+export function wettedLayer(h, L, C, i) {
+  let n = i;
+  while (n + C < L * C && !(h[n] > 1e-6)) n += C;
+  return n;
 }
 
 export function layerMeans(saved, layers, C) {
-  const stores = saved.Q && saved.Q.length === layers * C && saved.W && saved.W.length === layers * C;
-  const mean = (store, value) => (n) => (stores && saved.h[n] > 0 ? store[n] / saved.h[n] : value[n]);
-  return [mean(saved.Q, saved.T), mean(saved.W, saved.S)];
+  const whole = (name) => saved[name] && saved[name].length === layers * C;
+  const [Q, W, heatReference, saltReference] = whole('Q') && whole('W') ? [saved.Q, saved.W, 0, 0] : whole('Qref') && whole('Wref') ? [saved.Qref, saved.Wref, HEAT_REFERENCE, SALT_REFERENCE] : [];
+  const mean = (store, reference, value) => (n) => (store && saved.h[n] > 0 ? (store[n] + reference * saved.h[n]) / saved.h[n] : value[n]);
+  return [mean(Q, heatReference, saved.T), mean(W, saltReference, saved.S)];
 }
 
 export function createOcean(mesh, {
@@ -1875,7 +1877,7 @@ export function createOcean(mesh, {
       if (Math.abs(sum - H) > 1e-9) { const scale = H / sum; for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; } }
     }
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
-    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * topLayerDensity(saved, i, rho[0]);
+    if (hasShelves) for (let i = 0; i < C; i++) { const n = wettedLayer(h, L, C, i); shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * seawaterDensity(Q[n] / h[n], W[n] / h[n]); }
     for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     if (!own) regrid(Infinity);
     measureIce(ice, concentration, previousVolume);
