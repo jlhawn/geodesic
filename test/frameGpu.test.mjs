@@ -13,6 +13,8 @@ import { createModel } from '../js/model.module.js';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
 import { PREVIOUS_LEVELS, PREVIOUS_LAND } from './helpers/previousDefaults.mjs';
+import { cpuFrameFields } from '../js/cpuFrame.module.js';
+import { thinTopLayers } from './helpers/thinLayers.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -323,4 +325,29 @@ test('frames leave the model state bit-identical whichever fields they carry', {
   const plain = await run(['cloud']), heights = await run(['cloud', 'cloudTop', 'cloudBase']);
   plain.state.forEach((array, a) => assert.deepEqual(heights.state[a], array, `state array ${a}`));
   for (const [name, array] of Object.entries(plain.physics)) assert.deepEqual(heights.physics[name], array, `physics ${name}`);
+});
+
+test('the GPU frame gives a top layer thinner than EPS its own temperature and salinity, Q/h and W/h, as the CPU frame does, and below 1e-6 m the top class\'s, as the GPU download does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const setup = { topography, land: PREVIOUS_LAND }, cpuModel = createModel(new Grid(N), setup), C = cpuModel.mesh.nCells, { state } = cpuModel;
+  initializeState(cpuModel, {}).forEach((values, a) => state[a].set(values));
+  for (let i = 0; i < C; i++) if (cpuModel.geography.land[i]) state[6][i] = 0;
+  cpuModel.ocean.initialize(state[3], state[6]);
+  const column = new Float64Array(C);
+  cpuModel.ocean.serialize().h.forEach((v, n) => { column[n % C] += v; });
+  const sea = [...column.keys()].filter((i) => column[i] > 0), [thin, submicron] = [...sea].sort((a, b) => column[b] - column[a]);
+  const { state: saved } = thinTopLayers(cpuModel.ocean, state[6], [[thin, 0.005], [submicron, 1e-7]]);
+  cpuModel.ocean.load(saved, state[3], state[6]);
+  const cpu = cpuFrameFields(cpuModel, { depth: 'surface', fields: ['sst', 'sss'] });
+  const model = await createGpuModel(new Grid(N), setup);
+  model.state.forEach((array, a) => array.set(state[a]));
+  model.load();
+  await model.ocean.load(saved, model.state[3], model.state[6]);
+  model.land.initialize();
+  const { fields } = await model.beginFrame({ level: 'surface', fields: ['sst', 'sss'] }), ocean = await model.oceanEngine.download();
+  model.destroy();
+  for (const [name, top, bound] of [['sst', 'T1', 1e-3], ['sss', 'S1', 1e-4]]) {
+    assert.ok(Math.abs(fields[name][thin] - cpu[name][thin]) < bound, `${name} over the 5 mm top layer at ${thin}: ${fields[name][thin]} on the GPU, ${cpu[name][thin]} on the CPU`);
+    const at = sea.find((i) => !(Math.abs(fields[name][i] - ocean[top][i]) < bound));
+    assert.equal(at, undefined, `${name}[${at}], under a ${saved.h[at]} m top layer: ${fields[name][at]} in the GPU frame, ${ocean[top][at]} from its download`);
+  }
 });

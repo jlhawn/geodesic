@@ -1535,8 +1535,8 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
   const OF = seq([['SST', nC], ['SSS', nC], ['H1', nC], ['THD', nC], ['ETA', nC], ['CUR', 3 * nC], ['CSPD', nC], ['UPW', nC], ['PART', reduced.length * reductionGroups(nC)]]);
   kernels.oFrame = `${HYBRID_THERMOCLINE}@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
-  let h0 = max(EPSO, IN[hOff(0) + i]);
-  OUT[${OF.SSS} + i] = IN[wOff(0) + i] / h0 + SREF;
+  let h0 = IN[hOff(0) + i];
+  OUT[${OF.SSS} + i] = select(LABEL_S[0], IN[wOff(0) + i] / h0 + SREF, h0 > 1e-6);
   OUT[${OF.H1} + i] = OD[O_MIXED + i];
   OUT[${OF.THD} + i] = thermoclineDepthOf(i);
   OUT[${OF.ETA} + i] = OD[O_ETA + i];
@@ -1548,7 +1548,8 @@ export function createLayeredOcean(core, { registers = null, packing = null, ...
     OUT[${OF.CUR} + 3 * i] = 0.0; OUT[${OF.CUR} + 3 * i + 1] = 0.0; OUT[${OF.CUR} + 3 * i + 2] = 0.0; OUT[${OF.CSPD} + i] = DRY;
     return;
   }
-  OUT[${OF.SST} + i] = IN[qOff(layer) + i] / max(EPSO, IN[hOff(layer) + i]) + TREF;
+  let hl = IN[hOff(layer) + i];
+  OUT[${OF.SST} + i] = select(LABEL_T[layer], IN[qOff(layer) + i] / hl + TREF, hl > 1e-6);
   var w = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m]; let s = f32(MI[ESC + MAXE * i + m]);
