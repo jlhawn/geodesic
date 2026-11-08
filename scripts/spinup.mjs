@@ -176,8 +176,10 @@
 // A fresh start's observed soil water is SOIL_SEED (a file in
 // js/geography.module.js's soil-water format, as scripts/soilWater.mjs
 // writes with --out), else data/soilwater_march.bin; the saved header's
-// soilSeed names the file and its sha256. SOIL_SEED is refused with FROM
-// or LAND_FROM, and on a continuation unless the state records that file.
+// soilSeed names the file and its sha256, and a start from FROM or
+// LAND_FROM carries that state's. SOIL_SEED is refused with FROM, with
+// LAND_FROM, with a land start other than 'observed', and on a
+// continuation unless the state records that file.
 // Without FROM, the ocean starts from the climatology CLIMATOLOGY (a file
 // in js/ocean/climatology.module.js's format; data/woa_march_1deg.bin
 // when it exists, the World Ocean Atlas's March) and the sea surface from
@@ -290,8 +292,9 @@ const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADI
 const otherGroups = base?.given ? differingGroups(GIVEN, base.given) : [];
 if (otherGroups.length) log(`options other than ${saved ? file : process.env.FROM}'s header records: ${otherGroups.join(', ')}`);
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
-const { geography: startingGeography, soilSeed } = startGeography(sheets.geography, process.env, { saved });
-const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}, soil seed ${soilSeed ?? 'observed'}`;
+const landFromState = !saved && process.env.LAND_FROM ? await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM))) : null;
+const { geography: startingGeography, soilSeed, soilNote } = startGeography(sheets.geography, process.env, { saved, from: fromState, landFrom: landFromState });
+const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}, ${soilNote}`;
 const found = base ? stateGrid(base, topography) : null;
 requireOwnSubgrid(TERRAIN, OROGRAPHY.orography);
 const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: startingGeography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
@@ -387,8 +390,8 @@ if (saved) {
     model.land.initialize(model.time);
     log(started ? `ocean and sea surface from ${climatology}: ${started.atlas} sea cells, ${started.analytic} from the analytic climatology where it has no water` : 'ocean from the analytic climatology');
   }
-  if (process.env.LAND_FROM) {
-    const seed = await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM)));
+  if (landFromState) {
+    const seed = landFromState;
     const seedGeography = stateGeography(seed), sameGround = JSON.stringify(seedGeography.record) === JSON.stringify(GEOGRAPHY);
     const sourceMesh = seed.N === N ? mesh : stateGrid(seed, seedGeography.topography).mesh;
     const source = { mesh: sourceMesh, geography: seed.N === N && sameGround ? model.geography : createGeography(sourceMesh, seedGeography.topography, seedGeography.geography) };

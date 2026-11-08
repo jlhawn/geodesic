@@ -111,13 +111,21 @@ export async function referenceScale(raw, paths) {
   return factor;
 }
 
-export function startGeography(geography, env, { saved = null } = {}) {
-  const seed = env.SOIL_SEED;
-  if (!seed) return { geography, soilSeed: saved?.soilSeed ?? null };
-  const soilSeed = `${basename(seed)} sha256:${createHash('sha256').update(readFileSync(seed)).digest('hex')}`;
+export const soilSeedRecord = (path) => `${basename(path)} sha256:${createHash('sha256').update(readFileSync(path)).digest('hex')}`;
+
+export function startGeography(geography, env, { saved = null, from = null, landFrom = null } = {}) {
+  const seed = env.SOIL_SEED, start = JSON.parse(env.LAND ?? '{}').start ?? 'observed';
+  const [source, owner] = saved ? ['the state continued', saved] : landFrom ? [`LAND_FROM ${env.LAND_FROM}`, landFrom] : from ? [`FROM ${env.FROM}`, from] : [null, null];
+  const lineage = (record) => (record ? `, seeded from ${record}` : '');
+  if (!seed) {
+    if (owner) return { geography, soilSeed: owner.soilSeed ?? null, soilNote: `soil from ${source}${lineage(owner.soilSeed)}` };
+    return { geography, soilSeed: null, soilNote: start === 'observed' ? 'soil observed' : `soil at the '${start}' start` };
+  }
+  const soilSeed = soilSeedRecord(seed);
   if (saved && saved.soilSeed !== soilSeed) throw new Error(`SOIL_SEED ${soilSeed} seeds a fresh start's land; the state continued holds its own land, ${saved.soilSeed ? `seeded from ${saved.soilSeed}` : 'not seeded from a file'}`);
-  if (!saved && (env.FROM || env.LAND_FROM)) throw new Error(`SOIL_SEED ${seed} seeds a fresh start's land; ${env.FROM ? `FROM ${env.FROM}` : `LAND_FROM ${env.LAND_FROM}`} gives this start's land`);
-  return { geography: seededGeography(geography, seed), soilSeed };
+  if (!saved && owner) throw new Error(`SOIL_SEED ${seed} seeds a fresh start's land; ${source} gives this start's land`);
+  if (!saved && start !== 'observed') throw new Error(`SOIL_SEED ${seed} seeds the 'observed' land start; the '${start}' start puts the soil at half its capacity`);
+  return { geography: seededGeography(geography, seed), soilSeed, soilNote: saved ? `soil from ${source}${lineage(soilSeed)}` : `soil seed ${soilSeed}` };
 }
 
 export function scaleFill(fill, factor) {

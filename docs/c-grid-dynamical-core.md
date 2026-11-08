@@ -5147,9 +5147,11 @@ The work, in order:
      poleward of 60°N. A fresh spin-up takes such a file as `SOIL_SEED`
      (`startGeography` in `scripts/soilWater.mjs`), else the observed
      fill; its log and saved headers name the file and its sha256
-     (`soilSeed`), and `SOIL_SEED` is refused with `FROM`, with
-     `LAND_FROM` and on a continuation of a state that does not record
-     the same file. `test/soilSeed.test.mjs` holds the band fit, the
+     (`soilSeed`), which a start from `FROM` or `LAND_FROM` and
+     `scripts/reseedSoil.mjs` carry or rewrite. `SOIL_SEED` is refused
+     with `FROM`, with `LAND_FROM`, with the 'neutral', 'bare' and
+     'green' land starts (which put the soil at half its capacity) and
+     on a continuation of a state that does not record the same file. `test/soilSeed.test.mjs` holds the band fit, the
      clamp, the refusals and the seed reaching the land at N = 16.
    - `coverGoal` ('water', the default, or 'observed'; `scripts/spinup.mjs`
      gives 'observed' unless `LAND` says otherwise, a goal for spin-ups

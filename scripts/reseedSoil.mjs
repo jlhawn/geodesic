@@ -4,7 +4,8 @@
  * data/soilwater_march.bin or a seed scaled with --reference --out) as an observed fresh start seeds it: on open land
  * (land off the ice sheets) where the file has a value, the root zone holds the fill times its capacity, the surface
  * layer the fill times its own, and the deep store, when the state carries one, the fill times DEEP_CAPACITY. Everything
- * else in the state is kept.
+ * else in the state is kept but the header's soilSeed, which names the file and its sha256. The capacities are those the
+ * state's land options record, else the defaults, and the mesh is the state's own (stateGrid).
  *
  *   node scripts/reseedSoil.mjs state.bin seed.bin out.bin
  */
@@ -12,26 +13,30 @@ import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { createGeography, decodeSoilWater, geographyOptions, readTopography, savedGeography } from '../js/geography.module.js';
-import { Grid } from '../js/grid.module.js';
-import { gridMesh, savedRelax } from '../js/stateGrid.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
+import { soilSeedRecord } from './soilWater.mjs';
 import { DEEP_CAPACITY } from '../js/physics/land.module.js';
 
-export const ROOT_ZONE = 300, SURFACE = 15;
+export const ROOT_ZONE = 300, SURFACE = 15, BUCKET = 150;
 
-export function reseedLand(saved, soilWater) {
-  const record = savedGeography(saved), mesh = gridMesh(new Grid(saved.N, { relax: savedRelax(saved) ?? undefined }));
-  const geography = createGeography(mesh, readTopography(record.topography), { ...geographyOptions(record).geography, landCover: null, soilWater });
+export function reseedLand(saved, soilWater, soilSeed = null) {
+  const record = savedGeography(saved), topography = readTopography(record.topography), { mesh } = stateGrid(saved, topography);
+  const geography = createGeography(mesh, topography, { ...geographyOptions(record).geography, landCover: null, soilWater });
+  const options = saved.options?.land ?? {}, vegetated = options.vegetation !== false;
+  const rootZone = vegetated ? options.rootZoneCapacity ?? ROOT_ZONE : options.bucketCapacity ?? BUCKET, surface = options.surfaceCapacity ?? SURFACE, deep = options.deepCapacity ?? (vegetated ? DEEP_CAPACITY : 0);
   const { land } = saved, before = Float64Array.from(land.soil);
   let cells = 0;
   for (let i = 0; i < mesh.nCells; i++) {
     if (!geography.land[i] || (geography.iceSheet && geography.iceSheet[i]) || !Number.isFinite(geography.wetness[i])) continue;
     const fill = Math.min(1, Math.max(0, geography.wetness[i]));
-    land.soil[i] = ROOT_ZONE * fill;
-    if (land.surface) land.surface[i] = SURFACE * fill;
-    if (land.deep) land.deep[i] = DEEP_CAPACITY * fill;
+    land.soil[i] = rootZone * fill;
+    if (land.surface) land.surface[i] = surface * fill;
+    if (land.deep) land.deep[i] = deep * fill;
     cells++;
   }
-  const mean = (soil) => { let a = 0, s = 0; for (let i = 0; i < mesh.nCells; i++) if (geography.land[i] && !(geography.iceSheet && geography.iceSheet[i])) { a += mesh.areaCell[i]; s += mesh.areaCell[i] * soil[i] / ROOT_ZONE; } return s / a; };
+  if (soilSeed) saved.soilSeed = soilSeed;
+  else delete saved.soilSeed;
+  const mean = (soil) => { let a = 0, s = 0; for (let i = 0; i < mesh.nCells; i++) if (geography.land[i] && !(geography.iceSheet && geography.iceSheet[i])) { a += mesh.areaCell[i]; s += mesh.areaCell[i] * soil[i] / rootZone; } return s / a; };
   return { cells, before: mean(before), after: mean(land.soil), deep: !!land.deep };
 }
 
@@ -39,7 +44,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   const [input, seed, output] = process.argv.slice(2);
   if (!output) throw new Error('usage: node scripts/reseedSoil.mjs state.bin seed.bin out.bin');
   const saved = await decodeState(new Uint8Array(readFileSync(input)));
-  const { cells, before, after, deep } = reseedLand(saved, decodeSoilWater(readFileSync(seed)));
+  const { cells, before, after, deep } = reseedLand(saved, decodeSoilWater(readFileSync(seed)), soilSeedRecord(seed));
   writeFileSync(output, encodeState(saved, { f64: f64Names(saved) }));
   console.log(`N=${saved.N}: re-seeded ${cells} open land cells from ${seed}; mean root-zone fill ${before.toFixed(3)} → ${after.toFixed(3)}${deep ? ', the deep store with it' : '; no deep store saved, so a load starts it from the root zone\'s fill'}; wrote ${output}`);
 }

@@ -80,8 +80,20 @@ test('SOIL_SEED\x27s file replaces the observed fill of a fresh start cell for c
   assert.equal(startGeography(geography, {}).geography, geography);
   assert.equal(startGeography(geography, {}).soilSeed, null);
   assert.match(start.soilSeed, /^seed\.bin sha256:[0-9a-f]{64}$/);
-  assert.throws(() => startGeography(geography, { SOIL_SEED: path, FROM: 'x.bin' }), /FROM x\.bin gives this start/);
-  assert.throws(() => startGeography(geography, { SOIL_SEED: path, LAND_FROM: 'y.bin' }), /LAND_FROM y\.bin gives this start/);
+  assert.equal(start.soilNote, `soil seed ${start.soilSeed}`);
+  assert.equal(startGeography(geography, {}).soilNote, 'soil observed');
+  assert.throws(() => startGeography(geography, { SOIL_SEED: path, FROM: 'x.bin' }, { from: {} }), /FROM x\.bin gives this start/);
+  assert.throws(() => startGeography(geography, { SOIL_SEED: path, LAND_FROM: 'y.bin' }, { landFrom: {} }), /LAND_FROM y\.bin gives this start/);
+  for (const placed of ['neutral', 'bare', 'green']) {
+    assert.throws(() => startGeography(geography, { SOIL_SEED: path, LAND: JSON.stringify({ start: placed }) }), new RegExp(`the '${placed}' start`));
+    assert.equal(startGeography(geography, { LAND: JSON.stringify({ start: placed }) }).soilNote, `soil at the '${placed}' start`);
+  }
+  const inherited = startGeography(geography, { FROM: 'a.bin' }, { from: { soilSeed: start.soilSeed } }), landInherited = startGeography(geography, { FROM: 'a.bin', LAND_FROM: 'b.bin' }, { from: {}, landFrom: { soilSeed: start.soilSeed } });
+  assert.equal(inherited.geography, geography);
+  assert.ok(inherited.soilSeed === start.soilSeed && landInherited.soilSeed === start.soilSeed, 'a start carries the soil seed of the state its land comes from');
+  assert.match(inherited.soilNote, /^soil from FROM a\.bin, seeded from seed\.bin sha256:/);
+  assert.match(landInherited.soilNote, /^soil from LAND_FROM b\.bin, seeded from/);
+  assert.equal(startGeography(geography, { FROM: 'a.bin' }, { from: {} }).soilNote, 'soil from FROM a.bin');
   assert.throws(() => startGeography(geography, { SOIL_SEED: path }, { saved: {} }), /not seeded from a file/);
   const recorded = await decodeState(encode({ ...header, K: model.core.K, day: 0, time: 0, soilSeed: start.soilSeed, land: { soil: new Float64Array(C) } }));
   assert.equal(recorded.soilSeed, start.soilSeed);
@@ -107,16 +119,21 @@ test('a saved state re-seeded from a soil-water file holds the land water an obs
   running.land.initialize();
   const serialized = running.land.serialize();
   for (let i = 0; i < C; i++) { serialized.soil[i] *= 0.6; if (serialized.surface) serialized.surface[i] *= 0.3; if (serialized.deep) serialized.deep[i] *= 0.9; }
-  const saved = await decodeState(encode({ ...header, K: running.core.K, day: 365, time: 365 * 86400, land: serialized }));
-  const kept = Float64Array.from(saved.land.soil), { cells } = reseedLand(saved, soilWater);
+  const saved = await decodeState(encode({ ...header, K: running.core.K, day: 365, time: 365 * 86400, soilSeed: 'earlier.bin sha256:0', land: serialized }));
+  const kept = Object.fromEntries(['soil', 'surface', 'deep'].map((name) => [name, Float64Array.from(saved.land[name])])), { cells } = reseedLand(saved, soilWater, 'later.bin sha256:1');
+  assert.equal(saved.soilSeed, 'later.bin sha256:1');
+  const smaller = await decodeState(encode({ ...header, K: running.core.K, day: 365, time: 365 * 86400, soilSeed: 'earlier.bin sha256:0', options: { land: { rootZoneCapacity: 200, surfaceCapacity: 10 } }, land: running.land.serialize() }));
+  reseedLand(smaller, soilWater);
+  assert.equal(smaller.soilSeed, undefined);
   const fresh = createModel(grid, { topography, geography: { ...geography, soilWater }, land });
   fresh.land.initialize();
   const start = fresh.land.serialize();
   let open = 0, untouched = 0;
   for (let i = 0; i < C; i++) {
     const seeded = fresh.geography.land[i] && !(fresh.geography.iceSheet && fresh.geography.iceSheet[i]) && Number.isFinite(fresh.geography.wetness[i]);
-    if (!seeded) { assert.equal(saved.land.soil[i], kept[i], `cell ${i}: kept`); untouched++; continue; }
+    if (!seeded) { for (const name of ['soil', 'surface', 'deep']) assert.equal(saved.land[name][i], kept[name][i], `cell ${i}: ${name} kept`); untouched++; continue; }
     for (const name of ['soil', 'surface', 'deep']) if (start[name] && saved.land[name]) assert.ok(Math.abs(saved.land[name][i] - start[name][i]) < 1e-4, `cell ${i}: ${name} ${saved.land[name][i]} against the fresh start's ${start[name][i]}`);
+    assert.ok(Math.abs(smaller.land.soil[i] - start.soil[i] * 2 / 3) < 1e-4 && Math.abs(smaller.land.surface[i] - start.surface[i] * 2 / 3) < 1e-4, `cell ${i}: the state's own capacities`);
     open++;
   }
   console.log(`${cells} cells re-seeded (${open} checked against a fresh start, ${untouched} kept); arrays ${['soil', 'surface', 'deep'].filter((n) => saved.land[n]).join(', ')}`);
