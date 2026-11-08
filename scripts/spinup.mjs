@@ -83,11 +83,13 @@
 // IFS's operational G, GKDRAG 0.3, or false),
 // TERRAIN (JSON options for the surface geopotential, see terrainOptions in
 // js/geography.module.js, e.g. '{"conserveVolume":true}' to smooth by
-// trading volume between land neighbors only, so each land mass keeps its
-// own and the coasts keep their step to the sea; without it a run keeps
-// the terrain its state records, and a state saved over other terrain has
-// its surface pressure moved onto this one; the bundled sub-grid files,
-// whose μ, σ and γ lie below the default terrain's surface, are kept),
+// trading volume between land neighbors only, so the sea never enters a
+// land cell's smoothing and each land mass keeps its own; without it a run
+// keeps the terrain its state records, and a state saved over other
+// terrain has its surface pressure moved onto this one; over terrain other
+// than the default the sub-grid orography's drag needs the fine grids of a
+// geodesic-terrain-cache to rebuild its fields below the surface, and the
+// run refuses to start without them),
 // LAND (JSON options for the land surface, e.g. '{"treeMoisture":false}';
 // a fresh start's land is 'observed' by default: its cover is the observed
 // annual maximum of the green fraction and its trees the observed tree
@@ -217,7 +219,7 @@ import { START_CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { SEA_ICE_START_FILE, loadSeaIceStart } from '../js/physics/seaIceStart.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { withCadence } from '../js/cadence.module.js';
-import { headerOptions, differingGroups, runTerrain, moveOntoTerrain } from './stateOptions.mjs';
+import { headerOptions, differingGroups, runTerrain, moveOntoTerrain, requireOwnSubgrid } from './stateOptions.mjs';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
@@ -287,13 +289,13 @@ if (otherGroups.length) log(`options other than ${saved ? file : process.env.FRO
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}`;
 const found = base ? stateGrid(base, topography) : null;
+requireOwnSubgrid(TERRAIN, OROGRAPHY.orography);
 const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: process.env.SOIL_SEED ? { ...sheets.geography, soilWater: decodeSoilWater(readFileSync(process.env.SOIL_SEED)) } : sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 const deepNote = (land) => (model.land.deepWater ? `deep store of ${model.land.deepCapacity} kg/m² under the trees, ${land && land.deep ? 'from the saved land.deep' : 'started at the root zone\'s fill'}` : '');
 function rebalanceTerrain(source) {
-  if (!model.surfaceGeopotential) return;
   const to = TERRAIN ?? true, from = moveOntoTerrain(source, to, { core, mesh, geography: model.geography }, state, model.surfaceGeopotential);
   if (from !== null) log(`surface pressure moved from terrain ${JSON.stringify(from)} onto ${JSON.stringify(to)}`);
 }

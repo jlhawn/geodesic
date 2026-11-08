@@ -38,7 +38,7 @@ import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 import { pressureColumns, residualCirculation, temSums, tropicalTable, temJson, TEM_PRESSURES } from './residualCirculation.mjs';
 import { upperWindLine } from './upperAtmosphere.mjs';
 import { loadSavedLand } from './savedLand.mjs';
-import { headerOptions, savedTerrain, moveOntoTerrain } from './stateOptions.mjs';
+import { headerOptions, savedTerrain, moveOntoTerrain, requireOwnSubgrid } from './stateOptions.mjs';
 
 const [FILE, OUT, TAG] = process.argv.slice(2);
 const DAYS = Number(process.env.DAYS ?? 12), SAVE_DAYS = Number(process.env.SAVE_DAYS ?? 3), SAVE_FROM = Number(process.env.SAVE_FROM ?? 0), SST = process.env.SST ?? 'own', CAP = Number(process.env.CAP ?? 1e12), BATCH = 8;
@@ -51,6 +51,7 @@ const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedL
 const SAVED_TERRAIN = savedTerrain(saved) ?? true;
 const TERRAIN = process.env.TERRAIN === undefined ? SAVED_TERRAIN : JSON.parse(process.env.TERRAIN);
 const GIVEN_GROUPS = [['moist', 'MOIST'], ['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY'], ['dynamics', 'DYNAMICS']].filter(([, name]) => process.env[name] !== undefined);
+requireOwnSubgrid(TERRAIN, env('OROGRAPHY'));
 const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: env('RADIATION'), land: { ...landOptions, ...env('LAND') }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, env(name)])), ...(TERRAIN === true ? {} : { terrain: TERRAIN }) });
 const model = await createGpuModel(mesh, { topography, geography, land: { ...landOptions, ...env('LAND') }, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES'), orography: env('OROGRAPHY'), dynamics: env('DYNAMICS'), terrain: TERRAIN });
 const { state, core } = model, C = mesh.nCells;

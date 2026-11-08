@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel, dragConstants } from '../js/model.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, createGeography, readTopography, geographyOptions, FRESH_GEOGRAPHY } from '../js/geography.module.js';
+import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, createGeography, readTopography, geographyOptions, FRESH_GEOGRAPHY, terrainCache } from '../js/geography.module.js';
 import { orographicColumn, namedConstants, OROGRAPHY_DEFAULTS, OROGRAPHY_CONSTANTS, LOTT_MILLER } from '../js/physics/orography.module.js';
 import { orographyConstants } from '../js/gpu/orography.gpu.js';
 
@@ -135,21 +135,31 @@ test('with conserveVolume the passes take at least as much grid-scale roughness 
   assert.ok(kept <= smoothed, `${kept} against ${smoothed}`);
 });
 
-test('terrain options that make the same surface share a key', () => {
+test('terrain options that make the same surface share a key, and no terrain has its own', () => {
   assert.equal(terrainKey(true), terrainKey({}));
   assert.equal(terrainKey(true), terrainKey({ conserveVolume: false, passes: 2 }));
   assert.equal(terrainKey({ passes: 3, conserveVolume: true }), terrainKey({ conserveVolume: true, passes: 3 }));
   assert.notEqual(terrainKey({ conserveVolume: true }), terrainKey(true));
   assert.notEqual(terrainKey({ passes: 1 }), terrainKey(true));
+  assert.notEqual(terrainKey(false), terrainKey(true));
 });
 
-test('a run over terrain of other options keeps the bundled subgrid file, its σ_flt and the named drag constants', () => {
-  const plain = createModel(new Grid(16), { topography }), kept = createModel(new Grid(16), { topography, terrain: { conserveVolume: true } });
+test('a run over terrain of other options takes the bundled pipeline\'s fields rebuilt below its own surface with the fine grids in reach and keeps the bundled file out of their reach, either way with σ_flt and the named drag constants', () => {
+  const terrain = { conserveVolume: true }, before = process.env.TERRAIN_CACHE, plain = createModel(new Grid(16), { topography });
+  const own = terrainCache() ? createModel(new Grid(16), { topography, terrain }) : null;
+  let kept;
+  process.env.TERRAIN_CACHE = 'none';
+  try {
+    kept = createModel(new Grid(16), { topography, terrain });
+  } finally {
+    if (before === undefined) delete process.env.TERRAIN_CACHE; else process.env.TERRAIN_CACHE = before;
+  }
   assert.notDeepEqual(Array.from(kept.surfaceGeopotential), Array.from(plain.surfaceGeopotential));
-  for (const model of [plain, kept]) {
+  for (const model of [plain, kept, own].filter(Boolean)) {
     assert.equal(model.orography.fields.raster, undefined);
     assert.ok(model.orography.fields.filtered.some((value) => value > 0));
     assert.deepEqual(model.orography.options, OROGRAPHY_DEFAULTS);
   }
   assert.deepEqual(Array.from(kept.orography.fields.deviation), Array.from(plain.orography.fields.deviation));
+  if (own) assert.notDeepEqual(Array.from(own.orography.fields.deviation), Array.from(plain.orography.fields.deviation));
 });

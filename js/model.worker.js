@@ -315,6 +315,7 @@ function savedCumulus(model) {
  * state keeps the grid found for it.
  */
 let sourceModel = null;
+const startTerrain = (message, saved) => (message.terrain === false ? false : savedTerrain(saved ?? {}) ?? true);
 const sameLevels = (a, b) => a.length === b.length && a.every((sigma, k) => sigma === b[k]);
 function sourceFor(saved) {
   const levels = savedLevels(saved);
@@ -635,7 +636,7 @@ async function restore(snapshot) {
   if (snapshot.options) saved.options = snapshot.options;
   const sameGeography = JSON.stringify(savedGeography(saved)) === JSON.stringify(currentGeography);
   if (model && saved.N === currentN && sameGeography && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
-  if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || terrainKey(savedTerrain(saved) ?? true) !== terrainKey(currentTerrain) || !sameOptions(runOptions(saved.options, lastStart.options), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
+  if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || terrainKey(startTerrain(lastStart, saved)) !== terrainKey(currentTerrain) || !sameOptions(runOptions(saved.options, lastStart.options), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   const init = initialState(model, saved, currentN);
@@ -684,7 +685,7 @@ async function start(message) {
     if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };
   }
   if (climatologyOn(options.radiation)) options.radiation = { ...options.radiation, aerosolData: await loadAerosolFile() };
-  options.terrain = message.terrain === false ? false : savedTerrain(saved ?? {}) ?? true;
+  options.terrain = startTerrain(message, saved);
   if (saved?.ocean?.generator) options.ocean = { ...(options.ocean ?? {}), generator: saved.ocean.generator };
   if (saved) options.levels = savedLevels(saved);
   else if (message.levels) options.levels = sigmaInterfaces(message.levels);

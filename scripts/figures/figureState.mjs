@@ -6,7 +6,7 @@ import { basename } from 'node:path';
 import { stateGeography } from '../../js/geography.module.js';
 import { createGpuModel } from '../../js/gpu/model.gpu.js';
 import { withCadence } from '../../js/cadence.module.js';
-import { decodeState, savedLevels, stateName } from '../../js/stateFile.module.js';
+import { decodeState, savedLevels, savedTerrain, stateName } from '../../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../../js/physics/regrid.module.js';
 import { placeCumulus } from '../../js/physics/moist.module.js';
 import { stateGrid } from '../../js/stateGrid.module.js';
@@ -34,7 +34,8 @@ export function season(day) {
 export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day, N: saved.N, season: season(saved.day) });
 
 /*
- * A GPU model on the state's grid, level set and ice sheets with the run's options
+ * A GPU model on the state's grid, level set, terrain and ice sheets with
+ * the run's options
  * (OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND as JSON in the
  * environment; the radiation's clear-sky pass on unless RADIATION turns
  * it off, and the cadences of js/cadence.module.js at the state's dt,
@@ -44,7 +45,7 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
 export async function gpuModelFrom(saved) {
   const env = (name) => JSON.parse(process.env[name] ?? '{}'), { topography, geography, land } = stateGeography(saved);
   const model = await createGpuModel(stateGrid(saved, topography).mesh, {
-    topography, geography, levels: savedLevels(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
+    topography, geography, levels: savedLevels(saved), terrain: savedTerrain(saved) ?? true, ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
     moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: { ...land, ...env('LAND') },
   });
   const { state } = model;

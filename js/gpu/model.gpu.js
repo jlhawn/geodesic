@@ -74,7 +74,7 @@ export async function createGpuModel(gridOrMesh, {
   const mode = exchangeMode(surface, landOptions);
   const skinSet = skinOptions(surface), skinOn = skinSet.warmLayer || skinSet.coolSkin;
   skinRequiresRoughness(skinSet, mode);
-  const subgrid = geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, givenSubgrid, GRAVITY) : null;
+  const subgrid = geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, givenSubgrid, GRAVITY, terrain) : null;
   const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};
   const orography = subgrid ? dragConstants(subgrid, dragOptions) : dragOptions;
   const formDrag = subgrid && subgrid.filtered && formDragOptions !== false ? formDragOptions : false;

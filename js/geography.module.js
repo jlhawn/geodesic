@@ -670,9 +670,7 @@ function maskedGeography(mesh, file, iceShelves, cavityDepth) {
 
 /*
  * surfaceGeopotential's options from the models' `terrain`: true for its
- * defaults, or an object of `conserveVolume` and `passes`. The bundled
- * sub-grid files (scripts/subgridTerrain.mjs) hold μ, σ and γ below the
- * default options' surface, and a run over other options keeps them.
+ * defaults, or an object of `conserveVolume` and `passes`.
  */
 export function terrainOptions(terrain = true) {
   if (terrain === true) return {};
@@ -687,9 +685,11 @@ const TERRAIN_DEFAULTS = { conserveVolume: false, passes: 2 };
 
 /*
  * The `terrain` options as a key, equal for options that make the same
- * surface: those at their defaults left out, the rest in name order.
+ * surface: those at their defaults left out, the rest in name order;
+ * 'false' for no terrain.
  */
 export function terrainKey(terrain = true) {
+  if (terrain === false) return 'false';
   const options = terrainOptions(terrain);
   return JSON.stringify(Object.keys(options).sort().filter((name) => options[name] !== TERRAIN_DEFAULTS[name]).map((name) => [name, options[name]]));
 }
@@ -704,9 +704,10 @@ export function terrainKey(terrain = true) {
  * `conserveVolume` a pass instead moves k (h_i − h_j) of volume across
  * each edge between land cells, k the larger of its two cells' `weight` ×
  * area / edge count, so a cell among land relaxes no more slowly than
- * without it. Water never enters a land cell's mean: each land mass keeps
- * its area-weighted volume to rounding, a coast keeps its step to the
- * water, and a cell with no land neighbor keeps its height.
+ * without it. Water never enters a land cell's smoothing: each land mass
+ * keeps its area-weighted volume to rounding and a cell with no land
+ * neighbor its height, while a coastal cell relaxes toward its land
+ * neighbors alone, so steep coasts sharpen.
  */
 export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = TERRAIN_DEFAULTS.passes, weight = 0.5, conserveVolume = TERRAIN_DEFAULTS.conserveVolume } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
@@ -887,6 +888,68 @@ export function decodeSubgrid(buffer) {
 
 export const subgridUrl = (N, topography = 'etopo1', mask = 'raster') => new URL(`../data/subgrid_${topography === 'etopo1' ? '' : `${topography}_`}${mask === 'raster' ? '' : `${mask}_`}N${N}.bin`, import.meta.url);
 
+export const FINE_ROWS = 4320, FINE_COLS = 8640, GRADIENT_SPACING = 5000;
+
+/*
+ * The directory of the 2′30″ grids scripts/subgridTerrain.py's `filter`
+ * writes (fine_h5.f32, fine_flt2.f32): TERRAIN_CACHE, else the nearest
+ * geodesic-terrain-cache beside this repository or a directory above it;
+ * null off node, with TERRAIN_CACHE 'none', or with none found.
+ */
+export function terrainCache() {
+  const node = globalThis.process, fs = node?.getBuiltinModule?.('node:fs');
+  if (!fs) return null;
+  const path = node.getBuiltinModule('node:path'), { fileURLToPath } = node.getBuiltinModule('node:url');
+  const holds = (dir) => ['h5', 'flt2'].every((name) => fs.existsSync(path.join(dir, `fine_${name}.f32`)));
+  const given = node.env.TERRAIN_CACHE;
+  if (given === 'none') return null;
+  if (given) {
+    if (!holds(given)) throw new Error(`TERRAIN_CACHE ${given} holds no fine_h5.f32 and fine_flt2.f32`);
+    return given;
+  }
+  for (let dir = path.dirname(fileURLToPath(new URL('../', import.meta.url))); ; dir = path.dirname(dir)) {
+    if (holds(path.join(dir, 'geodesic-terrain-cache'))) return path.join(dir, 'geodesic-terrain-cache');
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+export function readFine(cache, name, rows = FINE_ROWS, cols = FINE_COLS) {
+  const bytes = globalThis.process.getBuiltinModule('node:fs').readFileSync(`${cache}/fine_${name}.f32`);
+  if (bytes.byteLength !== 4 * rows * cols) throw new Error(`fine_${name}.f32: ${bytes.byteLength} bytes`);
+  return new Float32Array(bytes.buffer, bytes.byteOffset, rows * cols);
+}
+
+/*
+ * The bundled files' fields from the fine grids `h5` and `flt2` (rows
+ * from the north, columns from −180°): subgridOrography's below
+ * `resolved`, the height the mesh carries, on `land`, the gradients by
+ * central differences 5 km each way, as on the IFS's 5 km grid.
+ */
+export function fineSubgrid(mesh, land, resolved, h5, flt2, rows = FINE_ROWS, cols = FINE_COLS) {
+  return subgridOrography(mesh, { rows, cols, data: h5 }, resolved, land, { filtered: { data: flt2 }, spacing: GRADIENT_SPACING });
+}
+
+const rebuilt = [];
+/*
+ * The bundled file's fields for a run over terrain of other options:
+ * fineSubgrid below the run's own surface `phis` / g, quantized as the
+ * files are, built once a process for each mesh, land mask and surface;
+ * null without terrainCache().
+ */
+export function rebuiltSubgrid(mesh, land, phis, g) {
+  const cache = terrainCache();
+  if (!cache) return null;
+  const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  let entry = rebuilt.find((e) => e.cells === mesh.nCells && e.relax === mesh.relax && e.g === g && same(e.land, land) && same(e.phis, phis));
+  if (!entry) {
+    const start = performance.now(), fields = fineSubgrid(mesh, land, Float64Array.from(phis, (p) => p / g), readFine(cache, 'h5'), readFine(cache, 'flt2'));
+    entry = { cells: mesh.nCells, relax: mesh.relax, g, land: Uint8Array.from(land), phis: Float64Array.from(phis), fields: decodeSubgrid(encodeSubgrid({ ...fields, relax: mesh.relax })) };
+    rebuilt.push(entry);
+    console.log(`subgrid orography: built below the run's own surface from ${cache}'s fine grids in ${((performance.now() - start) / 1000).toFixed(1)} s`);
+  }
+  return entry.fields;
+}
+
 /*
  * The fields for a mesh: `given` when it has the mesh's cell count, else
  * under node the file for N and the topography if there is one, else null
@@ -932,6 +995,14 @@ export function subgridFallbackNote(mesh, reason = 'missing', fields = null, top
   if (fallbackSaid.has(`${file} ${reason}`)) return;
   fallbackSaid.add(`${file} ${reason}`);
   console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](file, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with C_d 1 and G 1, and no form drag`);
+}
+
+const keptSaid = new Set();
+export function subgridKeptNote(mesh, terrain, topography = 'etopo1', mask = 'raster') {
+  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10)), file = `data/${subgridUrl(N, topography, mask).pathname.split('/').pop()}`, said = `${file} ${JSON.stringify(terrain)}`;
+  if (keptSaid.has(said)) return;
+  keptSaid.add(said);
+  console.log(`subgrid orography: terrain ${JSON.stringify(terrain)} keeps ${file}, whose fields lie below the default terrain's surface; the fine grids that rebuild them below its own (geodesic-terrain-cache, or TERRAIN_CACHE) are out of reach`);
 }
 
 /*

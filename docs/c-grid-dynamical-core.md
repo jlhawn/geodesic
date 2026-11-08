@@ -10510,18 +10510,30 @@ the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
   removed, so the height reaches neither the resolved surface nor the
   sub-grid fields: 42 m of the Maritime Continent's mean land height at
   N=128, 96 m at N=64 (Nov 7 audit). Terrain `conserveVolume` makes the
-  passes trade volume between land neighbors only, so each land mass
-  keeps its volume and each coast its step to the sea: 30 of those 42 m
-  come back at N=128 and 54 of the 96 m at N=64. Steep coasts come out
-  sharper than the default's; 1097 cells at N=128 stand over 50 m above
-  both their unsmoothed and their default heights, up to 531 m. The rest,
-  lost where a coastal cell's mean takes in the seabed at its depth,
-  stays lost. The bundled files' μ, σ and γ stay those below the default
-  surface; against this one μ differs by over 10 % in 274 of the 11,860
-  land cells at N=64 and 660 of the 47,482 at N=128. Under `passes` 0, 1
-  and 3, which keep the files too, μ differs by over 10 % in 4399, 1356
-  and 857 of the N=64 land cells, σ in 1017, 284 and 173. At 0.25°
-  GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
+  passes trade volume between land neighbors only, and the sea never
+  enters a land cell's smoothing: each land mass keeps its volume and a
+  one-cell island its unsmoothed height. 30 of those 42 m come back at
+  N=128 and 54 of the 96 m at N=64; the rest, lost where a coastal cell's
+  unsmoothed mean takes in the seabed at its depth, stays lost. A coastal
+  cell still relaxes toward its land neighbors, so its step to the sea
+  changes and steep coasts sharpen: of the 5134 land cells beside the sea
+  at N=128 the step grows by over 50 m in 1872 and shrinks by over 50 m
+  in 436, against 1015 and 1216 under the default (889 and 252 of 2083
+  at N=64, against 499 and 652); the largest rise is 885 m, on the coast
+  of Peru, the largest drop 842 m, on Taiwan.
+  The bundled files' μ, σ and γ lie below the default
+  surface. A run over terrain of other options takes them rebuilt below
+  its own surface: the files' pipeline run in memory (`rebuiltSubgrid`)
+  on the fine grids of a `geodesic-terrain-cache` beside the repository
+  or above it (or `TERRAIN_CACHE`), quantized as the files are, 3–5 s
+  once a process; below the default surface it reproduces the files bit
+  for bit. The rebuilt μ differs from the files' by over 10 % in 277 of
+  the 11,860 land cells at N=64 and 667 of the 47,482 at N=128 under
+  `conserveVolume`, and in 4397, 1356 and 863 of the N=64 land cells
+  under `passes` 0, 1 and 3. Out of the grids' reach (the page, a
+  machine without them) a run keeps the files and says so in the log;
+  `scripts/spinup.mjs` and `fixedSst.mjs` refuse to start instead. At
+  0.25° GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
   over land outside Antarctica, 6.5 m (rms 76 m) over Antarctica.
 - σ_flt (§11.3.3): the 30″ orography smoothed at Δ 2 km and at Δ 20 km; the
   square of the difference averaged over each 2′30″ block (5 × 5 points),

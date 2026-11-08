@@ -225,6 +225,14 @@ test('with surface.relativeWind a coupled run split at a day\'s end ends byte fo
   assert.ok(Buffer.from(encodeState(withoutMeans(x), { f64: f64Names(x) })).equals(Buffer.from(encodeState(withoutMeans(y), { f64: f64Names(y) }))), 'the split run ends where the uninterrupted one does');
 });
 
+test('a state saved over terrain and resumed without it has its surface pressure moved down to sea level', { skip }, async () => {
+  const out = outDir('flatResume', 'f_day0000.bin');
+  const result = spawnSync(process.execPath, [join(root, 'scripts', 'spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), TAG: 'f', MINUTES: '100', OUT: out, DAYS: '1', TERRAIN: 'false' }, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr.slice(-2000));
+  assert.match(result.stdout, /surface pressure moved from terrain true onto false/);
+  assert.equal((await load(join(out, 'f_day0001.bin'))).terrain, false);
+});
+
 test('a state saved with the instantaneous cumulus cloud loads with that cloud as the memory\'s start: the first step relaxes each layer\'s cover and cover × water from it toward the plume\'s', { skip }, async () => {
   const { readState, gpuModelFrom, dt } = await import('../scripts/figures/figureState.mjs');
   const { readRanges } = await import('../js/gpu/device.module.js');

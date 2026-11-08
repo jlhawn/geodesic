@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey } from '../js/geography.module.js';
+import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, terrainCache, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
-import { recordedOptions, givenOptions, headerOptions, differingGroups, runTerrain, moveOntoTerrain } from '../scripts/stateOptions.mjs';
+import { recordedOptions, givenOptions, headerOptions, differingGroups, runTerrain, moveOntoTerrain, requireOwnSubgrid, stateTerrain } from '../scripts/stateOptions.mjs';
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 
@@ -58,4 +58,44 @@ test("a state saved over terrain of other options keeps its options, given and t
   const again = resume(await save(once.moved, records), undefined);
   assert.equal(again.from, null);
   assert.deepEqual(Array.from(again.moved), Array.from(once.moved, Math.fround));
+});
+
+test('a state saved without terrain resumes onto terrain with its surface pressure moved up from sea level, one saved over terrain resumes without terrain with it moved down to sea level, and a state stays where it stands when the run matches it', async () => {
+  const model = createModel(new Grid(16), { topography, physics: false }), { core, mesh, geography } = model;
+  const [pi, theta] = initializeState(model, {});
+  const [flat, raised] = await Promise.all([false, true].map((terrain) => decodeState(encodeState({ N: 16, K: core.K, day: 0, time: 0, terrain, pi, theta }))));
+  assert.deepEqual([stateTerrain(flat), stateTerrain(raised)], [false, true]);
+  const resume = (saved, terrain, toPhi) => {
+    const state = [Float64Array.from(saved.pi), Float64Array.from(saved.theta)];
+    return { from: moveOntoTerrain(saved, terrain, { core, mesh, geography }, state, toPhi), moved: state[0] };
+  };
+  const rebalanced = (saved, fromPhi, toPhi) => {
+    const p = Float64Array.from(saved.pi), t = Float64Array.from(saved.theta);
+    core.diagnose(p, t, null, null);
+    rebalanceSurfacePressure(core, p, t, fromPhi, toPhi);
+    return p;
+  };
+  const up = resume(flat, true, model.surfaceGeopotential), down = resume(raised, false, null);
+  assert.equal(up.from, false);
+  assert.deepEqual(up.moved, rebalanced(flat, null, model.surfaceGeopotential));
+  assert.ok(up.moved.some((p, i) => p !== flat.pi[i]), 'the pressure moves up onto the terrain');
+  assert.equal(down.from, true);
+  assert.deepEqual(down.moved, rebalanced(raised, model.surfaceGeopotential, null));
+  for (const [saved, terrain, toPhi] of [[flat, false, null], [raised, true, model.surfaceGeopotential]]) {
+    const kept = resume(saved, terrain, toPhi);
+    assert.equal(kept.from, null);
+    assert.deepEqual(kept.moved, Float64Array.from(saved.pi));
+  }
+});
+
+test('a run over terrain of other options than the default refuses to start with the fine grids out of reach, and starts with them in reach, on the default terrain or without orography', () => {
+  const before = process.env.TERRAIN_CACHE, other = [{ conserveVolume: true }, { passes: 1 }];
+  try {
+    if (terrainCache()) for (const terrain of other) assert.doesNotThrow(() => requireOwnSubgrid(terrain, {}));
+    process.env.TERRAIN_CACHE = 'none';
+    for (const terrain of other) assert.throws(() => requireOwnSubgrid(terrain, {}), /rebuilt below its own surface/);
+    for (const [terrain, orography] of [[undefined, {}], [true, {}], [{ passes: 2 }, {}], [{ conserveVolume: false }, {}], [false, {}], [{ conserveVolume: true }, false]]) assert.doesNotThrow(() => requireOwnSubgrid(terrain, orography));
+  } finally {
+    if (before === undefined) delete process.env.TERRAIN_CACHE; else process.env.TERRAIN_CACHE = before;
+  }
 });
