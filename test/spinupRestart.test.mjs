@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { decodeState } from '../js/stateFile.module.js';
 import { withoutMeans } from '../js/intervalMeans.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
+import { loadSeaIceStart, SEA_ICE_START_FILE } from '../js/physics/seaIceStart.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -51,10 +53,10 @@ for (const [arm, env] of Object.entries(arms)) {
   });
 }
 
-test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed inside a day and run to its end whole, and stopped again inside it with lake outflow not yet drained to the sea, saved, then resumed, ends on the same state bit for bit but for the day\'s rain and radiation means and its energy record, which cover the steps each run took', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed inside a day and run to its end whole, and stopped again inside it with lake outflow not yet drained to the sea, saved, then resumed, ends on the same state bit for bit but for the day\'s rain and radiation means and its energy record, which cover the steps each run took; and a run from a fresh start, which lays no observed sea-ice snow on a lake, ends the day on the state of its own restart from step 32 but for those means', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'restart-lakes-'));
   try {
-    const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: '32', MINUTES: '100', OUT: out, DAYS: '1', ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: '32', MINUTES: '100', OUT: out, DAYS: '1', ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     run({ TAG: 'whole', STOP_AFTER_STEPS: '32' });
     copyFileSync(join(out, 'whole_day0000_step0032.bin'), join(out, 'split_day0000_step0032.bin'));
     run({ TAG: 'whole' });
@@ -63,9 +65,17 @@ test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed insi
     const lakes = inside.lakeMean.reduce((n, v) => n + (v !== 0), 0), pending = inside.lakePending.reduce((n, v) => n + (v !== 0), 0);
     assert.ok(lakes > 0 && pending > 0, `${pending} of ${lakes} lake cells hold outflow not yet drained at the stop`);
     run({ TAG: 'split' });
-    const [whole, split] = await Promise.all(['whole', 'split'].map((tag) => decoded(join(out, `${tag}_day0001.bin`))));
-    const parted = apart(whole, split, ['energyRecord', 'convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect']);
+    run({ TAG: 'fresh' });
+    const [fresh, whole, split] = await Promise.all(['fresh', 'whole', 'split'].map((tag) => decoded(join(out, `${tag}_day0001.bin`))));
+    const ownSteps = ['energyRecord', 'convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect'];
+    const parted = apart(whole, split, ownSteps);
     assert.deepEqual(parted, [], `day 1, whole against split: ${parted.join(', ')}`);
+    const start = await loadSeaIceStart(fileURLToPath(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url))), { mesh } = stateGrid(whole);
+    const snowed = [...whole.lakeMean.keys()].filter((i) => whole.lakeMean[i] !== 0 && start.at(mesh.latCell[i], mesh.lonCell[i]).snow > 0);
+    assert.ok(snowed.length > 0, 'the observed sea ice holds snow at a lake cell');
+    assert.deepEqual(snowed.map((i) => fresh.land.snow[i]), snowed.map((i) => whole.land.snow[i]), `day 1, land.snow at lake cells ${snowed.join(', ')}: the fresh run against its restart`);
+    const restarted = apart(fresh, whole, ownSteps);
+    assert.deepEqual(restarted, [], `day 1, fresh against whole: ${restarted.join(', ')}`);
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
