@@ -987,11 +987,13 @@ point, and ice thinner than 0.5 m blends toward the water's albedo
 has no source read for it: it was set (e7812042, Oct 1) between CCSM3's
 melting bare ice, about 0.50 from memory of Briegleb et al. (2004), and
 SHEBA's ponded July ice, 0.45–0.55 as Perovich et al. (2002) were quoted
-(the snow and ice albedo review below). The Arctic's summer depends on
-it: the Nov 7 audit's 60-year column of this code under
-Maykut–Untersteiner forcing melts out every August at 0.48 (volume
-minimum 0) and keeps 1.72 m at 0.55 (its report's table; its sea-ice
-coverage notes find 0.55–0.64 restores a perennial pack).
+(the snow and ice albedo review below). The Arctic's summer turns on
+it. In the Nov 7 audit's 60-year columns of this code, under the GCM's
+own fluxes north of 80°N, 0.48 melts the pack out by August (volume
+minimum 0) and 0.55 alone keeps 1.72 m (its sea-ice verification);
+under Maykut and Untersteiner's (1971) forcing, recalled rather than
+read, 0.55 with light through the ice (i0 0.3) and a brine reservoir
+keeps 1.02 m (its finding sea-ice-02).
 Snow lies on the ice: precipitation that falls on an iced cell from air
 below the melting point accumulates in water equivalent in the ocean
 cells of the land surface's snow array (one field of snow on the
