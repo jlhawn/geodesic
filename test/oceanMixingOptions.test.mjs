@@ -530,7 +530,7 @@ test('under the boundary taper a column whose thick layers end above its boundar
   assert.equal(moved, 0);
 });
 
-test('under isoneutralDiffusion a layer no thicker than twice minimumLayer sets no slope and takes no triad flux: no interface beside one takes κS² diffusivity, and the water of a shelf column\'s thin layers moves none of its layers thick in every column, nor their κS²', () => {
+test('under isoneutralDiffusion an interface at the top or bottom of a layer no thicker than twice minimumLayer takes no κS² diffusivity, and the water of a shelf column\'s thin layers moves none of its layers thick in every column, nor their κS²', () => {
   const { ocean, sea, thin } = shelfSea(10), F = ocean.table.fixed, { h } = ocean;
   const before = tracerTendency(ocean);
   let beside = 0, besideKappa = 0, thick = 0;
