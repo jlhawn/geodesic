@@ -52,7 +52,9 @@ Everything vertical and everything physical is untouched (Section 8).
 
 Moisture, non-hydrostatic dynamics, topography (the C-grid makes it
 easier later, but the aqua-planet stays flat for now), higher-order
-transport schemes (2nd-order centered first; upgrade path noted), and a
+horizontal transport schemes (2nd-order centered; upgrade path noted in
+Section 4.3; the vertical interfaces of q and q_c take a limiter as an
+option, `dynamics.verticalAdvection`), and a
 new time integrator (AB4 stays; RK3 is an optional later swap).
 
 ---
@@ -345,7 +347,7 @@ plane; zonal/meridional components are computed for display only.
 
 Vertical coordinate `σ = p/π`, K layers, unchanged. Per layer `k` the
 layer mass per area is `m_i = π_i Δσ_k / g`; edge mass `m_e = ½(m_i + m_j)`
-(centered; an upwinded variant is a later option). `Δσ_k` is fixed so
+(centered). `Δσ_k` is fixed so
 `m_e u_e Δ`-bookkeeping reduces to `π_e u_e Δσ_k`.
 
 ### 4.1 Continuity and vertical velocity (Steps 1–3, structure preserved)
@@ -410,13 +412,51 @@ Flux form, consistent with the mass flux used in continuity so that
                    + π_i Δσ_k Q_i / (c_p Π_i)
 ```
 
-with `θ_e = ½(θ_i + θ_j)` (second-order centered) initially. Upgrade
+with `θ_e = ½(θ_i + θ_j)` (second-order centered). Upgrade
 path: 3rd/4th-order upwind-biased flux (Skamarock & Gassmann 2011) when
 the centered scheme's dispersive ripples at fronts become the limiting
-noise source. The interface `θ_{k±½}` interpolation and the radiation
-heating `Q_i` are unchanged from the current code. The thermal ∇²
+noise source. The thermal ∇²
 diffusion on θ is dropped in favour of a ∇⁴ on θ (`nu4Theta`), which
 the thin top layers require (Section 6, M2).
+
+**Vertical advection** (`dynamics.verticalAdvection`). Under
+`'centered'`, the default, the interface values `θ_{k±½}`, `q_{k±½}` and
+`q_c,k±½` are linear in the Exner function of the layer middles. Under
+`'vanLeerWater'` the faces of q and q_c are van Leer's
+(`vanLeerFace`, the same on the CPU and, through `limitedInterfaces`, in
+the WGSL): the centered value blended toward the upwind layer's by
+`φ(r) = (r + |r|)/(1 + |r|)`, with `r` the ratio of the gradient upwind of
+the upwind layer to the gradient across the interface, each over the
+Exner spacing of the layer middles it spans, and never taken past the
+downwind layer's value. A profile straight in Exner keeps the centered
+face on stretched layers; where the upwind layer is the top or the lowest
+the face takes the upwind value. The transport stays in flux form, so the
+water is kept to roundoff. The option is off by default and the
+kernels are then exactly the centered ones.
+
+θ is never limited. The core's energy balance pairs the vertical
+transport of θ through an interface with the hydrostatic pressure work
+only at the face linear in Exner. A limited θ face leaves
+`c_p F (Π_{k+1} − Π_k)(θ_centered − θ_limited)` unbalanced at every
+interface, and a diffusive limiter makes it one-signed: a source of
+`c_p T`, 0.13 W/m² every step on the N=16 aquaplanet against 0.02
+centered. Balancing it would need the geopotential and the pressure
+gradient to take a flow-dependent θ face.
+
+**Temperature closure** (`dynamics.temperatureClosure`). The ∇⁴ closure
+of θ acts on T = θΠ with fluxes weighted by the edge's π. Under `'sigma'`,
+the default, T is the layer's temperature along σ. Along σ over terrain
+the hydrostatic slope of T is large, and the closure turns it into heating
+of high ground (+16 W/m² over the Maritime Continent's land at N=128).
+Under `'standard'` the closure acts on T less the US Standard
+Atmosphere 1976 at the layer's pressure πσ, which takes that slope out
+(about a tenth of the tropical profile's slope is left, against an AFGL
+tropical profile; the polar ice sheets are closest). The subtracted
+profile enters only the closure's operand, so the flux form still keeps
+`c_p T Δm`: the model step keeps `c_p T + L q` to 4.2×10⁻⁸ W/m². The CPU
+reads `standardTemperature`, the WGSL a table of the same layers
+(`standardReferenceClosure`); one closure step at N=16 on bl48 moves T by
+up to 0.106 K from `'sigma'`, and the two engines agree to 2.9×10⁻⁴ K.
 
 ### 4.4 Time integration
 
@@ -863,7 +903,8 @@ sources are off (`moist: false` carries q but never sources it).
 
 - **Tracer.** `q` (specific humidity) is state[4], transported by the
   same flux-form scheme and mass fluxes as θ, with interface values
-  interpolated in Exner like θ's. The ∇⁴ closure acts on the
+  interpolated in Exner like θ's (or limited, under `verticalAdvection`
+  `'vanLeerWater'`, Section 4.3). The ∇⁴ closure acts on the
   mass-weighted field π q, so the column's water is preserved exactly
   under transport (checked to roundoff in `test/moist.test.mjs`); θ's
   closure is unchanged. Virtual potential temperature θ(1 + 0.608 q)
@@ -6779,7 +6820,10 @@ The work, in order:
    halving of ν_d strengthens the equatorial Pacific stress by 4–9 mN/m²
    (two starts; Nov 7 audit), and ν_d = c d²/dt halves from N=64
    (1.29 × 10⁶ m²/s) to N=128 (6.45 × 10⁵) at a fixed c, so N=64 runs
-   understate N=128's stress. `divergenceViscosity` sets ν_d in m²/s.
+   understate N=128's stress. `dynamics.divergenceViscosity` sets ν_d in
+   m²/s, a step of ν_d Δt, in place of the coefficient's step c d², whose
+   ν_d = c d²/Δt changes with Δt and the resolution (0, the default, keeps
+   c), on σ and hybrid surfaces and in both engines.
    At N=128 (the last column of the table above) it takes the global
    ω700 grid-scale share from 0.63 to 0.18 in five days, the deck-height
    sink's spread as the dynamics leaves it from 18.5 to 4.6 mm/s, and it
@@ -10462,12 +10506,29 @@ the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
   (rms 117 m), mostly the mesh's two smoothing passes. μ has that mean
   removed, so the height reaches neither the resolved surface nor the
   sub-grid fields: 42 m of the Maritime Continent's mean land height at
-  N=128, 96 m at N=64 (Nov 7 audit). Terrain `conserveVolume` makes the
-  passes trade volume between land neighbors only, and the sea never
-  enters a land cell's smoothing: each land mass keeps its volume and a
-  one-cell island its unsmoothed height. 30 of those 42 m come back at
+  N=128, 96 m at N=64 (Nov 7 audit). Terrain `conserveVolume` (off by
+  default) makes each pass move k (h_i − h_j) of volume across every
+  edge between two land cells, k the larger of the two cells' ½ × area /
+  edge count, so a cell among land relaxes no more slowly than without
+  it. The sea never enters a land cell's smoothing: each land mass keeps
+  its volume to rounding and a one-cell island its unsmoothed height. 30
+  of those 42 m come back at
   N=128 and 54 of the 96 m at N=64; the rest, lost where a coastal cell's
-  unsmoothed mean takes in the seabed at its depth, stays lost. A coastal
+  unsmoothed mean takes in the seabed at its depth, stays lost. (The 42
+  and 96 m are against the raster's 313.0 and 335.0 m with the sea at 0;
+  the model's unsmoothed surface, which counts that seabed, is 300.0 m at
+  N=128 and 290.9 m at N=64 over the Maritime Continent's land, 15S–20N,
+  90–160E. The default passes leave 270.6 m (−9.8 %) and 238.8 m
+  (−17.9 %), `conserveVolume` 300.2 m (+0.1 %) and 292.3 m (+0.5 %).)
+  The residual, a cell's unsmoothed mean less its resolved height, has an
+  area mean over that land of 29.4 m (N=128) and 52.2 m (N=64) under the
+  default and −0.2 and −1.4 m under `conserveVolume`, whose land masses
+  lose no volume to it; its cell-to-cell part (rms 158 and 182 m
+  under the default, 143 and 147 m under `conserveVolume`) stays in
+  neither the resolved surface nor μ, which is the spread about the
+  cell's own mean. Over the land off the ice sheets the raster μ against
+  the `conserveVolume` surface differs from the default's by 0.3 m
+  (N=128) and 0.7 m (N=64) on average, rms 3.9 and 5.3 m. A coastal
   cell still relaxes toward its land neighbors, so its step to the sea
   changes and steep coasts sharpen: of the 5134 land cells beside the sea
   at N=128 the step grows by over 50 m in 1872 and shrinks by over 50 m
@@ -10569,7 +10630,11 @@ without the factor 2, the gravity wave activity was too weak"), G 1.23 (the
 only value the chapter gives, for the elliptical mountain of eq. 4.2 that
 the scheme assumes; it calls G "a function of the mountain sharpness" and
 states no operational value), H_n,crit 0.5, Ri_crit 0.25
-(`OROGRAPHY_DEFAULTS`; `LOTT_MILLER` keeps C_d 1, G 1, factor 1). The
+(`OROGRAPHY_DEFAULTS`; `LOTT_MILLER` keeps C_d 1, G 1, factor 1; orography
+`constants` 'cy41r2' takes the IFS's operational G, GKDRAG 0.3 (Cy41r2
+Part II §3.5, set in SUGWD), with the other defaults, a launched stress
+of 1.2 against 4.92 ρUNμσD at Z_b = 0, and constants given by name win
+over it). The
 doubled H_eff enters the wave's launch amplitude δz as well as its stress.
 Eq. 4.37's remark that its /9 equals eq. 4.19's /4 at Z_blk = 0 holds only
 without the factor; taken as eq. 4.8 states it. Against `LOTT_MILLER`'s
