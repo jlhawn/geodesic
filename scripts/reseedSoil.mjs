@@ -8,8 +8,8 @@
  *
  *   node scripts/reseedSoil.mjs state.bin seed.bin out.bin
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { createGeography, decodeSoilWater, geographyOptions, readTopography, savedGeography } from '../js/geography.module.js';
 import { Grid } from '../js/grid.module.js';
@@ -35,7 +35,7 @@ export function reseedLand(saved, soilWater) {
   return { cells, before: mean(before), after: mean(land.soil), deep: !!land.deep };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const [input, seed, output] = process.argv.slice(2);
   if (!output) throw new Error('usage: node scripts/reseedSoil.mjs state.bin seed.bin out.bin');
   const saved = await decodeState(new Uint8Array(readFileSync(input)));
