@@ -528,7 +528,7 @@ test('with traceCloudPath the engines agree on trace layers between two cloudy r
   for (let n = 0; n < 6; n++) for (const [x, share] of shares()) qc[x] = Math.fround(qc[x] * 0.5 / share);
   const near = shares().map(([, share]) => share), within = near.filter((s) => Math.abs(s - 0.5) < 0.05).length;
   const plain = await physicsHeating(traced, {}), trace = await physicsHeating(traced, { traceCloudPath: t });
-  let engines = 0, scale = 0, change = 0, olr = 0, moved = 0, olrChange = 0;
+  let engines = 0, scale = 0, change = 0, heated = 0, olr = 0, moved = 0, olrChange = 0;
   for (let i = 0; i < C; i++) {
     olr = Math.max(olr, ...[plain, trace].map((r) => Math.abs(r.cpuOutgoing[i] - r.gpuOutgoing[i])));
     moved = Math.max(moved, Math.abs(trace.cpuOutgoing[i] - plain.cpuOutgoing[i]));
@@ -538,10 +538,12 @@ test('with traceCloudPath the engines agree on trace layers between two cloudy r
       engines = Math.max(engines, ...[plain, trace].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
       scale = Math.max(scale, Math.abs(plain.cpu[x]));
       change = Math.max(change, Math.abs((trace.cpu[x] - plain.cpu[x]) - (trace.gpu[x] - plain.gpu[x])));
+      heated = Math.max(heated, Math.abs(trace.cpu[x] - plain.cpu[x]));
     }
   }
   console.log(`${near.length} trace layers in ${traceLayers.size} columns at N=${N}, ${within} with W/f within 0.05 t of t/2 (${Math.min(...near).toFixed(3)} t to ${Math.max(...near).toFixed(3)} t): the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}, the OLR by ${olr.toExponential(1)} W/m2; traceCloudPath ${t} moves the OLR by up to ${moved.toFixed(3)} W/m2, the engines' changes apart by ${olrChange.toExponential(1)}`);
-  assert.ok(near.length > 0 && within > 0.9 * near.length && moved > 1e-3, `${within} of ${near.length} trace layers near t/2; the option moves the OLR by ${moved} W/m2`);
+  assert.ok(near.length > 0 && within > 0.9 * near.length && moved > 0.03, `${within} of ${near.length} trace layers near t/2; the option moves the OLR by ${moved} W/m2, five times the tolerance on the engines' OLR`);
+  assert.ok(heated > 5e-5 * scale, `the option moves the layer heating by ${heated} K/day, five times the tolerance of 1e-5 times ${scale}`);
   assert.ok(engines < 1e-5 * scale && change < 1e-5 * scale, `layer heating differs by ${engines} K/day, its change by ${change}, against ${scale}`);
   assert.ok(olr < 2e-5 * 300 && olrChange < 2e-5 * 300, `OLR apart by ${olr}, its change by ${olrChange} W/m2`);
 });

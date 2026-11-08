@@ -140,7 +140,7 @@ test('with traceCloudPath a layer whose cloud water is a trace enters the longwa
   assert.throws(() => columns(model, { traceCloudPath: 2e-3 }), /traceCloudPath must be null or an in-cloud water path/);
 });
 
-test('with traceCloudPath a layer whose in-cloud path is half the trace path enters the chain at half its cover with the same mean emissivity: alone in its column it leaves the OLR and back radiation as they were to rounding, and between two cloudy layers it moves the OLR through the overlap it no longer shares, alike at two trace paths', () => {
+test('with traceCloudPath a layer whose in-cloud path is half the trace path keeps its mean emissivity: alone in its column it leaves the OLR and back radiation as they were to rounding, and between two cloudy layers it moves the OLR through the overlap it no longer shares, alike at two trace paths', () => {
   const model = partlyCloudy(), [pi, theta, , , q, qc] = model.state, { K, levels } = model.core, C = model.mesh.nCells;
   const { exnerLayer, sigmaMid } = model.core.diagnostics;
   let k0 = 1;
@@ -173,9 +173,9 @@ test('with traceCloudPath a layer whose in-cloud path is half the trace path ent
   const results = [1e-3, 1e-4].map((t) => { const traced = halve(t); return { t, lone: moves(t, traced, true), sandwiched: moves(t, traced, false) }; });
   for (const { t, lone, sandwiched } of results) console.log(`t = ${t} kg/m2, W/f = t/2 to ${Math.max(lone.half, sandwiched.half).toExponential(1)} in ${cells.length} columns: the OLR moves by up to ${lone.olr.toExponential(2)} W/m2 and its back radiation by ${lone.back.toExponential(2)} for a lone layer, the OLR by ${sandwiched.olr.toExponential(2)} for one between two cloudy layers; closure ${lone.closure.toExponential(1)}, ${sandwiched.closure.toExponential(1)}`);
   for (const { t, lone, sandwiched } of results) assert.ok(lone.half < 1e-9 && sandwiched.half < 1e-9 && lone.closure < 1e-11 && sandwiched.closure < 1e-11, `t = ${t}: W/f is t/2 to ${lone.half}, ${sandwiched.half}; closure ${lone.closure}, ${sandwiched.closure}`);
-  for (const { t, lone } of results) assert.ok(lone.olr < 1e-10 && lone.back < 1e-10, `t = ${t}: a lone layer at half its cover and twice its in-cloud emissivity moves the OLR by ${lone.olr} and the back radiation by ${lone.back} W/m2`);
+  for (const { t, lone } of results) assert.ok(lone.olr < 1e-10 && lone.back < 1e-10, `t = ${t}: a lone layer at W/f = t/2 moves the OLR by ${lone.olr} and the back radiation by ${lone.back} W/m2`);
   const [wide, narrow] = results.map((r) => r.sandwiched.olr);
-  assert.ok(wide > 5e-3 && Math.abs(narrow / wide - 1) < 0.05, `between two cloudy layers the halved chain cover moves the OLR by ${wide} W/m2 at t = 1e-3 and ${narrow} at 1e-4: it is the cover the trace no longer shares, not its emissivity, that moves it`);
+  assert.ok(wide > 5e-3 && Math.abs(narrow / wide - 1) < 0.05, `between two cloudy layers the cover the ramp takes out of the chain moves the OLR by ${wide} W/m2 at t = 1e-3 and ${narrow} at 1e-4: it is the overlap the trace no longer shares, not its emissivity, that moves it`);
 });
 
 test('the GPU kernels carry the trace-chain floor as one literal that rounds to TRACE_CHAIN_FLOOR in f32', async () => {
