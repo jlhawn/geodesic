@@ -5,7 +5,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16, decodeSubgrid, landSubgrid, subgridUrl, terrainCache, SUBGRID_FIELDS } from '../js/geography.module.js';
-import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING, DIVERGENCE_SURFACES, TEMPERATURE_CLOSURES, VERTICAL_ADVECTION } from '../js/dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING, DIVERGENCE_SURFACES, TEMPERATURE_CLOSURES, VERTICAL_ADVECTION, THETA_FACES } from '../js/dynamics/sigmaCore.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -139,4 +139,29 @@ test(`one tendency with verticalAdvection 'vanLeerWater' on the GPU matches the 
   const theta = apart(vanLeerWater.gpu[1], centered.gpu[1]);
   console.log(`vanLeerWater on the GPU: θ against centered ${said(theta)}`);
   assert.ok(theta.relative < 1e-6);
+});
+
+test(`one tendency with dynamics.thetaFace 'arakawaSuarez' on the GPU matches the CPU at N=${N} on bl48 over the terrain, and only θ's tendency sees the face`, { skip }, async () => {
+  const rates = {};
+  for (const thetaFace of THETA_FACES) {
+    const options = { levels, surfaceGeopotential: model.surfaceGeopotential, thetaFace };
+    const out = start.map((a) => new Float64Array(a.length));
+    createSigmaCore(mesh, options).tendency(start, out);
+    const gpu = await createGpuCore(mesh, { ...options, dragCoefficient: 0, topDragDays: 0, spongeRates: null, spongeMeanRates: null, gravityWaves: false });
+    gpu.upload(start);
+    await gpu.tendency();
+    rates[thetaFace] = { cpu: out, gpu: await gpu.download(gpu.buffers.K1) };
+    for (const buffer of Object.values(gpu.buffers)) buffer.destroy();
+  }
+  const { exner, arakawaSuarez } = rates;
+  const face = apart(minus(arakawaSuarez.gpu[1], exner.gpu[1]), minus(arakawaSuarez.cpu[1], exner.cpu[1]));
+  const whole = apart(arakawaSuarez.gpu[1], arakawaSuarez.cpu[1]);
+  console.log(`θ: GPU against CPU, the face's change ${said(face)}, the tendency ${said(whole)}`);
+  assert.ok(face.scale > 0 && face.relative < 1e-2, `the face's change ${face.diff} against ${face.scale}`);
+  assert.ok(whole.relative < 1e-3, `the tendency ${whole.diff} against ${whole.scale}`);
+  for (const [s, name] of [[0, 'π'], [2, 'the wind'], [4, 'q'], [5, 'q_c']]) {
+    const moved = apart(arakawaSuarez.gpu[s], exner.gpu[s]);
+    console.log(`thetaFace on the GPU: ${name} against 'exner' ${said(moved)}`);
+    assert.equal(moved.diff, 0, `${name} does not see it`);
+  }
 });

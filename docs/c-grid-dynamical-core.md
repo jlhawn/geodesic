@@ -420,8 +420,9 @@ diffusion on θ is dropped in favour of a ∇⁴ on θ (`nu4Theta`), which
 the thin top layers require (Section 6, M2).
 
 **Vertical advection** (`dynamics.verticalAdvection`). Under
-`'centered'`, the default, the interface values `θ_{k±½}`, `q_{k±½}` and
-`q_c,k±½` are linear in the Exner function of the layer middles. Under
+`'centered'`, the default, the interface values `q_{k±½}` and `q_c,k±½`
+are linear in the Exner function of the layer middles, as `θ_{k±½}` is
+under `thetaFace` `'exner'` (below). Under
 `'vanLeerWater'` the faces of q and q_c are van Leer's
 (`vanLeerFace`, the same on the CPU and, through `limitedInterfaces`, in
 the WGSL): the centered value blended toward the upwind layer's by
@@ -434,13 +435,38 @@ the face takes the upwind value. The transport stays in flux form, so the
 water is kept to roundoff. The option is off by default and the
 kernels are then exactly the centered ones.
 
-θ is never limited. The core's energy balance pairs the vertical
-transport of θ through an interface with the hydrostatic pressure work
-only at the face linear in Exner. A limited θ face leaves
-`c_p F (Π_{k+1} − Π_k)(θ_centered − θ_limited)` unbalanced at every
-interface, and a diffusive limiter makes it one-signed: a source of
-`c_p T`, 0.13 W/m² every step on the N=16 aquaplanet against 0.02
-centered. Balancing it would need the geopotential and the pressure
+**θ's face** (`dynamics.thetaFace`). The hydrostatic step is Arakawa
+and Suarez's (1983),
+`φ_k − φ_{k+1} = c_p [θ_v,k (Π_{k+½} − Π_k) + θ_v,k+1 (Π_{k+1} − Π_{k+½})]`,
+and TRiSK's gradient is the adjoint of its divergence, so through an
+interface with mass flux `F` (πσ̇) the kinetic energy exchanges
+`−F (φ_k − φ_{k+1})/g` and the enthalpy `c_p F ΔΠ θ̂/g`, with
+`ΔΠ = Π_{k+1} − Π_k` and `θ̂` the interface value θ is transported at.
+In dry air the two cancel only at
+`θ̂ = [θ_k (Π_{k+½} − Π_k) + θ_{k+1} (Π_{k+1} − Π_{k+½})]/ΔΠ`, the
+face `'arakawaSuarez'`. Under `'exner'`, the default, θ's face is linear
+in Exner, `θ_k + t (θ_{k+1} − θ_k)` with `t = (Π_{k+½} − Π_k)/ΔΠ`: it
+swaps the two weights and differs from the balanced face by
+`(2t − 1)(θ_{k+1} − θ_k)`. At N=16 `|2t − 1|` reaches 0.443 on bl48 and
+0.208 on bl36, and `c_p θ̂ ΔΠ` at the `'exner'` face misses the
+hydrostatic step by up to 6.5 % on bl48. One core tendency of the dry
+N=16 aquaplanet 32 steps from initializeState changes `c_p T` plus the
+kinetic energy by −3.34×10⁻³ W/m² on bl48 and +7.07×10⁻³ on bl36, the
+`'exner'` face's mismatch but for about 10⁻⁶ W/m² in the horizontal
+pressure-gradient pairing; at the `'arakawaSuarez'` face the vertical
+pairing is exact to roundoff (`test/atmosphereConservation.test.mjs`).
+The residual has no fixed sign. q and q_c, which do no pressure work,
+keep the linear weights. The option is off by default; the WGSL takes
+it through `hydrostaticThetaFaces`, and the kernels are otherwise
+exactly the `'exner'` ones.
+
+θ is never limited. A limited θ face adds
+`c_p F ΔΠ (θ_exner − θ_limited)` to the `'exner'` face's own mismatch
+at every interface, and a diffusive limiter makes that increment
+one-signed: a source of `c_p T`, 0.13 W/m² every step on the N=16
+aquaplanet, against 0.008 W/m² on average from the dynamics under the
+centered faces over the slab (the conservation test bounds it at 0.02).
+Balancing a limited face would need the geopotential and the pressure
 gradient to take a flow-dependent θ face.
 
 **Temperature closure** (`dynamics.temperatureClosure`). The ∇⁴ closure
@@ -903,7 +929,8 @@ sources are off (`moist: false` carries q but never sources it).
 
 - **Tracer.** `q` (specific humidity) is state[4], transported by the
   same flux-form scheme and mass fluxes as θ, with interface values
-  interpolated in Exner like θ's (or limited, under `verticalAdvection`
+  interpolated in Exner like θ's under the default `thetaFace` (or
+  limited, under `verticalAdvection`
   `'vanLeerWater'`, Section 4.3). The ∇⁴ closure acts on the
   mass-weighted field π q, so the column's water is preserved exactly
   under transport (checked to roundoff in `test/moist.test.mjs`); θ's

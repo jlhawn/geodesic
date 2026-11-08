@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createSigmaCore, sigmaInterfaces, VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, dynamicsOptions, VIRTUAL_FACTOR, THETA_FACES } from '../js/dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { divergence } from '../js/dynamics/operators.module.js';
 import { initializeState } from '../js/physics/init.module.js';
@@ -248,9 +248,10 @@ test("in double precision the CPU's adjustment keeps the energy of the air and i
 /*
  * The energy tendency (W/m²) of one evaluation of the dynamics, from the
  * tendencies of π, θ and u in `out`: Σ c_p Π (π dθ/dt + (1 + κ) θ dπ/dt)
- * Δσ/g over the cells and layers (Ππ goes as π^(1+κ)) and the kinetic
- * energy's change on the edges. Water's L q is carried in flux form and
- * keeps its total, so it is left out.
+ * Δσ/g over the cells and layers (Ππ goes as π^(1+κ)) and the change of
+ * the kinetic energy Σ ½ d_c d_v π_e u² Δσ/g on the edges, as bookkeeper
+ * counts it. Water's L q is carried in flux form and keeps its total, so
+ * it is left out.
  */
 function energyTendency(model, state, out) {
   const { mesh, core } = model, { K, C, E, dSigma, cp, g, kappa } = core.diagnostics;
@@ -267,7 +268,7 @@ function energyTendency(model, state, out) {
   }
   for (let k = 0; k < K; k++) for (let e = 0; e < E; e++) {
     const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], x = k * E + e, u = state[2][x];
-    rate += 0.5 * dcEdge[e] * dvEdge[e] * dSigma[k] / g * (u * out[2][x] * 0.5 * (state[0][a] + state[0][b]) + 0.25 * u * u * (out[0][a] + out[0][b]));
+    rate += 0.5 * dcEdge[e] * dvEdge[e] * dSigma[k] / g * (u * out[2][x] * (state[0][a] + state[0][b]) + 0.5 * u * u * (out[0][a] + out[0][b]));
   }
   return rate / area;
 }
@@ -320,6 +321,24 @@ test('the CPU dynamics changes the energy of moist air as it changes its dry twi
   console.log(`CPU: energy tendency ${wet.toExponential(3)} W/m² moist, ${plain.toExponential(3)} its dry twin; the virtual work ${work.toExponential(3)}`);
   assert.ok(work > 0.02, `virtual work ${work} W/m²`);
   assert.ok(Math.abs(wet - plain) < 0.2 * work, `moist ${wet} against dry ${plain} W/m², virtual work ${work}`);
+});
+
+test("in double precision a CPU core tendency keeps the dry twin's c_p T and kinetic energy to 1e-5 W/m² under dynamics.thetaFace 'arakawaSuarez', the face whose vertical transport of c_p θ the hydrostatic pressure work balances, on bl36 and bl48, where the 'exner' face leaves a residual of its own", () => {
+  const bl48 = createModel(new Grid(N), { ...OPTIONS, levels: sigmaInterfaces('bl48') });
+  initializeState(bl48).forEach((values, s) => bl48.state[s].set(values));
+  for (let n = 0; n < SPINUP_STEPS; n++) bl48.step(DT);
+  for (const [name, model] of [['bl36', spunUp()], ['bl48', bl48]]) {
+    const { dry } = twins(model), rates = {};
+    for (const thetaFace of THETA_FACES) {
+      const core = createSigmaCore(model.mesh, { levels: model.core.levels, surfaceGeopotential: model.surfaceGeopotential, ...dynamicsOptions({ thetaFace }) });
+      const out = dry.map((a) => new Float64Array(a.length));
+      core.tendency(dry, out);
+      rates[thetaFace] = energyTendency(model, dry, out);
+    }
+    console.log(`CPU ${name}, the dry twin's energy tendency: 'exner' ${rates.exner.toExponential(3)} W/m², 'arakawaSuarez' ${rates.arakawaSuarez.toExponential(3)}`);
+    assert.ok(Math.abs(rates.exner) > 1e-3, `${name} 'exner': ${rates.exner} W/m²`);
+    assert.ok(Math.abs(rates.arakawaSuarez) < 1e-5, `${name} 'arakawaSuarez': ${rates.arakawaSuarez} W/m²`);
+  }
 });
 
 test('the GPU dynamics changes the energy of moist air as it changes its dry twin\'s, to single precision', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

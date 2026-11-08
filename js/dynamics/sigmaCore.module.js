@@ -28,6 +28,7 @@ const CAM_L26_HYBI = [
 export const DIVERGENCE_SURFACES = ['sigma', 'hybrid'];
 export const TEMPERATURE_CLOSURES = ['sigma', 'standard'];
 export const VERTICAL_ADVECTION = ['centered', 'vanLeerWater'];
+export const THETA_FACES = ['exner', 'arakawaSuarez'];
 
 /*
  * The models' `dynamics` options with their defaults: divergenceSurfaces,
@@ -37,20 +38,30 @@ export const VERTICAL_ADVECTION = ['centered', 'vanLeerWater'];
  * temperatureClosure, 'sigma' for the ∇⁴ closure on T along σ, or
  * 'standard' for it on T less the US Standard Atmosphere 1976 at the
  * layer's pressure πσ, which takes out T's hydrostatic slope along σ over
- * terrain; verticalAdvection, 'centered' for θ, q and q_c at the layer
- * interfaces linear in Exner, or 'vanLeerWater' for q and q_c limited by
- * vanLeerFace and θ centered, the face whose vertical transport the
- * hydrostatic pressure work balances. The last three are returned only
- * when given.
+ * terrain; verticalAdvection, 'centered' for q and q_c at the layer
+ * interfaces linear in Exner, or 'vanLeerWater' for them limited by
+ * vanLeerFace, θ never limited; thetaFace, 'exner' for θ's interface
+ * value linear in Exner, θ_k + t(θ_{k+1} − θ_k) with
+ * t = (Π_{k+½} − Π_k)/ΔΠ, or 'arakawaSuarez' for it weighted as the
+ * hydrostatic step weights θ_v,
+ * [θ_k(Π_{k+½} − Π_k) + θ_{k+1}(Π_{k+1} − Π_{k+½})]/ΔΠ, the one face
+ * whose vertical transport of c_p θ the pressure work balances. The
+ * 'exner' face swaps those weights and differs from it by
+ * (2t − 1)(θ_{k+1} − θ_k), so it carries an energy residual of its own,
+ * −3.3×10⁻³ W/m² on bl48 and +7.1×10⁻³ on bl36 in a dry N=16 core
+ * tendency (docs/c-grid-dynamical-core.md, section 4.3); a limited θ face
+ * would add a one-signed c_p T source to it. The last four are returned
+ * only when given.
  */
-export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscosity, temperatureClosure, verticalAdvection, ...rest } = {}) {
+export function dynamicsOptions({ divergenceSurfaces = 'sigma', divergenceViscosity, temperatureClosure, verticalAdvection, thetaFace, ...rest } = {}) {
   const unknown = Object.keys(rest);
-  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, divergenceViscosity, temperatureClosure and verticalAdvection, not ${unknown.join(', ')}`);
+  if (unknown.length) throw new Error(`the dynamics options are divergenceSurfaces, divergenceViscosity, temperatureClosure, verticalAdvection and thetaFace, not ${unknown.join(', ')}`);
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
   if (divergenceViscosity !== undefined && !(typeof divergenceViscosity === 'number' && divergenceViscosity >= 0 && Number.isFinite(divergenceViscosity))) throw new Error(`divergenceViscosity is ν_d in m²/s, 0 or more, not ${divergenceViscosity}`);
   if (temperatureClosure !== undefined && !TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
   if (verticalAdvection !== undefined && !VERTICAL_ADVECTION.includes(verticalAdvection)) throw new Error(`verticalAdvection is ${VERTICAL_ADVECTION.join(' or ')}, not ${verticalAdvection}`);
-  return { divergenceSurfaces, ...(divergenceViscosity !== undefined ? { divergenceViscosity } : {}), ...(temperatureClosure !== undefined ? { temperatureClosure } : {}), ...(verticalAdvection !== undefined ? { verticalAdvection } : {}) };
+  if (thetaFace !== undefined && !THETA_FACES.includes(thetaFace)) throw new Error(`thetaFace is ${THETA_FACES.join(' or ')}, not ${thetaFace}`);
+  return { divergenceSurfaces, ...(divergenceViscosity !== undefined ? { divergenceViscosity } : {}), ...(temperatureClosure !== undefined ? { temperatureClosure } : {}), ...(verticalAdvection !== undefined ? { verticalAdvection } : {}), ...(thetaFace !== undefined ? { thetaFace } : {}) };
 }
 
 /*
@@ -237,12 +248,13 @@ export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
     nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma', surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null, spongeMeanRates = null,
-    divergenceViscosity = 0, temperatureClosure = 'sigma', verticalAdvection = 'centered',
+    divergenceViscosity = 0, temperatureClosure = 'sigma', verticalAdvection = 'centered', thetaFace = 'exner',
   } = options;
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
   if (!TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
   if (!VERTICAL_ADVECTION.includes(verticalAdvection)) throw new Error(`verticalAdvection is ${VERTICAL_ADVECTION.join(' or ')}, not ${verticalAdvection}`);
-  const standardClosure = temperatureClosure === 'standard', vanLeer = verticalAdvection === 'vanLeerWater';
+  if (!THETA_FACES.includes(thetaFace)) throw new Error(`thetaFace is ${THETA_FACES.join(' or ')}, not ${thetaFace}`);
+  const standardClosure = temperatureClosure === 'standard', vanLeer = verticalAdvection === 'vanLeerWater', hydrostaticFace = thetaFace === 'arakawaSuarez';
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
     cellsOnEdge, verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, areaTriangle, dcEdge, dvEdge, fVertex,
@@ -326,7 +338,7 @@ export function createSigmaCore(mesh, options = {}) {
     for (let k = 0; k < K - 1; k++) {
       const idx = k * C + i;
       const t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
-      thetaLower[idx] = theta[idx] + t * (theta[idx + C] - theta[idx]);
+      thetaLower[idx] = theta[idx] + (hydrostaticFace ? 1 - t : t) * (theta[idx + C] - theta[idx]);
       qLower[idx] = q ? q[idx] + t * (q[idx + C] - q[idx]) : 0;
       qcLower[idx] = qc ? qc[idx] + t * (qc[idx + C] - qc[idx]) : 0;
     }
@@ -635,5 +647,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, divergenceViscosity, temperatureClosure, verticalAdvection, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, divergenceSurfaces, divergenceViscosity, temperatureClosure, verticalAdvection, thetaFace, coupledClosure: coupled, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }

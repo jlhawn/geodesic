@@ -5,7 +5,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
-import { createSigmaCore, sigmaInterfaces, dynamicsOptions, standardTemperature, standardSigma, vanLeerFace, DIVERGENCE_DAMPING, DIVERGENCE_SURFACES, VERTICAL_ADVECTION, P0 } from '../js/dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, dynamicsOptions, standardTemperature, standardSigma, vanLeerFace, DIVERGENCE_DAMPING, DIVERGENCE_SURFACES, VERTICAL_ADVECTION, THETA_FACES, P0 } from '../js/dynamics/sigmaCore.module.js';
 
 const N = 16, dt = 1350 * 16 / N, levels = sigmaInterfaces('bl48'), K = levels.length - 1;
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
@@ -159,4 +159,32 @@ test(`over a sharp step in water at N=${N} over the terrain the centered faces d
   }
   assert.deepEqual(Array.from(rates.vanLeerWater[2]), Array.from(rates.centered[2]), 'the wind does not see it');
   assert.deepEqual(Array.from(rates.vanLeerWater[1]), Array.from(rates.centered[1]), 'vanLeerWater leaves θ centered');
+});
+
+test(`thetaFace takes 'exner' or 'arakawaSuarez'; at N=${N} on bl48 over the terrain c_p θ ΔΠ at the 'arakawaSuarez' face is the hydrostatic step between two dry layers, which the 'exner' face misses, and only θ's tendency sees the face`, () => {
+  assert.deepEqual(dynamicsOptions({ thetaFace: 'arakawaSuarez' }), { divergenceSurfaces: 'sigma', thetaFace: 'arakawaSuarez' });
+  assert.throws(() => dynamicsOptions({ thetaFace: 'linear' }), /not linear$/);
+  assert.throws(() => core({ thetaFace: 'upwind' }), /upwind/);
+  assert.equal(createModel(new Grid(N), { levels, physics: false, dynamics: { thetaFace: 'arakawaSuarez' } }).core.thetaFace, 'arakawaSuarez');
+  const state = start.map((a) => Float64Array.from(a));
+  state[4].fill(0);
+  state[5].fill(0);
+  const misses = {}, rates = {};
+  for (const thetaFace of THETA_FACES) {
+    const c = core({ thetaFace }), out = state.map((a) => new Float64Array(a.length));
+    c.tendency(state, out);
+    const { exnerLayer, geopotential, cp } = c.diagnostics, face = c.arrays.thetaLower;
+    let miss = 0;
+    for (let k = 0; k < K - 1; k++) for (let i = 0; i < C; i++) {
+      const n = k * C + i, rise = geopotential[n] - geopotential[n + C];
+      miss = Math.max(miss, Math.abs(cp * face[n] * (exnerLayer[n + C] - exnerLayer[n]) - rise) / Math.abs(rise));
+    }
+    misses[thetaFace] = miss;
+    rates[thetaFace] = out;
+  }
+  console.log(`c_p θ ΔΠ against the hydrostatic step: 'exner' ${misses.exner.toExponential(2)} at most, 'arakawaSuarez' ${misses.arakawaSuarez.toExponential(2)}`);
+  assert.ok(misses.arakawaSuarez < 1e-12, `'arakawaSuarez' ${misses.arakawaSuarez}`);
+  assert.ok(misses.exner > 1e-2, `'exner' ${misses.exner}`);
+  for (const s of [0, 2, 4, 5]) assert.deepEqual(Array.from(rates.arakawaSuarez[s]), Array.from(rates.exner[s]), `field ${s} does not see it`);
+  assert.ok(largest(rates.arakawaSuarez[1].map((x, n) => x - rates.exner[1][n])) > 0, 'θ does');
 });
