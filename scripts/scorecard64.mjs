@@ -14,13 +14,17 @@
  *   node scripts/scorecard64.mjs [--json OUT.json] [--base BASE.json] [--log FILE] [--start START] [--commit HASH] [--any-start] [--identical] DIR/p64_day0395.bin DIR/p64_day0425.bin
  * which takes the start from --start or from the save 30 days before the first one beside it. Each state's daily lines
  * (TOA fluxes and the sea-ice cuts) are read from TAG.log beside it, or from --log FILE; a missing log is an error.
+ * An older log's sea-ice line cut over every sea cell ("sea cells, 15 %") is not the index's cut and is not scored:
+ * its rows read no value, and only calibration falls back on the proxy, the cut of the 30-day mean on the index's
+ * grids.
  * The JSON records the start's
  * sha256 and day, the save days, each save's sha256, the saves' options, the scoring tree's HEAD (scoredOn) and the
  * commit that made the saves (commit: with --run the tree's HEAD before the first segment, else --commit, else null,
  * since a save does not record it), and with --run the spin-up's environment and treeChangedDuringRun when the fingerprint
- * of HEAD, the tracked changes and the untracked files under js/, scripts/ and data/ differs before a segment or at
+ * of HEAD, the tracked changes and the untracked files under js/, scripts/ and data/ (a symlink by its target, a
+ * directory by name) differs before a segment or at
  * scoring. A --base whose start or leads differ is refused without --any-start, which prints what differs; --json may
- * not name the --base file, and --run takes no other arguments.
+ * not name the --base file (the same device and inode), and --run takes no other arguments.
  *
  * With --base, a row moves when its two-window mean changed by more than t·sigma, t the two-sided 5 % quantile of
  * Student's t at sigma's degrees of freedom, and is unresolved otherwise; a re-pin cites the moved rows. Unresolved is not
@@ -65,7 +69,7 @@
  * Not definition-matched: landT, and the undercurrent rows, which compare the window-end ocean's velocity, a snapshot,
  * with TAO's annual-mean climatology, not day means of the window's calendar months.
  */
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, copyFileSync, realpathSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, copyFileSync, statSync, lstatSync, readlinkSync } from 'node:fs';
 import { spawnSync, execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -106,17 +110,17 @@ export const windowDays = (D) => Array.from({ length: 30 }, (_, j) => D - 29 + j
 export const dayWeighted = (D, f) => windowDays(D).reduce((s, d) => { let h = 0; for (let k = 0; k < 24; k++) h += f(monthAt(d - 1 + (k + 0.5) / 24)); return s + h / 24; }, 0) / 30;
 
 export function logDays(text) {
-  const days = new Map(), ice = new Map();
+  const days = new Map(), ice = new Map(), seaCellIce = new Map();
   for (const line of text.split('\n')) {
     let m = line.match(/^day (\d+) \([^)]*\): Ts [-\d.]+ °C, ASR ([-\d.]+) \(atmosphere [-\d.]+\) OLR ([-\d.]+) W\/m²/);
     if (m) {
       const g = (re) => { const x = line.match(re); return x ? Number(x[1]) : NaN; };
       days.set(+m[1], { asr: +m[2], olr: +m[3], swcre: g(/SWCRE ([-\d.]+)/), lwcre: g(/LWCRE ([-\d.]+)/) });
     }
-    m = line.match(/sea ice on day (\d+)'s mean concentration, sea cells(?: on the index's grids)?, 15 %: N extent ([\d.]+) area ([\d.]+), S extent ([\d.]+) area ([\d.]+)/);
-    if (m) ice.set(+m[1], { nExtent: +m[2], nArea: +m[3], sExtent: +m[4], sArea: +m[5] });
+    m = line.match(/sea ice on day (\d+)'s mean concentration, sea cells( on the index's grids)?, 15 %: N extent ([\d.]+) area ([\d.]+), S extent ([\d.]+) area ([\d.]+)/);
+    if (m) (m[2] ? ice : seaCellIce).set(+m[1], { nExtent: +m[3], nArea: +m[4], sExtent: +m[5], sArea: +m[6] });
   }
-  return { days, ice };
+  return { days, ice, seaCellIce };
 }
 
 export function undercurrentCore(profile) {
@@ -390,14 +394,24 @@ async function startOf(path) {
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const GIT = { cwd: ROOT, maxBuffer: 1 << 30, stdio: ['ignore', 'pipe', 'ignore'] };
-const git = (cmd) => execSync(cmd, { ...GIT, encoding: 'utf8' }).trim();
+const git = (cmd, cwd = ROOT) => execSync(cmd, { ...GIT, cwd, encoding: 'utf8' }).trim();
 
-function fingerprint() {
+function untrackedEntry(root, path) {
+  const full = join(root, path);
   try {
-    const head = git('git rev-parse --short=12 HEAD'), diff = execSync('git diff HEAD -- js scripts data', GIT);
-    const untracked = execSync('git ls-files -z --others --exclude-standard -- js scripts data', GIT).toString().split('\0').filter(Boolean);
+    const st = lstatSync(full);
+    if (st.isSymbolicLink()) return `link ${readlinkSync(full)}`;
+    if (st.isDirectory()) return 'directory';
+    return readFileSync(full);
+  } catch (error) { return `unreadable ${error.code ?? error.message}`; }
+}
+
+export function fingerprint(root = ROOT) {
+  try {
+    const head = git('git rev-parse --short=12 HEAD', root), diff = execSync('git diff HEAD -- js scripts data', { ...GIT, cwd: root });
+    const untracked = execSync('git ls-files -z --others --exclude-standard -- js scripts data', { ...GIT, cwd: root }).toString().split('\0').filter(Boolean);
     const hash = createHash('sha256').update(head).update(diff);
-    for (const path of untracked) hash.update(`\0${path}\0`).update(readFileSync(join(ROOT, path)));
+    for (const path of untracked) hash.update(`\0${path}\0`).update(untrackedEntry(root, path));
     return { scoredOn: `${head}${diff.length || untracked.length ? ' with changes' : ''}`, tree: hash.digest('hex').slice(0, 16) };
   } catch (error) {
     console.warn(`warning: no fingerprint of the tree (${String(error.message).split('\n')[0]}); scoredOn and tree are null`);
@@ -418,10 +432,20 @@ function commitArg(value) {
   return value.slice(0, 12);
 }
 
+export function sameFile(x, y) {
+  if (existsSync(x) && existsSync(y)) { const [a, b] = [statSync(x), statSync(y)]; return a.dev === b.dev && a.ino === b.ino; }
+  return resolve(x) === resolve(y);
+}
+
+export function runSegments(days, run, { first, take = () => fingerprint().tree } = {}) {
+  const segments = [];
+  days.forEach((day, k) => { segments.push({ day, tree: k === 0 ? first : take() }); run(day); });
+  return segments;
+}
+
 function loadBase(baseFile, jsonOut) {
   if (!baseFile) return null;
-  const same = (x, y) => resolve(x) === resolve(y) || (existsSync(x) && existsSync(y) && realpathSync(x) === realpathSync(y));
-  if (jsonOut && same(baseFile, jsonOut)) throw new Error(`--json ${jsonOut} is the --base file; it would overwrite the base`);
+  if (jsonOut && sameFile(baseFile, jsonOut)) throw new Error(`--json ${jsonOut} is the --base file; it would overwrite the base`);
   return JSON.parse(readFileSync(baseFile, 'utf8'));
 }
 
@@ -468,12 +492,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs
     if (readdirSync(outDir).some((name) => /_day\d+\.bin$/.test(name))) throw new Error(`${outDir} already holds saves`);
     const D0 = first.day, days = [D0 + 30, D0 + 60], spinup = fileURLToPath(new URL('./spinup.mjs', import.meta.url));
     copyFileSync(start, join(outDir, `p64_day${String(D0).padStart(4, '0')}.bin`));
-    const env = { ...process.env, LEVELS: 'bl48', N: '64', TAG: 'p64', OUT: outDir, MINUTES: '100000', KEEP: '20' }, made = { ...fingerprint(), env: spinupEnv(env), segments: [] };
-    for (const d of days) {
-      made.segments.push({ day: d, tree: d === days[0] ? made.tree : fingerprint().tree });
+    const env = { ...process.env, LEVELS: 'bl48', N: '64', TAG: 'p64', OUT: outDir, MINUTES: '100000', KEEP: '20' }, made = { ...fingerprint(), env: spinupEnv(env) };
+    made.segments = runSegments(days, (d) => {
       const run = spawnSync(process.execPath, ['--max-old-space-size=6000', spinup], { stdio: 'inherit', env: { ...env, DAYS: String(d) } });
       if (run.status !== 0) throw new Error(`spinup.mjs to day ${d} exited ${run.status}`);
-    }
+    }, { first: made.tree });
     const reductions = [];
     for (const d of days) reductions.push(await reduceFile(join(outDir, `p64_day${String(d).padStart(4, '0')}.bin`)));
     score({ reductions, start: { path: start, sha256: hash, day: D0 }, made, base, jsonOut, anyStart, identical });

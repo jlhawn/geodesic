@@ -1,18 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { ROWS, BOXES, SIGMA_FILE, logDays, undercurrentCore, dayWeighted, monthAt, windowDays, windowMeans, calibrate, twoSidedTail, studentTail, studentCritical, sigmaDof, designProblems, compareScores, identityCheck, inMooringWindow, mooringProfile, PROFILE_DEPTHS } from '../scripts/scorecard64.mjs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, linkSync, symlinkSync, rmSync, existsSync } from 'node:fs';
+import { spawnSync, execSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ROWS, BOXES, SIGMA_FILE, logDays, undercurrentCore, dayWeighted, monthAt, windowDays, windowMeans, calibrate, twoSidedTail, studentTail, studentCritical, sigmaDof, designProblems, compareScores, identityCheck, formatTable, fingerprint, sameFile, runSegments, inMooringWindow, mooringProfile, PROFILE_DEPTHS } from '../scripts/scorecard64.mjs';
 
-test('the log parser reads the day-mean TOA line and the daily sea-ice cut', () => {
+test('the log parser reads the day-mean TOA line and the index-grid sea-ice cut, and keeps the older all-sea-cell cut apart', () => {
   const text = [
     'day 410 (1.4 min): Ts 16.14 °C, ASR 231.5 (atmosphere 77.0) OLR 234.5 W/m², ps 539–1035 hPa, albedo 0.309, SWCRE -50.7 LWCRE 26.2, clear-sky reflectance 0.1573',
-    'sea ice on day 410\'s mean concentration, sea cells, 15 %: N extent 12.14 area 10.73, S extent 1.59 area 0.89 Mkm²',
+    'sea ice on day 410\'s mean concentration, sea cells on the index\'s grids, 15 %: N extent 12.14 area 10.73, S extent 1.59 area 0.89 Mkm²',
+    'sea ice on day 411\'s mean concentration, sea cells, 15 %: N extent 12.30 area 10.90, S extent 1.60 area 0.90 Mkm²',
     'regions after 2 days',
   ].join('\n');
-  const { days, ice } = logDays(text);
+  const { days, ice, seaCellIce } = logDays(text);
   assert.deepEqual(days.get(410), { asr: 231.5, olr: 234.5, swcre: -50.7, lwcre: 26.2 });
   assert.deepEqual(ice.get(410), { nExtent: 12.14, nArea: 10.73, sExtent: 1.59, sArea: 0.89 });
-  assert.equal(days.size + ice.size, 2);
+  assert.deepEqual(seaCellIce.get(411), { nExtent: 12.3, nArea: 10.9, sExtent: 1.6, sArea: 0.9 });
+  assert.deepEqual([days.size, ice.size, seaCellIce.size], [1, 1, 1]);
 });
 
 test('the undercurrent core is the profile\x27s eastward maximum refined by a parabola', () => {
@@ -63,6 +68,20 @@ test('sigma is the saturated spread of the two-window mean, with its serial corr
   assert.ok(compareScores(base, inside, sigma).every((c) => c.verdict === 'unresolved'));
 });
 
+test('a row no twin pair carries is ungated: no sigma, outside the nulls, printed without a threshold', () => {
+  const rows = (model, proxy = NaN) => Object.fromEntries(ROWS.filter(([key]) => key !== 'landT2m').map(([key]) => [key, { model, ref: 0, proxy }]));
+  const year = (start, late) => Array.from({ length: 12 }, (_, k) => { const lead = k === 11 ? 365 : 30 * (k + 1); return { day: start + lead, rows: rows(lead >= 180 ? late(k) : 0.1) }; });
+  const zero = (start) => Array.from({ length: 12 }, (_, k) => ({ day: start + (k === 11 ? 365 : 30 * (k + 1)), rows: rows(NaN, 0) }));
+  const { rows: sigma, nulls } = calibrate([{ label: 'S1', start: 365, a: year(365, (k) => (k % 2 ? 1 : -1)), b: zero(365) }, { label: 'S2', start: 548, a: year(548, () => 2), b: zero(548) }]);
+  assert.deepEqual(sigma.landT2m, { sigma: null, windows: 0, ungated: 'no twin pair carries this row' });
+  assert.ok(Object.entries(sigma).filter(([key]) => key !== 'landT2m').every(([, r]) => r.sigma > 0 && !r.ungated));
+  assert.deepEqual(nulls.atLeads.map((n) => n.rows), [ROWS.length - 1, ROWS.length - 1]);
+  assert.ok([nulls.normalTailRate, nulls.inSampleRate, nulls.saturatedRateAtTwoSigma].every(Number.isFinite));
+  const reduction = { day: 395, rows: Object.fromEntries(ROWS.map(([key]) => [key, { model: 1, ref: 0 }])) };
+  const line = formatTable([reduction], JSON.parse(JSON.stringify(sigma))).split('\n').find((x) => x.startsWith('| 40–60N land 2 m air'));
+  assert.match(line, /\| — \/ — \|$/, line);
+});
+
 test('identity: a base read back from JSON, bit-exact rows, rows with no value on either side, the starts and the saves', () => {
   const sigma = Object.fromEntries(ROWS.map(([key]) => [key, { sigma: 1, dof: 8 }])), viaJson = (x) => JSON.parse(JSON.stringify(x));
   const record = (value, extra = {}) => ({ start: { sha256: 'a'.repeat(64), day: 365 }, days: [395, 425], saves: ['s1', 's2'], means: Object.fromEntries(ROWS.map(([key]) => [key, { model: value, ref: 0 }])), ...extra });
@@ -101,6 +120,10 @@ test('identity: a base read back from JSON, bit-exact rows, rows with no value o
   const ungated = compareScores(viaJson(withoutT2m), newRow, partial), t2mRow = ungated.find((c) => c.key === 'landT2m'), ungatedCheck = identityCheck(viaJson(withoutT2m), newRow, ungated);
   assert.ok(!t2mRow.gated && t2mRow.verdict === 'no value' && ungatedCheck.ok && ungatedCheck.ungated.join() === 'landT2m (no value in the base)', 'an ungated row is reported but does not decide --identical');
   assert.equal(compareScores(newRow, structuredClone(newRow), partial).find((c) => c.key === 'landT2m').verdict, 'ungated');
+  const t2mMoved = structuredClone(newRow);
+  t2mMoved.means.landT2m.model = 290;
+  const ungatedChange = compareScores(viaJson(newRow), t2mMoved, partial), ungatedChangeCheck = identityCheck(viaJson(newRow), t2mMoved, ungatedChange);
+  assert.ok(ungatedChangeCheck.ok && ungatedChangeCheck.changed.length === 0 && ungatedChangeCheck.ungated.join() === 'landT2m (changed)', 'a changed ungated row is listed, not counted as a change');
   const committed = JSON.parse(readFileSync(SIGMA_FILE, 'utf8')).rows, onRecord = compareScores(viaJson(withoutT2m), newRow, committed);
   assert.ok(onRecord.filter((c) => !c.gated).map((c) => c.key).join() === 'landT2m' && identityCheck(viaJson(withoutT2m), newRow, onRecord).ok, 'the committed record leaves exactly the 2 m row ungated');
   ({ check } = verdicts(record(2, { saves: undefined }), record(2)));
@@ -116,6 +139,69 @@ test('a base from another start, other leads or no recorded start is refused unl
   assert.match(designProblems(base, { ...base, start: { sha256: 'a'.repeat(64), day: 548 }, days: [578, 638] }).join(), /leads are \[30,60\], the candidate's \[30,90\]/);
   assert.match(designProblems({ means }, base).join(), /base records no start/);
   assert.throws(() => compareScores({ means }, base, {}), /not the same gate design/);
+});
+
+const SCRIPT = new URL('../scripts/scorecard64.mjs', import.meta.url).pathname;
+const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
+
+test('the command line refuses a --json that is the --base file, by path, hard link or case, and --run arguments it does not take, before reading a save or a start', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'scorecard64-cli-'));
+  try {
+    const base = join(dir, 'Base.json'), saves = [join(dir, 'p64_day0395.bin'), join(dir, 'p64_day0425.bin')];
+    writeFileSync(base, '{"means":{}}');
+    linkSync(base, join(dir, 'linked.json'));
+    const overwrite = /is the --base file; it would overwrite the base/;
+    for (const json of [base, join(dir, '.', 'Base.json'), join(dir, 'linked.json')]) {
+      const r = cli('--json', json, '--base', base, ...saves);
+      assert.ok(r.status !== 0 && overwrite.test(r.stderr), `--json ${json}: ${r.stderr.slice(-300)}`);
+    }
+    if (existsSync(join(dir, 'base.json'))) assert.match(cli('--json', join(dir, 'base.json'), '--base', base, ...saves).stderr, overwrite);
+    assert.equal(readFileSync(base, 'utf8'), '{"means":{}}');
+    const other = cli('--json', join(dir, 'out.json'), '--base', base, ...saves);
+    assert.ok(other.status !== 0 && !overwrite.test(other.stderr) && /ENOENT/.test(other.stderr), other.stderr.slice(-300));
+    for (const extra of [['--commit', 'abcdef1'], ['--log', 'x.log'], ['--identicl'], ['third']]) {
+      const r = cli('--run', join(dir, 'missing-start.bin'), join(dir, 'out'), ...extra);
+      assert.ok(r.status !== 0 && /usage: --run START OUT/.test(r.stderr) && !existsSync(join(dir, 'out')), `${extra}: ${r.stderr.slice(-300)}`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the tree fingerprint sees untracked files, their contents and a symlink\x27s target, survives a directory symlink and a nested repository, and a run takes it before each segment', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'scorecard64-fp-')), git = (cmd) => execSync(`git -c user.name=t -c user.email=t@t ${cmd}`, { cwd: dir, stdio: 'ignore' });
+  try {
+    git('init -q');
+    for (const sub of ['js', 'scripts', 'data']) mkdirSync(join(dir, sub));
+    writeFileSync(join(dir, 'scripts/tracked.mjs'), 'a');
+    git('add -A'); git('commit -q -m base');
+    const clean = fingerprint(dir);
+    assert.ok(clean.tree && clean.scoredOn && !clean.scoredOn.endsWith('with changes'));
+    writeFileSync(join(dir, 'scripts/new.mjs'), 'x');
+    const added = fingerprint(dir);
+    writeFileSync(join(dir, 'scripts/new.mjs'), 'y');
+    const edited = fingerprint(dir);
+    symlinkSync('../js', join(dir, 'data/to-js'));
+    const linked = fingerprint(dir);
+    mkdirSync(join(dir, 'js/nested'));
+    execSync('git init -q', { cwd: join(dir, 'js/nested'), stdio: 'ignore' });
+    const nested = fingerprint(dir);
+    const trees = [clean, added, edited, linked, nested].map((x) => x.tree);
+    assert.ok(trees.every(Boolean) && new Set(trees).size === trees.length && added.scoredOn.endsWith('with changes'), JSON.stringify(trees));
+    rmSync(join(dir, 'data/to-js')); symlinkSync('../scripts', join(dir, 'data/to-js'));
+    assert.notEqual(fingerprint(dir).tree, nested.tree, 'a symlink is hashed by its target');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  let reading = 0;
+  const ran = [], segments = runSegments([395, 425, 455], (d) => ran.push(d), { first: 'start', take: () => `reading ${++reading}` });
+  assert.deepEqual(segments, [{ day: 395, tree: 'start' }, { day: 425, tree: 'reading 1' }, { day: 455, tree: 'reading 2' }]);
+  assert.deepEqual(ran, [395, 425, 455]);
+});
+
+test('sameFile compares device and inode when both exist, else the resolved paths', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'scorecard64-same-'));
+  try {
+    const a = join(dir, 'a.json');
+    writeFileSync(a, '{}'); linkSync(a, join(dir, 'b.json')); writeFileSync(join(dir, 'c.json'), '{}');
+    assert.deepEqual([sameFile(a, join(dir, 'b.json')), sameFile(a, join(dir, 'c.json')), sameFile(join(dir, 'x.json'), join(dir, '.', 'x.json')), sameFile(a, join(dir, 'y.json'))], [true, false, true, false]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('the mooring window: the N=64 floors of 1° and 1.5° bind below them, the mesh spacing above; the profile weighs columns by area', () => {
