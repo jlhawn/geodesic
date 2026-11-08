@@ -463,7 +463,8 @@ Kept, ported to operate on flat arrays (no algorithmic change):
 - Gray longwave radiation column (`RadiationColumn`), solar geometry, slab
   ocean heat capacity, surface albedo.
 - Bulk surface drag and sensible heat flux (speed from 3.7), gustiness
-  floor, dry convective adjustment, PBL and top Rayleigh drag.
+  floor (`surface.gustiness`, 3 m/s, on both engines), dry convective
+  adjustment, PBL and top Rayleigh drag.
 - Initialization: latitude-dependent surface temperature and σ-tapered θ
   shift, balanced surface pressure (bisection on a level 500 hPa
   surface), the wavenumber-5 eddy seed, the ±30°/±60° pressure bands.
@@ -9541,7 +9542,8 @@ order of the vegetation's turbulent stress itself over the mountains
 (0.12–0.29 N/m² after); the μ, γ, θ and σ fields can be computed from the
 0.25° file at the model's start.
 
-What still misses: the gustiness is the 3 m/s floor, not a free
+What still misses: the gustiness is a fixed floor (`surface.gustiness`,
+3 m/s, which reaches the GPU's exchange, drag and ice drift as well), not a free
 convection velocity (COARE's 1.2 w*, the IFS's w* with z_i 1000 m), so
 calm stable nights keep a flux; the tiles share one skin, so a forest's
 strong coupling and the bare soil's weak one average into one
@@ -12030,6 +12032,71 @@ observed 0.6–0.8 low cover; but the Atlantic trades 10–20N 50–25W go
 0.64 → 0.77 against Earth's 0.35–0.55, the deck there 0.16 → 0.39, and
 the N Pacific trades stay 0.83. minimumInversion has not been restated
 against the interpolated reference.
+
+#### The boundary layer's and the surface exchange's options
+
+Each is off, or at the value the scheme had before it, by default. Each
+runs on both engines and leaves the model bit-identical when it is unset.
+
+`surface.relativeWind` (false): the stress and the bulk heat and
+moisture fluxes take the lowest layer's wind relative to the sea's
+surface current, τ = ρ C_D |v − u_s| (v − u_s).
+- u_s is the ocean's top-layer velocity on each edge under open water
+  (`seaFlow`, zero under ice and shelves), refreshed after the ice drift.
+- It needs the roughness exchange's implicit drag. A save carries `seaFlow`.
+- The ocean-only phase of `scripts/asyncSpinup.sh` replays the coupled
+  phase's recorded stress and fluxes, so it has no current feedback.
+- A state's header does not record the `surface` group
+  (`scripts/stateOptions.mjs`), so the page opens such a state without
+  the option.
+
+`boundaryLayer.diagnoseFirst` (false) and `surfaceExcess` (0).
+- With diagnoseFirst, the diagnosis (top, K, regime) sees the lowest
+  layer before the step's surface sensible heat and evaporation enter
+  it, as CAM's does. The implicit solve still takes them.
+- The offline tools (`diagnoseExchange` in `scripts/surfaceExchange.mjs`,
+  and `scripts/adjustStages.mjs`) diagnose a saved state as it stands,
+  through the plain entry `{ withhold: false }`.
+- With surfaceExcess b > 0, a column with B0 > 0 searches again from the
+  lowest layer's θ_v plus Troen and Mahrt's excess b (w'θ_v')₀ / w_m.
+  Holtslag and Boville, and CAM, take b = 8.5.
+
+`boundaryLayer.virtualDensity` (false): the flux air density takes the
+virtual factor, ρ = p / (R T (1 + 0.61 q)). It applies in the bulk
+fluxes, the stress, the boundary layer's mass and the fog deposition's
+cap.
+
+`boundaryLayer.profileHeight` ('midpoint'), `stableProfile` ('flat') and
+`prandtlCoefficient` (7.2).
+- 'ground' lays the K-profile's z, h, w_m and Pr from the ground, as
+  Holtslag and Boville do, instead of from the lowest layer's midpoint.
+  The profile still ends at the same interface.
+- 'holtslagBoville' divides a stable column's profile by φ = 1 + 5 z/L,
+  or 5 + z/L above z/L = 1.
+- prandtlCoefficient is their a in Pr = φ_h/φ_m + a κ (z/h) w*/w_m.
+
+`surface.gustiness` (3 m/s): the floor on the wind speed of the bulk
+fluxes, the drag and the ice drift's stress. It reaches the GPU's
+exchange, drag and ice drift (`GUSTO`) as well as the CPU's.
+`ocean.gustiness` is refused.
+
+`boundaryLayer.searchTop` (0.5): the Richardson search for the top
+stops at the highest level whose midpoint σ exceeds it (σ 0.531 on bl48).
+A column that has found no top below it takes that level's height. The
+GPU's form drag ends at the same σ.
+
+Where it binds was measured on the two page states. Each is one save at
+12 UTC near the March equinox, and the count is of columns whose saved
+top lies within 0.5 % of that level's height:
+- seventeen64 day 365: 34 of 40962 columns (0.08 %), over the Sahara
+  from local noon to 15 h, 5.1–5.2 km above the ground.
+- combined128 day 1460: 35 of 163842 (0.02 %), over the western Tibetan
+  Plateau from 15 to 21 h, 4.4–4.6 km above the ground.
+
+All but four are dry convective columns (regime 1). These are real deep
+dry boundary layers, and the ceiling cuts them off; it would bind more
+often in a northern summer afternoon. Raising the ceiling is a default
+change.
 
 ### M23 — The equatorial ocean — in progress
 
