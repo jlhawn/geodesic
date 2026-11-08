@@ -10,7 +10,7 @@ import { decodeState, savedLevels, stateTerrain, stateName } from '../../js/stat
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../../js/physics/regrid.module.js';
 import { placeCumulus } from '../../js/physics/moist.module.js';
 import { stateGrid } from '../../js/stateGrid.module.js';
-import { loadSavedLand } from '../savedLand.mjs';
+import { loadSavedLand, loadSavedLake } from '../savedLand.mjs';
 
 export const readGeography = (saved) => stateGeography(saved);
 export const readState = async (file) => decodeState(new Uint8Array(readFileSync(file)));
@@ -67,6 +67,7 @@ export async function gpuModelFrom(saved) {
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
   loadSavedLand(model, saved);
+  await loadSavedLake(model, saved);
   return model;
 }
 

@@ -19,6 +19,7 @@ import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
+import { loadSavedLake } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
@@ -33,6 +34,7 @@ function make(radiation) {
   model.seaIce.load(model.state[6], saved.concentration ?? null);
   for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
   model.land.load(saved.land, model.state[6]);
+  loadSavedLake(model, saved);
   model.time = saved.time;
   const { g } = model.core.diagnostics, zs = Float64Array.from({ length: model.mesh.nCells }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
   if (saved.boundaryDepth) model.boundaryLayer.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));

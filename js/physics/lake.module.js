@@ -326,6 +326,8 @@ export const MISSING_BEDS = ['default', 'hydrolakes'];
 export const lakeModelOf = (geography, { model } = {}) => model ?? (geography?.lake ? LAKE_DEFAULTS.model : 'off');
 export const lakeStateName = (name) => `lake${name[0].toUpperCase()}${name.slice(1)}`;
 export const lakeArrays = (serialized) => Object.fromEntries(Object.entries(serialized).map(([name, values]) => [lakeStateName(name), Float64Array.from(values)]));
+export const savedLakeOptions = (saved) => ({ ...(saved?.options?.lake || {}), ...(saved?.given?.lake || {}) });
+export const holdsLake = (columns) => !!columns && LAKE_FIELDS.some((name) => columns[name]?.some((v) => v !== 0));
 export const savedLake = (saved) => (saved?.lakeMean ? Object.fromEntries([...LAKE_FIELDS, 'passed', 'depth'].map((name) => [name, saved[lakeStateName(name)]]).filter(([, values]) => values)) : null);
 export const LAKE_FIELDS = ['mixed', 'mean', 'bottom', 'shape', 'mixedDepth', 'ice', 'iceT'];
 

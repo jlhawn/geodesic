@@ -57,7 +57,7 @@ import { decodeForcing, forcingDay } from '../js/forcing.module.js';
 import { COUPLED_ICE_DRIFT } from '../js/ocean/iceDrift.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
-import { loadSavedLand } from './savedLand.mjs';
+import { loadSavedLand, loadSavedLake } from './savedLand.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
 refuseUnreadOptions(import.meta.url);
@@ -108,6 +108,7 @@ model.time = saved.time;
 model.load();
 model.ocean.load(saved.ocean, state[3], state[6]);
 loadSavedLand(model, saved);
+await loadSavedLake(model, saved);
 const forced = createForcedOcean(model);
 
 const deg = 180 / Math.PI, land = model.geography.land;

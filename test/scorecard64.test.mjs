@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, linkSync, symlinkSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, linkSync, symlinkSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { spawnSync, execSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ROWS, BOXES, SIGMA_FILE, logDays, undercurrentCore, dayWeighted, monthAt, windowDays, windowMeans, calibrate, twoSidedTail, studentTail, studentCritical, sigmaDof, designProblems, compareScores, identityCheck, formatTable, fingerprint, sameFile, runSegments, withoutGitEnv, inMooringWindow, mooringProfile, PROFILE_DEPTHS } from '../scripts/scorecard64.mjs';
@@ -143,8 +144,9 @@ test('a base from another start, other leads or no recorded start is refused unl
 });
 
 const SCRIPT = fileURLToPath(new URL('../scripts/scorecard64.mjs', import.meta.url));
-const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env: withoutGitEnv() });
-const linked = (from, to, t) => {
+const SCRUBBED = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/.test(k)));
+const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env: SCRUBBED });
+const hardLink = (t, from, to) => {
   try { linkSync(from, to); return true; } catch (error) {
     if (['EXDEV', 'EPERM', 'ENOTSUP'].includes(error.code)) { t.skip(`no hard links here (${error.code})`); return false; }
     throw error;
@@ -178,12 +180,16 @@ test('the command line refuses a --json that is the --base file, by path spellin
     mkdirSync(join(dir, 'sub'));
     symlinkSync(base, join(dir, 'symlink.json'));
     const spellings = [base, `${dir}/./Base.json`, `${dir}/sub/../Base.json`, join(dir, 'symlink.json')];
-    if (linked(base, join(dir, 'hardlink.json'), t)) spellings.push(join(dir, 'hardlink.json'));
     for (const json of spellings) {
       const r = cli('--json', json, '--base', base, ...saves);
       assert.ok(r.status !== 0 && overwrite.test(r.stderr), `--json ${json}: ${r.stderr.slice(-300)}`);
       assert.equal(readFileSync(base, 'utf8'), original, `--json ${json} wrote the base`);
     }
+    await t.test('a hard link to the base', (t) => {
+      if (!hardLink(t, base, join(dir, 'hardlink.json'))) return;
+      assert.match(cli('--json', join(dir, 'hardlink.json'), '--base', base, ...saves).stderr, overwrite);
+      assert.equal(readFileSync(base, 'utf8'), original);
+    });
     await t.test('a case variant of the base\x27s name', (t) => {
       if (!existsSync(join(dir, 'base.json'))) return t.skip('a case-sensitive volume: base.json is another file');
       assert.match(cli('--json', join(dir, 'base.json'), '--base', base, ...saves).stderr, overwrite);
@@ -201,22 +207,23 @@ test('the command line refuses a --json that is the --base file, by path spellin
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('the tree fingerprint sees tracked edits, untracked files and their contents and a symlink\x27s target, not ignored files, survives a directory symlink and a nested repository, and ignores GIT_DIR and GIT_INDEX_FILE', () => {
+test('the tree fingerprint sees tracked edits, untracked files and their contents and a symlink\x27s target, not ignored files, survives a directory symlink and a nested repository, and ignores every GIT_* variable', () => {
   const dir = mkdtempSync(join(tmpdir(), 'scorecard64-fp-')), repo = join(dir, 'repo'), decoy = join(dir, 'decoy');
-  const git = (cwd, cmd) => execSync(`git -c user.name=t -c user.email=t@t ${cmd}`, { cwd, stdio: 'ignore', env: withoutGitEnv() });
-  const saved = { GIT_DIR: process.env.GIT_DIR, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE };
+  const git = (cwd, cmd) => execSync(`git -c user.name=t -c user.email=t@t ${cmd}`, { cwd, stdio: 'ignore', env: SCRUBBED });
+  const decoyVariables = ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_WORK_TREE', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0'];
+  const saved = Object.fromEntries(decoyVariables.map((k) => [k, process.env[k]]));
   try {
     mkdirSync(decoy); git(decoy, 'init -q'); writeFileSync(join(decoy, 'd.txt'), 'decoy'); git(decoy, 'add -A'); git(decoy, 'commit -q -m decoy');
-    const decoyState = () => [readFileSync(join(decoy, '.git/config'), 'utf8'), execSync('git rev-parse HEAD', { cwd: decoy, env: withoutGitEnv(), encoding: 'utf8' }), readFileSync(join(decoy, '.git/index')).toString('hex')];
+    const decoyState = () => [readFileSync(join(decoy, '.git/config'), 'utf8'), execSync('git rev-parse HEAD', { cwd: decoy, env: SCRUBBED, encoding: 'utf8' }), readFileSync(join(decoy, '.git/index')).toString('hex'), readdirSync(join(decoy, '.git/objects'), { recursive: true }).sort()];
     const before = decoyState();
-    process.env.GIT_DIR = join(decoy, '.git'); process.env.GIT_INDEX_FILE = join(decoy, '.git/index');
+    Object.assign(process.env, { GIT_DIR: join(decoy, '.git'), GIT_INDEX_FILE: join(decoy, '.git/index'), GIT_OBJECT_DIRECTORY: join(decoy, '.git/objects'), GIT_COMMON_DIR: join(decoy, '.git'), GIT_WORK_TREE: decoy, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.bare', GIT_CONFIG_VALUE_0: 'true' });
     mkdirSync(repo); git(repo, 'init -q');
     for (const sub of ['js', 'scripts', 'data']) mkdirSync(join(repo, sub));
     writeFileSync(join(repo, 'scripts/tracked.mjs'), 'a'); writeFileSync(join(repo, '.gitignore'), 'scripts/*.log\n');
     git(repo, 'add -A'); git(repo, 'commit -q -m base');
     const clean = fingerprint(repo);
     assert.ok(clean.tree && clean.scoredOn && !clean.scoredOn.endsWith('with changes'));
-    assert.equal(clean.scoredOn, execSync('git rev-parse --short=12 HEAD', { cwd: repo, env: withoutGitEnv(), encoding: 'utf8' }).trim(), 'the fingerprint reads the repository it is given, not GIT_DIR');
+    assert.equal(clean.scoredOn, execSync('git rev-parse --short=12 HEAD', { cwd: repo, env: SCRUBBED, encoding: 'utf8' }).trim(), 'the fingerprint reads the repository it is given, not GIT_DIR');
     writeFileSync(join(repo, 'scripts/run.log'), 'ignored');
     assert.deepEqual(fingerprint(repo), clean, 'an ignored file is not part of the tree');
     writeFileSync(join(repo, 'scripts/tracked.mjs'), 'b');
@@ -242,6 +249,12 @@ test('the tree fingerprint sees tracked edits, untracked files and their content
   }
 });
 
+test('withoutGitEnv drops every GIT_* variable and keeps the rest', () => {
+  const unlisted = `GIT_${randomBytes(6).toString('hex').toUpperCase()}`;
+  const env = { [unlisted]: 'f', GIT_CONFIG_PARAMETERS: "'core.bare'='true'", GIT_DIR: 'a', GIT_WORK_TREE: 'b', GIT_COMMON_DIR: 'c', GIT_OBJECT_DIRECTORY: 'd', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.bare', GIT_CONFIG_VALUE_0: 'true', GIT_ALTERNATE_OBJECT_DIRECTORIES: 'e', PATH: '/bin', HOME: '/h', MYGIT_DIR: 'kept' };
+  assert.deepEqual(withoutGitEnv(env), { PATH: '/bin', HOME: '/h', MYGIT_DIR: 'kept' });
+});
+
 test('a run takes its fingerprint reading before each segment, the tree\x27s own by default', () => {
   const events = [];
   let reading = 0;
@@ -252,13 +265,13 @@ test('a run takes its fingerprint reading before each segment, the tree\x27s own
   assert.deepEqual(runSegments([1, 2], () => {}, { first: 'start' }).map((x) => x.tree), ['start', tree]);
 });
 
-test('sameFile compares device and inode when both exist, following symlinks, else the resolved paths', (t) => {
+test('sameFile compares device and inode when both exist, following symlinks, else the resolved paths', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'scorecard64-same-'));
   try {
     const a = join(dir, 'a.json');
     writeFileSync(a, '{}'); writeFileSync(join(dir, 'c.json'), '{}'); symlinkSync(a, join(dir, 's.json'));
     assert.deepEqual([sameFile(a, join(dir, 's.json')), sameFile(a, join(dir, 'c.json')), sameFile(join(dir, 'x.json'), `${dir}/./x.json`), sameFile(a, join(dir, 'y.json'))], [true, false, true, false]);
-    if (linked(a, join(dir, 'b.json'), t)) assert.ok(sameFile(a, join(dir, 'b.json')));
+    await t.test('a hard link', (t) => { if (hardLink(t, a, join(dir, 'b.json'))) assert.ok(sameFile(a, join(dir, 'b.json'))); });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
