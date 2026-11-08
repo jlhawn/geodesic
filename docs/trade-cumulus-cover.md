@@ -316,8 +316,10 @@ about 0.15 g/kg on BOMEX's fluxes, while the LES adiabat holds 0.6.
 
 ## The plume's buoyancy
 
-Two options, on both engines and off by default (the defaults' fields are
-bitwise unchanged):
+Two options, on both engines. They were built off by default and have
+been defaults since 932d6cc (Oct 24): `cumulusEntrainmentHeight` 1 and
+`cumulusAscent` 'kinetic'; `cumulusEntrainmentHeight` null and
+`cumulusAscent` 'buoyant' restore the constant rate and the buoyant top.
 
 - `cumulusEntrainmentHeight` c: above the LCL the shallow plume entrains
   at ε = c/z, z the layer midpoint's height above the surface, in place of
@@ -478,6 +480,60 @@ percent rather than the single runs' 22, and 1.13 ± 0.11 hPa off the
 gradient. The buoyant plume's single runs, −102.1 alone and −90.7 with
 the pair, sit within one realization of those means.
 
+## The moist layer at the inversion base (Nov 7)
+
+The Nov 7 audit found a cool, moist layer at the base of the trade
+inversion (875–815 hPa) over 3S–3N 160W–100W within days of an ERA5
+start at observed SST. By days 1–2 the control is 1.3–1.5 K cold and
+1.3–2.5 g/kg moist at 850 hPa against ERA5, and the shallow plume
+detrains into the layer. Four plume settings were tested as its cause,
+each against one shared control: the closure halved (`cumulusClosure`
+0.015), the kinetic overshoot and ascent off (`cumulusAscent`
+'buoyant', `cumulusOvershoot` 0), the mass-flux decay doubled
+(`cumulusDetrainment` 3.5·10⁻³) and the 1/z entrainment doubled
+(`cumulusEntrainmentHeight` 2).
+
+The instrument was the same for all four, and the 1/z arm ran at
+fa61952. It ran N=64 hindcasts of 10 days, each holding its start's own
+sea surface, from the ERA5 starts of August (day 517), April (395) and
+December (639). The
+reader was `fixedSstMeans.mjs`: `scripts/fixedSst.mjs` plus day means
+over the section's sea cells, of 32 samples a day for T and q and 8 a
+day for the stress, which it rebuilt from the run's exchange. Each row
+gives the arm minus the control as the mean ± SE of the three starts,
+n = 3, so 95 % needs 4.3 SE. The 1/z arm:
+
+| 160W–100W | days 1–2 | days 3–5 | days 6–10 |
+|---|---|---|---|
+| q850, g/kg | −0.01 ± 0.02 | +0.12 ± 0.07 | −0.01 ± 0.04 |
+| T850, K | +0.01 ± 0.05 | −0.02 ± 0.08 | +0.04 ± 0.05 |
+| T875–815 hPa, K | +0.05 ± 0.04 | +0.03 ± 0.05 | +0.05 ± 0.03 |
+| T925, K | −0.15 ± 0.05 | −0.10 ± 0.04 | −0.08 ± 0.04 |
+| stress, mN/m² | −1.2 ± 0.6 | +0.02 ± 0.37 | +0.65 ± 0.14 |
+
+Doubling the 1/z rate does not remove the layer. q850 and T850 move
+inside 1.9 SE, under 1 % of the control's moist error and 0.5 % of its
+cold one. T925 cools by 2.0–3.2 SE, below 95 %. The stress at days
+6–10 moves by 4.7 SE, 1.2 % of the control's −54.6 mN/m². The other
+three settings give the same answer. The kinetic overshoot and ascent
+removes about a quarter of the T850 error and a third of the q850 error
+on days 1–2, but it moves the anomaly down to 925 hPa and brightens the
+cloud. The halved closure removes 15 % of the T850 error, and the
+doubled decay removes nothing. None of the four plume settings removes
+the layer. This is a 10-day transient result at observed SST, not a
+closed-loop one. It holds until the hindcast instrument, the starts or
+the control's physics change.
+
+The open question has moved upstream, to where the extra water comes
+from. The audit's water budget gives the 1000–700 hPa surplus at
+160W–100W growing 0.54 kg/m²/day over days 0–10 (three starts): 0.38
+of it is an evaporation excess and 0.16 a shortfall in removal. The
+evaporation is 1.16–1.28 times ERA5's in August and December and
+0.87–0.98 in April, at 12 UTC by lead window, while the momentum flux
+is 0.88 times ERA5's, so the wind is nearly right. That excess, and the
+dry lowest layer that feeds it, is being diagnosed in the boundary
+layer's surface exchange (Nov 7).
+
 ## Tests
 
 - `test/gpuModel.test.mjs`: a parity test of 'water', `buoyancyLength`
@@ -517,6 +573,9 @@ the pair, sit within one realization of those means.
   part of its pressure gradient is beyond the protocol's noise.
 - A CPU/GPU field comparison at the page's configuration with the options
   of either change on.
+- The moist layer at the inversion base: no plume setting removes it in
+  the hindcasts, and its cause is being sought in the surface
+  evaporation excess.
 - With `cloudColumns` and `cloudSpread` (`toa-radiation-bias.md`) the pair
   is the shortwave's remaining cloud-amount change; the net balance needs
   the clear-sky column first.

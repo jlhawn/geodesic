@@ -499,6 +499,39 @@ hold, not a restore:
 - With the pair, its cover gain in the SE Pacific comes with a larger one in
   the subtropics of both hemispheres.
 
+## The reference above the deck
+
+The deck entrains the free troposphere's θ_l and q_t above its top h
+(`thetaLAbove`, `qtAbove`). Under `deckReference` 'layer' (the default)
+that air is the first layer whose midpoint lies above h. The reference
+therefore switches layers as h crosses a midpoint, and through the jump
+and the decoupling ratio the cover can flip from one step to the next.
+'interpolate' (a radiation option, on both engines) moves the reference
+toward the next layer up's air by the share of the way h has climbed
+from the midpoint below it to the one above, so it is continuous in h. The option and why 'layer'
+stayed the default are in `c-grid-dynamical-core.md`, "The cumulus
+memory and the deck's reference (Oct 3)".
+
+A CPU probe measured the flip (Nov 7). It ran 24 steps at N=64 from the
+amz64 day-487 state (August) and counted the deck columns whose cover
+jumps by more than 0.2 between deck steps. That is one state and one
+run, so there is no sigma.
+- Under 'layer', 144 of 1219 deck columns jump. The worst alternate
+  every step: the cover is about 0.3 when the top lies just above a layer
+  midpoint and about 1.0 just below it, while the capping layer stays put
+  and the top stays below the ceiling.
+- Under 'interpolate', 39 of 1292 jump.
+- Cutting the entrainment at the lid instead leaves all 144.
+
+The audit put the flips' radiative effect under 0.05 W/m². 'layer'
+stays the default. Making 'interpolate' the default is Joshua's call,
+and its climate effect has not been measured since the Oct 3 passage
+found the interpolation as built to be a climate change.
+`test/gpuModel.test.mjs`'s deck row seeds the deck at 1436 m, half a
+layer above the inversion. There 'interpolate' moves the gate on more
+columns than the engines may part by, and the row compares the GPU's own
+response with the CPU's, so a GPU that ignores the option fails it.
+
 ## What remains
 
 - **The MAM column's EIS.** Earth's 7.3 K against the arms' 4.0–6.4 K is
