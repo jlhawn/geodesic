@@ -11,7 +11,7 @@ import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 import { loadSeaIceStart, SEA_ICE_START_FILE } from '../js/physics/seaIceStart.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { stateGeography, createGeography } from '../js/geography.module.js';
-import { seaCells, seaIceExtent } from '../js/seaIceExtent.module.js';
+import { seaCells, seaIceExtent, polarIcedCells } from '../js/seaIceExtent.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -83,7 +83,7 @@ test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed insi
   }
 });
 
-test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extents of the day's save, with FLake over the sea cells and saying its frozen lakes are left out, and with the lake model off over every cell off land and saying nothing of lakes", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extents of the day's save, with FLake over the sea cells and saying its frozen lakes are left out, and with the lake model off over every cell off land and saying nothing of lakes, and a positive surface shortwave over the save's iced sea cells poleward of 60° in each hemisphere", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'spinup-extents-'));
   try {
     for (const [tag, lake] of [['flake', {}], ['off', { LAKE: '{"model":"off"}' }]]) {
@@ -98,6 +98,11 @@ test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extent
       assert.ok(counted[0] - left[0] >= 0.1, `${tag}: the frozen lakes hold ${(counted[0] - left[0]).toFixed(3)} Mkm² of the northern extent, enough to show in its tenths`);
       const want = tag === 'flake' ? [...left.map((x) => x.toFixed(1)), ', lakes left out'] : [...counted.map((x) => x.toFixed(1)), ''];
       assert.deepEqual([printed[1], printed[2], printed[3] ?? ''], want, `${tag}: the extents and the label`);
+      const iced = polarIcedCells(mesh, seaCells({ geography, lake: tag === 'flake' ? { isLake: geography.lake } : null }), saved.ice), north = iced.filter((i) => mesh.latCell[i] > 0).length;
+      const shortwave = line.match(/\(iced cells poleward of 60°: N ([-\d.]+) S ([-\d.]+)\)/);
+      console.log(`${tag}: iced sea cells poleward of 60° in the save N ${north} S ${iced.length - north}; the line's shortwave over them ${shortwave?.[0]}`);
+      assert.ok(north > 0 && iced.length > north, `${tag}: the save holds sea ice poleward of 60° in each hemisphere`);
+      assert.ok(shortwave && +shortwave[1] > 0 && +shortwave[2] > 0, `${tag}: the line gives the iced cells poleward of 60° a positive surface shortwave in each hemisphere: ${shortwave?.[0]}`);
     }
   } finally {
     rmSync(out, { recursive: true, force: true });
