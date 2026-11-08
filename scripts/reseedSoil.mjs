@@ -6,9 +6,11 @@
  * layer the fill times its own, and the deep store, when the state carries one, the fill times DEEP_CAPACITY. Everything
  * else in the state is kept but the header's soilSeed, which names the file and its sha256. The capacities are those the
  * state's header records among its land options (given, as scripts/stateOptions.mjs writes them, then options), else
- * the defaults, and the mesh is the state's own (stateGrid). The page rebuilds a saved state's land at the default
- * capacities (runOptions passes the header's land through soilOptions), so only a spin-up given the same LAND honors
- * recorded capacities other than the defaults; the command line warns when the state records any.
+ * the defaults, and the mesh is the state's own (stateGrid). The page builds a state's land from its header's
+ * options.land, which headerOptions and splitState write through soilOptions without the capacities, so it runs every
+ * state at the default capacities; only a spin-up given the same LAND honors recorded ones. The command line warns when
+ * the state records a capacity its land uses (the root zone or, without vegetation, the bucket; the surface layer; the
+ * deep store) at other than the default.
  *
  *   node scripts/reseedSoil.mjs state.bin seed.bin out.bin
  */
@@ -40,7 +42,7 @@ export function reseedLand(saved, soilWater, soilSeed = null) {
   if (soilSeed) saved.soilSeed = soilSeed;
   else delete saved.soilSeed;
   const mean = (soil) => { let a = 0, s = 0; for (let i = 0; i < mesh.nCells; i++) if (geography.land[i] && !(geography.iceSheet && geography.iceSheet[i])) { a += mesh.areaCell[i]; s += mesh.areaCell[i] * soil[i] / rootZone; } return s / a; };
-  const defaults = { rootZoneCapacity: ROOT_ZONE, bucketCapacity: BUCKET, surfaceCapacity: SURFACE, deepCapacity: vegetated ? DEEP_CAPACITY : 0 };
+  const defaults = { ...(vegetated ? { rootZoneCapacity: ROOT_ZONE } : { bucketCapacity: BUCKET }), surfaceCapacity: SURFACE, deepCapacity: vegetated ? DEEP_CAPACITY : 0 };
   const nonDefault = Object.entries(defaults).filter(([key, value]) => option(key) !== undefined && option(key) !== value).map(([key]) => `${key} ${option(key)}`);
   return { cells, before: mean(before), after: mean(land.soil), deep: !!land.deep, nonDefault };
 }
