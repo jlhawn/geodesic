@@ -185,7 +185,7 @@ test("under rainCover 'overlap' rain that forms beneath an ice-only layer, or a 
   }
 });
 
-test("under rainCover 'overlap' a cloud beneath a clear layer in which all the rain falling into it evaporated resets the share to max(0.1, a), as cloudsc resets ZCOVPTOT where ZQPRETOT, the flux into the layer, is zero", () => {
+test("under rainCover 'overlap' a cloud beneath a clear layer in which all the rain falling into it evaporated resets the share to max(0.1, a), as cloudsc zeroes ZCOVPTOT where the rain and snow leaving the layer above fall below ZEPSEC before its overlap recursion", () => {
   const saturated = { qs: 0, slope: 0, liquid: 1 }, D = MOIST_DEFAULTS, dt = 900;
   let mesh = null;
   const lowerClear = (options, upperCover, lowerCover) => {

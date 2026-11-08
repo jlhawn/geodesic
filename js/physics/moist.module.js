@@ -408,9 +408,11 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * is negative,
  * with eq. 6.31's base flux as printed, max(−ω/g in its source layer,
  * (H + L E)/(g z_base)), z_base the height of the source layer's upper
- * interface above the ground (cumastrn.F90's PGEOH(IKB)), without the IFS
+ * interface above the ground (cumastrn.F90 divides by the geopotential
+ * PGEOH(IKB) there without subtracting the ground's), without the IFS
  * code's factor 5 on the surface term or its ZMFMAX/(1.05 RMFCFL) cap on
- * bases below 1.5 km, held to ZMFMAX of the layer above its source (a
+ * bases whose geopotential is below 1.5e3 m²/s² (about 153 m), held to
+ * ZMFMAX of the layer above its source (a
  * closure at or below CUMULUS_FLOOR gives no plume and ends the search),
  * and does not
  * depart where the stratocumulus cap closes the shallow plume. With
@@ -609,8 +611,12 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * cover from the rain's top down (eq. 7.65), at least 0.1, reduced in
  * proportion to what evaporates and reset only where nothing precipitates
  * into a layer: no rain or ice falls into it and the layer above holds no
- * ice (cloudsc.F90's ZQPRETOT: the flux into the layer, set at 2713-2720,
- * plus the rain and snow the layer stores, which the model does not). A
+ * ice (cloudsc.F90 zeroes ZCOVPTOT where the rain and snow leaving the
+ * layer above fall below ZEPSEC, 2716-2718, and its overlap recursion at
+ * 1775 then starts from zero, giving max(0.1, a) beneath a clear layer;
+ * the ZQPRETOT that gates that recursion, the first-guess rain, snow and
+ * ice of 1732, also counts what the layer stores, which the model does
+ * not). A
  * number sets a_P and a_clr to it and a to
  * 0. With `rainEvaporationCeiling` c (null: none) no law takes a layer past
  * the relative humidity c + (1 − c) a_clr / (1 − a), the IFS's eq. 7.77 (c
@@ -1117,7 +1123,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
    */
   function cumulusColumn(i, pi, theta, q, qc, dt) {
     const bottom = K - 1;
-    cumulus.top = -1; cumulus.mass = 0; cumulus.inhibition = 0; cumulus.baseFlux = 0; cumulus.velocity = 0; cumulus.snow = 0; cumulus.overshoot = 1;
+    cumulus.top = -1; cumulus.mass = 0; cumulus.sourceS = 0; cumulus.sourceQ = 0; cumulus.inhibition = 0; cumulus.baseFlux = 0; cumulus.velocity = 0; cumulus.snow = 0; cumulus.overshoot = 1;
     clearCumulus(i);
     const topped = capped && cloudBaseFound(i, pi, theta, q) && stratocumulusTopped(i, pi, theta, q);
     if (topped && plumeExits) plumeExits.capped[i] = 1;
