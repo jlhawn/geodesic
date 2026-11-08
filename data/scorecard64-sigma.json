@@ -1,7 +1,7 @@
 {
  "name": "Pair sigma of the N=64 scorecard's gate statistic",
  "design": "twin controls (the second perturbed by 1e-6 at its start) from 2 starts, each a year of 30-day windows; sigma is the RMS of the two-window mean difference (the gate's statistic) over the windows at leads of 180 days or more, where the twins have decorrelated, pooled over the starts",
- "definition": "per row: sigma, the pair sigma of the mean of two adjacent windows (a merge moves a row past 2 sigma); perWindow, the RMS of one window's difference; lag1, the correlation of adjacent windows' differences; dof, the windows less their serial correlation, windows (1 − lag1) / (1 + lag1); early, the RMS at leads 30 and 60 days (the gate's), earlyGate their two-window mean, saturation earlyGate / sigma; nullAtLeads, whether each start's twins at the gate's leads would read moved; monteCarloRate, P(|mean| > 2 sigma) for normal differences at the early RMS with lag1; inSampleRate, the share of the late pairs past 2 sigma. proxy: the twins carry no gridBoxSkin or daily sea-ice line, so Ts takes surfaceT and sea ice the 30-day-mean cut on the index's grids",
+ "definition": "per row: sigma, the pair sigma of the mean of two adjacent windows; perWindow, the RMS of one window's difference; lag1, the correlation of adjacent windows' differences; dof, sigma's degrees of freedom, (tr C)² / tr(C²) for the pair means' covariance C under a Gaussian AR(1) at lag1 with the starts independent; critical, the two-sided 5 % quantile of Student's t at dof; threshold, critical × sigma, past which a row moves; early, the RMS at leads 30 and 60 days (the gate's), earlyGate their two-window mean, saturation earlyGate / sigma; nullAtLeads, whether each start's twins at the gate's leads would read moved; normalTailRate, P(|mean| > threshold) for normal differences at the early RMS with lag1, a closed form; inSampleRate, the share of the late pairs past threshold. proxy: the twins carry no gridBoxSkin or daily sea-ice line, so Ts takes surfaceT and sea ice the 30-day-mean cut on the index's grids",
  "twins": [
   {
    "label": "ctl/S1 − ctl2/S1 from day 365",
@@ -57,8 +57,9 @@
     "rows": 30
    }
   ],
-  "monteCarloRate": 0.0015333300415629589,
-  "inSampleRate": 0.030555555555555558
+  "normalTailRate": 0.0005252896835188452,
+  "inSampleRate": 0.01111111111111111,
+  "saturatedRateAtTwoSigma": 0.09459256039015367
  },
  "rows": {
   "sst30": {
@@ -67,7 +68,9 @@
    "lag1": 0.8639781020308689,
    "windows": 14,
    "pairs": 12,
-   "dof": 1.0216356992032403,
+   "dof": 2.907749920944222,
+   "critical": 3.2403338270959408,
+   "threshold": 0.48501827434176414,
    "early": [
     0.015577929391674423,
     0.08988109093520673
@@ -78,7 +81,7 @@
     false,
     false
    ],
-   "monteCarloRate": 7.62183531831087e-9,
+   "normalTailRate": 8.111645981301428e-21,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -88,7 +91,9 @@
    "lag1": 0.7511581257828066,
    "windows": 14,
    "pairs": 12,
-   "dof": 1.9894184241548019,
+   "dof": 3.731031149434329,
+   "critical": 2.8571912294591257,
+   "threshold": 2.284728067712931,
    "early": [
     0.02475760594309531,
     0.38339947606673813
@@ -99,7 +104,7 @@
     false,
     false
    ],
-   "monteCarloRate": 1.8818010834195887e-15,
+   "normalTailRate": 6.98982671702039e-30,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -109,7 +114,9 @@
    "lag1": 0.7053692260729115,
    "windows": 14,
    "pairs": 12,
-   "dof": 2.4187318335031835,
+   "dof": 4.0696436404783585,
+   "critical": 2.7578068601179506,
+   "threshold": 0.7862800993112874,
    "early": [
     0.033347400043673904,
     0.20526417734605693
@@ -120,7 +127,7 @@
     false,
     false
    ],
-   "monteCarloRate": 7.120105581609438e-7,
+   "normalTailRate": 8.129938237798414e-12,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -130,7 +137,9 @@
    "lag1": 0.019803451040934672,
    "windows": 14,
    "pairs": 12,
-   "dof": 13.456271079902521,
+   "dof": 8.371300997298023,
+   "critical": 2.288321544234056,
+   "threshold": 0.2061431937287001,
    "early": [
     0.0049942680587485855,
     0.1558961597938654
@@ -141,8 +150,8 @@
     false,
     false
    ],
-   "monteCarloRate": 0.020956872042506736,
-   "inSampleRate": 0.08333333333333333,
+   "normalTailRate": 0.008251817182270423,
+   "inSampleRate": 0,
    "proxy": true
   },
   "landT": {
@@ -151,7 +160,9 @@
    "lag1": 0.047901953591315355,
    "windows": 14,
    "pairs": 12,
-   "dof": 12.720057066445815,
+   "dof": 8.228294643719481,
+   "critical": 2.294914836646778,
+   "threshold": 2.3930645867216906,
    "early": [
     0.033426639238453675,
     1.6054796869280443
@@ -162,8 +173,8 @@
     false,
     false
    ],
-   "monteCarloRate": 0.009462606560627765,
-   "inSampleRate": 0.08333333333333333,
+   "normalTailRate": 0.0029061564433847838,
+   "inSampleRate": 0,
    "proxy": false
   },
   "rain_amazon": {
@@ -172,7 +183,9 @@
    "lag1": 0.2574705496242339,
    "windows": 14,
    "pairs": 12,
-   "dof": 8.26692307693978,
+   "dof": 7.077125070685829,
+   "critical": 2.359410387115439,
+   "threshold": 3.3934162658850195,
    "early": [
     1.0292355643662998,
     0.7265151233965772
@@ -183,7 +196,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.00004195809193891559,
+   "normalTailRate": 0.000001348599526274692,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -193,7 +206,9 @@
    "lag1": -0.22052806753299792,
    "windows": 14,
    "pairs": 12,
-   "dof": 14,
+   "dof": 9.498349423780477,
+   "critical": 2.244193424798766,
+   "threshold": 1.5453822300439555,
    "early": [
     0.8290749253634713,
     0.04692122230388121
@@ -204,7 +219,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.0007821672252548693,
+   "normalTailRate": 0.000163824531514981,
    "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
@@ -214,7 +229,9 @@
    "lag1": -0.06847878886463933,
    "windows": 14,
    "pairs": 12,
-   "dof": 14,
+   "dof": 8.804650864406574,
+   "critical": 2.2698311546516416,
+   "threshold": 0.6141691289295262,
    "early": [
     0.10338841944000424,
     0.03319237152866139
@@ -225,8 +242,8 @@
     false,
     false
    ],
-   "monteCarloRate": 2.6939468603773516e-24,
-   "inSampleRate": 0.08333333333333333,
+   "normalTailRate": 8.086925916968757e-31,
+   "inSampleRate": 0,
    "proxy": false
   },
   "rain_tropSea": {
@@ -235,7 +252,9 @@
    "lag1": 0.5897818956269181,
    "windows": 14,
    "pairs": 12,
-   "dof": 3.6124788419221607,
+   "dof": 4.911199118876779,
+   "critical": 2.584624910905303,
+   "threshold": 0.6341032626115183,
    "early": [
     0.05596233255324632,
     0.24498433874021688
@@ -246,7 +265,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.0004933194264161268,
+   "normalTailRate": 0.000006708089379879515,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -256,7 +275,9 @@
    "lag1": 0.031194874388457694,
    "windows": 14,
    "pairs": 12,
-   "dof": 13.15296661710541,
+   "dof": 8.313628644386126,
+   "critical": 2.2909491987214956,
+   "threshold": 1.850158073024246,
    "early": [
     0.4654415824797201,
     1.188508801607536
@@ -267,7 +288,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.012263576092219904,
+   "normalTailRate": 0.004120384028667976,
    "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
@@ -277,7 +298,9 @@
    "lag1": 0.5576185048237102,
    "windows": 14,
    "pairs": 12,
-   "dof": 3.976160345609796,
+   "dof": 5.139057771285131,
+   "critical": 2.5498007800567075,
+   "threshold": 3.1705885463037426,
    "early": [
     0.2229116932320835,
     0.9787063270260523
@@ -288,7 +311,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.000008706220891552858,
+   "normalTailRate": 1.433943123044986e-8,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -298,7 +321,9 @@
    "lag1": 0.2010532676278719,
    "windows": 14,
    "pairs": 12,
-   "dof": 9.312871089640444,
+   "dof": 7.402399233552405,
+   "critical": 2.3388142060334394,
+   "threshold": 0.04747432545576172,
    "early": [
     0.009413639574243966,
     0.007776745478591852
@@ -309,7 +334,7 @@
     false,
     false
    ],
-   "monteCarloRate": 1.231681915516356e-9,
+   "normalTailRate": 1.2018707966833998e-12,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -319,7 +344,9 @@
    "lag1": 0.33792908490707757,
    "windows": 14,
    "pairs": 12,
-   "dof": 6.927865546733869,
+   "dof": 6.592317950555847,
+   "critical": 2.3945937989985353,
+   "threshold": 23.41146702838727,
    "early": [
     1.0965651314980351,
     6.80055215197021
@@ -330,7 +357,7 @@
     false,
     false
    ],
-   "monteCarloRate": 6.760816246771957e-8,
+   "normalTailRate": 1.032826713140948e-10,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -340,7 +367,9 @@
    "lag1": 0.10686786810620551,
    "windows": 14,
    "pairs": 12,
-   "dof": 11.296605680591826,
+   "dof": 7.919818768206872,
+   "critical": 2.310074194884968,
+   "threshold": 0.7142303819191511,
    "early": [
     0.19244922784805782,
     0.30920963389470885
@@ -351,7 +380,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.0011799994225747343,
+   "normalTailRate": 0.0001793062642521509,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -361,7 +390,9 @@
    "lag1": 0.4601725121853073,
    "windows": 14,
    "pairs": 12,
-   "dof": 5.175816395896228,
+   "dof": 5.806899843034894,
+   "critical": 2.4667718093907585,
+   "threshold": 1.3833923661907124,
    "early": [
     0.2506214498224202,
     0.31394443952887613
@@ -372,7 +403,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.0000034970605355944596,
+   "normalTailRate": 1.0543729007512694e-8,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -382,7 +413,9 @@
    "lag1": 0.5971443277331404,
    "windows": 14,
    "pairs": 12,
-   "dof": 3.531289761233396,
+   "dof": 4.858577882772726,
+   "critical": 2.5932509876539367,
+   "threshold": 2.36841876769233,
    "early": [
     0.04772607021092239,
     0.614319858777894
@@ -393,7 +426,7 @@
     false,
     false
    ],
-   "monteCarloRate": 1.4067722117112012e-8,
+   "normalTailRate": 1.9123358753202024e-13,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -403,7 +436,9 @@
    "lag1": 0.5102713089628014,
    "windows": 14,
    "pairs": 12,
-   "dof": 4.539715237806753,
+   "dof": 5.467984430513224,
+   "critical": 2.505797435266542,
+   "threshold": 1.526855756228686,
    "early": [
     0.23486402685621394,
     0.29158570304839654
@@ -414,7 +449,7 @@
     false,
     false
    ],
-   "monteCarloRate": 1.0528883458293779e-7,
+   "normalTailRate": 2.705100348945419e-11,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -424,7 +459,9 @@
    "lag1": -0.01334649469158883,
    "windows": 14,
    "pairs": 12,
-   "dof": 14,
+   "dof": 8.536814120622138,
+   "critical": 2.2810059127202473,
+   "threshold": 0.6268531145075785,
    "early": [
     0.19046726169548742,
     0.2689588981403893
@@ -435,7 +472,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.0007891223339879081,
+   "normalTailRate": 0.00012911080368992263,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -445,7 +482,9 @@
    "lag1": 0.3780254434471819,
    "windows": 14,
    "pairs": 12,
-   "dof": 6.318928168667886,
+   "dof": 6.341251778326454,
+   "critical": 2.4153440734086997,
+   "threshold": 1.291810204739147,
    "early": [
     0.018668686481674482,
     0.0814935615545429
@@ -456,7 +495,7 @@
     false,
     false
    ],
-   "monteCarloRate": 2.9827828766051833e-124,
+   "normalTailRate": 2.6680905545116163e-180,
    "inSampleRate": 0,
    "proxy": true
   },
@@ -466,7 +505,9 @@
    "lag1": 0.7149579720082044,
    "windows": 14,
    "pairs": 12,
-   "dof": 2.3269307219302786,
+   "dof": 3.9988045463318715,
+   "critical": 2.7767724815500525,
+   "threshold": 0.8456849596459785,
    "early": [
     0.007663200906297013,
     0.26030313322478754
@@ -477,7 +518,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.000004596369626169308,
+   "normalTailRate": 1.9945305836099952e-10,
    "inSampleRate": 0,
    "proxy": true
   },
@@ -487,7 +528,9 @@
    "lag1": 0.6199428949967164,
    "windows": 14,
    "pairs": 12,
-   "dof": 3.2845598980553916,
+   "dof": 4.694623409882099,
+   "critical": 2.621698814787824,
+   "threshold": 1.0332089142512773,
    "early": [
     0.04411331946747291,
     0.3306706543540618
@@ -498,7 +541,7 @@
     false,
     false
    ],
-   "monteCarloRate": 0.00001173218642434102,
+   "normalTailRate": 9.217732007739551e-9,
    "inSampleRate": 0,
    "proxy": true
   },
@@ -508,7 +551,9 @@
    "lag1": 0.43473647319648934,
    "windows": 14,
    "pairs": 12,
-   "dof": 5.51577904590243,
+   "dof": 5.975224608857699,
+   "critical": 2.4493733154831414,
+   "threshold": 0.6893376887802248,
    "early": [
     0.008656288913862399,
     0.09883858157016337
@@ -519,8 +564,8 @@
     false,
     false
    ],
-   "monteCarloRate": 7.573277718854195e-28,
-   "inSampleRate": 0.08333333333333333,
+   "normalTailRate": 6.410514985445757e-41,
+   "inSampleRate": 0,
    "proxy": true
   },
   "euc_0n165e": {
@@ -529,7 +574,9 @@
    "lag1": 0.12279716421208649,
    "windows": 14,
    "pairs": 12,
-   "dof": 10.93771884403428,
+   "dof": 7.83448538312538,
+   "critical": 2.314511675492348,
+   "threshold": 0.32128859498151063,
    "early": [
     0.022610489285651132,
     0.04443805363468989
@@ -540,7 +587,7 @@
     false,
     false
    ],
-   "monteCarloRate": 2.4150335831055105e-26,
+   "normalTailRate": 1.0314510086604727e-34,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -550,7 +597,9 @@
    "lag1": 0.24905125398791542,
    "windows": 14,
    "pairs": 12,
-   "dof": 8.417014442444088,
+   "dof": 7.126420697547358,
+   "critical": 2.3561471988460783,
+   "threshold": 154.55113138292427,
    "early": [
     41.25144836970674,
     15.943476263696589
@@ -561,7 +610,7 @@
     false,
     false
    ],
-   "monteCarloRate": 4.0120929348905285e-8,
+   "normalTailRate": 9.945389944648873e-11,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -571,7 +620,9 @@
    "lag1": 0.20650216693187812,
    "windows": 14,
    "pairs": 12,
-   "dof": 9.207583680685545,
+   "dof": 7.371496947820137,
+   "critical": 2.3406797517251876,
+   "threshold": 0.28771203239830917,
    "early": [
     0.008680199343752935,
     0.023374097240385902
@@ -582,8 +633,8 @@
     false,
     false
    ],
-   "monteCarloRate": 1.8016691210028508e-76,
-   "inSampleRate": 0.08333333333333333,
+   "normalTailRate": 4.864524422590472e-104,
+   "inSampleRate": 0,
    "proxy": false
   },
   "eucDepth_0n170w": {
@@ -592,7 +643,9 @@
    "lag1": 0.6692240805730962,
    "windows": 14,
    "pairs": 12,
-   "dof": 2.7742607633522365,
+   "dof": 4.335731986677794,
+   "critical": 2.693678131094982,
+   "threshold": 43.47657097675864,
    "early": [
     0.43299939510524116,
     2.116701597496538
@@ -603,8 +656,8 @@
     false,
     false
    ],
-   "monteCarloRate": 9.525407345772606e-156,
-   "inSampleRate": 0.08333333333333333,
+   "normalTailRate": 7.639322825419976e-281,
+   "inSampleRate": 0,
    "proxy": false
   },
   "euc_0n140w": {
@@ -613,7 +666,9 @@
    "lag1": 0.6783681771362242,
    "windows": 14,
    "pairs": 12,
-   "dof": 2.682871125318881,
+   "dof": 4.268593781791158,
+   "critical": 2.708884486377352,
+   "threshold": 0.2786255184399117,
    "early": [
     0.00932241491361349,
     0.07675282707043476
@@ -624,7 +679,7 @@
     false,
     false
    ],
-   "monteCarloRate": 8.0026415835843e-7,
+   "normalTailRate": 2.322304667676511e-11,
    "inSampleRate": 0,
    "proxy": false
   },
@@ -634,7 +689,9 @@
    "lag1": 0.13965170740551014,
    "windows": 14,
    "pairs": 12,
-   "dof": 10.568909797664224,
+   "dof": 7.743246045335478,
+   "critical": 2.31938168124476,
+   "threshold": 30.773947881673703,
    "early": [
     0.7630592941492242,
     5.061438182686
@@ -645,8 +702,8 @@
     false,
     false
    ],
-   "monteCarloRate": 3.007330468830185e-24,
-   "inSampleRate": 0.08333333333333333,
+   "normalTailRate": 4.852172757194204e-32,
+   "inSampleRate": 0,
    "proxy": false
   },
   "euc_0n110w": {
@@ -655,7 +712,9 @@
    "lag1": 0.5491196920803344,
    "windows": 14,
    "pairs": 12,
-   "dof": 4.0747815311794335,
+   "dof": 5.198688808170523,
+   "critical": 2.5413111280343488,
+   "threshold": 0.5883586986057551,
    "early": [
     0.010589603199133758,
     0.05001482753460427
@@ -666,7 +725,7 @@
     false,
     false
    ],
-   "monteCarloRate": 2.683269961567352e-60,
+   "normalTailRate": 3.296591889678261e-96,
    "inSampleRate": 0.08333333333333333,
    "proxy": false
   },
@@ -676,7 +735,9 @@
    "lag1": 0.5244761829138616,
    "windows": 14,
    "pairs": 12,
-   "dof": 4.366964544163103,
+   "dof": 5.370154476643365,
+   "critical": 2.5181917825064115,
+   "threshold": 193.7679008169762,
    "early": [
     2.885083859780626,
     10.315667214890258
@@ -687,7 +748,7 @@
     false,
     false
    ],
-   "monteCarloRate": 3.9646550397417102e-143,
+   "normalTailRate": 1.0316738621035652e-225,
    "inSampleRate": 0.08333333333333333,
    "proxy": false
   }
