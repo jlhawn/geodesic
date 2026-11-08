@@ -1,0 +1,9 @@
+{
+ "name": "Sea surface temperature, WOA23 1991–2020 climate normal, monthly on 1°",
+ "source": { "dataset": "World Ocean Atlas 2023, objectively analyzed temperature (t_an), period decav91C0 (1991–2020), 1.00° csv form", "doi": "10.25923/54bh-1613", "url": "https://www.ncei.noaa.gov/data/oceans/woa/WOA23/DATA/temperature/csv/decav91C0/1.00/", "references": ["Locarnini et al. 2023, WOA23 Volume 1: Temperature, NOAA Atlas NESDIS 89"], "license": "public domain (NOAA NCEI)" },
+ "period": "1991–2020, months 01–12 (centered on the middle of each month of a 365-day year)",
+ "box": "global ocean, 1° cells", "mask": "WOA's own: land, ice shelves and cells without an analysis are missing",
+ "definition": "°C at 0 m; the file data/references/woa23-sst-1991-2020.bin in the 'WOAM' layout of scripts/packWoaMonthlySst.py (decodeMonthlySst in js/ocean/climatology.module.js; scripts/woaSstBias.mjs --woa). The model's matching quantity is the day-mean sst of sea cells deeper than 1 m. The atlas's 'decav' (data/woa_sst_monthly_1deg.bin) averages its decades and sits 0.20 K below this normal over 30S–30N, 0.32 K in the cold tongue (2S–2N, 150–90W) and 0.16 K in the warm pool (10S–10N, 130–160E).",
+ "script": "python3 -I scripts/packWoaMonthlySst.py RAW_DIR data/references/woa23-sst-1991-2020.bin decav91C0",
+ "sha256": "2f9631fa20ef1e33e1477d47c3ddcf14f5958c1900d10801b64f2b92ca990f62"
+}

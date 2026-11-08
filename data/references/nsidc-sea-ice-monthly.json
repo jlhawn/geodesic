@@ -1,0 +1,107 @@
+{
+ "name": "Sea-ice extent and area by hemisphere, 1991–2020 monthly climatology",
+ "source": {
+  "dataset": "NSIDC Sea Ice Index, Version 4 (G02135), monthly extent and area CSV files",
+  "doi": "10.7265/a98x-0f50",
+  "url": "https://noaadata.apps.nsidc.org/NOAA/G02135/",
+  "references": [
+   "Fetterer, F., K. Knowles, W. N. Meier, M. Savoie, A. K. Windnagel 2025, Sea Ice Index, Version 4, NSIDC"
+  ],
+  "license": "no restrictions; cite the data set (https://nsidc.org/data/g02135)"
+ },
+ "period": "1991-01 to 2020-12",
+ "box": "northern and southern hemispheres",
+ "mask": "sea ice of the ocean only: the passive-microwave product masks lakes and land, so the model's lake ice must be left out of its count",
+ "definition": "Mkm², month m at index m − 1. Extent: the area of cells whose concentration is at least 15 %. Area: the sum of concentration times cell area (the pole hole counted as ice in the Arctic). The model's matching quantity is the area of sea (not lake) cells whose 30-day or monthly mean concentration is at least 15 %, from the run's day means.",
+ "script": "scripts/referenceSeaIce.mjs",
+ "years": {
+  "N": [
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30
+  ],
+  "S": [
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30,
+   30
+  ]
+ },
+ "extent": {
+  "N": [
+   13.982,
+   14.865,
+   15.027,
+   14.316,
+   12.929,
+   11.297,
+   8.75,
+   6.427,
+   5.584,
+   7.493,
+   10.143,
+   12.404
+  ],
+  "S": [
+   5.041,
+   3.087,
+   4.082,
+   6.95,
+   10.287,
+   13.461,
+   16.066,
+   17.839,
+   18.612,
+   18.225,
+   15.865,
+   10.402
+  ]
+ },
+ "area": {
+  "N": [
+   12.226,
+   13.012,
+   13.169,
+   12.518,
+   11.062,
+   8.933,
+   6.051,
+   4.266,
+   3.934,
+   5.878,
+   8.66,
+   10.749
+  ],
+  "S": [
+   3.321,
+   2.02,
+   2.742,
+   5.161,
+   7.995,
+   10.667,
+   12.865,
+   14.206,
+   14.656,
+   14.126,
+   11.611,
+   6.913
+  ]
+ }
+}

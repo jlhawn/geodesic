@@ -1,0 +1,32 @@
+{
+ "name": "Global mean surface temperature, 1991–2020 monthly climatology",
+ "source": {
+  "dataset": "Berkeley Earth Land/Ocean Temperature Record (Land_and_Ocean_complete.txt; land analysis 04-Jan-2025, HadSST4 ocean)",
+  "doi": "10.5194/essd-12-3469-2020",
+  "url": "https://berkeley-earth-temperature.s3.us-west-1.amazonaws.com/Global/Land_and_Ocean_complete.txt",
+  "references": [
+   "Rohde and Hausfather 2020, Earth Syst. Sci. Data 12, 3469–3479"
+  ],
+  "license": "CC BY-NC 4.0 (https://berkeleyearth.org/data/); attribute to Berkeley Earth"
+ },
+ "period": "1991-01 to 2020-12",
+ "box": "global",
+ "mask": "none: land air temperature, sea-surface temperature over open ocean, air temperature over sea ice",
+ "definition": "°C, month m at index m − 1: the record's 1951–1980 absolute climatology (global 14.102 ± 0.019 °C) plus the month's mean anomaly over 1991–2020. The model's matching quantity is the surface skin temperature (surfaceT) from the run's day means, area-weighted over the globe.",
+ "script": "scripts/referenceTs.mjs",
+ "monthly": [
+  12.912,
+  13.147,
+  13.774,
+  14.699,
+  15.599,
+  16.286,
+  16.529,
+  16.428,
+  15.816,
+  14.917,
+  13.876,
+  13.158
+ ],
+ "annual": 14.762
+}
