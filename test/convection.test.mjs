@@ -1848,7 +1848,8 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   assert.ok(!off.deep.deep && !off.deep.midLevel && off.deep.baseFlux === 0, 'nothing convects without the option');
   assert.ok(on.deep.deep && on.deep.midLevel && Math.abs(on.deep.baseFlux * g / 0.2 - 1) < 1e-14, `base flux ${on.deep.baseFlux}`);
   assert.ok(on.height > 800 && on.height < 3000 && on.deep.cape > 0 && on.rain > 0, `the plume departs ${on.height} m above the lowest layer with CAPE ${on.deep.cape} J/kg and rain ${on.rain} kg/m²`);
-  assert.ok(on.flux[on.deep.base] === 1 && on.flux[on.deep.base - 1] === 1, `the mid-level plume keeps its whole base flux through its first cloud layer: ${on.flux[on.deep.base - 1]}`);
+  const firstCloud = on.deep.base - 1, firstShare = on.entrained[firstCloud] * (on.interfaces[firstCloud] - on.interfaces[firstCloud + 1]), sourceShare = 2 * Math.min(0.4, 1.75e-3 * (1 - on.humidity[on.source]) * (on.interfaces[on.source] - on.interfaces[on.source + 1]));
+  assert.ok(on.deep.base === on.source && Math.abs(firstShare / sourceShare - 1) < 1e-12 && on.flux[firstCloud] > 1, `the first cloud layer entrains 2 min(0.4, ENTRORG (1 - RH) dz) of the source layer, cuascn.F90's KCBOT, as a share of the flux: ${firstShare} against ${sourceShare}, its flux leaving at ${on.flux[firstCloud]}`);
   const lifted = run({ midLevelConvection: true }, { profile: (k) => (k === on.deep.base - 1 ? 0.45 : -0.2) });
   assert.ok(lifted.deep.midLevel && lifted.source === on.source && Math.abs(lifted.deep.baseFlux * g / 0.2 - 1) < 1e-14, `descent at 0.45 Pa/s in the layer above the cloud base leaves the plume in its source layer at -omega/g of that layer: base flux ${lifted.deep.baseFlux}, from ${lifted.height} m against ${on.height} m`);
   const faint = { profile: (k) => (k === on.source ? -1e-7 : -0.2) }, weak = run({ midLevelConvection: true }, faint), weakOff = run({}, faint);
@@ -1875,6 +1876,9 @@ test('with midLevelConvection a column that no test parcel types deep and whose 
   const mixing = Array.from({ length: on.deep.base - on.deep.top }, (_, n) => on.deep.top + n).filter((k) => on.entrained[k] > 0);
   const spread = Math.max(...mixing.map((k) => on.humidity[k])) - Math.min(...mixing.map((k) => on.humidity[k]));
   assert.ok(mixing.length >= 3 && spread > 0.05 && mixing.every((k) => Math.abs(on.detrained[k] / (on.entrained[k] * (1.6 - on.humidity[k])) - 1) < 1e-12), `the mid-level plume detrains (1.6 - RH) times what it entrains in each of its ${mixing.length} entraining layers: ratios ${mixing.map((k) => (on.detrained[k] / on.entrained[k]).toFixed(4)).join(' ')} against 1.6 - RH ${mixing.map((k) => (1.6 - on.humidity[k]).toFixed(4)).join(' ')}`);
+  const equalLayers = Float64Array.from({ length: 41 }, (_, k) => k / 40), forced = { profile: () => -20, grid: equalLayers }, cloudFlux = (r) => Array.from({ length: r.deep.base - r.deep.top - 1 }, (_, n) => r.flux[r.deep.top + 1 + n]);
+  const trimmed = run({ midLevelConvection: true, cumulusBoundaryLoss: 10 }, forced), untrimmed = run({ midLevelConvection: true }, forced);
+  assert.ok(trimmed.deep.midLevel && untrimmed.deep.midLevel && Math.max(...cloudFlux(untrimmed)) > 1.05 && Math.max(...cloudFlux(trimmed)) <= 1 + 1e-12 && cloudFlux(trimmed).some((f) => Math.abs(f - 1) < 1e-12), `on 40 equal layers under 20 Pa/s of ascent, a base flux held to the mass of the layer above the source per step keeps every interface's flux at or below it, as cuascn.F90's ZMFMAX trim does with RMFCFL 1, where the flux under cumulusBoundaryLoss 0.1 grows to ${Math.max(...cloudFlux(untrimmed))} of its base value: ${cloudFlux(trimmed).map((f) => f.toFixed(6)).join(' ')}`);
   const deckColumn = (z, p) => {
     const T = (z < 900 ? 290 : 304 + 5e-3 * (z - 900)) * Math.pow(p / 1e5, 0.2857);
     return { T, q: z < 900 ? Math.min(0.0105, saturationHumidity(T, p)) : Math.min(0.003, 0.3 * saturationHumidity(T, p)) };

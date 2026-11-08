@@ -19,7 +19,7 @@ export const PLUME_EXITS = ['none', 'veto', 'lcl', 'dry', 'shallow', 'plume', 'f
 export const IFS_ENTRAINMENT = { entrainment: 1.75e-3, humidity: 1.3, detrainment: 0.75e-4, detrainmentHumidity: 1.6, scaleExponent: 3, drag: 1 + 1.875 * 0.506 };
 export const TEST_PARCEL = { entrainment: 0.4, removal: 0.5 };
 export const DEPARTURE = { depth: 350e2, temperature: 0.2, humidity: 1e-4, reference: 'lowest' };
-export const MID_LEVEL = { humidity: 0.8, height: 1e4, entrainment: 2, buoyancy: 0.5 };
+export const MID_LEVEL = { humidity: 0.8, height: 1e4, entrainment: 2, buoyancy: 0.5, baseHumidity: 1, entrainmentCap: 0.4, entrainmentBuoyancy: 0.2, interfaceFallback: 0.1, courant: 1 };
 export const IFS_PRECIPITATION = { conversion: 1.4e-3, liquidFactor: 1.3, critical: 5e-4, seaThreshold: 3e-4, landThreshold: 5e-4, bergeron: 268.16, ice: 250.16, speed: 10, velocityScale: 0.75 };
 export const SOURCE_EXCESS = { coefficient: 1.5, temperature: 3, humidity: 2e-3, scale: 1.2, layer: 1.5, karman: 0.4, friction: 0.1, virtual: 0.61 };
 export const KESSLER_EVAPORATION = { rate: 5.44e-4, flux: 5.09e-3, exponent: 0.5777, cloudsc: 0.5 };
@@ -389,18 +389,30 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * deficit, all over liquid where CUININ takes FOEEWM's mixed phase) (a
  * layer that fails any of these gives way to the next one up,
  * as a type-3 cloud that cuascn.F90 cancels at its first level does),
- * departs with its own s_l and q_t
- * as the deep plume at MID_LEVEL.entrainment (2) times eq. 6.7's rate,
- * detraining that rate times (1.6 − RH) as the IFS code's types 2 and 3 do,
- * keeping its whole base flux through its first cloud layer, where
- * cuascn.F90's cloud block (KLAB(JK+1) = 2) and its organized detrainment
- * do not run,
+ * departs with its own s_l and q_t from that layer, cuascn.F90's KCBOT,
+ * and mixes as cuascn.F90's type 3 does: its first cloud layer entrains
+ * MID_LEVEL.entrainment (2) times min(MID_LEVEL.entrainmentCap (0.4),
+ * ENTRORG (1 − RH) dz) of the source layer, each layer above that factor
+ * times min(0.4, ENTRORG (1.3 − RH) dz min(1, q_s/q_s,KCBOT)³), q_s that
+ * of the layer below, where the plume at the interface below is less than
+ * MID_LEVEL.entrainmentBuoyancy (0.2 K) colder in virtual temperature,
+ * loaded with the condensate it carried up to that interface, than
+ * CUININ's air there (than the mean of the two layers' T and q where
+ * CUININ's air leaves it more than MID_LEVEL.interfaceFallback (0.1 K)
+ * colder), and nothing elsewhere; it detrains what it entrains times
+ * (1.6 − RH), and where an interface would carry more than
+ * MID_LEVEL.courant (1) times the next layer up's mass per step (ZMFMAX)
+ * its entrainment is trimmed first and its detrainment raised to hold it
+ * there; its vertical velocity is driven by the mean of the buoyancies at
+ * its two interfaces, and it detrains as organized outflow where that mean
+ * is negative,
  * with eq. 6.31's base flux as printed, max(−ω/g in its source layer,
  * (H + L E)/(g z_base)), z_base the height of the source layer's upper
  * interface above the ground (cumastrn.F90's PGEOH(IKB)), without the IFS
  * code's factor 5 on the surface term or its ZMFMAX/(1.05 RMFCFL) cap on
- * bases below 1.5 km (a closure at or below CUMULUS_FLOOR gives no plume
- * and ends the search), and does not
+ * bases below 1.5 km, held to ZMFMAX of the layer above its source (a
+ * closure at or below CUMULUS_FLOOR gives no plume and ends the search),
+ * and does not
  * depart where the stratocumulus cap closes the shallow plume. With
  * `plumeDeparture` 'elevated' (IFS Cy41r2 Part IV
  * §6.4; Bechtold et al. 2014, JAS 71, 734) a column whose surface test
@@ -752,7 +764,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const envHumidity = new Float64Array(K), plumeDetrained = new Float64Array(K), envVirtual = new Float64Array(K), plumeCounted = new Uint8Array(K), plumeSpeed = new Float64Array(K + 1), plumeWork = new Float64Array(K), plumeBuoyancy = new Float64Array(K), plumeEntrained = new Float64Array(K), plumeDepth = new Float64Array(K);
   const draftFlux = new Float64Array(K + 1), draftS = new Float64Array(K + 1), draftQ = new Float64Array(K + 1), draftEvaporation = new Float64Array(K);
   const deepCover = new Float64Array(K), deepWater = new Float64Array(K), tendencyS = new Float64Array(K), tendencyQ = new Float64Array(K), convectiveFall = new Float64Array(K), convectiveReserve = new Float64Array(K);
-  const plumeCarried = new Float64Array(K), plumeInterfaceT = new Float64Array(K), plumeFrozen = new Float64Array(K), convectiveMelted = new Float64Array(K), convectiveFrozen = new Float64Array(K), convectiveSnow = new Float64Array(C);
+  const plumeCarried = new Float64Array(K), middleFlux = new Float64Array(K), plumeInterfaceT = new Float64Array(K), plumeFrozen = new Float64Array(K), convectiveMelted = new Float64Array(K), convectiveFrozen = new Float64Array(K), convectiveSnow = new Float64Array(C);
   const plume = { T: 0, liquid: 0, ice: 0 }, draft = { q: 0, s: 0 }, plumeSaturated = { qs: 0, slope: 0, liquid: 1 };
   const plumeExits = plumeTrace ? Object.fromEntries(['excessT', 'excessQ', 'lcl', 'stop', 'parcelBase', 'parcelTop', 'top', 'cape', 'inhibition', 'baseFlux', 'pcape', 'pcapeBoundary', 'tau', 'consumptionP', 'halfEntrainment', 'doubleExcess', 'fastStart', 'capped', 'rainMade', 'rainDraft', 'rainBelow', 'rainGround'].map((name) => [name, new Float32Array(C)])) : null;
   if (plumeExits) plumeExits.exit = new Uint8Array(C);
@@ -1405,7 +1417,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       deep.typeMargin = margin;
     }
-    let middle = false, deepened = false;
+    let middle = false, deepened = false, midBuoyancy = 0, midLoad = 0;
     if (!typed && deepening && retype && lcl && lcl.pressure > pi[i] * levels[1]) {
       deep.shallowDepth = shallowCloudDepth(i, pi, theta, q, qc);
       if (deep.shallowDepth > 0) deep.typeMargin = Math.min(deep.typeMargin, Math.abs(deep.shallowDepth - DEEP_CLOUD_DEPTH) / DEEP_CLOUD_DEPTH);
@@ -1437,7 +1449,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         const zh = upperInterface(i, k), ph = pi[i] * levels[k], qsAbove = saturationHumidity(T[k - 1], p[k - 1]);
         const th = saturatedTemperature(Math.max(cp * T[k - 1] + g * z[k - 1], cp * T[k] + g * z[k]) - g * zh + latentHeat * qsAbove, ph, T[k - 1]);
         plumeState(envS[k], envQ[k], zh, ph, 0);
-        if (plume.liquid > 0 && plume.T * (1 + tv * (envQ[k] - plume.liquid)) - th * (1 + tv * Math.max(0, Math.min(Math.max(0, q[(k - 1) * C + i]), qsAbove) + saturationHumidity(th, ph) - qsAbove)) > -MID_LEVEL.buoyancy) { kb = k; break; }
+        const topBuoyancy = plume.T * (1 + tv * (envQ[k] - plume.liquid)) - th * (1 + tv * Math.max(0, Math.min(Math.max(0, q[(k - 1) * C + i]), qsAbove) + saturationHumidity(th, ph) - qsAbove));
+        if (plume.liquid > 0 && topBuoyancy > -MID_LEVEL.buoyancy) { kb = k; midBuoyancy = topBuoyancy; midLoad = plume.liquid; break; }
       }
       if (kb < 0) return shallowRain;
       source = kb; stackBottom = kb; mass = dp[kb]; sourceS = envS[kb]; sourceQ = envQ[kb]; rooted = false; middle = true;
@@ -1447,6 +1460,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     let s = sourceS, w = sourceQ, w2 = 0, below = 0, inhibition = 0, cloudy = false, started = false, top = -1, guess = 0, cape = 0, base = -1, pcape = 0, baseSaturation = 0;
     plumeS[source] = s; plumeQ[source] = w;
     plumeSpeed.fill(0); plumeCounted.fill(0);
+    let midBase = 0, midFluxIn = 1, midB = midBuoyancy, midCarried = midLoad, midQsBelow = 0, midQsSource = 1, midRhSource = 0, midDzSource = 0, midOrganized = false;
+    if (middle) {
+      const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
+      const enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
+      midBase = Math.min(open * Math.max(0, -layerOmega[source * C + i] / g, enthalpy / (g * (upperInterface(i, source) - ground))), cumulusBoundaryLoss * mass / (g * dt), MID_LEVEL.courant * dp[source - 1] / (g * dt));
+      midQsSource = saturation(T[source], p[source]).qs; midRhSource = Math.min(1, Math.max(0, q[source * C + i]) / midQsSource); midDzSource = upperInterface(i, source) - upperInterface(i, source + 1);
+      envHumidity[source] = midRhSource; plumeDepth[source] = midDzSource;
+    }
     for (let k = source - 1; k >= 0; k--) {
       const lower = upperInterface(i, k + 1), upper = k > 0 ? upperInterface(i, k) : Infinity, depth = upper - lower;
       const mixes = pi[i] * levels[k + 1] <= lcl.pressure;
@@ -1457,7 +1478,18 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         envHumidity[k] = humidity;
         plumeDetrained[k] = mixes ? IFS_ENTRAINMENT.detrainment * (IFS_ENTRAINMENT.detrainmentHumidity - humidity) : 0;
         epsilon = mixes && below > 0 ? IFS_ENTRAINMENT.entrainment * (middle ? MID_LEVEL.entrainment : 1) * (IFS_ENTRAINMENT.humidity - humidity) * (saturated.qs / baseSaturation) ** IFS_ENTRAINMENT.scaleExponent : 0;
-        if (middle) plumeDetrained[k] = mixes ? epsilon * (IFS_ENTRAINMENT.detrainmentHumidity - humidity) : 0;
+        if (middle) {
+          const qsk = saturated.qs;
+          epsilon = !mixes || k === 0 ? 0 : k === base - 1 ? MID_LEVEL.entrainment * Math.min(MID_LEVEL.entrainmentCap, IFS_ENTRAINMENT.entrainment * (MID_LEVEL.baseHumidity - midRhSource) * midDzSource) / depth
+            : midB > -MID_LEVEL.entrainmentBuoyancy ? MID_LEVEL.entrainment * Math.min(MID_LEVEL.entrainmentCap, IFS_ENTRAINMENT.entrainment * (IFS_ENTRAINMENT.humidity - humidity) * depth * Math.min(1, midQsBelow / midQsSource) ** IFS_ENTRAINMENT.scaleExponent) / depth : 0;
+          let detrained = mixes ? epsilon * (IFS_ENTRAINMENT.detrainmentHumidity - humidity) : 0;
+          const inflow = midBase * midFluxIn;
+          if (mixes && k > 0 && inflow > 0) {
+            const limit = Math.log(MID_LEVEL.courant * dp[k - 1] / (g * dt) / inflow), net = (epsilon - detrained) * depth;
+            if (net > limit) { epsilon -= Math.max(0, net - limit - Math.max(0, -limit)) / depth; detrained = epsilon - limit / depth; }
+          }
+          plumeDetrained[k] = detrained; midQsBelow = qsk;
+        }
         mixing = IFS_ENTRAINMENT.drag * (epsilon > 0 ? epsilon : plumeDetrained[k]);
       } else {
         epsilon = mixes ? Math.max(plumeEntrainmentFloor, plumeEntrainment * Math.max(0, below) / w2) : 0;
@@ -1478,10 +1510,22 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         plumeState(sourceS, sourceQ, z[k], p[k], plume.T);
         plumeWork[k] = R * (plume.T * (1 + virtual * (sourceQ - plume.liquid)) - environment) * dp[k] / p[k];
       }
+      let midLift = buoyancy;
+      if (middle && mixes && k > 0) {
+        const full = Math.exp(-epsilon * depth), topS = envS[k] + (s - envS[k]) * full, topQ = envQ[k] + (w - envQ[k]) * full, ph = pi[i] * levels[k];
+        plumeState(topS, topQ, upper, ph, guess);
+        const rising = plume.T * (1 + virtual * (topQ - plume.liquid) - loading * midCarried), qsAbove = saturationHumidity(T[k - 1], p[k - 1]);
+        let th = saturatedTemperature(Math.max(cp * T[k - 1] + g * z[k - 1], cp * T[k] + g * z[k]) - g * upper + latentHeat * qsAbove, ph, T[k - 1]);
+        let qh = Math.max(0, Math.min(Math.max(0, q[(k - 1) * C + i]), qsAbove) + saturationHumidity(th, ph) - qsAbove), interfaceB = rising - th * (1 + virtual * qh);
+        if (interfaceB < -MID_LEVEL.interfaceFallback) { th = 0.5 * (T[k] + T[k - 1]); qh = 0.5 * (air + Math.max(0, q[(k - 1) * C + i])); interfaceB = rising - th * (1 + virtual * qh); }
+        midOrganized = interfaceB + midB < 0;
+        midLift = g * 0.5 * (interfaceB + midB) / (th * (1 + virtual * qh));
+        midB = interfaceB;
+      }
       if (mixes) {
         if (!(depth < Infinity)) { top = k; break; }
         const x = 2 * mixing * depth, decay = Math.exp(-x);
-        w2 = w2 * decay + 2 * plumeAcceleration * buoyancy * depth * (x > 0 ? -Math.expm1(-x) / x : 1);
+        w2 = w2 * decay + 2 * plumeAcceleration * midLift * depth * (x > 0 ? -Math.expm1(-x) / x : 1);
         if (!(w2 > 0)) { top = k; break; }
       }
       plumeSpeed[k] = mixes ? w2 : 0;
@@ -1514,6 +1558,11 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         plumeCarried[k] = plume.liquid - plumeRain[k];
       }
       plumeS[k] = s; plumeQ[k] = w;
+      if (middle) {
+        midCarried = plumeCarried[k];
+        middleFlux[k] = k >= base ? midFluxIn : midOrganized ? midFluxIn * Math.exp(-plumeDetrained[k] * depth) * Math.min(1, (IFS_ENTRAINMENT.detrainmentHumidity - envHumidity[k]) * Math.sqrt(plumeSpeed[k] / plumeSpeed[k + 1])) : midFluxIn * Math.exp((epsilon - plumeDetrained[k]) * depth);
+        midFluxIn = middleFlux[k];
+      }
     }
     if (top === 0) top = 1;
     if (((retyped && !middle) || deepened) && cloudy && top >= 1) {
@@ -1541,8 +1590,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     cumulusFlux[source] = 1;
     if (ifsEntrainment) {
       for (let k = source - 1; k > top; k--) {
-        if (k >= base) cumulusFlux[k] = cumulusFlux[k + 1];
-        else if (plumeBuoyancy[k] > 0 || (middle && k === base - 1)) cumulusFlux[k] = cumulusFlux[k + 1] * Math.exp((plumeEntrained[k] - plumeDetrained[k]) * plumeDepth[k]);
+        if (middle) cumulusFlux[k] = middleFlux[k];
+        else if (k >= base) cumulusFlux[k] = cumulusFlux[k + 1];
+        else if (plumeBuoyancy[k] > 0) cumulusFlux[k] = cumulusFlux[k + 1] * Math.exp((plumeEntrained[k] - plumeDetrained[k]) * plumeDepth[k]);
         else cumulusFlux[k] = cumulusFlux[k + 1] * Math.exp(-plumeDetrained[k] * plumeDepth[k]) * Math.min(1, (IFS_ENTRAINMENT.detrainmentHumidity - envHumidity[k]) * Math.sqrt(plumeSpeed[k] / plumeSpeed[k + 1]));
       }
     } else {
@@ -1662,13 +1712,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const velocity = Math.max(convective, cumulusFriction * (frictionVelocity ? frictionVelocity[i] : 0));
       if (velocity > 0) shallowBase = cumulusClosure * lcl.pressure / (R * lcl.temperature) * velocity * Math.exp(-inhibition / (velocity * velocity));
     }
-    let drive = Math.max(shallowBase, gate * relaxed);
-    if (middle) {
-      const b = bottom * C + i, ground = (geopotential[b] - cp * thetaV[b] * (exnerLower[b] - exnerLayer[b])) / g;
-      const enthalpy = (surfaceSensible ? surfaceSensible[i] : 0) + latentHeat * (surfaceEvaporation ? surfaceEvaporation[i] : 0);
-      drive = Math.max(0, -layerOmega[source * C + i] / g, enthalpy / (g * (upperInterface(i, source) - ground)));
-    }
-    let baseFlux = Math.min(open * drive, cumulusBoundaryLoss * mass / (g * dt));
+    const drive = Math.max(shallowBase, gate * relaxed);
+    let baseFlux = middle ? midBase : Math.min(open * drive, cumulusBoundaryLoss * mass / (g * dt));
     for (let k = top; k <= bottom; k++) {
       const courant = baseFlux * (Math.max(cumulusFlux[k], cumulusFlux[k + 1]) + share * Math.max(-draftFlux[k], -draftFlux[k + 1])) * g * dt / dp[k];
       if (courant > 1) baseFlux /= courant;
