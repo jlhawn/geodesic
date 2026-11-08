@@ -685,9 +685,11 @@ const TERRAIN_DEFAULTS = { conserveVolume: false, passes: 2 };
 
 /*
  * The `terrain` options as a key, equal for options that make the same
- * surface: those at their defaults left out, the rest in name order.
+ * surface: those at their defaults left out, the rest in name order;
+ * 'false' for no terrain.
  */
 export function terrainKey(terrain = true) {
+  if (terrain === false) return 'false';
   const options = terrainOptions(terrain);
   return JSON.stringify(Object.keys(options).sort().filter((name) => options[name] !== TERRAIN_DEFAULTS[name]).map((name) => [name, options[name]]));
 }

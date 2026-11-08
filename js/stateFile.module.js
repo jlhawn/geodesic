@@ -94,6 +94,13 @@ const RECORDS = ['grid', 'options', 'given', 'terrainOptions'];
  * none (the default terrain).
  */
 export const savedTerrain = (header) => header.given?.terrain ?? header.terrainOptions;
+
+/*
+ * The terrain a state's surface pressure stands on: false for a state
+ * saved without terrain, else the one its header records, true for the
+ * default.
+ */
+export const stateTerrain = (header) => (header.terrain ? savedTerrain(header) ?? true : false);
 const isF64 = (name) => F64.includes(name) || /^means\.\w+Sum$/.test(name);
 const isNames = (value) => Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string');
 const isArray = (value) => (ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer) && !isNames(value);

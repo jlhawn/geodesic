@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { SECTIONS, sectionName as binName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable } from './equatorialSections.mjs';
 import { diagnoseExchange } from './surfaceExchange.mjs';
-import { savedTerrain } from '../js/stateFile.module.js';
+import { savedTerrain, stateTerrain } from '../js/stateFile.module.js';
 const R = new URL('../', import.meta.url).pathname;
 const [{ stateGeography, terrainKey }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
   import(R + 'js/geography.module.js'), import(R + 'js/model.module.js'), import(R + 'js/stateFile.module.js'), import(R + 'js/physics/regrid.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/physics/moist.module.js')]);
@@ -63,7 +63,7 @@ let files = 0;
 for (const file of FILES) {
   const saved = file === FILES[0] ? first : await decodeState(new Uint8Array(readFileSync(file)));
   if (meaned(saved) !== useMeans) throw new Error(`${file} ${useMeans ? 'carries no' : 'carries'} 30-day means, unlike ${FILES[0]}; give saves of one kind`);
-  if (terrainKey(savedTerrain(saved) ?? true) !== terrainKey(savedTerrain(first) ?? true)) throw new Error(`${file} stands on other terrain than ${FILES[0]}; give saves of one run`);
+  if (terrainKey(stateTerrain(saved)) !== terrainKey(stateTerrain(first))) throw new Error(`${file} stands on other terrain than ${FILES[0]}; give saves of one run`);
   const means = useMeans ? saved.means : null;
   STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
   seaIce.load(state[6], saved.concentration ?? null);

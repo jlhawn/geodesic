@@ -3,7 +3,7 @@ import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { DEFAULT_SOIL } from '../js/physics/land.module.js';
 import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
 import { terrainKey, terrainOptions, terrainCache, surfaceGeopotential, rebalanceSurfacePressure } from '../js/geography.module.js';
-import { savedTerrain } from '../js/stateFile.module.js';
+import { savedTerrain, stateTerrain } from '../js/stateFile.module.js';
 
 const SOIL_OPTIONS = ['soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity'];
 export const soilOptions = (land = {}) => Object.fromEntries(SOIL_OPTIONS.filter((name) => land[name] !== undefined).map((name) => [name, land[name]]));
@@ -49,16 +49,16 @@ const canonical = (value) => (value && typeof value === 'object' && !Array.isArr
  */
 export const differingGroups = (a = {}, b = {}) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((group) => canonical(a[group]) !== canonical(b[group]));
 
-export { savedTerrain };
+export { savedTerrain, stateTerrain };
 
 /*
- * The terrain whose surface a state's pressure stands on, when a run over
- * `terrain` resumes it and that is another surface; null when the state
- * stands on `terrain`'s own surface or has no terrain.
+ * The terrain whose surface a state's pressure stands on (stateTerrain,
+ * false for none), when a run over `terrain` resumes it and that is
+ * another surface; null when the state stands on `terrain`'s own.
  */
 export function terrainMove(header, terrain = true) {
-  const from = savedTerrain(header) ?? true;
-  return header.terrain && terrainKey(from) !== terrainKey(terrain) ? from : null;
+  const from = stateTerrain(header);
+  return terrainKey(from) !== terrainKey(terrain) ? from : null;
 }
 
 /*
@@ -80,14 +80,14 @@ export const runTerrain = (given, saved) => given ?? (saved ? savedTerrain(saved
 
 /*
  * Moves a resumed state's surface pressure, state[0] over state[1]'s θ,
- * from the terrain its header records onto `toPhi`, the surface of a run
- * over `terrain` (false for none), when that is another surface; returns
- * the terrain it moved from, or null when nothing moved.
+ * from the surface it stands on onto `toPhi`, the surface of a run over
+ * `terrain` (false for none), when that is another surface; returns the
+ * terrain it moved from (false for none), or null when nothing moved.
  */
 export function moveOntoTerrain(header, terrain, { core, mesh, geography }, state, toPhi) {
-  const from = terrain === false ? (header.terrain ? savedTerrain(header) ?? true : null) : terrainMove(header, terrain);
+  const from = terrainMove(header, terrain);
   if (from === null) return null;
   core.diagnose(state[0], state[1], null, null);
-  rebalanceSurfacePressure(core, state[0], state[1], surfaceGeopotential(mesh, geography, terrainOptions(from)), toPhi);
+  rebalanceSurfacePressure(core, state[0], state[1], from === false ? null : surfaceGeopotential(mesh, geography, terrainOptions(from)), toPhi);
   return from;
 }

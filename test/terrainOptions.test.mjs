@@ -135,12 +135,13 @@ test('with conserveVolume the passes take at least as much grid-scale roughness 
   assert.ok(kept <= smoothed, `${kept} against ${smoothed}`);
 });
 
-test('terrain options that make the same surface share a key', () => {
+test('terrain options that make the same surface share a key, and no terrain has its own', () => {
   assert.equal(terrainKey(true), terrainKey({}));
   assert.equal(terrainKey(true), terrainKey({ conserveVolume: false, passes: 2 }));
   assert.equal(terrainKey({ passes: 3, conserveVolume: true }), terrainKey({ conserveVolume: true, passes: 3 }));
   assert.notEqual(terrainKey({ conserveVolume: true }), terrainKey(true));
   assert.notEqual(terrainKey({ passes: 1 }), terrainKey(true));
+  assert.notEqual(terrainKey(false), terrainKey(true));
 });
 
 test('a run over terrain of other options takes the bundled pipeline\'s fields rebuilt below its own surface with the fine grids in reach and keeps the bundled file out of their reach, either way with σ_flt and the named drag constants', () => {

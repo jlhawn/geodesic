@@ -288,7 +288,6 @@ const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mas
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 const deepNote = (land) => (model.land.deepWater ? `deep store of ${model.land.deepCapacity} kg/m² under the trees, ${land && land.deep ? 'from the saved land.deep' : 'started at the root zone\'s fill'}` : '');
 function rebalanceTerrain(source) {
-  if (!model.surfaceGeopotential) return;
   const to = TERRAIN ?? true, from = moveOntoTerrain(source, to, { core, mesh, geography: model.geography }, state, model.surfaceGeopotential);
   if (from !== null) log(`surface pressure moved from terrain ${JSON.stringify(from)} onto ${JSON.stringify(to)}`);
 }
