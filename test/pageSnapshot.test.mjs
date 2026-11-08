@@ -54,9 +54,15 @@ test("the page's store keeps every array the worker's snapshot holds, and runs r
         for (const [key, buffer] of Object.entries(b)) {
           const x = a[key] ? new Float64Array(a[key]) : null, y = new Float64Array(buffer);
           if (!x || x.length !== y.length) { out.push(`${prefix}${key} missing`); continue; }
-          let gap = 0, scale = 0;
-          for (let i = 0; i < y.length; i++) { gap = Math.max(gap, Math.abs(x[i] - y[i])); scale = Math.max(scale, Math.abs(y[i])); }
-          if (gap > 0) out.push(`${prefix}${key} ${(scale > 0 ? gap / scale : gap).toExponential(2)}`);
+          let cells = 0, nan = 0, gap = 0, scale = 0;
+          for (let i = 0; i < y.length; i++) {
+            if (Math.abs(y[i]) > scale) scale = Math.abs(y[i]);
+            if (Object.is(x[i], y[i])) continue;
+            cells++;
+            if (Number.isNaN(x[i]) || Number.isNaN(y[i])) nan++;
+            else gap = Math.max(gap, Math.abs(x[i] - y[i]));
+          }
+          if (cells > 0) out.push(`${prefix}${key}: ${cells} of ${y.length} differ${nan ? `, ${nan} of them NaN on one side` : ''}${gap > 0 ? `, by at most ${(scale > 0 ? gap / scale : gap).toExponential(2)} of the largest` : ''}`);
         }
       }
       return out;
