@@ -5118,6 +5118,26 @@ The work, in order:
      0.675 and India (10–28°N, 70–90°E) 0.255. `test/soilWater.test.mjs`
      holds the file, the resampling and the start, and
      `test/landStart.test.mjs` the engines' agreement at N = 16.
+   - The soil seed on the model's scale. CPC's 760 mm column is not
+     the model's 300 kg/m² root zone: at its own March 20 the model's
+     fill matches soilw/760 in the tropics but runs about twice it at
+     40–60°N and three to four times poleward of 60°N, so an observed
+     start spends its first year refilling the land (global fill 0.335
+     against the model's 0.51–0.55 at N = 128). `scripts/soilWater.mjs
+     --reference=a.bin,b.bin --out=file.bin` scales soilw/760 by a factor
+     linear in latitude between 10° band centers, fitted so each band's
+     mean fill over open land matches the reference states' (March 20
+     saves of one grid, N, relax and recorded geography; bands under
+     0.5 % of the land take their neighbors' factors; factors held to
+     0.5–5) and refuses to write without `--out`, so
+     `data/soilwater_march.bin` stays the observed fill. Against
+     seventeen128 day 1095, combined128 day 1460 and pmin day 1825 the
+     global fill goes from 0.335 to 0.527 (the states' 0.528), with
+     factors 0.7–1.3 in the tropics, 1.6–2.1 at 20–60°N and 4.4–5
+     poleward of 60°N. A fresh spin-up takes such a file as `SOIL_SEED`
+     (`seededGeography`), else the observed fill. `test/soilSeed.test.mjs`
+     holds the band fit, the refusals and the seed reaching the land at
+     N = 16.
    - `coverGoal` ('water', the default, or 'observed'; `scripts/spinup.mjs`
      gives 'observed' unless `LAND` says otherwise, a goal for spin-ups
      that the page never runs: a published state's cover follows the
