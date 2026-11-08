@@ -168,7 +168,7 @@ test('a strongly stable column stays unmixed', () => {
   for (let k = 0; k < K; k++) assert.equal(theta[k * C + i], before[k * C + i]);
 });
 
-test('with diagnoseFirst the diagnosis is the plain one of the lowest layer without the step\'s surface heat and evaporation, and the state and diagnostics are left as deposited', () => {
+test('with diagnoseFirst the diagnosis is the plain one of the lowest layer without the step\'s surface heat and evaporation, and the state and diagnostics are left as deposited; withhold false diagnoses the state as it stands', () => {
   const { exnerLayer, sigmaMid, kappa, cp } = core.diagnostics, { thetaV } = core.arrays;
   const heat = Float64Array.from({ length: C }, (_, i) => 150 * Math.sin(0.9 * i)), water = Float64Array.from({ length: C }, (_, i) => 6e-5 * (1 + Math.cos(1.7 * i))), dt = 900, base = (K - 1) * C;
   const first = createBoundaryLayer(mesh, core, { turbulence: 'dry', diagnoseFirst: true, depositedHeat: heat, depositedWater: water }), plain = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
@@ -176,7 +176,10 @@ test('with diagnoseFirst the diagnosis is the plain one of the lowest layer with
   for (let i = 0; i < C; i++) state[3][i] = state[1][base + i] * exnerLayer[base + i] * Math.pow(sigmaMid[K - 1], -kappa) + 2;
   const deposited = state.map((a) => Float64Array.from(a));
   plain.diagnose(state);
-  const depositedDepth = Float64Array.from(plain.depth), depositedV = Float64Array.from(thetaV);
+  const depositedDepth = Float64Array.from(plain.depth), depositedMixing = Float64Array.from(plain.mixing), depositedV = Float64Array.from(thetaV);
+  first.diagnose(state, 0, C, 0, { withhold: false });
+  assert.deepEqual(first.depth, depositedDepth);
+  assert.deepEqual(first.mixing, depositedMixing);
   first.diagnose(state, 0, C, dt);
   for (const bad of [0, undefined, -dt]) assert.throws(() => first.diagnose(state, 0, C, bad), /diagnoseFirst withholds/);
   for (let a = 0; a < state.length; a++) assert.deepEqual(state[a], deposited[a]);
