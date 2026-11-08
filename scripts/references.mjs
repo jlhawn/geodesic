@@ -5,7 +5,8 @@
  *
  * Gridded files come back as { south, west, step, rows, columns, months, values } with values [month][row][column],
  * rows northward from `south` and columns eastward from `west`, all in degrees. sampleGrid interpolates one bilinearly at
- * a point; given ERA5's land-sea mask it weighs the four points by lsm for a land cell and by 1 − lsm for a sea cell, so a
+ * a point (a global grid holds its edge rows to the poles; a band throws for a point more than half a step outside
+ * it, and any grid for a month index outside 0–11); given ERA5's land-sea mask it weighs the four points by lsm for a land cell and by 1 − lsm for a sea cell, so a
  * coastal cell takes the points of its own kind. boxMean averages the samples over a set of cells by area.
  */
 import { readFileSync } from 'node:fs';
@@ -36,7 +37,7 @@ const grid = (values, { south, west, step, rows, columns, months }) => ({ south,
 export function gpcp(dir = REFERENCES) {
   const name = 'gpcp-precip-1991-2020', { meta, floats } = binary(name, dir);
   if (floats.length !== 12 * 72 * 144) fail(name, `${floats.length} values, not 12 × 72 × 144`);
-  return { meta, grid: grid(floats, { south: -88.75, west: 1.25, step: 2.5, rows: 72, columns: 144, months: 12 }) };
+  return { meta, grid: { ...grid(floats, { south: -88.75, west: 1.25, step: 2.5, rows: 72, columns: 144, months: 12 }), global: true } };
 }
 
 export function era5Fields(dir = REFERENCES) {
@@ -91,6 +92,9 @@ export function ceres(dir = REFERENCES) {
 
 export function sampleGrid(g, month, lat, lon, { lsm = null, land = null } = {}) {
   if (lsm && typeof land !== 'boolean') throw new Error('sampling with lsm needs land: true or false');
+  if (!(Number.isInteger(month) && month >= 0 && month < 12 && (g.months === 1 || month < g.months))) throw new Error(`month index ${month} is not 0–11`);
+  const north = g.south + (g.rows - 1) * g.step;
+  if (!g.global && (lat < g.south - g.step / 2 || lat > north + g.step / 2)) throw new Error(`latitude ${lat} lies outside the grid's ${g.south}–${north}°`);
   const m = g.months === 1 ? 0 : month, y = (lat - g.south) / g.step, x = ((((lon - g.west) % 360) + 360) % 360) / g.step;
   const j0 = Math.min(Math.max(Math.floor(y), 0), g.rows - 2), fy = Math.min(Math.max(y - j0, 0), 1);
   const i0 = Math.floor(x) % g.columns, i1 = (i0 + 1) % g.columns, fx = x - Math.floor(x);

@@ -2,7 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
-import { gpcp, era5Fields, woa23Sst, globalTs, seaIce, tao, ceres, checkSha256, sampleGrid, boxMean, gridMean, TAO_STATIONS } from '../scripts/references.mjs';
+import { mkdtempSync, copyFileSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { gpcp, era5Fields, woa23Sst, globalTs, seaIce, tao, ceres, checkSha256, sampleGrid, boxMean, gridMean, TAO_STATIONS, REFERENCES } from '../scripts/references.mjs';
 
 test('each reference loads with its recorded sha256 and shape, and a changed byte fails the check', () => {
   const p = gpcp(), e = era5Fields();
@@ -48,4 +51,25 @@ test('with lsm a land cell takes the land points around it and a sea cell the se
   const mesh = gridMesh(new Grid(16)), cells = [0, 1, 2];
   const flat = { south: -90, west: 0, step: 1, rows: 181, columns: 360, months: 1, values: new Float32Array(181 * 360).fill(7) };
   assert.ok(Math.abs(boxMean(mesh, flat, 0, cells) - 7) < 1e-6);
+});
+
+test('the grids are not symmetric about the equator, a band refuses points off it, and a loader refuses a damaged copy', () => {
+  const { grid } = gpcp(), { t2m } = era5Fields().fields;
+  const north = sampleGrid(grid, 6, 20, 78), south = sampleGrid(grid, 6, -20, 78);
+  assert.ok(north > 5 && south < 1, `GPCP July at 78E: ${north} mm/day at 20N, ${south} at 20S`);
+  assert.ok(sampleGrid(grid, 0, 89.9, 0) > 0, 'a global grid holds its edge row to the pole');
+  assert.ok(Number.isFinite(sampleGrid(t2m, 0, 70.4, 0)));
+  assert.throws(() => sampleGrid(t2m, 0, 75, 0), /outside the grid/);
+  assert.throws(() => sampleGrid(t2m, 0, 29, 0), /outside the grid/);
+  for (const month of [12, -1, 1.5]) assert.throws(() => sampleGrid(t2m, month, 50, 0), /month index/);
+  const dir = mkdtempSync(join(tmpdir(), 'references-'));
+  try {
+    for (const ext of ['json', 'bin']) copyFileSync(join(REFERENCES, `gpcp-precip-1991-2020.${ext}`), join(dir, `gpcp-precip-1991-2020.${ext}`));
+    assert.ok(gpcp(`${dir}/`).grid.values.length > 0);
+    const bin = join(dir, 'gpcp-precip-1991-2020.bin'), bytes = readFileSync(bin);
+    bytes[4096] ^= 0x40; writeFileSync(bin, bytes);
+    assert.throws(() => gpcp(`${dir}/`), /sha256/);
+    writeFileSync(bin, bytes.subarray(0, bytes.length - 4));
+    assert.throws(() => gpcp(`${dir}/`), /sha256/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

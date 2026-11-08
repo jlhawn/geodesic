@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 /*
- * Writes data/references/global-ts-era5.json: the global mean surface temperature by calendar month over 1991–2020 in
- * the model's own definition, from ERA5's monthly means (NCAR RDA ds633.1, read by OPeNDAP at every fourth 0.25° point,
- * a 1° grid of 181 × 360). The model's Ts (surfaceT) is the land's surface temperature on land, the ice's surface
- * temperature on sea ice and the top ocean layer's temperature on open sea, so a point takes ERA5's skin temperature
- * (skt) where its land-sea mask is at least 0.5 or it holds any sea ice (ci > 0), and its bulk SST (sstk) elsewhere, or skt at a sea point without one.
- * ERA5's skt is the grid box's skin, its tiles weighted by cover, so at a point with ice it is the ice's skin and the
- * open water of the leads together: the model's matching quantity there is the same cover-weighted mean, gridBoxSkin of
- * js/intervalMeans.module.js, not the ice's own surfaceT. The annual means weigh each month by its mean length over
- * 1991–2020 (February 28 + 8/30 days).
+ * Writes data/references/global-ts-era5.json: the global mean grid-box skin temperature by calendar month over
+ * 1991–2020, from ERA5's monthly means (NCAR RDA ds633.1, read by OPeNDAP at every fourth 0.25° point, a 1° grid of
+ * 181 × 360). A point takes ERA5's skin temperature (skt), the grid box's skin with its tiles weighted by cover (at a
+ * point with ice, the ice and the open water of its leads), where its land-sea mask is at least 0.5 or it holds any sea
+ * ice (ci > 0), and its bulk SST (sstk) elsewhere, or skt at a sea point without one. The model's matching quantity is
+ * gridBoxSkin of js/intervalMeans.module.js: c·surfaceT + (1 − c)·sst on sea cells with ice, surfaceT elsewhere. The
+ * annual means weigh each month by its mean length over 1991–2020 (February 28 + 8/30 days).
  * For comparison it also writes the same mean with 2 m air temperature (2t) in place of skt, the definition of the
  * station and Berkeley Earth records, and the gap between the two by month.
  *
