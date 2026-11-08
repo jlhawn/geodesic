@@ -10,6 +10,7 @@ import { stateGeography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState } from '../js/stateFile.module.js';
 import { gridHeader } from '../js/stateGrid.module.js';
+import { oceanCells } from '../js/ocean/layered.module.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'diagnostic-scripts-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -34,19 +35,27 @@ const file = join(dir, 'state16_day0000.bin');
 writeFileSync(file, encodeState({ ...header, K: model.core.K, levels: model.core.levels, day: 0, time: 0, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, ocean: await ocean.serialize(), land: await model.land.serialize() }));
 const run = (script, env) => spawnSync(process.execPath, [new URL(`../scripts/${script}.mjs`, import.meta.url).pathname, file], { env: { ...process.env, ...env }, encoding: 'utf8' });
 
-test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid computes: on open equatorial edges of a state at N=16 they add up to the tendency in each of the top 20 layers, far above the floor, where no drag acts', () => {
-  const edges = [];
-  for (let e = 0; e < E && edges.length < 3; e++) {
+test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid computes: on a state at N=16 they add up to the tendency in each of the top 20 layers of open equatorial edges, far above the floor, where no drag acts, and in the top layer of edges under an ice shelf, where the shelf\'s drag does', () => {
+  const edges = [], shelfEdges = [], { shelf } = oceanCells(model.mesh.nCells, model.geography);
+  for (let e = 0; e < E; e++) {
     const { lat, lon } = edgeAt(e), [a, b] = [model.mesh.cellsOnEdge[2 * e], model.mesh.cellsOnEdge[2 * e + 1]];
-    if (ocean.edgeOcean[e] && !model.geography.land[a] && !model.geography.land[b] && Math.abs(lat) < 10 && lon > 200 && lon < 250) edges.push(e);
+    if (edges.length < 3 && ocean.edgeOcean[e] && !model.geography.land[a] && !model.geography.land[b] && Math.abs(lat) < 10 && lon > 200 && lon < 250) edges.push(e);
+    if (shelfEdges.length < 2 && ocean.edgeOcean[e] && shelf[a] + shelf[b] > 0) shelfEdges.push(e);
   }
   assert.equal(edges.length, 3);
-  const budget = run('edgeBudget', { EDGES: edges.join(',') });
+  assert.equal(shelfEdges.length, 2);
+  const budget = run('edgeBudget', { EDGES: [...edges, ...shelfEdges].join(',') });
   assert.equal(budget.status, 0, budget.stderr);
   assert.doesNotMatch(budget.stdout, /NaN|Infinity/);
-  const lines = budget.stdout.split('\n').filter((line) => /^edge \d+ layer \d+ /.test(line));
+  const lines = budget.stdout.split('\n').filter((line) => /^edge \d+ layer \d+ /.test(line)), of = (e) => lines.filter((line) => line.startsWith(`edge ${e} `));
   const term = (line, name) => Number(new RegExp(`${name} (\\S+)`).exec(line)[1]);
-  const upper = lines.filter((line) => Number(/ layer (\d+) /.exec(line)[1]) < 20);
+  for (const e of shelfEdges) {
+    const [top] = of(e);
+    assert.match(top, / layer 0 .* shelf drag -?\d/);
+    assert.notEqual(term(top, 'shelf drag'), 0, top);
+    assert.equal(Math.abs(term(top, 'drag\\+rest')), 0, top);
+  }
+  const upper = edges.flatMap(of).filter((line) => Number(/ layer (\d+) /.exec(line)[1]) < 20);
   for (const e of edges) assert.ok(upper.filter((line) => line.startsWith(`edge ${e} `)).length >= ocean.table.fixed, `edge ${e} shows ${upper.filter((line) => line.startsWith(`edge ${e} `)).length} of the top 20 layers`);
   for (const line of upper) assert.equal(Math.abs(term(line, 'drag\\+rest')), 0, line);
   for (const name of ['Coriolis', 'baroclinic', '-grad K']) assert.ok(upper.some((line) => term(line, name) !== 0), `${name} is zero on every edge`);

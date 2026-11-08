@@ -7,7 +7,7 @@ import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { gradient, curl, kineticEnergy, laplacianVelocity } from '../js/dynamics/operators.module.js';
-import { THIN, PV_FLOOR, closureCoefficient } from '../js/ocean/layered.module.js';
+import { THIN, PV_FLOOR, closureCoefficient, oceanCells } from '../js/ocean/layered.module.js';
 import { H_MIN } from '../js/ocean/column.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { diagnoseExchange } from './surfaceExchange.mjs';
@@ -32,7 +32,7 @@ const hEdge = shared('hEdge'), pressure = shared('pressure'), gradEta = shared('
 const { nEdgesOnEdge, edgesOnEdge, weightsOnEdge, maxEdgesOnEdge, dcEdge, dvEdge, cellsOnEdge, verticesOnEdge, fVertex } = mesh;
 let spacing = 0; for (let e = 0; e < E; e++) spacing += dcEdge[e]; spacing /= E;
 const nu4 = closureCoefficient(spacing, OCEAN.closureHours ?? 12, OCEAN.closureSpacing), centring = OCEAN.vorticityCentring ?? 0.5, minimumLayer = OCEAN.minimumLayer ?? H_MIN;
-const pvFloor = Float64Array.from(ocean.table.minimum, (m) => Math.min(PV_FLOOR, m));
+const pvFloor = Float64Array.from(ocean.table.minimum, (m) => Math.min(PV_FLOOR, m)), { shelf } = oceanCells(C, model.geography), topDrag = OCEAN.topDrag ?? 2.5e-3;
 const zeta = new Float64Array(mesh.nVertices), Kc = new Float64Array(C), gK = new Float64Array(E), lap = new Float64Array(E), lap2 = new Float64Array(E), dS = new Float64Array(C), cS = new Float64Array(mesh.nVertices), fluxPV = new Float64Array(E), q = new Float64Array(E);
 const ae = (k, e) => k * E + e, at = (k, i) => k * C + i;
 console.log(`== ${FILE.split('/').pop()} day ${saved.day} step ${saved.step ?? 0}; terms in 1e-5 m/s2`);
@@ -51,9 +51,10 @@ for (let k = 0; k < L; k++) {
     const na = at(k, cellsOnEdge[2 * e]), nb = at(k, cellsOnEdge[2 * e + 1]), Ha = columnAbove[na], Hb = columnAbove[nb];
     const top = Math.max(Ha, Hb), bottom = Math.min(Ha + h[na], Hb + h[nb]), zR = bottom > top ? 0.5 * (top + bottom) : 0.5 * (Ha + 0.5 * h[na] + Hb + 0.5 * h[nb]);
     const eta = -g * gradEta[e], bc = -g / rho0 * (pressure[nb] + layerRho[nb] * (zR - Hb) - pressure[na] - layerRho[na] * (zR - Ha)) / dcEdge[e];
-    const st = k === 0 ? stress[e] / rho0 / Math.max(hEdge[e], minimumLayer) : 0;
+    const he = Math.max(hEdge[e], minimumLayer), st = k === 0 ? stress[e] / rho0 / he : 0;
+    const shelfDrag = k === 0 ? -topDrag * 0.5 * (shelf[cellsOnEdge[2 * e]] + shelf[cellsOnEdge[2 * e + 1]]) * Math.abs(uk[e]) * uk[e] / he : 0;
     const closure = -nu4 * lap2[e];
-    const rest = du[ae(k, e)] - (cor - gK[e] + eta + bc + st + closure);
-    console.log(`edge ${e} layer ${k} ${rho[k].toFixed(2)} hEdge ${hEdge[ae(k, e)].toFixed(0)} u ${uk[e].toFixed(2)} | -g grad eta ${(eta * 1e5).toFixed(2)} baroclinic ${(bc * 1e5).toFixed(2)} Coriolis ${(cor * 1e5).toFixed(2)} -grad K ${(-gK[e] * 1e5).toFixed(2)} stress ${(st * 1e5).toFixed(2)} nu4 ${(closure * 1e5).toFixed(2)} drag+rest ${(rest * 1e5).toFixed(2)} | du/dt ${(du[ae(k, e)] * 1e5).toFixed(2)}`);
+    const rest = du[ae(k, e)] - (cor - gK[e] + eta + bc + st + shelfDrag + closure);
+    console.log(`edge ${e} layer ${k} ${rho[k].toFixed(2)} hEdge ${hEdge[ae(k, e)].toFixed(0)} u ${uk[e].toFixed(2)} | -g grad eta ${(eta * 1e5).toFixed(2)} baroclinic ${(bc * 1e5).toFixed(2)} Coriolis ${(cor * 1e5).toFixed(2)} -grad K ${(-gK[e] * 1e5).toFixed(2)} stress ${(st * 1e5).toFixed(2)} shelf drag ${(shelfDrag * 1e5).toFixed(2)} nu4 ${(closure * 1e5).toFixed(2)} drag+rest ${(rest * 1e5).toFixed(2)} | du/dt ${(du[ae(k, e)] * 1e5).toFixed(2)}`);
   }
 }
