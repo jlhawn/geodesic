@@ -783,6 +783,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const draftFlux = new Float64Array(K + 1), draftS = new Float64Array(K + 1), draftQ = new Float64Array(K + 1), draftEvaporation = new Float64Array(K);
   const deepCover = new Float64Array(K), deepWater = new Float64Array(K), tendencyS = new Float64Array(K), tendencyQ = new Float64Array(K), convectiveFall = new Float64Array(K), convectiveReserve = new Float64Array(K);
   const plumeCarried = new Float64Array(K), middleFlux = new Float64Array(K), plumeInterfaceT = new Float64Array(K), plumeFrozen = new Float64Array(K), convectiveMelted = new Float64Array(K), convectiveFrozen = new Float64Array(K), convectiveSnow = new Float64Array(C);
+  const plumeInterfaceExcess = new Float64Array(K);
   const plume = { T: 0, liquid: 0, ice: 0 }, draft = { q: 0, s: 0 }, plumeSaturated = { qs: 0, slope: 0, liquid: 1 };
   const plumeExits = plumeTrace ? Object.fromEntries(['excessT', 'excessQ', 'lcl', 'stop', 'parcelBase', 'parcelTop', 'top', 'cape', 'inhibition', 'baseFlux', 'pcape', 'pcapeBoundary', 'tau', 'consumptionP', 'halfEntrainment', 'doubleExcess', 'fastStart', 'capped', 'rainMade', 'rainDraft', 'rainBelow', 'rainGround'].map((name) => [name, new Float32Array(C)])) : null;
   if (plumeExits) plumeExits.exit = new Uint8Array(C);
@@ -1387,7 +1388,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     if (mixedPlume) { convectiveFrozen.fill(0); convectiveMelted.fill(0); }
     deep.deep = false; deep.top = -1; deep.cape = 0; deep.consumption = 0; deep.start = -1; deep.downdraft = 0; deep.baseFlux = 0; deep.inhibition = 0; deep.shallowRain = 0; deep.shallowSnow = 0;
     deep.pcape = 0; deep.pcapeBoundary = 0; deep.consumptionP = 0; deep.tau = 0; deep.speed = 0; deep.depth = 0; deep.boundaryWind = 0; deep.boundaryTime = 0; deep.excessT = 0; deep.excessQ = 0; deep.rooted = true; deep.departure = -1;
-    deep.parcelDeep = false; deep.midLevel = false; deep.midTrimmed = false; deep.midOffset = false; deep.midDry = false; deep.midOvershoot = false; deep.deepened = false; deep.shallowDepth = 0; deep.shallowBase = 0; deep.shallowReach = 0; deep.parcelBase = 0; deep.parcelTop = 0; deep.conversionMargin = Infinity; deep.typeMargin = Infinity; cumulus.snow = 0; parcelStop = 0; lclPressure = 0;
+    deep.parcelDeep = false; deep.midLevel = false; deep.midTrimmed = false; deep.midOffset = false; deep.midDry = false; deep.midOvershoot = false; deep.midCloudEnd = false; deep.deepened = false; deep.shallowDepth = 0; deep.shallowBase = 0; deep.shallowReach = 0; deep.parcelBase = 0; deep.parcelTop = 0; deep.conversionMargin = Infinity; deep.typeMargin = Infinity; cumulus.snow = 0; parcelStop = 0; lclPressure = 0;
     if (plumeExits) plumeExits.capped[i] = 0;
     if (momentumLayers) {
       momentumSource[i] = K;
@@ -1529,15 +1530,17 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         plumeState(sourceS, sourceQ, z[k], p[k], plume.T);
         plumeWork[k] = R * (plume.T * (1 + virtual * (sourceQ - plume.liquid)) - environment) * dp[k] / p[k];
       }
-      let midLift = buoyancy, midDry = false, midStable = false;
+      let midLift = buoyancy, midDry = false, midStable = false, midCloudEnd = false;
       if (middle && mixes && k > 0) {
         const full = Math.exp(-epsilon * depth), topS = envS[k] + (s - envS[k]) * full, topQ = envQ[k] + (w - envQ[k]) * full, ph = pi[i] * levels[k];
         plumeState(topS, topQ, upper, ph, guess);
         midDry = !(plume.liquid > full * midCarried + (1 - full) * cloud);
+        midCloudEnd = midDry && plume.liquid > full * midCarried;
         const rising = plume.T * (1 + virtual * (topQ - plume.liquid) - loading * midCarried), qsAbove = saturationHumidity(T[k - 1], p[k - 1]);
         let th = saturatedTemperature(Math.max(cp * T[k - 1] + g * z[k - 1], cp * T[k] + g * z[k]) - g * upper + latentHeat * qsAbove, ph, T[k - 1]);
         let qh = Math.max(0, Math.min(Math.max(0, q[(k - 1) * C + i]), qsAbove) + saturationHumidity(th, ph) - qsAbove), interfaceB = rising - th * (1 + virtual * qh);
         if (interfaceB < -MID_LEVEL.interfaceFallback) { th = 0.5 * (T[k] + T[k - 1]); qh = 0.5 * (air + Math.max(0, q[(k - 1) * C + i])); interfaceB = rising - th * (1 + virtual * qh); }
+        plumeInterfaceExcess[k] = interfaceB;
         midOrganized = interfaceB + midB < 0;
         midLift = g * 0.5 * (interfaceB + midB) / (th * (1 + virtual * qh));
         midStable = interfaceB <= -MID_LEVEL.overshootBuoyancy && T[k - 1] - T[k] >= -MID_LEVEL.overshootLapse * (z[k - 1] - z[k]);
@@ -1547,7 +1550,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         if (!(depth < Infinity)) { top = k; break; }
         const x = 2 * mixing * depth, decay = Math.exp(-x);
         w2 = w2 * decay + 2 * plumeAcceleration * midLift * depth * (x > 0 ? -Math.expm1(-x) / x : 1);
-        if (midDry || midStable || !(w2 > 0)) { top = k; if (w2 > 0) { deep.midDry = !midStable; deep.midOvershoot = !midDry; } break; }
+        if (midDry || midStable || !(w2 > 0)) { top = k; if (w2 > 0) { deep.midDry = !midStable; deep.midOvershoot = !midDry; deep.midCloudEnd = midCloudEnd && !midStable; } break; }
       }
       plumeSpeed[k] = mixes ? w2 : 0;
       if (cloudy && plumeWork[k] > 0) { cape += plumeWork[k]; plumeCounted[k] = 1; if (bechtold) pcape += plumeWork[k] * p[k] / (R * environment); }
@@ -1928,7 +1931,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     condensation: settings, plumeExits, adjust, useSeaIce, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
     plumeAir(energy, water, height, pressure, guess) { plumeState(energy, water, height, pressure, guess); return { ...plume }; },
     precipitation, rain, convectivePrecipitation, largeScalePrecipitation, fogPrecipitation, convectiveRain, largeScaleRain, fogRain, convectiveSnow, budget, latentHeat, trace, falling,
-    cumulus, cumulusCover, cumulusWater, cumulusCloudPath, cumulusBaseFlux, cumulusTop, cumulusOvershootShare, cumulusFlux, deep, subcloudVirtual, subcloudLayers: KL, saveSubcloud, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, convectiveFrozen, convectiveMelted, plumeFrozen, plumeCarried, plumeInterfaceT, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained, plumeDetrained, envHumidity, plumeCounted, resolutionScale,
+    cumulus, cumulusCover, cumulusWater, cumulusCloudPath, cumulusBaseFlux, cumulusTop, cumulusOvershootShare, cumulusFlux, deep, subcloudVirtual, subcloudLayers: KL, saveSubcloud, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, convectiveFrozen, convectiveMelted, plumeFrozen, plumeCarried, plumeInterfaceT, plumeInterfaceExcess, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained, plumeDetrained, envHumidity, plumeCounted, resolutionScale,
     momentum: { up: momentumUp, upKeep: momentumUpKeep, down: momentumDown, downKeep: momentumDownKeep, source: momentumSource },
     shared: { momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, fogPrecipitation: fogBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer, subcloudVirtual: subcloudBuffer },
   };
