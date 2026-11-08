@@ -4,7 +4,10 @@
 // time have passed or DAYS is reached, finishing the simulated day, save a
 // binary snapshot and keep the KEEP newest. Logs one line a day to
 // <TAG>.log, with the sea-ice extent of each hemisphere (the area of the
-// cells at least 15% covered), and at the end of the segment the rain,
+// cells at least 15% covered; with the means, a second line gives the
+// extent and area of the sea cells on the Sea Ice Index's grids
+// (js/seaIceIndex.module.js), the day's mean concentration cut at 15 %, the
+// index's daily definition, on each day the recorder sampled), and at the end of the segment the rain,
 // vegetation and surface temperature of the regions in BOXES, the
 // equatorial Pacific's surface temperatures and thermocline, and the
 // convection and equator lines of js/audit.module.js, and exits with 2 on
@@ -175,7 +178,11 @@
 // with GIOMAS's thickness and snow); SEA_ICE=rule lays it by latitude.
 // A fresh start's observed soil water is SOIL_SEED (a file in
 // js/geography.module.js's soil-water format, as scripts/soilWater.mjs
-// writes with --out), else data/soilwater_march.bin.
+// writes with --out), else data/soilwater_march.bin; the saved header's
+// soilSeed names the file and its sha256, and a start from FROM or
+// LAND_FROM carries that state's. SOIL_SEED is refused with FROM, with
+// LAND_FROM, with a land start other than 'observed', and on a
+// continuation unless the state records that file.
 // Without FROM, the ocean starts from the climatology CLIMATOLOGY (a file
 // in js/ocean/climatology.module.js's format; data/woa_march_1deg.bin
 // when it exists, the World Ocean Atlas's March) and the sea surface from
@@ -200,7 +207,7 @@ import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appen
 import { basename } from 'node:path';
 import { Grid } from '../js/grid.module.js';
 import { stateGrid, gridHeader, savedRelax, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
-import { createGeography, stateGeography, savedGeography, checkGeography, geographyHeader, readTopography, geographyOptions, decodeSoilWater, FRESH_GEOGRAPHY, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
+import { createGeography, stateGeography, savedGeography, checkGeography, geographyHeader, readTopography, geographyOptions, FRESH_GEOGRAPHY, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
@@ -228,6 +235,8 @@ import { watchSkin } from './skinWatch.mjs';
 import { lakeArrays, savedLake } from '../js/physics/lake.module.js';
 import { loadSavedLand } from './savedLand.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
+import { startGeography } from './soilWater.mjs';
+import { indexCells, seaIceIndexCut } from '../js/seaIceIndex.module.js';
 
 refuseUnreadOptions(import.meta.url);
 const BOXES = {
@@ -289,10 +298,12 @@ const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADI
 const otherGroups = base?.given ? differingGroups(GIVEN, base.given) : [];
 if (otherGroups.length) log(`options other than ${saved ? file : process.env.FROM}'s header records: ${otherGroups.join(', ')}`);
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
-const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}`;
+let landFromState = !saved && process.env.LAND_FROM ? await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM))) : null;
+const { geography: startingGeography, soilSeed, soilNote } = startGeography(sheets.geography, process.env, { saved, from: fromState, landFrom: landFromState });
+const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}, ${soilNote}`;
 const found = base ? stateGrid(base, topography) : null;
 requireOwnSubgrid(TERRAIN, OROGRAPHY.orography);
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: process.env.SOIL_SEED ? { ...sheets.geography, soilWater: decodeSoilWater(readFileSync(process.env.SOIL_SEED)) } : sheets.geography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: startingGeography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
@@ -385,13 +396,14 @@ if (saved) {
     model.land.initialize(model.time);
     log(started ? `ocean and sea surface from ${climatology}: ${started.atlas} sea cells, ${started.analytic} from the analytic climatology where it has no water` : 'ocean from the analytic climatology');
   }
-  if (process.env.LAND_FROM) {
-    const seed = await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM)));
+  if (landFromState) {
+    const seed = landFromState;
     const seedGeography = stateGeography(seed), sameGround = JSON.stringify(seedGeography.record) === JSON.stringify(GEOGRAPHY);
     const sourceMesh = seed.N === N ? mesh : stateGrid(seed, seedGeography.topography).mesh;
     const source = { mesh: sourceMesh, geography: seed.N === N && sameGround ? model.geography : createGeography(sourceMesh, seedGeography.topography, seedGeography.geography) };
     model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6], model.time, state[3]);
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
+    landFromState = null;
   }
   const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at', 'the topsoil carbon, the trees free, at'][record[1]];
   log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green', 'observed'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}${model.land.deepWater ? `; ${deepNote(process.env.LAND_FROM ? null : fromState ? fromState.land : null)}` : ''}`);
@@ -402,6 +414,7 @@ const gcd = (a, b) => (b ? gcd(b, a % b) : a), lcm = (a, b) => a * b / gcd(a, b)
 if (startStep % everySteps) throw new Error(`the snapshot stopped at step ${startStep}, off the ocean's ${everySteps}-step cadence`);
 
 const deg = 180 / Math.PI, land = model.geography.land;
+const onIndexGrids = indexCells(mesh, model.geography), seaIceCut = (concentration) => seaIceIndexCut(mesh, onIndexGrids, concentration);
 const inBox = Object.fromEntries(Object.entries(BOXES).map(([k, [a, b, c, e]]) => [k, [...Array(C).keys()].filter((i) => land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e)]));
 const PH = model.gpu.layout.PH;
 const split = { convective: new Float64Array(C), largeScale: new Float64Array(C), wet: new Float64Array(C), seconds: 0 };
@@ -527,6 +540,7 @@ async function dayEnd(day, stepsToday, jump) {
     renameSync(`${file}.partial`, file);
     hook.after(file);
   }
+  const dayIce = meansRecorder && MEANS.includes('concentration') && stepsToday === perDay ? meansRecorder.latest() : null;
   const ice = iceArea(), lowest = lowestCloudLine(day), synced = STRATOSPHERE || budget ? model.sync() : null;
   const landed = (async () => {
     const [absorbedSum, atmosphereSum, longwaveSum] = await sums;
@@ -542,8 +556,10 @@ async function dayEnd(day, stepsToday, jump) {
     for (let i = 0; i < C; i++) if (!land[i] && iceNow[i] > 0 && Math.abs(mesh.latCell[i] * deg) >= 60) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
     const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
     iceNorth += north; iceSouth += south;
+    const iceDay = dayIce ? await dayIce : null, seaIceDay = iceDay ? seaIceCut(iceDay.values.concentration) : null;
     const minutes = (performance.now() - start) / 60000;
     log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
+    if (seaIceDay) log(`sea ice on day ${day}'s mean concentration, sea cells on the index's grids, 15 %: N extent ${seaIceDay.N.extent.toFixed(2)} area ${seaIceDay.N.area.toFixed(2)}, S extent ${seaIceDay.S.extent.toFixed(2)} area ${seaIceDay.S.area.toFixed(2)} Mkm²`);
     log(await lowest);
     if (sstDay) {
       const { mean, samples } = await sstDay;
@@ -642,7 +658,7 @@ if (days > 0 && !step) {
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
 const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
-const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...(TERRAIN === undefined ? {} : { terrainOptions: TERRAIN }), ...geographyHeader(GEOGRAPHY), levels: core.levels, options: OPTIONS, given: GIVEN, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
+const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, ...(TERRAIN === undefined ? {} : { terrainOptions: TERRAIN }), ...geographyHeader(GEOGRAPHY), ...(soilSeed ? { soilSeed } : {}), levels: core.levels, options: OPTIONS, given: GIVEN, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
 writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, ...lakeState, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, ...(model.seaIce.brine ? { brine: model.seaIce.brine } : {}), mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, ...(model.seaFlow ? { seaFlow: model.seaFlow } : {}), evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean, land: landState, ...sstFields, ...meansSaved, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));

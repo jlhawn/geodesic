@@ -8,7 +8,7 @@ import { Grid } from '../js/grid.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { decodeState } from '../js/stateFile.module.js';
-import { createIntervalMeans, meansGroup, meansEvery, MEANS } from '../js/intervalMeans.module.js';
+import { createIntervalMeans, meansGroup, meansEvery, MEANS, DERIVED_MEANS } from '../js/intervalMeans.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 /*
@@ -56,8 +56,8 @@ test('a sample reads every default field as the frame does, and a day\'s recorde
   let worst = 0;
   for (let i = 0; i < C; i++) worst = Math.max(worst, Math.abs(means.mslp[i] - sum[i] / means.samples) / (sum[i] / means.samples));
   assert.ok(worst < 1e-6, `means.mslp lies up to ${worst} off the mean of the samples`);
-  const sampled = await model.sampleFrame({ fields: MEANS }), framed = await model.beginFrame({ fields: MEANS });
-  assert.deepEqual(MEANS.filter((name) => !same(sampled.fields[name], framed.fields[name])), []);
+  const frameMeans = MEANS.filter((name) => !DERIVED_MEANS[name]), sampled = await model.sampleFrame({ fields: frameMeans }), framed = await model.beginFrame({ fields: frameMeans });
+  assert.deepEqual(frameMeans.filter((name) => !same(sampled.fields[name], framed.fields[name])), []);
   const land = model.geography.land;
   for (const name of MEANS) assert.equal(Array.from(means[name]).filter((v, i) => !Number.isFinite(v) && !(name === 'sst' && land[i])).length, 0, name);
   assert.ok(means.precipitation.some((r) => r > 1) && means.zonalStress.some((t) => Math.abs(t) > 0.01) && Math.max(...means.shortwave) > 100, 'plausible rain, stress and sunlight');
