@@ -3,7 +3,7 @@
 // 'drag+rest' is the tendency less the other terms):
 //   EDGES=20091,20281 node scripts/edgeBudget.mjs <state.bin>
 import { readFileSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, savedTerrain } from '../js/stateFile.module.js';
 import { gradient, curl, kineticEnergy, laplacianVelocity } from '../js/dynamics/operators.module.js';
@@ -13,14 +13,14 @@ import { diagnoseExchange } from './surfaceExchange.mjs';
 const FILE = process.argv[2], EDGES = (process.env.EDGES ?? '').split(',').map(Number);
 const OCEAN = { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') };
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const N = saved.N, topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: savedTerrain(saved) ?? true, topography, levels: savedLevels(saved), ocean: OCEAN });
+const N = saved.N, { topography, geography, land: landOptions } = stateGeography(saved);
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: savedTerrain(saved) ?? true, topography, geography, land: landOptions, levels: savedLevels(saved), ocean: OCEAN });
 const { mesh, core, state, surface, seaIce, ocean } = model;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 model.time = saved.time;
 ocean.load(saved.ocean, state[3], state[6]);
-core.phaseFlux(state, 0, core.K); core.phaseColumn(state, [new Float64Array(mesh.nCells)], 0, mesh.nCells); diagnoseExchange(model, 1350 * 16 / N);
+core.phaseFlux(state, 0, core.K); core.phaseColumn(state, [new Float64Array(mesh.nCells)], 0, mesh.nCells); diagnoseExchange(model);
 ocean.setStress(surface.stress(state, new Float64Array(mesh.nEdges)), state[6], seaIce.concentration);
 const C = mesh.nCells, E = mesh.nEdges, L = ocean.layers, rho = ocean.densities, g = 9.81, rho0 = 1025, dtOcean = OCEAN.everySteps * 1350 * 16 / N;
 new Float64Array(ocean.shared.params)[1] = dtOcean;

@@ -72,7 +72,7 @@ for (const file of FILES) {
   model.time = saved.time;
   const [pi, theta, u, , q] = state;
   core.phaseFlux(state, 0, K); core.phaseColumn(state, [new Float64Array(C)], 0, C);
-  diagnoseExchange(model, 1350 * 16 / first.N); surface.applyLayers(state, [null, null, new Float64Array(K * E)], 0, K);
+  diagnoseExchange(model); surface.applyLayers(state, [null, null, new Float64Array(K * E)], 0, K);
   const stressEdge = surface.stress(state, new Float64Array(E)), speed = surface.windSpeed;
   const geo = Float64Array.from(geopotential), exL = Float64Array.from(exnerLayer), thv = Float64Array.from(thetaV);
   for (let k = 0; k < K; k++) for (const i of cells) zMid[k * C + i] = geo[k * C + i] / g;

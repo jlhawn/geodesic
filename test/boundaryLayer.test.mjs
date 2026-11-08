@@ -177,9 +177,11 @@ test('with diagnoseFirst the diagnosis is the plain one of the lowest layer with
   const deposited = state.map((a) => Float64Array.from(a));
   plain.diagnose(state);
   const depositedDepth = Float64Array.from(plain.depth), depositedMixing = Float64Array.from(plain.mixing), depositedV = Float64Array.from(thetaV);
-  first.diagnose(state, 0, C, 0, { withhold: false });
-  assert.deepEqual(first.depth, depositedDepth);
-  assert.deepEqual(first.mixing, depositedMixing);
+  for (const step of [0, dt]) {
+    first.diagnose(state, 0, C, step, { withhold: false });
+    assert.deepEqual(first.depth, depositedDepth);
+    assert.deepEqual(first.mixing, depositedMixing);
+  }
   first.diagnose(state, 0, C, dt);
   for (const bad of [0, undefined, -dt]) assert.throws(() => first.diagnose(state, 0, C, bad), /diagnoseFirst withholds/);
   for (let a = 0; a < state.length; a++) assert.deepEqual(state[a], deposited[a]);
