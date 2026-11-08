@@ -44,7 +44,7 @@ if (!FILE) { console.error('usage: node scripts/compareEngines.mjs STATE.bin [ST
 export const PH_MAP = {
   SFLUX: 'radiation.surfaceFlux', OFLUX: 'seaIce.oceanFlux', CAP: 'ocean.capacity', MIX: 'boundaryLayer.mixing', MIXH: 'boundaryLayer.scalarMixing', FSTRESS: 'boundaryLayer.formStress', TOFD: 'boundaryLayer.formRate[tail]', OFLT: 'boundaryLayer.formDrag.sigma', DEPTH: 'boundaryLayer.depth', MIXTOP: 'boundaryLayer.mixingTop',
   RAIN: 'moist.precipitation', STEPRAIN: 'moist.rain', CONV: 'moist.convectivePrecipitation', COND: 'moist.largeScalePrecipitation', FOG: 'moist.fogPrecipitation',
-  SH: 'radiation.sensibleHeat', EVAP: 'radiation.evaporation', SWDN: 'radiation.surfaceShortwave', BUOY: 'radiation.surfaceBuoyancy', USTAR: 'boundaryLayer.friction',
+  SH: 'radiation.sensibleHeat', EVAP: 'radiation.evaporation', SWDN: 'radiation.surfaceShortwave', BUOY: 'boundaryLayer.buoyancyFlux', USTAR: 'boundaryLayer.friction',
   STRESS: 'boundaryLayer.surfaceStress', SDRAG: 'boundaryLayer.surfaceDrag', HEATX: 'exchange.heat', REFX: 'exchange.reference', DRAG: 'exchange.drag', XWIND: 'exchange.wind', T2M: 'exchange.temperature2m',
   REGIME: 'boundaryLayer.regime', ENTRAIN: 'boundaryLayer.entrainment', VRAD: 'boundaryLayer.radiativeVelocity', CTCOOL: 'boundaryLayer.cloudTopCooling',
   DECK: 'radiation.stratus', DECKF: 'radiation.stratusFraction', STRAT: 'radiation.stratiform', MLMCOVER: 'radiation.mlmCover', MLMWATER: 'radiation.mlmWater', MLMENT: 'radiation.mlmEntrainment',
