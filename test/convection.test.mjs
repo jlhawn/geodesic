@@ -71,10 +71,11 @@ function stratocumulus(z, p, below) {
 }
 
 /*
- * Column i of `model` set from profile(z, p, memo) (heights above the
- * surface), iterated so the heights are the core's.
+ * Column i of `model` set from profile(z, p, memo), z the height above sea
+ * level, or above the ground given its geopotential `phis`, iterated so the
+ * heights are the core's.
  */
-function place(model, i, surfacePressure, profile) {
+function place(model, i, surfacePressure, profile, phis = null) {
   const { K, C, sigmaMid, exnerLayer, geopotential, g } = model.core.diagnostics;
   const [pi, theta, , , q, qc] = model.state;
   pi[i] = surfacePressure;
@@ -83,7 +84,7 @@ function place(model, i, surfacePressure, profile) {
     model.core.diagnoseColumn(i, pi, theta, q, qc);
     const memo = {};
     for (let k = K - 1; k >= 0; k--) {
-      const idx = k * C + i, p = pi[i] * sigmaMid[k], z = geopotential[idx] / g;
+      const idx = k * C + i, p = pi[i] * sigmaMid[k], z = (geopotential[idx] - (phis ? phis[i] : 0)) / g;
       const air = profile(z, p, memo);
       theta[idx] = air.T / exnerLayer[idx];
       q[idx] = air.q;
@@ -909,7 +910,7 @@ const nocturnalSounding = (cap, strength, warm = 0) => (z, p) => {
  * boundary layers, deck gates, regimes, mixing tops, sea ice, saved
  * subcloud T_v and surface fluxes, all in single precision.
  */
-function randomColumns(model, { nocturnal = false } = {}) {
+function randomColumns(model, { nocturnal = false, phis = null } = {}) {
   const { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   let seed = 12345;
@@ -927,13 +928,13 @@ function randomColumns(model, { nocturnal = false } = {}) {
     friction[i] = 0.1 + 0.3 * random();
     const night = nocturnal ? { cooled: nightRandom() < 0.4, cap: 300 + 600 * nightRandom(), strength: 4 + 6 * nightRandom(), flux: -2e-5 * nightRandom() } : null;
     if (kind === 0 && night && night.cooled) {
-      place(model, i, surface, nocturnalSounding(night.cap, night.strength, warm));
+      place(model, i, surface, nocturnalSounding(night.cap, night.strength, warm), phis);
       buoyancy[i] = night.flux;
-    } else if (kind === 0) place(model, i, surface, (z, p) => { const air = jordan(p); const T = air.T + warm * (z < 800 ? 1 : 0.5); return { T, q: Math.min(wet * air.q, 0.95 * saturationHumidity(T, p)) }; });
-    else if (kind === 1) place(model, i, surface, (z, p) => { const air = tradeCumulus(z, p); return { T: air.T + warm, q: Math.min(wet * air.q, 0.95 * saturationHumidity(air.T + warm, p)) }; });
-    else if (kind === 2) place(model, i, surface, stratocumulus);
-    else if (kind === 4) place(model, i, surface, (z, p) => { const air = tradeWind(z, p); return { T: air.T + warm, q: Math.min(wet * air.q, 0.95 * saturationHumidity(air.T + warm, p)) }; });
-    else place(model, i, surface, (z, p) => { const air = jordan(p); const T = air.T - 5 + warm; return { T, q: Math.min(0.6 * air.q, 0.95 * saturationHumidity(T, p)) }; });
+    } else if (kind === 0) place(model, i, surface, (z, p) => { const air = jordan(p); const T = air.T + warm * (z < 800 ? 1 : 0.5); return { T, q: Math.min(wet * air.q, 0.95 * saturationHumidity(T, p)) }; }, phis);
+    else if (kind === 1) place(model, i, surface, (z, p) => { const air = tradeCumulus(z, p); return { T: air.T + warm, q: Math.min(wet * air.q, 0.95 * saturationHumidity(air.T + warm, p)) }; }, phis);
+    else if (kind === 2) place(model, i, surface, stratocumulus, phis);
+    else if (kind === 4) place(model, i, surface, (z, p) => { const air = tradeWind(z, p); return { T: air.T + warm, q: Math.min(wet * air.q, 0.95 * saturationHumidity(air.T + warm, p)) }; }, phis);
+    else place(model, i, surface, (z, p) => { const air = jordan(p); const T = air.T - 5 + warm; return { T, q: Math.min(0.6 * air.q, 0.95 * saturationHumidity(T, p)) }; }, phis);
     surfaceT[i] = 300;
     const { geopotential, g } = core.diagnostics;
     model.boundaryLayer.depth[i] = geopotential[(K - 1) * C + i] / g + 200 + 1300 * random();
@@ -1492,8 +1493,9 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   const landMask = land ? Uint8Array.from({ length: 16 * 16 * 10 + 2 }, (_, i) => (i % 3 === 0 ? 1 : 0)) : null;
   const model = createModel(new Grid(16), { ...(ground ? { topography: syntheticTopography(90, 180, ground) } : {}), ocean: false, levels: grid, moist: landMask ? { ...options, land: landMask } : options }), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
   const [pi, theta, , surfaceT, q, qc] = model.state;
-  const fields = randomColumns(model, { nocturnal });
+  const phis = ground ? surfaceGeopotential(mesh, model.geography) : null, fields = randomColumns(model, { nocturnal, phis });
   if (columns) columns(model, fields);
+  assert.ok(theta.every(Number.isFinite) && q.every(Number.isFinite), 'every random column holds a finite theta and q');
   const { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation } = fields;
   if (ascent) {
     let ascentSeed = 777;
@@ -1505,7 +1507,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   const cloudRandom = () => { cloudSeed = (cloudSeed * 1103515245 + 12345) % 2147483648; return cloudSeed / 2147483648; };
   for (let x = moist.cumulusK0 * C; x < K * C; x++) if (cloudRandom() < 0.3) { moist.cumulusCover[x] = Math.fround(0.05 * cloudRandom()); moist.cumulusWater[x] = Math.fround(1e-3 * cloudRandom()); }
   const priorCover = Float64Array.from(moist.cumulusCover), priorWater = Float64Array.from(moist.cumulusWater);
-  const phis = ground ? surfaceGeopotential(mesh, model.geography) : null, above = (h, i) => h - (phis ? phis[i] / core.diagnostics.g : 0);
+  const above = (h, i) => h - (phis ? phis[i] / core.diagnostics.g : 0);
   const gpu = await createGpuCore(mesh, { levels: grid, physics: options, ...(phis ? { surfaceGeopotential: phis } : {}) });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
@@ -1519,7 +1521,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SUBTV, Float32Array.from(saved));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(sensible));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(evaporation));
-  const landUsed = landMask ?? (ground ? model.geography.land : null);
+  const landUsed = landMask ?? (ground ? Float32Array.from(model.geography.land, (l, i) => (l ? (model.geography.iceSheet?.[i] ? 2 : 1) : 0)) : null);
   if (landUsed) device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LAND, Float32Array.from(landUsed));
   let dragSeed = 31;
   const dragRandom = () => { dragSeed = (dragSeed * 1103515245 + 12345) % 2147483648; return dragSeed / 2147483648; };
