@@ -1981,18 +1981,19 @@ export function createOcean(mesh, {
   }
   function fields(depth = 0, upwellingDepth = depth) {
     layerDensitiesAll();
-    for (let i = 0; i < C; i++) { thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN; const n = wettedLayer(h, L, C, i, 0); surfaceSalinity[i] = W[n] / h[n]; }
+    for (let i = 0; i < C; i++) { thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN; const n = wettedLayer(h, L, C, i, 0); surfaceSalinity[i] = h[n] > 0 ? W[n] / h[n] : NaN; }
     const layerT = (k, i) => (k === 0 ? T0[i] : Q[at(k, i)] / h[at(k, i)]);
     return { h1: mixedDepths, T1: T0, S1: S0, surfaceSalinity, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0, upwellingDepth: null }), upwelling: upwellingAt(depth, upwellingDepth) };
   }
 
   function diagnostics() {
     layerDensitiesAll();
-    let area = 0, depth = 0, heat = 0, thermo = 0, salinity = 0, ssh = 0, speed = 0, transport = 0, interiorT = 0, interiorH = 0;
+    let area = 0, depth = 0, heat = 0, thermo = 0, salinity = 0, surfaceArea = 0, ssh = 0, speed = 0, transport = 0, interiorT = 0, interiorH = 0;
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
       const a = areaCell[i], top = wettedLayer(h, L, C, i, 0);
-      area += a; depth += a * mixedDepths[i]; salinity += a * (W[top] / h[top]); ssh = Math.max(ssh, Math.abs(eta[i]));
+      area += a; depth += a * mixedDepths[i]; ssh = Math.max(ssh, Math.abs(eta[i]));
+      if (h[top] > 0) { surfaceArea += a; salinity += a * (W[top] / h[top]); }
       thermo += a * thermocline(i);
       for (let k = 0; k < L; k++) heat += a * rhoCp * Q[at(k, i)];
       for (let k = 1; k < L; k++) { interiorT += Q[at(k, i)] * a; interiorH += h[at(k, i)] * a; }
@@ -2003,7 +2004,7 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) t += hEdge[ae(k, e)] * u[ae(k, e)];
       transport = Math.max(transport, Math.abs(t) * dvEdge[e]);
     }
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried, ...(drift ? drift.diagnostics() : {}) };
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / surfaceArea, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried, ...(drift ? drift.diagnostics() : {}) };
   }
 
   if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);

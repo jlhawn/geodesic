@@ -1360,7 +1360,7 @@ ${o.lakes ? LAKE_DRAIN_WGSL : ''}    }
  * the edge's first cell.
  */
 const HYBRID_REDUCED = [
-  ['area', 'sum', 'wet * a'], ['depth', 'sum', 'wet * a * OD[O_MIXED + i]'], ['salinity', 'sum', 'wet * a * surfaceSalinityOf(i)'],
+  ['area', 'sum', 'wet * a'], ['depth', 'sum', 'wet * a * OD[O_MIXED + i]'], ['salinity', 'sum', 'surfaceArea * surface'], ['surfaceArea', 'sum', 'surfaceArea'],
   ['thermocline', 'sum', 'wet * a * thermo'], ['heat', 'sum', 'wet * a * RHOCP * heat'],
   ['interiorT', 'sum', 'wet * a * interiorQ'], ['interiorH', 'sum', 'wet * a * interiorH'],
   ['ssh', 'max', 'wet * abs(OD[O_ETA + i])'], ['speed', 'max', 'speed'], ['limited', 'sum', 'limited'], ['transport', 'max', 'transport'],
@@ -1368,7 +1368,7 @@ const HYBRID_REDUCED = [
 ];
 const HYBRID_SURFACE = `fn surfaceSalinityOf(i: i32) -> f32 {
   for (var k = 0; k < L; k++) { let hk = IN[hOff(k) + i]; if (hk > 0.0) { return IN[wOff(k) + i] / hk + SREF; } }
-  return SREF;
+  return DRY;
 }
 `;
 // The depth at which the column's density, its layer means held from decreasing with depth, reaches THERMOCLINE_DENSITY.
@@ -1387,6 +1387,8 @@ fn thermoclineDepthOf(i: i32) -> f32 {
 `;
 const hybridReducedSetup = `    let a = MF[F_AREA + i];
     let wet = select(0.0, 1.0, OD[O_CMASK + i] > 0.5);
+    let surface = surfaceSalinityOf(i);
+    let surfaceArea = select(0.0, wet * a, surface > DRY);
     let thermo = select(0.0, thermoclineDepthOf(i), wet > 0.5);
     var heat = 0.0; var interiorQ = 0.0; var interiorH = 0.0;
     for (var k = 0; k < L; k++) {
@@ -2349,8 +2351,8 @@ ${core.fieldConstants}
   }
 
   function diagnosticsFrom(sums) {
-    const { area, depth, heat, interiorT, interiorH, speed, thermocline, salinity, ssh, transport, limited, dried } = sums;
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermocline / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried };
+    const { area, depth, heat, interiorT, interiorH, speed, thermocline, salinity, surfaceArea, ssh, transport, limited, dried } = sums;
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermocline / area, oceanSalinity: salinity / surfaceArea, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried };
   }
 
   /*

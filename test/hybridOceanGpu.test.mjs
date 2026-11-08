@@ -9,6 +9,7 @@ import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 import { HYBRID_LAYERS, labelBoundaries, H_MIN } from '../js/ocean/column.module.js';
 import { SEAWATER, seawaterDensity, salinityForDensity } from '../js/ocean/seawater.module.js';
 import { thinTopLayers } from './helpers/thinLayers.mjs';
+import { readRanges } from '../js/gpu/device.module.js';
 
 /*
  * The GPU hybrid ocean (vertical: 'hybrid' in js/gpu/layeredOcean.gpu.js)
@@ -875,6 +876,29 @@ test('the GPU hybrid ocean\'s mean surface salinity takes each column\'s first l
     if (cut < 1e-5) assert.ok(Math.abs(other - onCpu) > 10 * bound, `over top layers of ${cut} m, ${cut === 0 ? 'the reference salinity' : 'the 1e-6 m class rule'} gives a mean of ${other}, within ten bounds of the CPU's ${onCpu}`);
     assert.ok(Math.abs(onGpu - onCpu) < bound, `mean surface salinity over top layers of ${cut} m: ${onGpu} on the GPU, ${onCpu} on the CPU`);
   }
+});
+
+test('a GPU hybrid ocean column with no water, whatever heat and salt it still holds, gives the frame no SST or SSS and takes no weight in the mean surface salinity, as a CPU column does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpu, mesh, surfaceT, ice } = scenario(N), C = mesh.nCells, L = cpu.layers, bound = 1e-5;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  const sea = [...Array(C).keys()].filter((i) => cpu.h[i] > 0), emptied = new Set(sea.filter((_, n) => n % 2 === 0)), { state } = thinTopLayers(cpu, ice, []);
+  cpu.load(state, Float64Array.from(surfaceT), ice);
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu;
+  await gpu.upload(state, Float64Array.from(surfaceT), ice);
+  const { OS } = gpu.layout, { C: packed, cellAt } = gpu.packing, [h] = await readRanges(device, gpu.buffers.S, [{ offset: OS.OH, length: L * packed }]);
+  for (const i of emptied) for (let k = 0; k < L; k++) { h[k * packed + cellAt[i]] = 0; cpu.h[k * C + i] = 0; }
+  device.queue.writeBuffer(gpu.buffers.S, 4 * OS.OH, h);
+  const { fields, diagnostics } = await gpu.frame({ fields: ['sst', 'sss'], diagnostics: true });
+  gpuModel.destroy();
+  const surface = cpu.fields(0).surfaceSalinity, onCpu = cpu.diagnostics().oceanSalinity, onGpu = diagnostics.oceanSalinity;
+  for (const i of emptied) assert.ok(Number.isNaN(fields.sst[i]) && Number.isNaN(fields.sss[i]) && Number.isNaN(surface[i]), `the column at ${i}, with no water: SST ${fields.sst[i]} and SSS ${fields.sss[i]} in the GPU frame, SSS ${surface[i]} on the CPU`);
+  const at = sea.find((i) => !emptied.has(i) && !(Math.abs(fields.sss[i] - surface[i]) < 1e-4));
+  assert.equal(at, undefined, `the SSS at ${at}, which holds water: ${fields.sss[at]} in the GPU frame, ${surface[at]} on the CPU`);
+  let sum = 0, area = 0, dry = 0;
+  for (const i of sea) if (emptied.has(i)) dry += mesh.areaCell[i]; else { sum += mesh.areaCell[i] * surface[i]; area += mesh.areaCell[i]; }
+  const referenced = (sum + dry * SALT_REFERENCE) / (area + dry);
+  assert.ok(Math.abs(referenced - onCpu) > 10 * bound, `the reference salinity in the columns with no water gives a mean of ${referenced}, within ten bounds of the CPU's ${onCpu}`);
+  assert.ok(Math.abs(onGpu - onCpu) < bound, `the mean surface salinity with ${emptied.size} of ${sea.length} sea columns empty: ${onGpu} on the GPU, ${onCpu} on the CPU`);
 });
 
 test('the GPU hybrid ocean\'s plain upload of a save with T and S keeps the heat and salt of a top layer thinner than EPS', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
