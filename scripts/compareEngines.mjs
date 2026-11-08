@@ -112,6 +112,7 @@ async function build(file) {
   const { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } = await import(`${REPO}/js/physics/regrid.module.js`);
   const { stateGrid } = await import(`${REPO}/js/stateGrid.module.js`);
   const { stateGeography } = await import(`${REPO}/js/geography.module.js`);
+  const { savedLake } = await import(`${REPO}/js/physics/lake.module.js`);
   const saved = await fs.readState(file), sg = stateGeography(saved), topography = sg.topography, dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
   const subgrid = process.env.NO_SUBGRID ? { subgrid: false } : {};
@@ -144,14 +145,15 @@ async function build(file) {
     if (model.load) model.load();
     model.ocean.load(saved.ocean, state[3], state[6]);
     if (saved.land) model.land.load(saved.land, state[6], saved.time, state[3]);
+    if (model.lake && savedLake(saved)) model.lake.load(savedLake(saved));
     return model;
   };
   const cpu = GPU_DUMP ? null : load(createModel(mesh, { ...options, ...subgrid }));
   const gpu = NO_GPU ? null : load(await createGpuModel(mesh, { ...options, ...subgrid }));
-  return { cpu, gpu, dt, label: `${file.replace(/.*\//, '')} N=${saved.N}` };
+  return { cpu, gpu, dt, savedLakes: savedLake(saved), label: `${file.replace(/.*\//, '')} N=${saved.N}` };
 }
 
-const { cpu, gpu, dt, label } = await build(FILE);
+const { cpu, gpu, dt, savedLakes, label } = await build(FILE);
 const C = (cpu ?? gpu).mesh.nCells;
 const lines = [`# ${label}: CPU against GPU, dt ${dt} s (${REPO.replace(/.*\//, '')})`];
 let failures = 0;
@@ -230,6 +232,16 @@ let before = cpu ? cpu.state.map((a) => Float64Array.from(a)) : null;
 let oceanBefore = cpu && cpu.ocean ? cpu.ocean.serialize() : null;
 let gBefore = CPU_ONLY ? null : await gpuAt(0);
 if (GPU_DUMP) writeFileSync(`${GPU_DUMP}.step0`, serialize(gBefore));
+if (savedLakes) {
+  const { LAKE_FIELDS } = await import(`${REPO}/js/physics/lake.module.js`), { LAKE_SLOTS } = await import(`${REPO}/js/gpu/lake.gpu.js`);
+  const cells = (cpu ?? gpu).lake?.cells ?? [], saved = (name) => savedLakes[name];
+  const off = (values, name) => cells.filter((i) => !(Math.abs(values[i] - saved(name)[i]) <= 1e-6 * Math.max(1, Math.abs(saved(name)[i])))).length;
+  const counts = LAKE_FIELDS.filter((name) => saved(name)).map((name) => [name, cpu ? off(cpu.lake[name], name) : 0, gBefore ? off(gBefore.regions.LAKE.subarray(LAKE_SLOTS.indexOf(name) * C), name) : 0]);
+  const bad = counts.filter(([, c, g]) => c || g);
+  if (!cells.length) fail(`the save holds lake columns and the model has no lake cells`);
+  else if (bad.length) fail(`lake columns at load differ from the save (cells off, cpu/gpu): ${bad.map(([n, c, g]) => `${n} ${c}/${g}`).join(', ')}`);
+  else lines.push(`\nlake columns at load: ${cells.length} cells as saved on ${[cpu && 'the CPU', gBefore && 'the GPU'].filter(Boolean).join(' and ')}`);
+}
 let done = 0;
 for (const target of STEPS) {
   while (done < target) { const t0 = Date.now(); if (cpu) cpu.step(dt); const t1 = Date.now(); if (gpu) { await gpu.step(dt); await gpu.settle(); } done++; console.error(`step ${done}${cpu ? `: cpu ${((t1 - t0) / 1000).toFixed(1)} s` : ''}`); }
