@@ -6,9 +6,11 @@
 // the stepped state, cumulus, boundary layer and deck are copied into a second
 // model under OTHER (JSON, '{"longwaveScheme":"gray","solarGases":"lacisHansen","aerosol":"flat","shortwave":"sequential"}'
 // if unset); every box column's radiation then runs in both at TIMES (24)
-// instants of the day (dt 0, so the deck's carried state does not move). The
-// layer heating is the radiation's own: its longwave record, and the rest of
-// its layer flux less the lowest layer's sensible heat as the shortwave.
+// instants of the day (dt 0, so the deck's carried state does not move).
+// Both models build their lakes with LAKE (JSON) over the save's lake
+// options. The layer heating is the radiation's own: its longwave record,
+// and the rest of its layer flux less the lowest layer's sensible heat as the
+// shortwave.
 import { readFileSync } from 'node:fs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
