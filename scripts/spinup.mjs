@@ -22,10 +22,14 @@
 // (SWCRE, ASR less clear-sky ASR; LWCRE, clear-sky OLR less OLR) and the
 // clear-sky reflectance (the day's clear-sky reflected over its incoming
 // sunlight), then the day-mean sunlight absorbed and net longwave
-// (downward less emitted) at the surface of the sea cells (sea ice
-// included), and the sunlight absorbed at the surface of the sea cells
-// poleward of 60° that hold ice at the day's end, leads included, in each
-// hemisphere. After the precipitation it gives the day-mean fog (what
+// (downward less emitted) at the surface of the cells off land (sea ice
+// and lakes included), and the sunlight absorbed at the surface of the
+// cells poleward of 60° that hold sea ice at the day's end, leads
+// included, in each hemisphere. The extents and these iced cells
+// (js/seaIceExtent.module.js), like the ice share, leave out a lake the
+// lake model holds, and the extents' text then ends "lakes left out"; with
+// the lake model off a lake is sea and its ice counts. After the
+// precipitation it gives the day-mean fog (what
 // settled or deposited out of the lowest layer) globally, over land and
 // over sea, and the cells with more than 0.1 mm/d; a second line gives the
 // lowest layer's cloud water at the day's end over the cells holding more
@@ -224,6 +228,7 @@ import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
 import { START_CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { SEA_ICE_START_FILE, loadSeaIceStart } from '../js/physics/seaIceStart.module.js';
+import { seaCells, seaIceExtent, polarIcedCells } from '../js/seaIceExtent.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { withCadence } from '../js/cadence.module.js';
 import { headerOptions, differingGroups, runTerrain, moveOntoTerrain, requireOwnSubgrid } from './stateOptions.mjs';
@@ -413,7 +418,7 @@ const everySteps = model.oceanEngine ? model.oceanEngine.everySteps : 1, radiati
 const gcd = (a, b) => (b ? gcd(b, a % b) : a), lcm = (a, b) => a * b / gcd(a, b), cadence = lcm(lcm(everySteps, radiationEvery), DRAG_EVERY);
 if (startStep % everySteps) throw new Error(`the snapshot stopped at step ${startStep}, off the ocean's ${everySteps}-step cadence`);
 
-const deg = 180 / Math.PI, land = model.geography.land, lakeCell = model.lake ? model.lake.isLake : null, onLake = (i) => Boolean(lakeCell && lakeCell[i]);
+const deg = 180 / Math.PI, land = model.geography.land, seaCell = seaCells(model);
 const onIndexGrids = indexCells(mesh, model.geography), seaIceCut = (concentration) => seaIceIndexCut(mesh, onIndexGrids, concentration);
 const inBox = Object.fromEntries(Object.entries(BOXES).map(([k, [a, b, c, e]]) => [k, [...Array(C).keys()].filter((i) => land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e)]));
 const PH = model.gpu.layout.PH;
@@ -445,7 +450,7 @@ const lowestCloudLine = async (day) => {
   const over = (x) => foggy.filter((v) => v > x).length;
   return `lowest-layer cloud day ${day}: ${foggy.length} cells over 0.01 g/kg, p50 ${at(0.5).toFixed(3)} p90 ${at(0.9).toFixed(3)} p99 ${at(0.99).toFixed(3)} max ${(foggy.length ? 1e3 * foggy[foggy.length - 1] : 0).toFixed(3)} g/kg; over 0.5/1/5 g/kg ${over(5e-4)}/${over(1e-3)}/${over(5e-3)} cells`;
 };
-const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15 && !onLake(i)) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12, fields.ice]; };
+const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); return [...seaIceExtent(mesh, seaCell, fields.concentration), fields.ice]; };
 await model.diagnostics();
 if (startStep && saved.rainTotal) model.writeFreshwater(saved);
 const RECORD = process.env.RECORD;
@@ -543,12 +548,12 @@ async function dayEnd(day, stepsToday, jump) {
     await splitRead;
     const [north, south, iceNow] = await ice;
     const iceSolar = [0, 0], icedArea = [0, 0];
-    for (let i = 0; i < C; i++) if (!land[i] && !onLake(i) && iceNow[i] > 0 && Math.abs(mesh.latCell[i] * deg) >= 60) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
+    for (const i of polarIcedCells(mesh, seaCell, iceNow)) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
     const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
     iceNorth += north; iceSouth += south;
     const iceDay = dayIce ? await dayIce : null, seaIceDay = iceDay ? seaIceCut(iceDay.values.concentration) : null;
     const minutes = (performance.now() - start) / 60000;
-    log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
+    log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²${model.lake ? ', lakes left out' : ''}), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
     if (seaIceDay) log(`sea ice on day ${day}'s mean concentration, sea cells on the index's grids, 15 %: N extent ${seaIceDay.N.extent.toFixed(2)} area ${seaIceDay.N.area.toFixed(2)}, S extent ${seaIceDay.S.extent.toFixed(2)} area ${seaIceDay.S.area.toFixed(2)} Mkm²`);
     log(await lowest);
     if (sstDay) {
