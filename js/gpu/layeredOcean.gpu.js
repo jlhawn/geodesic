@@ -2170,7 +2170,7 @@ ${core.fieldConstants}
     const out = new Float32Array(C), hCol = new Float64Array(L), rhoCol = new Float64Array(L);
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
-      for (let k = 0; k < L; k++) { const n = k * C + i, hk = Math.max(EPS, h[n]); hCol[k] = h[n]; rhoCol[k] = eos(Q[n] / hk, W[n] / hk); }
+      for (let k = 0; k < L; k++) { const n = k * C + i, hk = h[n]; hCol[k] = hk; rhoCol[k] = hk > 1e-6 ? eos(Q[n] / hk, W[n] / hk) : rho[k]; }
       out[i] = mixedLayerDepth(hCol, rhoCol, L);
     }
     return out;
@@ -2232,7 +2232,7 @@ ${core.fieldConstants}
     if (own) {
       h.set(saved.h); u.set(saved.u);
       const Qs = saved.Qref ? Float64Array.from(saved.Qref, (q, n) => q + HEAT_REFERENCE * h[n]) : null, Ws = saved.Wref ? Float64Array.from(saved.Wref, (w, n) => w + SALT_REFERENCE * h[n]) : null;
-      for (let n = 0; n < L * C; n++) { Q[n] = Qs ? Qs[n] : h[n] * saved.T[n]; W[n] = Ws ? Ws[n] : h[n] * saved.S[n]; }
+      for (let n = 0; n < L * C; n++) { Q[n] = Qs ? Qs[n] : Math.max(EPS, h[n]) * saved.T[n]; W[n] = Ws ? Ws[n] : Math.max(EPS, h[n]) * saved.S[n]; }
     } else {
       const Ls = classes ? classes.length + 1 : Math.round(saved.h.length / C);
       if (saved.h.length !== Ls * C) throw new Error(`a saved ocean on ${Ls} layers holds ${Ls * C} thicknesses, not ${saved.h.length}`);
@@ -2321,10 +2321,11 @@ ${core.fieldConstants}
    * sizes, the last two and `calved` optional, its columns within a meter of this
    * bathymetry and dry on land, is uploaded as it is, without fitting its
    * columns. From T, S and h its heat and salt stores come back to the last
-   * bit, except within about 3e-6 K of HEAT_REFERENCE (273.15 K rounded to
-   * f32) or 4e-7 psu of 35: there a store can miss, by more ulps the nearer
-   * it lies to the reference, but never by more than about 2e-13·h. Qref and
-   * Wref, when a save carries them, are uploaded as they are.
+   * bit, except where a layer's temperature, Q/h, lies within about 3e-6 K of
+   * HEAT_REFERENCE (273.15 K rounded to f32) or its salinity, W/h, within
+   * 4e-7 psu of 35: there a store can miss, by more ulps the nearer it lies
+   * to the reference, but never by more than about 2e-13·h. Qref and Wref,
+   * when a save carries them, are uploaded as they are.
    */
   async function restartArrays() {
     const PHL = core.layout.PH;

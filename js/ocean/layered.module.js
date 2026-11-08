@@ -1851,7 +1851,7 @@ export function createOcean(mesh, {
     const classes = savedDensities(saved, C), own = classes && sameDensities(classes, labels) && saved.h.length === L * C;
     if (own) {
       h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
-      for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
+      for (let n = 0; n < L * C; n++) { Q[n] = Math.max(EPS, h[n]) * saved.T[n]; W[n] = Math.max(EPS, h[n]) * saved.S[n]; }
       if (saved.Q && saved.Q.length === L * C && saved.W && saved.W.length === L * C) { Q.set(saved.Q); W.set(saved.W); }
       else if (saved.Qref && saved.Qref.length === L * C && saved.Wref && saved.Wref.length === L * C) for (let n = 0; n < L * C; n++) { Q[n] = saved.Qref[n] + HEAT_REFERENCE * h[n]; W[n] = saved.Wref[n] + SALT_REFERENCE * h[n]; }
     } else convertSlab(saved, classes);
