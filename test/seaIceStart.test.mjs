@@ -6,6 +6,8 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { readTopography, geographyOptions, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+import { lakeIceAlbedo } from '../js/physics/lake.module.js';
+import { cpuFrameFields } from '../js/cpuFrame.module.js';
 import { encodeSeaIceStart, decodeSeaIceStart, loadSeaIceStart, SEA_ICE_START_FILE, EDGE_CONCENTRATION, NO_SEA } from '../js/physics/seaIceStart.module.js';
 
 const d = Math.PI / 180, N = 16;
@@ -70,4 +72,35 @@ test(`a fresh start at N=${N} takes the observed March ice, its concentration an
   assert.ok(area[0] > 8 && area[0] < 20, `Arctic ice area ${area[0]} Mkm²`);
   assert.ok(area[1] > 1 && area[1] < 8, `Antarctic ice area ${area[1]} Mkm²`);
   assert.ok(snowy > 0.8 * iced && partial > 0, `${snowy} of ${iced} iced cells carry snow, ${partial} partly covered`);
+});
+
+test('a fresh start at N=32 on the n1024 mask gives each lake cell the sea\'s start but its snow: the observed March ice, its cover and the sea\'s surface temperature, which FLake replaces at its first step, and no snow, which nothing would', async () => {
+  const start = decodeSeaIceStart(readFileSync(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url)));
+  const topography = readTopography(FRESH_GEOGRAPHY.topography), sheets = geographyOptions(FRESH_GEOGRAPHY);
+  const model = createModel(new Grid(32), { topography, geography: sheets.geography, ocean: false, land: { ...sheets.land }, levels: sigmaInterfaces('bl48') });
+  const { state, mesh } = model, lakes = model.lake.cells, options = { geostrophic: !model.surfaceGeopotential, seaIce: start };
+  const sea = initializeState({ ...model, lake: null }, options), seaCover = Float64Array.from(model.seaIce.concentration), seaSnow = Float64Array.from(model.land.snow);
+  initializeState(model, options).forEach((values, a) => state[a].set(values));
+  model.land.initialize();
+  assert.ok(lakes.some((i) => seaSnow[i] > 0 && sea[6][i] > 0), 'the sea\'s start lays the observed ice and its snow on a lake cell');
+  for (const i of lakes) assert.deepEqual([state[6][i], model.seaIce.concentration[i], state[3][i], model.land.snow[i]], [sea[6][i], seaCover[i], sea[3][i], 0], `lake cell ${i}: ice, cover, surface temperature and snow`);
+});
+
+test('at N=32 on the n1024 mask, on a lake the fresh start freezes, the CPU\'s albedo map and its surface-albedo diagnostic take the albedo of the lake\'s ice, as its radiation does, not the sea ice\'s', async () => {
+  const start = decodeSeaIceStart(readFileSync(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url)));
+  const topography = readTopography(FRESH_GEOGRAPHY.topography), sheets = geographyOptions(FRESH_GEOGRAPHY);
+  const model = createModel(new Grid(32), { topography, geography: sheets.geography, ocean: false, land: { ...sheets.land }, levels: sigmaInterfaces('bl48') });
+  const { state, mesh, seaIce } = model;
+  initializeState(model, { geostrophic: !model.surfaceGeopotential, seaIce: start }).forEach((values, a) => state[a].set(values));
+  model.land.initialize();
+  const frozen = model.lake.cells.filter((i) => state[6][i] > 0), lake = (i) => lakeIceAlbedo(state[3][i]);
+  const sea = (i) => seaIce.albedo(state[6][i], null, seaIce.snow[i], seaIce.cover(i, state[6][i]), state[3][i], seaIce.snowAlbedo[i]);
+  console.log(`frozen lake cells ${frozen.join(', ')}: the lake ice's albedo ${frozen.map((i) => lake(i).toFixed(3)).join(', ')}, the sea ice's ${frozen.map((i) => sea(i).toFixed(3)).join(', ')}`);
+  assert.ok(frozen.some((i) => Math.abs(lake(i) - sea(i)) > 0.05), "the start freezes a lake where the two ices' albedos differ");
+  const { albedo } = cpuFrameFields(model, { fields: ['albedo'] });
+  for (const i of frozen) assert.equal(albedo[i], Math.fround(lake(i)), `lake cell ${i}`);
+  let sum = 0, area = 0;
+  for (let i = 0; i < mesh.nCells; i++) { sum += mesh.areaCell[i] * albedo[i]; area += mesh.areaCell[i]; }
+  const { surfaceAlbedo } = model.diagnostics();
+  assert.ok(Math.abs(surfaceAlbedo - sum / area) < 1e-7, `the diagnostic ${surfaceAlbedo} against the map's mean ${sum / area}`);
 });

@@ -137,15 +137,16 @@ test('one GPU step, fed to the CPU land with the fluxes the GPU used, gives the 
 test('for soil \'slab\' the surface kernel\'s text, its constants and the PH layout are the slab\'s', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
   const sha = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16);
   const mesh = createModel(new Grid(16), { physics: false }).mesh;
-  assert.equal(sha(physicsSurfaceKernel(false)), 'c5353ee194d8caba');
-  assert.equal(sha(physicsSurfaceKernel(true, true)), 'bbc2935f95daa112');
+  assert.equal(sha(physicsSurfaceKernel(false)), '6bfdd2f948c9798b');
+  assert.equal(sha(physicsSurfaceKernel(true, true)), 'd0d0d189fbb7f5bc');
   const plain = layoutFor(mesh, 8), tall = layoutFor(mesh, 8, 1, 1, 1, null, true, 1, 1, 8, true, true, true, true);
-  assert.deepEqual([plain.PH.total, sha(JSON.stringify(plain.PH))], [389407, '1f1a4f4766b1ccdd']);
-  assert.deepEqual([tall.PH.total, sha(JSON.stringify(tall.PH))], [589251, 'bb66998c08f55b4e']);
+  assert.deepEqual([plain.PH.total, sha(JSON.stringify(plain.PH))], [391969, '203d63722d65c5ce']);
+  assert.deepEqual([tall.PH.total, sha(JSON.stringify(tall.PH))], [591813, '7b0c33faced120a7']);
   const column = soilColumn({ soil: 'layers' }), text = physicsSurfaceKernel(false, false, column);
   assert.ok(!/colC1|SOILT|SOIL_C/.test(physicsSurfaceKernel(false)));
   assert.ok(/PH_SOILT4/.test(text) && !/PH_SOILT5/.test(text) && /FIRN_G3/.test(text) && !text.includes('T += dt * net / LANDC'));
   const layered = layoutFor(mesh, 8, 0, 0, 0, null, false, 0, 0, false, false, false, false, false, 3);
   assert.equal(layered.PH.total, plain.PH.total + 3 * mesh.nCells);
-  assert.deepEqual(['SOILT2', 'SOILT3', 'SOILT4'].map((name) => layered.PH[name] - plain.PH.total), [0, 1, 2].map((k) => k * mesh.nCells));
+  assert.deepEqual(['SOILT2', 'SOILT3', 'SOILT4', 'T2M'].map((name) => layered.PH[name] - plain.PH.T2M), [0, 1, 2, 3].map((k) => k * mesh.nCells));
+  assert.equal(layered.PH.T2M, layered.PH.total - mesh.nCells);
 });

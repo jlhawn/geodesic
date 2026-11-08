@@ -71,6 +71,17 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  * z0m = 0.123 h, z0h = 0.1 z0m, κ 0.41), which the radiation's reference
  * evapotranspiration takes.
  *
+ * `temperature2m` is the air's temperature 2 m above the ground, the IFS's
+ * 2 m interpolation (Cy41r2 Part IV eq. 3.95): the dry static energy
+ * cp T + g h runs from the surface's, cp T_s, to the lowest layer's along
+ * the heat profile F(h) = ln((h + z0m)/z0h) − ψh((h + z0m)/L) + ψh(z0h/L),
+ * L = z/ζ with the step's ζ, the exchange's own, which no cap limits. The
+ * profile takes the WMO's open-terrain z0m 0.03 m and z0h 0.003 m where the
+ * cell's blended z0m exceeds 0.03 m (eq. 3.91), and the cell's own below;
+ * in stable air it is uniform above h = 5 L (section 3.2), so 2 m lies at
+ * F(min(2, 5 L))/F(min(z, 5 L)) of the way. It is NaN under 'fixed', which
+ * has no profile.
+ *
  * exchange 'fixed' gives constant coefficients: the sea's dragCoefficient
  * (SEA_DRAG) and the land's (LAND_DRAG) for momentum, heat and vapour
  * alike. An option set that names either coefficient and no `exchange` is
@@ -154,6 +165,22 @@ export function transfer(ri, z, z0m, z0h, iterations = EXCHANGE_DEFAULTS.iterati
   return out;
 }
 
+export function heatProfile(height, zeta, z, z0m, z0h) {
+  return Math.log((height + z0m) / z0h) - psiHeat(zeta * (height + z0m) / z) + psiHeat(zeta * z0h / z);
+}
+
+export const SCREEN_LEVEL = { height: 2, rough: 0.03, momentum: 0.03, heat: 0.003, stable: 5 };
+
+export function screenWeight(height, zeta, z, z0m, z0h) {
+  const open = z0m > SCREEN_LEVEL.rough, m = open ? SCREEN_LEVEL.momentum : z0m, h = open ? SCREEN_LEVEL.heat : z0h;
+  const top = zeta > 0 ? SCREEN_LEVEL.stable * z / zeta : Infinity;
+  return heatProfile(Math.min(height, top), zeta, z, m, h) / heatProfile(Math.min(z, top), zeta, z, m, h);
+}
+
+export function profileTemperature(height, surfaceT, airT, z, zeta, z0m, z0h, g, cp) {
+  return surfaceT + (airT + g * z / cp - surfaceT) * screenWeight(height, zeta, z, z0m, z0h) - g * height / cp;
+}
+
 export function andreasScalar(z0, ustar, viscosity) {
   const reynolds = ustar * z0 / viscosity, l = Math.log(Math.min(1000, reynolds));
   const [, b0, b1, b2] = ANDREAS.find(([limit]) => reynolds <= limit) ?? ANDREAS[2];
@@ -219,10 +246,12 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
   const fixed = mode === 'fixed';
   const heatBuffer = fixed ? dragBuffer : shared('heat'), referenceBuffer = fixed ? dragBuffer : shared('reference');
   const heat = fixed ? drag : new Float64Array(heatBuffer), reference = fixed ? drag : new Float64Array(referenceBuffer);
+  const temperature2mBuffer = shared('temperature2m'), temperature2m = new Float64Array(temperature2mBuffer);
   const o = exchangeOptions(options);
   const { roughness: { forest, grass, bare, snow: snowRoughness }, snowCover, iterations, convectiveGust, gustIterations } = o;
   const gusty = !fixed && !!convectiveGust, wetSurface = o.landHumidity === 'wetness', seaReduction = 1 - o.seaHumidity;
   if (!(buffers && buffers.drag)) {
+    temperature2m.fill(NaN);
     for (let i = 0; i < C; i++) {
       drag[i] = landMask && landMask[i] ? landDrag : seaDrag;
       if (!fixed) { heat[i] = drag[i]; reference[i] = drag[i]; }
@@ -285,9 +314,10 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
     drag[i] = coefficients.drag;
     heat[i] = coefficients.heat;
     reference[i] = referenceCoefficient(z, o.referenceCrop);
+    temperature2m[i] = profileTemperature(SCREEN_LEVEL.height, skin, theta[b] * exnerLayer[b], z, coefficients.zeta, blend.momentum, blend.heat, g, cp);
     last.z = z; last.ri = ri; last.momentum = blend.momentum; last.heat = blend.heat;
     return last;
   }
 
-  return { mode, fixed, gusty, drag, heat, reference, wind, cell, options: o, shared: { drag: dragBuffer, heat: heatBuffer, reference: referenceBuffer, wind: windBuffer } };
+  return { mode, fixed, gusty, drag, heat, reference, wind, temperature2m, cell, options: o, shared: { drag: dragBuffer, heat: heatBuffer, reference: referenceBuffer, wind: windBuffer, temperature2m: temperature2mBuffer } };
 }

@@ -539,7 +539,9 @@ Kept, ported to operate on flat arrays (no algorithmic change):
 - Gray longwave radiation column (`RadiationColumn`), solar geometry, slab
   ocean heat capacity, surface albedo.
 - Bulk surface drag and sensible heat flux (speed from 3.7), gustiness
-  floor, dry convective adjustment, PBL and top Rayleigh drag.
+  floor (`surface.gustiness`, 3 m/s, on both engines; the roughness
+  exchange's convective gust replaces it), dry convective adjustment, PBL
+  and top Rayleigh drag.
 - Initialization: latitude-dependent surface temperature and σ-tapered θ
   shift, balanced surface pressure (bisection on a level 500 hPa
   surface), the wavenumber-5 eddy seed, the ±30°/±60° pressure bands.
@@ -2708,7 +2710,8 @@ longwave at the top; the sea-ice thickness and concentration; the
 eastward and northward stress of the air on the surface, reconstructed
 at the cells from the implicit drag's edge stress as the wind is (a
 GPU model without the implicit drag has none, and the default leaves
-it out); and the surface latent and sensible heat fluxes. The recorder samples them
+it out); the surface latent and sensible heat fluxes; and the 2 m
+temperature (`t2m`, NaN under the fixed exchange). The recorder samples them
 every MEANS_EVERY steps, 64 samples a model day at any N (every 8th
 step at N=128). On the GPU it reads them through `model.sampleFrame`,
 which runs the frame kernel and one copy into a staging buffer without a
@@ -2721,7 +2724,7 @@ held, and with the recorder on or off the model steps bit for bit the
 same, and at N=128 the samples cost less than a timing's noise, about
 2 % of a 76 ms step. Each day's samples are averaged into a ring of
 daily means, float32 and MEANS_WINDOW = 30 days deep, held in memory:
-about 354 MB for the 18 default fields at N=128, with 24 MB of float64
+about 374 MB for the 19 default fields at N=128, with 25 MB of float64
 sums for the day under way. A save's `means.<field>` is the float32
 mean of the ring's days, and the header's
 `means: { fields, every, days, samples }` says how many days the ring
@@ -9611,6 +9614,27 @@ FAO-56's own reference grass at z₁ (eq. 4: h 0.12 m, d 2/3 h, z₀m
 0.123 h, z₀h 0.1 z₀m and FAO-56's κ 0.41; 2.45·10⁻³ at 20 m, 208/u₂ at
 2 m).
 
+The 2 m temperature (`t2m`, a frame field and one of the interval
+means) is interpolated as the IFS interpolates its 2 m temperature
+(Cy41r2 Part IV eq. 3.95). The dry static energy c_p T + g h at
+h = 2 m lies between the skin's and the lowest layer's at the share
+F(min(2 m, H))/F(min(z₁, H)) of the heat profile F(h) =
+ln((h + z₀m)/z₀h) − ψh((h + z₀m)/L) + ψh(z₀h/L), where H = 5L for
+L > 0 and is unbounded otherwise.
+- L = z₁/ζ is the step's, from the exchange's own ζ above, which no cap
+  limits. The IFS caps z/L in its exchange too, so its L would differ.
+- Where the cell's blended z₀m exceeds 0.03 m (90.3 % of the 2436
+  40–60N land cells, by area, in the exchange's blended z₀m at the
+  first CPU step from seventeen64's day-365 state), the profile takes
+  the WMO's open-terrain z₀m 0.03 m and z₀h 0.003 m in place of the
+  cell's (eq. 3.91). At or below 0.03 m it takes the cell's own.
+- In stable air the profile is uniform above h = 5L: the IFS limits z/L
+  to 5 in its post-processing (section 3.2). Where 5L is under 2 m,
+  t2m takes the lowest layer's dry static energy.
+
+Both engines compute it in the exchange; under the fixed exchange,
+which has no profile, it is NaN.
+
 Three consequences built with it, on both engines:
 - The surface drag is the lower boundary of the boundary layer's
   implicit edge solve (`implicitDrag`, the default under roughness): a
@@ -9789,9 +9813,12 @@ order of the vegetation's turbulent stress itself over the mountains
 (0.12–0.29 N/m² after); the μ, γ, θ and σ fields can be computed from the
 0.25° file at the model's start.
 
-What still misses: the gustiness is the 3 m/s floor, not a free
-convection velocity (COARE's 1.2 w*, the IFS's w* with z_i 1000 m), so
-calm stable nights keep a flux; the tiles share one skin, so a forest's
+What still misses: under the fixed exchange the gustiness is a fixed
+floor (3 m/s), not a free convection velocity (COARE's 1.2 w*, the IFS's
+w* with z_i 1000 m), so calm stable nights keep a flux (the roughness
+exchange, the default, takes the convective gust,
+`surface.convectiveGust`, in its place: see `surface.gustiness` at the
+end of M22); the tiles share one skin, so a forest's
 strong coupling and the bare soil's weak one average into one
 temperature (the IFS solves each tile's skin); the grass is one IFS type
 (0.1 m) where the table spans 0.034 (tundra) to 0.47 (tall grass); there
@@ -12400,6 +12427,122 @@ observed 0.6–0.8 low cover; but the Atlantic trades 10–20N 50–25W go
 0.64 → 0.77 against Earth's 0.35–0.55, the deck there 0.16 → 0.39, and
 the N Pacific trades stay 0.83. minimumInversion has not been restated
 against the interpolated reference.
+
+#### The boundary layer's and the surface exchange's options
+
+Each is off, or at the value the scheme had before it, by default. Each
+runs on both engines and leaves the model bit-identical when it is unset.
+
+`surface.relativeWind` (false): the stress and the bulk heat and
+moisture fluxes take the lowest layer's wind relative to the sea's
+surface current, τ = ρ C_D |v − u_s| (v − u_s).
+- u_s is the ocean's top-layer velocity on each edge under open water
+  (`seaFlow`, zero under ice and shelves), refreshed after the ice drift.
+- It needs the roughness exchange's implicit drag. A save carries `seaFlow`.
+- The ocean-only phase of `scripts/asyncSpinup.sh` replays the coupled
+  phase's recorded stress and fluxes, so it has no current feedback.
+- A state's header does not record the `surface` group
+  (`scripts/stateOptions.mjs`), so the page opens such a state without
+  the option.
+
+`boundaryLayer.diagnoseFirst` (false) and `surfaceExcess` (0).
+- With diagnoseFirst, the diagnosis (top, K, regime) sees the lowest
+  layer before the step's surface sensible heat and evaporation enter
+  it, as CAM's does. The implicit solve still takes them.
+- The offline tools (`diagnoseExchange` in `scripts/surfaceExchange.mjs`,
+  and `scripts/adjustStages.mjs`) diagnose a saved state as it stands,
+  through the plain entry `{ withhold: false }`.
+- With surfaceExcess b > 0, a column with B0 > 0 searches again from the
+  lowest layer's θ_v plus Troen and Mahrt's excess b (w'θ_v')₀ / w_m.
+  Holtslag and Boville, and CAM, take b = 8.5.
+
+How the lowest layer's humidity over the sea is set was measured on the
+CPU over two days from seventeen64 day 365, in the cold tongue (160–100W,
+3S–3N, 353 sea cells). The box's mean surface pressure, 1006.9 hPa, puts
+1000 hPa about 61 m up, and the layer, its midpoint at 21 m, holds
+0.080 ± 0.014 g/kg more than 1000 hPa. That it holds too little is not
+established. Over the same 21–61 m, COARE 3.5's surface-layer profile
+(its constants recalled, not read) gives 0.083 g/kg at the box's own mean
+state, with an evaporation of 2.23 mm/day against the model's 2.22, and
+0.11–0.13 at the states of the audit's August and December hindcasts.
+The audit's 0.35 g/kg for those months joins COARE's extrapolation to
+21 m with ERA5's q at 1000 hPa, about 96 m up, and comes to about 0.27
+over 21–61 m. The layer's q budget around each process of the step, in
+g/kg/day (± the standard error of eight 6 h means), is that of a drifting
+state: the layer's q rises by 0.36 ± 0.17 g/kg/day (0.53 on day 1, 0.18
+on day 2), the deposit falls from 48.3 to 42.8 and the difference from
+0.090 to 0.069 g/kg.
+- the surface's deposit +45.5 ± 1.5, the boundary layer's implicit
+  mixing −28.0 ± 1.3, the dry convective adjustment −18.4 ± 1.1, the
+  convective plume −1.1 ± 0.1, large-scale condensation −0.3 ± 0.1, the
+  rain's fall and evaporation +2.6 ± 0.7, the dynamics 0.0.
+- The dry adjustment (`convectiveAdjustColumn` in
+  `js/physics/surface.module.js`, at the end of the GPU's `adjustRain`)
+  follows the boundary layer's mixing on both engines. It mixes θ, not
+  θ_v, over any unstable block at a tolerance of 1e-6 and carries q with
+  it, so it erases the superadiabatic θ and q gradient between the
+  lowest layer and the next.
+- With it off, a run of 154 steps (0.6 day) from the same state at
+  12 UTC moves the difference by +0.161 ± 0.009 g/kg from its paired
+  run's 0.072, and the evaporation by −3.1 ± 0.6 %, and in it the
+  boundary layer's mixing takes up what the adjustment took. It is a
+  transient, and nothing is attributed from it.
+- diagnoseFirst moves the difference by −0.006 ± 0.002 g/kg, and the
+  plume's term on the lowest layer (−1.1 ± 0.1) is 2.5 % of the deposit.
+- Exempting the lowest interface in the surface and coupled regimes, or
+  keeping the adjustment above the boundary layer, would be a design
+  change.
+
+`surface.virtualDensity` (false): the flux air density takes the
+virtual factor, ρ = p / (R T (1 + 0.61 q)). It applies in the bulk
+fluxes, the stress, the boundary layer's mass and the fog deposition's
+cap. Both engines refuse it under `boundaryLayer`, as they refuse
+`gustiness`, `implicitDrag`, `relativeWind` and `seaHumidity` (all
+`surface`) and `formDrag` (`orography`) there.
+
+`boundaryLayer.profileHeight` ('midpoint'), `stableProfile` ('flat') and
+`prandtlCoefficient` (7.2).
+- 'ground' lays the K-profile's z, h, w_m and Pr from the ground, as
+  Holtslag and Boville do, instead of from the lowest layer's midpoint.
+  The profile still ends at the same interface.
+- 'holtslagBoville' divides a stable column's profile by φ = 1 + 5 z/L,
+  or 5 + z/L above z/L = 1.
+- prandtlCoefficient is their a in Pr = φ_h/φ_m + a κ (z/h) w*/w_m.
+
+`surface.gustiness` (3 m/s): under the fixed exchange, the floor on the
+wind speed of the bulk fluxes, the drag and the stress on the ocean and
+the ice. Under the roughness exchange (the default) the convective gust
+(`surface.convectiveGust`: U² = |v|² + u_g², u_g = max(0.2 m/s, β w*))
+takes its place in the bulk fluxes and the boundary layer, and through
+the implicit drag in the stress. The gustiness then seeds the exchange's
+wind before its first step and floors the wind speed where no implicit
+stress is taken: the stress on the ocean and the ice before the first
+implicit solve (the CPU's explicit stress, the GPU's `GUSTO`) and, with
+`surface.implicitDrag` false, that stress in every step and the lowest
+layer's explicit drag (the CPU's `surfaceDragRates`, the GPU's
+`D_DRAG`). Both engines read it; `ocean.gustiness` is refused.
+
+`boundaryLayer.searchTop` (0.5): the Richardson search for the top
+stops at the highest level whose midpoint σ exceeds it (σ 0.531 on bl48).
+A column that has found no top below it takes that level's height. The
+form drag (`orography.formDrag`) acts on the same levels on both engines.
+
+Where it binds was measured on the two page states. Each is one save at
+12 UTC near the March equinox, and the count is of columns whose saved
+top lies within 0.5 % of that level's height above the ground, at local
+solar time 12 + λ/15 h:
+- seventeen64 day 365: 34 of 40962 columns (0.08 %), all on land at
+  21–34N and 4.6–5.2 km above the ground: 31 over the Sahara (1.8–11.0E)
+  from 12.12 to 12.74 h, and 3 on the Tibetan Plateau (84.8–87.3E,
+  31–34N) from 17.65 to 17.82 h.
+- combined128 day 1460: 35 of 163842 (0.02 %), all over the Tibetan
+  Plateau (33–36N, 81–94E) from 17.4 to 18.3 h, 4.4–4.6 km above the
+  ground.
+
+All but four are dry convective columns (regime 1). These are real deep
+dry boundary layers, and the ceiling cuts them off; it would bind more
+often in a northern summer afternoon. Raising the ceiling is a default
+change.
 
 ### M23 — The equatorial ocean — in progress
 

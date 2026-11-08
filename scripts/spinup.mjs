@@ -142,8 +142,8 @@
 // sea's top-layer temperature, the surface temperature, the last step's
 // precipitation rate, column cloud water, the surface's diffuse albedo, the
 // sunlight reaching the surface, the outgoing longwave at the top, sea-ice
-// thickness and concentration, the eastward and northward surface stress
-// and the surface latent and sensible heat fluxes, less any the model's frames
+// thickness and concentration, the eastward and northward surface stress,
+// the surface latent and sensible heat fluxes and the 2 m temperature, less any the model's frames
 // do not give (the GPU engine's stress needs the implicit drag); 'none' keeps none and
 // adds nothing to the steps), MEANS_EVERY (the steps between samples, by
 // default 64 samples a day: 8 at N=128; with BATCH above 1 a sample falls
@@ -447,17 +447,7 @@ const lowestCloudLine = async (day) => {
 };
 const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12, fields.ice]; };
 await model.diagnostics();
-if (startStep && saved.rainTotal) {
-  const queue = model.gpu.device.queue;
-  queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.RAIN, Float32Array.from(saved.rainTotal));
-  queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.RUNOFF, Float32Array.from(saved.runoffTotal));
-  if (saved.dischargeTotal) queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.DISCHARGE, Float32Array.from(saved.dischargeTotal));
-  if (model.oceanEngine && saved.rainSeen) {
-    model.oceanEngine.putSection('RAINSEEN', saved.rainSeen);
-    model.oceanEngine.putSection('RUNOFFSEEN', saved.runoffSeen);
-    if (saved.dischargeSeen) model.oceanEngine.putSection('DISCHARGESEEN', saved.dischargeSeen);
-  }
-}
+if (startStep && saved.rainTotal) model.writeFreshwater(saved);
 const RECORD = process.env.RECORD;
 if (RECORD) mkdirSync(RECORD, { recursive: true });
 const partOfDay = RECORD && startStep && saved.forcingSums ? { sums: saved.forcingSums, steps: saved.forcingSteps, oceanSteps: saved.forcingOceanSteps, seconds: saved.forcingSeconds, rain: saved.forcingRain, runoff: saved.forcingRunoff } : null;
@@ -616,15 +606,7 @@ for (;;) {
 }
 await ended?.landed;
 
-const partial = {};
-if (step) {
-  const [rainTotal, runoffTotal, dischargeTotal] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.RAIN, length: C }, { offset: PH.RUNOFF, length: C }, { offset: PH.DISCHARGE, length: C }]);
-  Object.assign(partial, { rainTotal, runoffTotal, dischargeTotal });
-  if (model.oceanEngine) {
-    const [rainSeen, runoffSeen, dischargeSeen] = await Promise.all(['RAINSEEN', 'RUNOFFSEEN', 'DISCHARGESEEN'].map((name) => model.oceanEngine.readSection(name)));
-    Object.assign(partial, { rainSeen, runoffSeen, dischargeSeen });
-  }
-}
+const partial = step ? await model.readFreshwater() : {};
 const ocean = await model.ocean.serialize({ restart: true });
 if (step && recorder) {
   await model.diagnostics();

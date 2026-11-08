@@ -45,9 +45,9 @@ test('the engine\'s default aerosol is \'mac\'; without it no WGSL of the aeroso
   assert.ok(/macGasAbove|gasAbove/.test(physicsKernel(false, true)) && /macF/.test(layeredPass(mac, false)) && /mq0/.test(layeredPass(mac, true)));
   const plain = layoutFor(mesh, 8), tall = layoutFor(mesh, 8, 0, 0, 0, null, false, 0, 0, false, false, false, false, true, 0, true);
   assert.equal(plain.PH.AER, undefined);
-  assert.equal(tall.PH.AER, tall.PH.total - 8 * C, 'the eight fields are the last slot of the physics buffer');
+  assert.deepEqual([tall.PH.T2M - tall.PH.AER, tall.PH.total - tall.PH.T2M], [8 * C, C], 'the eight fields are the last slot of the physics buffer but the 2 m temperature');
   assert.equal(tall.PH.total, layoutFor(mesh, 8, 0, 0, 0, null, false, 0, 0, false, false, false, false, true, 0, false).PH.total + 8 * C);
-  for (const name of Object.keys(plain.PH)) if (name !== 'total') assert.equal(layoutFor(mesh, 8, 0, 0, 0, null, false, 0, 0, false, false, false, false, true, 0, true).PH[name], layoutFor(mesh, 8, 0, 0, 0, null, false, 0, 0, false, false, false, false, true, 0, false).PH[name], `slot ${name}`);
+  for (const name of Object.keys(plain.PH)) if (name !== 'total') assert.equal(layoutFor(mesh, 8, 0, 0, 0, null, false, 0, 0, false, false, false, false, true, 0, true).PH[name], layoutFor(mesh, 8, 0, 0, 0, null, false, 0, 0, false, false, false, false, true, 0, false).PH[name] + (name === 'T2M' ? 8 * C : 0), `slot ${name}`);
   assert.equal(LONGWAVE_STASH_FLOATS(8, C, false), 5 * 8 * C + 26 * C);
 });
 

@@ -35,7 +35,7 @@ import { cpuFrameFields } from './cpuFrame.module.js';
  * `means.<field>Ring` (float32, the daily means oldest first) and, when
  * the day under way has samples, `means.<field>Sum` (float64).
  */
-export const MEANS = ['mslp', 'ps', 'speed', 'temperature', 'humidity', 'sst', 'surfaceT', 'precipitation', 'cloud', 'albedo', 'shortwave', 'longwave', 'ice', 'concentration', 'zonalStress', 'meridionalStress', 'latentHeat', 'sensibleHeat', 'gridBoxSkin'];
+export const MEANS = ['mslp', 'ps', 'speed', 'temperature', 'humidity', 'sst', 'surfaceT', 'precipitation', 'cloud', 'albedo', 'shortwave', 'longwave', 'ice', 'concentration', 'zonalStress', 'meridionalStress', 'latentHeat', 'sensibleHeat', 'gridBoxSkin', 't2m'];
 export const MEANS_PER_DAY = 64, MEANS_WINDOW = 30;
 
 /*

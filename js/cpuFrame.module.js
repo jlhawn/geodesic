@@ -62,7 +62,7 @@ export function cpuFrameFields(model, { level = 'surface', depth = 'surface', fi
   if (rain && want.has('rain')) out.rain = Float32Array.from(rain);
   if (want.has('ice')) out.ice = Float32Array.from(iceField);
   if (want.has('concentration')) out.concentration = Float32Array.from(model.seaIce.concentration);
-  if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h, null, model.seaIce.snow[i], model.seaIce.cover(i, h), model.state[3][i], model.seaIce.snowAlbedo[i])));
+  if (want.has('albedo')) out.albedo = Float32Array.from({ length: C }, (_, i) => model.diffuseAlbedoAt(i));
   if (want.has('shortwave')) out.shortwave = Float32Array.from(model.radiation.surfaceShortwave);
   if (want.has('longwave')) out.longwave = Float32Array.from(model.radiation.outgoing);
   if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil, (w, i) => w + model.land.surface[i] + (model.land.deepWater ? model.land.deepWater[i] : 0));
@@ -72,6 +72,7 @@ export function cpuFrameFields(model, { level = 'surface', depth = 'surface', fi
   if (model.moist && model.moist.rain && step > 0 && want.has('precipitation')) out.precipitation = Float32Array.from(model.moist.rain, (r) => r * 86400 / step);
   if (want.has('latentHeat')) out.latentHeat = Float32Array.from(model.radiation.evaporation, (e) => LATENT_HEAT * e);
   if (want.has('sensibleHeat')) out.sensibleHeat = Float32Array.from(model.radiation.sensibleHeat);
+  if (want.has('t2m')) out.t2m = model.exchange && model.exchange.temperature2m ? Float32Array.from(model.exchange.temperature2m) : new Float32Array(C).fill(NaN);
   if (model.surface && model.surface.stress && (want.has('zonalStress') || want.has('meridionalStress'))) {
     const stress = cellVector(mesh, model.surface.stress(state, new Float64Array(E))), { latCell, lonCell } = mesh;
     if (want.has('zonalStress')) out.zonalStress = Float32Array.from({ length: C }, (_, i) => -Math.sin(lonCell[i]) * stress[3 * i] + Math.cos(lonCell[i]) * stress[3 * i + 1]);

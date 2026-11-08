@@ -7,8 +7,9 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN } from '../js/physics/exchange.module.js';
+import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN, heatProfile, profileTemperature } from '../js/physics/exchange.module.js';
 import { PREVIOUS_LEVELS, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
+import { cpuFrameFields } from '../js/cpuFrame.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -36,6 +37,34 @@ test('the stability functions are the IFS\'s Paulson and Holtslag–De Bruin for
   close(psiHeat(2), -8.020764957086806, 1e-12, 'Ψh(2)');
   close((psiMomentum(1e-6) - psiMomentum(0)) / 1e-6, -5, 1e-4, 'stable slope at neutral');
   assert.ok(Math.abs(psiMomentum(0)) < 1e-12 && Math.abs(psiHeat(0)) < 1e-12);
+});
+
+test('the 2 m temperature\'s heat profile is the exchange\'s: at the lowest layer\'s height it is κ√C_D/C_H of transfer() at the same Richardson number and roughness, unstable to z/L past 30', () => {
+  let largest = 0;
+  for (const [z0m, z0h] of [[0.1, 1e-3], [2, 2], [0.013, 1.3e-4], [2e-4, 3e-5]]) for (const ri of [-2, -0.3, 0, 0.1, 0.6, 1.2, 1.8, 3]) {
+    const c = transfer(ri, 21, z0m, z0h);
+    largest = Math.max(largest, c.zeta);
+    close(heatProfile(21, c.zeta, 21, z0m, z0h), KARMAN * Math.sqrt(c.drag) / c.heat, 1e-12, `Ri ${ri}, z0m ${z0m}, z0h ${z0h}, ζ ${c.zeta}`);
+  }
+  assert.ok(largest > 30, `the largest ζ is ${largest}`);
+});
+
+test('the 2 m temperature lies along that profile with the WMO\'s open-terrain roughness wherever z0m exceeds 0.03 m and, in stable air, the profile uniform above z/L = 5, as the IFS interpolates its own (Cy41r2 Part IV eq. 3.95, section 3.2)', () => {
+  const g = 9.80616, cp = 1004.64, z = 21, surfaceT = 280, airT = 284;
+  const share = (zeta, z0m, z0h, top = z) => (profileTemperature(2, surfaceT, airT, top, zeta, z0m, z0h, g, cp) + 2 * g / cp - surfaceT) / (airT + g * top / cp - surfaceT);
+  for (const zeta of [-20, -10, -2, -0.5, 0, 1, 3, 20, 400]) {
+    assert.equal(share(zeta, 2, 2), share(zeta, 0.1, 1e-3), `ζ ${zeta}: forest and grass both take the WMO roughness`);
+    assert.equal(share(zeta, 0.1, 1e-3), share(zeta, 0.03, 0.003), `ζ ${zeta}: the WMO roughness is z0m 0.03 m and z0h 0.003 m`);
+    assert.equal(share(zeta, 0.031, 3.1e-4), share(zeta, 0.03, 0.003), `ζ ${zeta}: a cell of z0m 0.031 m takes the WMO roughness`);
+    for (const [z0m, z0h] of [[0.013, 1.3e-4], [0.029, 2.9e-4], [0.03, 3e-4]]) assert.ok(zeta >= 5 * z / 2 || share(zeta, z0m, z0h) !== share(zeta, 0.03, 0.003), `ζ ${zeta}: a cell of z0m ${z0m} m keeps its own roughness`);
+    close(profileTemperature(z, surfaceT, airT, z, zeta, 0.1, 1e-3, g, cp), airT, 1e-12, `ζ ${zeta}: the lowest layer's air at its height`);
+  }
+  close(share(0, 0.013, 1.3e-4), Math.log(2.013 / 1.3e-4) / Math.log(21.013 / 1.3e-4), 1e-12, 'neutral: the cell\'s own log law');
+  close(share(0, 2, 2), Math.log(2.03 / 0.003) / Math.log(21.03 / 0.003), 1e-12, 'neutral: the WMO roughness\'s log law');
+  for (const zeta of [6, 20, 50]) close(share(zeta, 0.1, 1e-3), share(2 * zeta, 0.1, 1e-3, 2 * z), 1e-12, `ζ ${zeta}: uniform above h = 5 L, a lowest layer twice as high at the same L gives the same share`);
+  for (const zeta of [3, -0.5, -2, -10, -20]) assert.ok(Math.abs(share(zeta, 0.1, 1e-3) - share(2 * zeta, 0.1, 1e-3, 2 * z)) > 1e-3, `ζ ${zeta}: below h = 5 L, and at any height in unstable air, the lowest layer's height matters`);
+  for (const zeta of [5 * z / 2, 400]) close(share(zeta, 0.1, 1e-3), 1, 1e-12, `ζ ${zeta}: with 5 L at or under 2 m the 2 m air is the lowest layer's`);
+  for (const [zeta, weight] of [[0, 0.736], [-0.5, 0.832], [1, 0.526], [10, 0.438], [20, 0.596]]) assert.ok(Math.abs(share(zeta, 2, 2) - weight) < 5e-4, `ζ ${zeta}: ${share(zeta, 2, 2)} against the review's IFS construction, ${weight}`);
 });
 
 test('the bulk Richardson number gives back the Obukhov length it came from, and its coefficients', () => {
@@ -123,17 +152,19 @@ for (const [name, levels] of [['cam26', PREVIOUS_LEVELS], ['bl48', sigmaInterfac
   const gpu = prepare(await createGpuModel(new Grid(16), { topography, levels }));
   cpu.step(900); await gpu.step(900); await gpu.settle();
   const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells;
-  const [drag, heat, reference, evaporation, surfaceFlux] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['DRAG', 'HEATX', 'REFX', 'EVAP', 'SFLUX'].map((name) => ({ offset: PH[name], length: C })));
+  const [drag, heat, reference, evaporation, surfaceFlux, t2m] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['DRAG', 'HEATX', 'REFX', 'EVAP', 'SFLUX', 'T2M'].map((name) => ({ offset: PH[name], length: C })));
   const { land, iceSheet } = cpu.geography;
   const classOf = (i) => (land[i] ? (iceSheet[i] ? 'ice sheet' : cpu.land.snow[i] > 30 ? 'snow' : cpu.land.canopy[i] > 0.5 ? 'forest' : 'other land') : cpu.state[6][i] > 0 ? 'sea ice' : 'open sea');
   const worst = {};
   for (let i = 0; i < C; i++) {
-    const k = classOf(i), w = (worst[k] ??= { cells: 0, drag: 0, heat: 0, reference: 0, evaporation: 0, flux: 0, cd: 0 });
+    const k = classOf(i), w = (worst[k] ??= { cells: 0, drag: 0, heat: 0, reference: 0, evaporation: 0, flux: 0, cd: 0, t2m: 0, finite: 0 });
     w.cells++;
     w.cd += cpu.exchange.drag[i];
     w.drag = Math.max(w.drag, Math.abs(drag[i] - cpu.exchange.drag[i]) / Math.max(cpu.exchange.drag[i], 1e-5));
     w.heat = Math.max(w.heat, Math.abs(heat[i] - cpu.exchange.heat[i]) / Math.max(cpu.exchange.heat[i], 1e-5));
     w.reference = Math.max(w.reference, Math.abs(reference[i] / cpu.exchange.reference[i] - 1));
+    w.t2m = Math.max(w.t2m, Math.abs(t2m[i] - cpu.exchange.temperature2m[i]));
+    if (Number.isFinite(t2m[i]) && Number.isFinite(cpu.exchange.temperature2m[i])) w.finite++;
     w.evaporation = Math.max(w.evaporation, (Math.abs(evaporation[i] - cpu.radiation.evaporation[i]) * 2.5e6 - 1e-5 * Math.abs(cpu.radiation.evaporation[i]) * 2.5e6));
     w.flux = Math.max(w.flux, Math.abs(surfaceFlux[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
   }
@@ -141,6 +172,8 @@ for (const [name, levels] of [['cam26', PREVIOUS_LEVELS], ['bl48', sigmaInterfac
     console.log(`${k}: ${w.cells} cells, mean C_D ${(w.cd / w.cells * 1e3).toFixed(3)}e-3; engines apart: C_D ${w.drag.toExponential(1)} and C_H ${w.heat.toExponential(1)} relative to the coefficient or 1e-5 if larger, reference ${w.reference.toExponential(1)} relative; latent heat ${w.evaporation.toExponential(1)}, net surface flux ${w.flux.toExponential(1)} W/m² beyond 1e-5 of each cell's own`);
     assert.ok(w.drag < bound && w.heat < bound && w.reference < bound / 20, `${k} coefficients against ${bound.toExponential(1)}`);
     assert.ok(w.evaporation < 0.05 && w.flux < 0.1, `${k} fluxes`);
+    console.log(`${k}: the 2 m temperature ${w.t2m.toExponential(1)} K apart, ${w.finite} of ${w.cells} finite on both`);
+    assert.ok(w.finite === w.cells && w.t2m < 2e-3, `${k} 2 m temperature`);
   }
   for (const k of ['ice sheet', 'snow', 'forest', 'other land', 'sea ice', 'open sea']) assert.ok(worst[k] && worst[k].cells > 0, `the grid has ${k}`);
 });
@@ -406,7 +439,15 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
   await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
 });
 
-test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both engines refuse under boundaryLayer the options they take from the surface or the orography', async () => {
+  for (const [key, value, group] of [['virtualDensity', true, 'surface'], ['gustiness', 1, 'surface'], ['implicitDrag', false, 'surface'], ['relativeWind', true, 'surface'], ['seaHumidity', 0.5, 'surface'], ['formDrag', false, 'orography']]) {
+    const refused = new RegExp(`boundaryLayer\\.${key} is not a boundary-layer option: set ${group}\\.${key}`);
+    assert.throws(() => createModel(new Grid(16), { topography, boundaryLayer: { [key]: value } }), refused);
+    if (gpuAvailable) await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { [key]: value } }), refused);
+  }
+});
+
+test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cases = [
     ['defaults', {}, []],
     ['ground, stable profile, Prandtl coefficient 3.6, countergradient', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6, countergradient: 7.2 }, ['mixing stable', 'mixing convective', 'scalarMixing stable', 'scalarMixing convective']],
@@ -415,17 +456,19 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
     ['capped scale, countergradient', { velocityScale: 'capped', countergradient: 7.2 }, ['mixing convective']],
     ['diagnoseFirst, surfaceExcess 8.5', { diagnoseFirst: true, surfaceExcess: 8.5 }, ['mixing stable', 'mixing convective', 'scalarMixing convective']],
     ['the subsidence share', { entrainment: { subsidence: true } }, []],
+    ['the search ceiling raised to sigma 0.3', { searchTop: 0.3 }, []],
+    ['the search ceiling lowered to sigma 0.9', { searchTop: 0.9 }, ['mixing convective']],
   ];
   const apartBound = { stable: 1e-3, convective: 5e-4, entraining: 1e-3 }, failures = [];
   for (const [label, surface] of [['roughness', {}], ['fixed', { exchange: 'fixed' }]]) {
     const runs = {};
-    let C = 0, K = 0, kTop = 0, g = 0, ground = null;
+    let C = 0, K = 0, kTop = Infinity, g = 0, ground = null;
     for (const [name, boundaryLayer] of cases) {
       const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer }));
       for (let s = 0; s < 2; s++) { cpu.step(900); await gpu.step(900); }
       await gpu.settle(); await gpu.sync();
       const bl = cpu.boundaryLayer, PH = gpu.gpu.layout.PH, key = { mixing: 'MIX', scalarMixing: 'MIXH', nonlocal: 'CG' };
-      C = cpu.mesh.nCells; K = cpu.core.K; kTop = bl.kTop; g = cpu.core.diagnostics.g; ground = Float64Array.from(cpu.surfaceGeopotential, (p) => p / g);
+      C = cpu.mesh.nCells; K = cpu.core.K; kTop = Math.min(kTop, bl.kTop); g = cpu.core.diagnostics.g; ground = Float64Array.from(cpu.surfaceGeopotential, (p) => p / g);
       const low = (K - 1) * C, fields = Object.keys(key).filter((field) => bl[field]);
       const read = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [...fields.map((field) => ({ offset: PH[key[field]], length: bl[field].length })), { offset: PH.DEPTH, length: C }]);
       runs[name] = {
@@ -463,15 +506,17 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
           const own = columnGap(mine, theirs, i), controlGap = base ? columnGap(base[0], base[1], i) : 0;
           if (own > 1e-2 || controlGap > 1e-2) {
             parted++;
-            const unexplained = [];
+            const unexplained = [], atTop = [];
             const why = [own > 1e-2 && [run, own], controlGap > 1e-2 && [control, controlGap]].filter(Boolean).map(([r, gap]) => {
               const apart = topsApart(r, i), room = clearance(r, i);
-              if (room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) { topRatio = Math.max(topRatio, gap * room / (2 * apart)); topRoom = Math.max(topRoom, room); topApart = Math.max(topApart, apart); return 'top'; }
+              if (room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) { atTop.push([gap * room / (2 * apart), room, apart]); return 'top'; }
               if (flipped(r, i)) return 'flip';
               unexplained.push(`column ${i}${r === control ? ' in the defaults' : ''} ${gap.toExponential(1)} apart, its top ${room.toFixed(2)} m from the lowest interface and ${(1e3 * apart).toFixed(1)} mm from the GPU's`);
               return 'loose';
             });
-            if (why.includes('loose')) loose.push(unexplained.join(', ')); else if (why.includes('flip')) flips++; else tops++;
+            if (why.includes('loose')) loose.push(unexplained.join(', '));
+            else if (why.includes('flip')) flips++;
+            else { tops++; for (const [ratio, room, apart] of atTop) { topRatio = Math.max(topRatio, ratio); topRoom = Math.max(topRoom, room); topApart = Math.max(topApart, apart); } }
             continue;
           }
           kept[i] = 1;
@@ -600,4 +645,18 @@ test('both coupled engines hand the air the same sea velocity under surface.rela
   console.log(`the sea velocity under the air, then the ocean's: ${report.join('; ')}`);
   assert.deepEqual(failures, []);
   await assert.rejects(createGpuModel(new Grid(16), { topography, ocean: { gustiness: 5 } }), /ocean\.gustiness is not an option/);
+});
+
+test('under the fixed exchange the 2 m temperature is NaN at every cell on both engines', async () => {
+  const options = { topography, surface: { exchange: 'fixed' } };
+  const cpu = prepare(createModel(new Grid(16), options));
+  cpu.step(900);
+  assert.equal(cpu.exchange.fixed, true);
+  assert.ok(cpuFrameFields(cpu, { fields: ['t2m'] }).t2m.every(Number.isNaN), 'the CPU frame');
+  if (!gpuAvailable) return;
+  const gpu = prepare(await createGpuModel(new Grid(16), options));
+  await gpu.step(900);
+  await gpu.settle();
+  const [t2m] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.T2M, length: cpu.mesh.nCells }]);
+  assert.ok(t2m.every(Number.isNaN), 'the GPU');
 });

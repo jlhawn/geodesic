@@ -22,6 +22,7 @@ import { JERLOV } from '../ocean/layered.module.js';
 import { createLake, lakeWater, lakeModelOf } from '../physics/lake.module.js';
 import { lakeUpload, lakeDownload, LAKE_SLOTS } from './lake.gpu.js';
 import { COUPLED_ICE_DRIFT, iceDriftMoves } from '../ocean/iceDrift.module.js';
+import { refuseBorrowedOptions } from '../physics/boundaryLayer.module.js';
 
 export const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'soilDarkening', 'wetSoilAlbedo', 'darkeningWetness', 'rootZoneCapacity', 'dryWetness', 'wetWetness', 'growthTime', 'declineTime', 'snowDeclineTime', 'snowHold', 'oldSnowAlbedo', 'snowMasking', 'forestSnowAlbedo', 'closedCanopy', 'canopyMemory', 'treeline', 'seasonThreshold', 'minimumSeason', 'treelineWarmth', 'seasonMemory', 'treeGrowthTime', 'treeDeclineTime', 'surfaceCapacity', 'percolationTime', 'stomatalResistance', 'growthColdest', 'growthWarmest', 'iceSheetAlbedo', 'iceSheetBalance', 'snowCap', 'bareIceAlbedo', 'treeMoisture', 'moistureMemory', 'forestAridity', 'grassland', 'forestAlbedo', 'grassAlbedo', 'grassSnowDarkening', 'coverGoal', 'deepCapacity', ...Object.keys(SOIL_CARBON)];
 const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
@@ -88,6 +89,7 @@ export async function createGpuModel(gridOrMesh, {
   const ageingOf = (options, key) => options[key] ?? (key === 'snowAgeing' ? true : SNOW_AGEING[key]);
   if (geography) for (const key of AGEING_OPTIONS) if (ageingOf(ice, key) !== ageingOf(landOptions, key)) throw new Error(`the GPU's land and sea ice share ${key}: ${ageingOf(landOptions, key)} on the land, ${ageingOf(ice, key)} on the ice`);
   if (geography && landOptions.latentHeatFusion !== undefined && landOptions.latentHeatFusion !== (ice.latentHeatFusion ?? 3.34e5)) throw new Error(`the GPU's land and sea ice share latentHeatFusion: ${landOptions.latentHeatFusion} on the land, ${ice.latentHeatFusion ?? 3.34e5} on the ice`);
+  refuseBorrowedOptions(boundaryLayer);
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
@@ -137,6 +139,27 @@ export async function createGpuModel(gridOrMesh, {
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain, fogRain: moistCpu.fogRain, cumulusK0: K - cumulusLength / C, cumulusCover: new Float64Array(cumulusLength), cumulusWater: new Float64Array(cumulusLength), subcloudVirtual: new Float64Array(gpu.physics.subcloudLayers * C) };
   model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
   model.oceanEngine = gpuOcean;
+  model.cadence = { radiationEvery: gpu.physics.radiationEvery, dragEvery: gpu.physics.dragEvery, oceanEvery: gpuOcean ? gpuOcean.everySteps : 1 };
+  const freshwater = [['rain', 'RAIN', 'RAINSEEN'], ['runoff', 'RUNOFF', 'RUNOFFSEEN'], ['discharge', 'DISCHARGE', 'DISCHARGESEEN']];
+  const lakePending = lakeCpu ? gpu.layout.PH.LAKE + LAKE_SLOTS.indexOf('pending') * C : null;
+  model.readFreshwater = async () => {
+    const totals = await readRanges(gpu.device, gpu.buffers.PH, [...freshwater.map(([, key]) => gpu.layout.PH[key]), ...(lakeCpu ? [lakePending] : [])].map((offset) => ({ offset, length: C })));
+    const seen = gpuOcean ? await Promise.all(freshwater.map(([, , section]) => gpuOcean.readSection(section))) : null;
+    return Object.fromEntries([...freshwater.flatMap(([name], n) => [[`${name}Total`, Float64Array.from(totals[n])], ...(seen ? [[`${name}Seen`, Float64Array.from(seen[n])]] : [])]), ...(lakeCpu ? [['lakePending', Float64Array.from(totals[freshwater.length])]] : [])]);
+  };
+  model.writeFreshwater = (saved) => {
+    for (const [name, key, section] of freshwater) {
+      const total = saved[`${name}Total`], seen = saved[`${name}Seen`];
+      if (total && total.length === C) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH[key], Float32Array.from(total));
+      if (gpuOcean && seen && seen.length === C) gpuOcean.putSection(section, seen);
+    }
+    if (gpuOcean && !(saved.rainTotal && saved.rainTotal.length === C) && saved.rainStep && saved.rainStep.length === C) {
+      gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH.RAIN, new Float32Array(C));
+      gpuOcean.putSection('RAINSEEN', Float64Array.from(saved.rainStep, (rain) => -rain));
+    }
+    const owed = saved.lakePending && saved.lakePending.length === C ? saved.lakePending : saved.lakePassed && saved.lakePassed.length === C && saved.lakeSeen && saved.lakeSeen.length === C ? Float64Array.from(saved.lakePassed, (passed, i) => passed - saved.lakeSeen[i]) : null;
+    if (lakeCpu && owed) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * lakePending, Float32Array.from(owed));
+  };
 
   function pushState(ocean) {
     gpu.upload(state);
@@ -327,7 +350,7 @@ export async function createGpuModel(gridOrMesh, {
       if (started) gpu.uploadSurfaceTemperature(surfaceT);
       return started;
     },
-    load(saved, surfaceT, iceField) { if (gpuOcean.upload(saved, surfaceT, iceField)) gpu.uploadSurfaceTemperature(surfaceT); },
+    load(saved, surfaceT, iceField, concentration = null, phase = 0) { oceanCounter = phase; if (gpuOcean.upload(saved, surfaceT, iceField)) gpu.uploadSurfaceTemperature(surfaceT); },
     async serialize({ restart = false } = {}) { return restart ? { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) } : gpuOcean.serialize(); },
   } : null;
 

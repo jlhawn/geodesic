@@ -1844,7 +1844,7 @@ export function createOcean(mesh, {
     }
   }
   let surfaceTAt = () => 288;
-  function load(saved, surfaceT, ice, concentration = seaCover) {
+  function load(saved, surfaceT, ice, concentration = seaCover, phase = 0) {
     restartUpwelling();
     if (!saved || !saved.h) { build(surfaceT, ice, climatology, concentration); return; }
     surfaceTAt = (i) => (ice[i] > 0 ? FREEZING_POINT : surfaceT[i]);
@@ -1886,7 +1886,7 @@ export function createOcean(mesh, {
       mleDepths.set(boundaryDepths);
       if (saved.mleDepths && saved.mleDepths.length === C && restartable(saved)) mleDepths.set(saved.mleDepths);
     }
-    counter = 0;
+    counter = phase;
     initialised = true;
   }
   let seaFlux = null;
@@ -1901,10 +1901,11 @@ export function createOcean(mesh, {
     };
   }
 
-  function serialize() {
+  function serialize({ restart = false } = {}) {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
-    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
+    const fields = { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
+    return restart ? { ...fields, ...restartArrays() } : fields;
   }
 
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;
