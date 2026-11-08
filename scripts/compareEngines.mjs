@@ -233,11 +233,11 @@ let oceanBefore = cpu && cpu.ocean ? cpu.ocean.serialize() : null;
 let gBefore = CPU_ONLY ? null : await gpuAt(0);
 if (GPU_DUMP) writeFileSync(`${GPU_DUMP}.step0`, serialize(gBefore));
 if (savedLakes) {
-  const { LAKE_FIELDS } = await import(`${REPO}/js/physics/lake.module.js`), { LAKE_SLOTS } = await import(`${REPO}/js/gpu/lake.gpu.js`);
-  const cells = (cpu ?? gpu).lake?.cells ?? [], saved = (name) => savedLakes[name];
-  const off = (values, name) => cells.filter((i) => !(Math.abs(values[i] - saved(name)[i]) <= 1e-6 * Math.max(1, Math.abs(saved(name)[i])))).length;
-  const counts = LAKE_FIELDS.filter((name) => saved(name)).map((name) => [name, cpu ? off(cpu.lake[name], name) : 0, gBefore ? off(gBefore.regions.LAKE.subarray(LAKE_SLOTS.indexOf(name) * C), name) : 0]);
-  const bad = counts.filter(([, c, g]) => c || g);
+  const { savedLakeOff } = await import(`${REPO}/scripts/savedLand.mjs`), { LAKE_SLOTS } = await import(`${REPO}/js/gpu/lake.gpu.js`);
+  const cells = (cpu ?? gpu).lake?.cells ?? [];
+  const cpuOff = cpu ? Object.fromEntries(savedLakeOff((name) => cpu.lake[name], savedLakes, cells)) : {};
+  const gpuOff = gBefore ? Object.fromEntries(savedLakeOff((name) => gBefore.regions.LAKE.subarray(LAKE_SLOTS.indexOf(name) * C), savedLakes, cells)) : {};
+  const bad = [...new Set([...Object.keys(cpuOff), ...Object.keys(gpuOff)])].map((name) => [name, cpuOff[name] ?? 0, gpuOff[name] ?? 0]);
   if (!cells.length) fail(`the save holds lake columns and the model has no lake cells`);
   else if (bad.length) fail(`lake columns at load differ from the save (cells off, cpu/gpu): ${bad.map(([n, c, g]) => `${n} ${c}/${g}`).join(', ')}`);
   else lines.push(`\nlake columns at load: ${cells.length} cells as saved on ${[cpu && 'the CPU', gBefore && 'the GPU'].filter(Boolean).join(' and ')}`);

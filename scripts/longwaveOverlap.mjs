@@ -35,6 +35,7 @@ import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { loadSavedLake } from './savedLand.mjs';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/longwaveOverlap.mjs <state.bin>'); process.exit(1); }
@@ -52,6 +53,7 @@ STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load(saved.land, state[6]);
+loadSavedLake(model, saved);
 model.time = saved.time;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
 if (saved.boundaryDepth) bl.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));

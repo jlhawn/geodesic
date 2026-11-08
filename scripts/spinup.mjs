@@ -232,8 +232,8 @@ import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
 import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
 import { watchSkin } from './skinWatch.mjs';
-import { lakeArrays, savedLake } from '../js/physics/lake.module.js';
-import { loadSavedLand } from './savedLand.mjs';
+import { lakeArrays } from '../js/physics/lake.module.js';
+import { loadSavedLand, loadSavedLake } from './savedLand.mjs';
 import { startGeography } from './soilWater.mjs';
 import { indexCells, seaIceIndexCut } from '../js/seaIceIndex.module.js';
 
@@ -334,8 +334,9 @@ function loadSaved(saved) {
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
   loadSavedLand(model, saved);
-  if (model.lake && savedLake(saved)) model.lake.load(savedLake(saved));
+  const lakes = loadSavedLake(model, saved);
   if (saved.energyRecord) model.energyRecord.load(saved.energyRecord);
+  return lakes;
 }
 let startStep = 0, oceanYears = 0, oceanFrom = null;
 if (saved) {
@@ -351,7 +352,7 @@ if (saved) {
     oceanFrom = basename(OCEAN_FROM);
     log(`ocean, sea ice and sea surface of ${file} replaced by those of ${OCEAN_FROM} (day ${alone.day}, ${alone.oceanYears ?? 0} years alone; ${oceanYears} in all)`);
   }
-  loadSaved(saved);
+  await loadSaved(saved);
   if (model.land.deepWater) log(`land: ${deepNote(saved.land)}`);
   log(`--- ${new Date().toISOString()} continuing from ${file} (day ${saved.day}${startStep ? `, step ${startStep} of ${perDay}` : ''}) on ${grid}, mesh of ${meshNote}, ${geographyNote}, after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 } else {

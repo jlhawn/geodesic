@@ -38,6 +38,7 @@ import { LOW_CLOUD_PRESSURE, CLOUD_OPTICS, cloudOptics, overlapped, DECORRELATIO
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { loadSavedLake } from './savedLand.mjs';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/cloudRegimes.mjs <state.bin>'); process.exit(1); }
@@ -54,6 +55,7 @@ STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) }, state[6]);
+loadSavedLake(model, saved);
 model.time = saved.time;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
 if (saved.boundaryDepth) bl.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));

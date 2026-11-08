@@ -11,6 +11,7 @@ import { withCadence } from '../js/cadence.module.js';
 import { LATENT_HEAT, placeCumulus } from '../js/physics/moist.module.js';
 import { readState, tagOf } from './figures/figureState.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { loadSavedLake } from './savedLand.mjs';
 
 const file = process.argv[2] ?? new URL('../runs/eleven64_day1825.bin', import.meta.url).pathname;
 const out = process.argv[3] ?? new URL('../explain/data/surface_budget.json', import.meta.url).pathname;
@@ -24,6 +25,7 @@ if (saved.boundaryDepth) boundaryLayer.depth.set(saved.boundaryDepth);
 model.time = saved.time;
 model.seaIce.load(model.state[6], saved.concentration ?? null);
 if (model.land && saved.land) model.land.load(saved.land);
+loadSavedLake(model, saved);
 if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
 if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
 if (saved.mlmGate) radiation.mlmGate.set(saved.mlmGate);

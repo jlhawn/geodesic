@@ -30,6 +30,7 @@ import { liftingCondensationLevel, MOIST_DEFAULTS } from '../js/physics/moist.mo
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { loadSavedLake } from './savedLand.mjs';
 
 const FILE = process.argv[2];
 const env = (name) => JSON.parse(process.env[name] ?? '{}');
@@ -42,6 +43,7 @@ STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) });
+loadSavedLake(model, saved);
 model.time = saved.time;
 const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, geopotential } = core.diagnostics;
 const exnerLower = core.diagnostics.exnerLower ?? core.arrays.exnerLower, thetaV = core.arrays.thetaV;

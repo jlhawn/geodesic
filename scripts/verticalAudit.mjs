@@ -89,6 +89,7 @@ import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { clearSkyClasses } from './clearSkyClasses.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { loadSavedLake } from './savedLand.mjs';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/verticalAudit.mjs <state.bin>'); process.exit(1); }
@@ -106,6 +107,7 @@ STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load(saved.land, state[6]);
+loadSavedLake(model, saved);
 model.time = saved.time;
 const [pi, theta, u, , q, qc, ice] = state;
 const deg = 180 / Math.PI, area = mesh.areaCell, landMask = model.geography.land, dt = 1350 * 16 / saved.N, bottom = (K - 1) * C;

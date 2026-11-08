@@ -40,6 +40,7 @@ import { LATENT_HEAT, saturationHumidity, placeCumulus } from '../js/physics/moi
 import { inLongitudes } from '../js/audit.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { loadSavedLake } from './savedLand.mjs';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/deckGate.mjs <state.bin>'); process.exit(1); }
@@ -56,6 +57,7 @@ STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load(saved.land, state[6]);
+loadSavedLake(model, saved);
 placeCumulus(model, saved);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === moist.subcloudVirtual.length) moist.subcloudVirtual.set(saved.subcloudVirtual);
 model.time = saved.time;

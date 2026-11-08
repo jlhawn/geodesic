@@ -39,6 +39,7 @@ import { depthFields, HEAT_REFERENCE } from '../js/ocean/layered.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { placeCumulus } from '../js/physics/moist.module.js';
 import { PUBLISHED_RADIATION, PUBLISHED_MOIST } from '../explain/published.module.js';
+import { loadSavedLake } from './savedLand.mjs';
 
 const FLOAT32_TOLERANCE = 2 ** -21, SECTION_MIN_THICKNESS = 0.1, NET_FRACTION = 0.1;
 const N = 16, DAY = 86400, STEP = 450, GRID = 'bl36', FRAME_DAYS = 5, SPINUP_FRAMES = 60, BINS = 36, CAP_STEP = 5, UPWELLING_DEPTH = 50, CELSIUS = 273.15;
@@ -129,6 +130,7 @@ if (resumed) {
   model.time = resumed.time;
   model.load({ ocean: false });
   model.ocean.load(resumed.ocean, surfaceT, ice);
+  await loadSavedLake(model, resumed);
   if (eddyRecorded(resumed)) { ocean.putSection('EDDYVREC', resumed.eddyVolumeFlux); ocean.putSection('EDDYQREC', resumed.eddyHeatFlux); }
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOW, Float32Array.from(resumed.seaSnow));
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOWALB, Float32Array.from(resumed.seaSnowAlbedo));
