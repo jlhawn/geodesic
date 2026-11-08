@@ -2322,8 +2322,10 @@ ${core.fieldConstants}
    * sizes, the last two and `calved` optional, its columns within a meter of this
    * bathymetry and dry on land, is uploaded as it is, without fitting its
    * columns. From T, S and h its heat and salt stores come back to the last
-   * bit except within about 3e-6 K of 273.15 K or 4e-7 of 35 psu, where one
-   * can miss by an ulp unless the save carries Qref and Wref.
+   * bit, except within about 3e-6 K of HEAT_REFERENCE (273.15 K rounded to
+   * f32) or 4e-7 psu of 35: there a store can miss, by more ulps the nearer
+   * it lies to the reference, but never by more than about 2e-13·h. Qref and
+   * Wref, when a save carries them, are uploaded as they are.
    */
   async function restartArrays() {
     const PHL = core.layout.PH;
