@@ -35,7 +35,9 @@
 # KEEP_FORCING (0: a cycle's record is deleted once its ocean-only phase is
 # done), RESTORE_CMD (a shell command run once before anything else, e.g.
 # to fetch OUT from a bucket), SYNC_CMD, BATCH and LAND_FROM (passed on),
-# YEAR_DAYS (365; shorter years only for tests), RETRY_WAIT (30).
+# MOIST, BOUNDARY_LAYER and SURFACE (JSON, the coupled phases only: the
+# ocean-only phase replays the recorded stress and fluxes), YEAR_DAYS (365;
+# shorter years only for tests), RETRY_WAIT (30).
 cd "$(dirname "$0")/.."
 N=${N:-64} PREFIX=${PREFIX:-async} CYCLES=${CYCLES:-9} COUPLED_YEARS=${COUPLED_YEARS:-10} RECORD_YEARS=${RECORD_YEARS:-1} OCEAN_YEARS=${OCEAN_YEARS:-100}
 PER_YEAR=${PER_YEAR:-4} KEEP=${KEEP:-4} OCEAN_KEEP=${OCEAN_KEEP:-2} SNAPSHOT_DAYS=${SNAPSHOT_DAYS:-30} RESTORE=${RESTORE:-30}
