@@ -184,3 +184,12 @@ test('the GPU kernels carry the trace-chain floor as one literal that rounds to 
   const literals = [...physicsConstants({ ...PHYSICS_DEFAULTS, R: 287 }).matchAll(/const TRACE_FLOOR: f32 = ([^;]+);/g)].map((m) => m[1]);
   assert.ok(literals.length === 1 && Math.fround(Number(literals[0])) === Math.fround(TRACE_CHAIN_FLOOR), `TRACE_FLOOR literals ${JSON.stringify(literals)} against TRACE_CHAIN_FLOOR ${TRACE_CHAIN_FLOOR}, ${Math.fround(TRACE_CHAIN_FLOOR)} in f32`);
 });
+test('the GPU kernels apply the trace-chain ramp and its floor with the CPU expression, max(W/(f t), min(1, TRACE_CHAIN_FLOOR / chain cover)), under the same guard', () => {
+  const gpu = readFileSync(new URL('../js/gpu/physics.gpu.js', import.meta.url), 'utf8'), cpu = readFileSync(new URL('../js/physics/radiation.module.js', import.meta.url), 'utf8');
+  const wgsl = [...gpu.matchAll(/if \((LW_CHAIN && TRACE_CHAIN && [^{]+)\) \{ chainF\[k\] \*= ([^;]+); \}/g)], js = [...cpu.matchAll(/if \((traceCloudPath !== null && [^{]+)\) \{ const kept = ([^;]+); chainCloud\[k\] \/= kept; chainCover\[k\] \*= kept; \}/g)];
+  const names = [[/Math\.(max|min)/g, '$1'], [/layerCover\[k\]/g, 'f'], [/traceCloudPath !== null/g, 'TRACE_CHAIN'], [/traceCloudPath/g, 'TRACE_PATH'], [/TRACE_CHAIN_FLOOR/g, 'TRACE_FLOOR'], [/chainCover\[k\]/g, 'chainF[k]'], [/\b([01])\.0\b/g, '$1'], [/^LW_CHAIN && /, '']];
+  const normal = (text) => names.reduce((t, [from, to]) => t.replace(from, to), text).replace(/\s+/g, '');
+  assert.ok(wgsl.length === 1 && js.length === 1, `${wgsl.length} WGSL and ${js.length} CPU trace-chain rules`);
+  assert.equal(normal(wgsl[0][2]), normal(js[0][2]), 'the ramp and its floor');
+  assert.equal(normal(wgsl[0][1]), normal(js[0][1]), 'the guard');
+});
