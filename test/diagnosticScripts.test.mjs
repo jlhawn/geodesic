@@ -10,7 +10,7 @@ import { stateGeography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState } from '../js/stateFile.module.js';
 import { gridHeader } from '../js/stateGrid.module.js';
-import { oceanCells, inertialStepLimit } from '../js/ocean/layered.module.js';
+import { oceanCells } from '../js/ocean/layered.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 const dir = mkdtempSync(join(tmpdir(), 'diagnostic-scripts-'));
@@ -50,9 +50,6 @@ test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid
   const budget = run('edgeBudget', { EDGES: wet.join(',') });
   assert.equal(budget.status, 0, budget.stderr);
   assert.doesNotMatch(budget.stdout, /NaN|Infinity/);
-  const dtOcean = ocean.everySteps * 1350, part = dtOcean / Math.max(1, Math.ceil(dtOcean / inertialStepLimit(model.mesh)));
-  ocean.phases.dynamics(part);
-  assert.match(budget.stdout, new RegExp(`pinned rows relax at 1/${(1 / new Float64Array(ocean.shared.params)[0]).toFixed(0)} s`));
   const rows = budget.stdout.split('\n').filter((line) => /^edge \d+ layer \d+ /.test(line)), pinned = (line) => / pinned,/.test(line);
   const term = (line, name) => Number(new RegExp(`${name} (\\S+)`).exec(line)[1]), key = (line) => /^edge (\d+) layer (\d+) /.exec(line).slice(1).join(':');
   assert.equal(rows.find((line) => term(line, 'rest') !== 0), undefined);
@@ -62,6 +59,10 @@ test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid
   assert.ok(rows.some(pinned), 'no row is pinned');
   for (const name of ['Coriolis', 'baroclinic', '-grad K', 'bottom drag', 'nu4']) assert.ok([...active.values()].some((line) => term(line, name) !== 0), `${name} is zero on every row`);
   assert.ok(open.some((e) => term(active.get(`${e}:0`), 'stress') !== 0), 'the wind is zero on the open edges');
+  const params = new Float64Array(ocean.shared.params);
+  for (let n = 0; n < ocean.everySteps; n++) model.step(1350);
+  assert.ok(params[1] > 0, 'the ocean has not stepped');
+  assert.match(budget.stdout, new RegExp(`pinned rows relax at 1/${(1 / params[0]).toFixed(0)} s`));
 });
 
 test('radiationProfiles runs the defaults against OTHER\'s gray longwave and Lacis–Hansen gases on the sequential shortwave, on a state at N=16', () => {
