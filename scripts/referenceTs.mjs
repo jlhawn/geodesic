@@ -5,6 +5,10 @@
  * a 1° grid of 181 × 360). The model's Ts (surfaceT) is the land's surface temperature on land, the ice's surface
  * temperature on sea ice and the top ocean layer's temperature on open sea, so a point takes ERA5's skin temperature
  * (skt) where its land-sea mask is at least 0.5 or it holds any sea ice (ci > 0), and its bulk SST (sstk) elsewhere, or skt at a sea point without one.
+ * ERA5's skt is the grid box's skin, its tiles weighted by cover, so at a point with ice it is the ice's skin and the
+ * open water of the leads together: the model's matching quantity there is the same cover-weighted mean, gridBoxSkin of
+ * js/intervalMeans.module.js, not the ice's own surfaceT. The annual means weigh each month by its mean length over
+ * 1991–2020 (February 28 + 8/30 days).
  * For comparison it also writes the same mean with 2 m air temperature (2t) in place of skt, the definition of the
  * station and Berkeley Earth records, and the gap between the two by month.
  *
@@ -54,12 +58,13 @@ for (const year of YEARS) {
 }
 const C = (x) => Number((x - 273.15).toFixed(3)), K = (x) => Number(x.toFixed(3)), months = (f) => Array.from({ length: 12 }, (_, m) => f(m));
 const monthly = months((m) => C(sums.skin[m] / areas.all[m])), air = months((m) => C(sums.air[m] / areas.all[m]));
-const annual = (xs) => K(xs.reduce((a, b) => a + b, 0) / 12);
+const DAYS = [31, 28 + 8 / 30, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], YEAR = DAYS.reduce((a, b) => a + b, 0);
+const annual = (xs) => K(xs.reduce((a, x, m) => a + x * DAYS[m], 0) / YEAR);
 writeFileSync(OUT, JSON.stringify({
   name: 'Global mean surface temperature in the model\'s definition, 1991–2020 monthly climatology',
-  source: { dataset: 'ERA5 monthly means of daily means on single levels, NCAR RDA ds633.1 (e5.moda.an.sfc: skt, 2t, ci, sstk, lsm)', doi: '10.5065/P8GT-0R61', url: 'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633001/e5.moda.an.sfc/catalog.html', references: ['Hersbach et al. 2020, Q. J. R. Meteorol. Soc. 146, 1999–2049'], license: 'Copernicus license (free use with attribution: "Contains modified Copernicus Climate Change Service information 2025")' },
+  source: { dataset: 'ERA5, C3S/ECMWF, via NCAR RDA ds633.1: monthly means of daily means on single levels (e5.moda.an.sfc: skt, 2t, ci, sstk, lsm)', citation: 'ERA5 Reanalysis (Monthly Mean 0.25 Degree Latitude-Longitude Grid), ECMWF, NSF NCAR 2019', doi: '10.5065/P8GT-0R61', url: 'https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633001/e5.moda.an.sfc/catalog.html', references: ['Hersbach et al. 2020, Q. J. R. Meteorol. Soc. 146, 1999–2049'], license: 'CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/), ECMWF\'s license for Copernicus data since 2 July 2025, which replaced the Copernicus license', changes: 'a 1991-2020 monthly climatology from a 1° subsample' },
   period: '1991-01 to 2020-12', box: 'global', mask: 'ERA5\'s land-sea mask (lsm ≥ 0.5 is land) and sea-ice cover (ci > 0 is ice) at each point',
-  definition: '°C, month m at index m − 1, cos-latitude weighted over every fourth 0.25° point. monthly: skt on land and sea ice, sstk on open sea, matching the model\'s surfaceT from the run\'s day means, area-weighted over the globe. air: the same with 2t in place of skt (the station records\' definition), for comparison only. gap: monthly − air, the skin less the air over land and ice in the global mean.',
+  definition: '°C, month m at index m − 1, cos-latitude weighted over every fourth 0.25° point. monthly: skt on land and at sea points with ice, sstk on open sea, area-weighted over the globe; skt is the grid box\'s skin (at an ice point the ice and its leads by cover), so the model\'s matching quantity is means.gridBoxSkin of the run\'s day means (c·surfaceT + (1 − c)·sst on sea cells with ice, surfaceT elsewhere), not surfaceT. annual and airAnnual weigh the months by their mean lengths over 1991–2020. air: the same with 2t in place of skt (the station records\' definition), for comparison only. gap: monthly − air, the skin less the air over land and ice in the global mean. seaIce: skt and 2t at sea points with ice, both grid-box values (ice and leads together).',
   script: 'scripts/referenceTs.mjs',
   monthly, annual: annual(monthly), air, airAnnual: annual(air), gap: months((m) => K(monthly[m] - air[m])),
   land: { skin: months((m) => C(sums.landSkin[m] / areas.land[m])), air: months((m) => C(sums.landAir[m] / areas.land[m])), share: months((m) => K(areas.land[m] / areas.all[m])) },

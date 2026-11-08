@@ -4,7 +4,8 @@
  * Undercurrent's core at the four equatorial TAO/TRITON ADCP moorings (0°, 165°E, 170°W, 140°W, 110°W), from PMEL's
  * daily ADCP data (ERDDAP pmelTaoDyAdcp, u_1205 in cm/s), quality 1–3 only. At each depth a calendar month's mean is the mean of its
  * days over the whole record, and the profile is the mean of the twelve months, so the record's uneven seasons do not
- * bias it; a depth enters only where every month has at least MIN_DAYS days. The core is the profile's eastward
+ * bias it; a depth enters only where every month has at least MIN_DAYS days from at least MIN_YEARS distinct years, so
+ * every depth kept is a climatology of a decade or more and none rests on a few years' anomalies. The core is the profile's eastward
  * maximum, its depth and speed refined by a parabola through the maximum and its two neighbors.
  *
  *   node scripts/referenceTaoAdcp.mjs [out.json]
@@ -13,7 +14,7 @@ import { writeFileSync } from 'node:fs';
 
 const OUT = process.argv[2] ?? new URL('../data/references/tao-adcp-equatorial-undercurrent.json', import.meta.url).pathname;
 const ERDDAP = 'https://data.pmel.noaa.gov/pmel/erddap/tabledap/pmelTaoDyAdcp.csv';
-const STATIONS = [['0n165e', 165], ['0n170w', -170], ['0n140w', -140], ['0n110w', -110]], MIN_DAYS = 30;
+const STATIONS = [['0n165e', 165], ['0n170w', -170], ['0n140w', -140], ['0n110w', -110]], MIN_DAYS = 30, MIN_YEARS = 10;
 let bytes = 0;
 
 async function rows(station) {
@@ -33,16 +34,16 @@ const out = {
   name: 'Equatorial Undercurrent core and mean zonal current at the TAO/TRITON ADCP moorings',
   source: { dataset: 'TAO/TRITON daily ADCP currents (NOAA PMEL GTMBA), ERDDAP dataset pmelTaoDyAdcp', url: 'https://data.pmel.noaa.gov/pmel/erddap/tabledap/pmelTaoDyAdcp.html', references: ['McPhaden et al. 1998, J. Geophys. Res. 103, 14169–14240', 'Johnson et al. 2002, Prog. Oceanogr. 52, 31–61'], license: 'public (NOAA); acknowledge the GTMBA Project Office of NOAA/PMEL' },
   period: 'each mooring\'s whole ADCP record (years listed per station)', box: 'the four moorings on the equator', mask: 'quality flags 1–3 (highest, standard, lower)',
-  definition: `m/s eastward and m below the surface. profile: at each depth, the mean of the twelve calendar-month means of the daily values, a depth kept only where every month has at least ${MIN_DAYS} days. core: the profile's eastward maximum, depth and speed from a parabola through it and its neighbors. The model's matching quantity is the day-mean zonal velocity of its ocean at the equator and the mooring's longitude, averaged over a whole number of years (or the same calendar months), interpolated to these depths.`,
+  definition: `m/s eastward and m below the surface. profile: at each depth, the mean of the twelve calendar-month means of the daily values, a depth kept only where every calendar month has at least ${MIN_DAYS} days from at least ${MIN_YEARS} distinct years, so every depth listed is climatological (each depth's \`days\` and \`years\` are its sparsest month's). core: the profile's eastward maximum, depth and speed from a parabola through it and its neighbors. The model's matching quantity is the day-mean zonal velocity of its ocean at the equator and the mooring's longitude, averaged over a whole number of years (or the same calendar months), interpolated to these depths.`,
   script: 'scripts/referenceTaoAdcp.mjs', stations: {},
 };
 for (const [station, longitude] of STATIONS) {
   const data = await rows(station), bins = new Map();
   for (const r of data) {
-    if (!bins.has(r.depth)) bins.set(r.depth, Array.from({ length: 12 }, () => ({ s: 0, n: 0 })));
-    const b = bins.get(r.depth)[r.month]; b.s += r.u; b.n++;
+    if (!bins.has(r.depth)) bins.set(r.depth, Array.from({ length: 12 }, () => ({ s: 0, n: 0, years: new Set() })));
+    const b = bins.get(r.depth)[r.month]; b.s += r.u; b.n++; b.years.add(r.year);
   }
-  const profile = [...bins.entries()].filter(([, ms]) => ms.every((b) => b.n >= MIN_DAYS)).map(([depth, ms]) => ({ depth, u: Number((ms.reduce((a, b) => a + b.s / b.n, 0) / 12).toFixed(4)), days: Math.min(...ms.map((b) => b.n)) })).sort((a, b) => a.depth - b.depth);
+  const profile = [...bins.entries()].filter(([, ms]) => ms.every((b) => b.n >= MIN_DAYS && b.years.size >= MIN_YEARS)).map(([depth, ms]) => ({ depth, u: Number((ms.reduce((a, b) => a + b.s / b.n, 0) / 12).toFixed(4)), days: Math.min(...ms.map((b) => b.n)), years: Math.min(...ms.map((b) => b.years.size)) })).sort((a, b) => a.depth - b.depth);
   if (profile.length < 5) throw new Error(`${station}: ${profile.length} depths`);
   let k = 0;
   for (let i = 1; i < profile.length; i++) if (profile[i].u > profile[k].u) k = i;

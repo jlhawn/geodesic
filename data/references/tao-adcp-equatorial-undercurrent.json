@@ -12,7 +12,7 @@
  "period": "each mooring's whole ADCP record (years listed per station)",
  "box": "the four moorings on the equator",
  "mask": "quality flags 1–3 (highest, standard, lower)",
- "definition": "m/s eastward and m below the surface. profile: at each depth, the mean of the twelve calendar-month means of the daily values, a depth kept only where every month has at least 30 days. core: the profile's eastward maximum, depth and speed from a parabola through it and its neighbors. The model's matching quantity is the day-mean zonal velocity of its ocean at the equator and the mooring's longitude, averaged over a whole number of years (or the same calendar months), interpolated to these depths.",
+ "definition": "m/s eastward and m below the surface. profile: at each depth, the mean of the twelve calendar-month means of the daily values, a depth kept only where every calendar month has at least 30 days from at least 10 distinct years, so every depth listed is climatological (each depth's `days` and `years` are its sparsest month's). core: the profile's eastward maximum, depth and speed from a parabola through it and its neighbors. The model's matching quantity is the day-mean zonal velocity of its ocean at the equator and the mooring's longitude, averaged over a whole number of years (or the same calendar months), interpolated to these depths.",
  "script": "scripts/referenceTaoAdcp.mjs",
  "stations": {
   "0n165e": {
@@ -29,274 +29,292 @@
    },
    "profile": [
     {
-     "depth": 10,
-     "u": -0.035,
-     "days": 83
-    },
-    {
-     "depth": 15,
-     "u": -0.0279,
-     "days": 83
-    },
-    {
-     "depth": 20,
-     "u": -0.0221,
-     "days": 83
-    },
-    {
-     "depth": 25,
-     "u": -0.0425,
-     "days": 193
-    },
-    {
      "depth": 30,
      "u": -0.0308,
-     "days": 469
+     "days": 469,
+     "years": 20
     },
     {
      "depth": 35,
      "u": -0.0131,
-     "days": 585
+     "days": 585,
+     "years": 22
     },
     {
      "depth": 40,
      "u": -0.0116,
-     "days": 660
+     "days": 660,
+     "years": 24
     },
     {
      "depth": 45,
      "u": -0.0024,
-     "days": 661
+     "days": 661,
+     "years": 24
     },
     {
      "depth": 50,
      "u": -0.0005,
-     "days": 692
+     "days": 692,
+     "years": 25
     },
     {
      "depth": 55,
      "u": 0.0035,
-     "days": 693
+     "days": 693,
+     "years": 25
     },
     {
      "depth": 60,
      "u": 0.0041,
-     "days": 695
+     "days": 695,
+     "years": 25
     },
     {
      "depth": 65,
      "u": 0.0023,
-     "days": 695
+     "days": 695,
+     "years": 25
     },
     {
      "depth": 70,
      "u": -0.0007,
-     "days": 697
+     "days": 697,
+     "years": 25
     },
     {
      "depth": 75,
      "u": -0.0047,
-     "days": 698
+     "days": 698,
+     "years": 25
     },
     {
      "depth": 80,
      "u": -0.0081,
-     "days": 701
+     "days": 701,
+     "years": 25
     },
     {
      "depth": 85,
      "u": -0.0107,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 90,
      "u": -0.0115,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 95,
      "u": -0.0085,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 100,
      "u": -0.0014,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 105,
      "u": 0.012,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 110,
      "u": 0.0312,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 115,
      "u": 0.0569,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 120,
      "u": 0.087,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 125,
      "u": 0.121,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 130,
      "u": 0.157,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 135,
      "u": 0.1962,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 140,
      "u": 0.2368,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 145,
      "u": 0.2784,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 150,
      "u": 0.3192,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 155,
      "u": 0.3586,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 160,
      "u": 0.3951,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 165,
      "u": 0.427,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 170,
      "u": 0.454,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 175,
      "u": 0.4742,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 180,
      "u": 0.4889,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 185,
      "u": 0.4967,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 190,
      "u": 0.4976,
-     "days": 702
+     "days": 702,
+     "years": 25
     },
     {
      "depth": 195,
      "u": 0.4922,
-     "days": 698
+     "days": 698,
+     "years": 25
     },
     {
      "depth": 200,
      "u": 0.4828,
-     "days": 690
+     "days": 690,
+     "years": 24
     },
     {
      "depth": 205,
      "u": 0.4679,
-     "days": 687
+     "days": 687,
+     "years": 23
     },
     {
      "depth": 210,
      "u": 0.4485,
-     "days": 665
+     "days": 665,
+     "years": 23
     },
     {
      "depth": 215,
      "u": 0.4253,
-     "days": 603
+     "days": 603,
+     "years": 22
     },
     {
      "depth": 220,
      "u": 0.3987,
-     "days": 586
+     "days": 586,
+     "years": 22
     },
     {
      "depth": 225,
      "u": 0.3714,
-     "days": 550
+     "days": 550,
+     "years": 20
     },
     {
      "depth": 230,
      "u": 0.3416,
-     "days": 550
+     "days": 550,
+     "years": 20
     },
     {
      "depth": 235,
      "u": 0.3105,
-     "days": 532
+     "days": 532,
+     "years": 19
     },
     {
      "depth": 240,
      "u": 0.2774,
-     "days": 529
+     "days": 529,
+     "years": 19
     },
     {
      "depth": 245,
      "u": 0.2497,
-     "days": 489
+     "days": 489,
+     "years": 18
     },
     {
      "depth": 250,
      "u": 0.2292,
-     "days": 411
+     "days": 411,
+     "years": 16
     },
     {
      "depth": 255,
      "u": 0.1927,
-     "days": 365
+     "days": 365,
+     "years": 15
     },
     {
      "depth": 260,
      "u": 0.1594,
-     "days": 317
+     "days": 317,
+     "years": 14
     },
     {
      "depth": 265,
      "u": 0.1177,
-     "days": 257
-    },
-    {
-     "depth": 270,
-     "u": 0.0842,
-     "days": 130
-    },
-    {
-     "depth": 275,
-     "u": 0.058,
-     "days": 34
+     "days": 257,
+     "years": 11
     }
    ]
   },
@@ -314,309 +332,322 @@
    },
    "profile": [
     {
-     "depth": 10,
-     "u": -0.2128,
-     "days": 147
-    },
-    {
-     "depth": 15,
-     "u": -0.1921,
-     "days": 147
-    },
-    {
-     "depth": 20,
-     "u": -0.1714,
-     "days": 147
-    },
-    {
      "depth": 25,
      "u": -0.1361,
-     "days": 197
+     "days": 197,
+     "years": 12
     },
     {
      "depth": 30,
      "u": -0.0958,
-     "days": 621
+     "days": 621,
+     "years": 27
     },
     {
      "depth": 35,
      "u": -0.0575,
-     "days": 832
+     "days": 832,
+     "years": 30
     },
     {
      "depth": 40,
      "u": -0.0248,
-     "days": 859
+     "days": 859,
+     "years": 30
     },
     {
      "depth": 45,
      "u": 0.0137,
-     "days": 859
+     "days": 859,
+     "years": 30
     },
     {
      "depth": 50,
      "u": 0.0529,
-     "days": 866
+     "days": 866,
+     "years": 30
     },
     {
      "depth": 55,
      "u": 0.0936,
-     "days": 867
+     "days": 867,
+     "years": 30
     },
     {
      "depth": 60,
      "u": 0.1349,
-     "days": 866
+     "days": 866,
+     "years": 30
     },
     {
      "depth": 65,
      "u": 0.177,
-     "days": 868
+     "days": 868,
+     "years": 30
     },
     {
      "depth": 70,
      "u": 0.2191,
-     "days": 868
+     "days": 868,
+     "years": 30
     },
     {
      "depth": 75,
      "u": 0.2609,
-     "days": 871
+     "days": 871,
+     "years": 30
     },
     {
      "depth": 80,
      "u": 0.3022,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 85,
      "u": 0.3424,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 90,
      "u": 0.3816,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 95,
      "u": 0.4216,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 100,
      "u": 0.4599,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 105,
      "u": 0.4937,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 110,
      "u": 0.5261,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 115,
      "u": 0.5569,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 120,
      "u": 0.5862,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 125,
      "u": 0.6134,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 130,
      "u": 0.6383,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 135,
      "u": 0.659,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 140,
      "u": 0.6762,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 145,
      "u": 0.6886,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 150,
      "u": 0.6966,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 155,
      "u": 0.6969,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 160,
      "u": 0.6925,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 165,
      "u": 0.6805,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 170,
      "u": 0.6646,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 175,
      "u": 0.6427,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 180,
      "u": 0.6178,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 185,
      "u": 0.5877,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 190,
      "u": 0.5558,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 195,
      "u": 0.5219,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 200,
      "u": 0.4873,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 205,
      "u": 0.4517,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 210,
      "u": 0.4161,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 215,
      "u": 0.3808,
-     "days": 873
+     "days": 873,
+     "years": 30
     },
     {
      "depth": 220,
      "u": 0.3459,
-     "days": 872
+     "days": 872,
+     "years": 30
     },
     {
      "depth": 225,
      "u": 0.3093,
-     "days": 837
+     "days": 837,
+     "years": 29
     },
     {
      "depth": 230,
      "u": 0.2759,
-     "days": 817
+     "days": 817,
+     "years": 29
     },
     {
      "depth": 235,
      "u": 0.2435,
-     "days": 790
+     "days": 790,
+     "years": 29
     },
     {
      "depth": 240,
      "u": 0.2124,
-     "days": 737
+     "days": 737,
+     "years": 28
     },
     {
      "depth": 245,
      "u": 0.1822,
-     "days": 679
+     "days": 679,
+     "years": 25
     },
     {
      "depth": 250,
      "u": 0.1554,
-     "days": 602
+     "days": 602,
+     "years": 23
     },
     {
      "depth": 255,
      "u": 0.1313,
-     "days": 558
+     "days": 558,
+     "years": 21
     },
     {
      "depth": 260,
      "u": 0.1068,
-     "days": 517
+     "days": 517,
+     "years": 20
     },
     {
      "depth": 265,
      "u": 0.0863,
-     "days": 500
+     "days": 500,
+     "years": 19
     },
     {
      "depth": 270,
      "u": 0.0681,
-     "days": 441
+     "days": 441,
+     "years": 17
     },
     {
      "depth": 275,
      "u": 0.0446,
-     "days": 398
+     "days": 398,
+     "years": 15
     },
     {
      "depth": 280,
      "u": 0.0233,
-     "days": 337
+     "days": 337,
+     "years": 15
     },
     {
      "depth": 285,
      "u": -0.0103,
-     "days": 196
-    },
-    {
-     "depth": 290,
-     "u": -0.0295,
-     "days": 183
-    },
-    {
-     "depth": 295,
-     "u": -0.0432,
-     "days": 145
-    },
-    {
-     "depth": 300,
-     "u": -0.0479,
-     "days": 125
-    },
-    {
-     "depth": 305,
-     "u": -0.0731,
-     "days": 77
-    },
-    {
-     "depth": 310,
-     "u": -0.0821,
-     "days": 48
+     "days": 196,
+     "years": 10
     }
    ]
   },
@@ -634,289 +665,304 @@
    },
    "profile": [
     {
-     "depth": 10,
-     "u": -0.1801,
-     "days": 133
-    },
-    {
-     "depth": 15,
-     "u": -0.1431,
-     "days": 133
-    },
-    {
-     "depth": 20,
-     "u": -0.1057,
-     "days": 133
-    },
-    {
      "depth": 25,
      "u": -0.0134,
-     "days": 207
+     "days": 207,
+     "years": 12
     },
     {
      "depth": 30,
      "u": 0.119,
-     "days": 616
+     "days": 616,
+     "years": 28
     },
     {
      "depth": 35,
      "u": 0.1904,
-     "days": 796
+     "days": 796,
+     "years": 29
     },
     {
      "depth": 40,
      "u": 0.266,
-     "days": 825
+     "days": 825,
+     "years": 29
     },
     {
      "depth": 45,
      "u": 0.3449,
-     "days": 826
+     "days": 826,
+     "years": 29
     },
     {
      "depth": 50,
      "u": 0.4266,
-     "days": 826
+     "days": 826,
+     "years": 29
     },
     {
      "depth": 55,
      "u": 0.5104,
-     "days": 827
+     "days": 827,
+     "years": 29
     },
     {
      "depth": 60,
      "u": 0.5962,
-     "days": 827
+     "days": 827,
+     "years": 29
     },
     {
      "depth": 65,
      "u": 0.6807,
-     "days": 827
+     "days": 827,
+     "years": 29
     },
     {
      "depth": 70,
      "u": 0.7629,
-     "days": 827
+     "days": 827,
+     "years": 29
     },
     {
      "depth": 75,
      "u": 0.8399,
-     "days": 827
+     "days": 827,
+     "years": 29
     },
     {
      "depth": 80,
      "u": 0.9085,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 85,
      "u": 0.9669,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 90,
      "u": 1.0138,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 95,
      "u": 1.0473,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 100,
      "u": 1.0679,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 105,
      "u": 1.0757,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 110,
      "u": 1.0707,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 115,
      "u": 1.0557,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 120,
      "u": 1.0311,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 125,
      "u": 0.9998,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 130,
      "u": 0.9627,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 135,
      "u": 0.9209,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 140,
      "u": 0.8764,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 145,
      "u": 0.8297,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 150,
      "u": 0.7823,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 155,
      "u": 0.7349,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 160,
      "u": 0.6876,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 165,
      "u": 0.6412,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 170,
      "u": 0.5957,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 175,
      "u": 0.5513,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 180,
      "u": 0.5082,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 185,
      "u": 0.4666,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 190,
      "u": 0.4267,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 195,
      "u": 0.3886,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 200,
      "u": 0.3526,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 205,
      "u": 0.3185,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 210,
      "u": 0.2862,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 215,
      "u": 0.2558,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 220,
      "u": 0.2276,
-     "days": 840
+     "days": 840,
+     "years": 29
     },
     {
      "depth": 225,
      "u": 0.2011,
-     "days": 839
+     "days": 839,
+     "years": 29
     },
     {
      "depth": 230,
      "u": 0.1756,
-     "days": 839
+     "days": 839,
+     "years": 29
     },
     {
      "depth": 235,
      "u": 0.1533,
-     "days": 826
+     "days": 826,
+     "years": 28
     },
     {
      "depth": 240,
      "u": 0.1291,
-     "days": 706
+     "days": 706,
+     "years": 25
     },
     {
      "depth": 245,
      "u": 0.1089,
-     "days": 649
+     "days": 649,
+     "years": 22
     },
     {
      "depth": 250,
      "u": 0.0875,
-     "days": 614
+     "days": 614,
+     "years": 22
     },
     {
      "depth": 255,
      "u": 0.0635,
-     "days": 438
+     "days": 438,
+     "years": 16
     },
     {
      "depth": 260,
      "u": 0.0475,
-     "days": 432
+     "days": 432,
+     "years": 15
     },
     {
      "depth": 265,
      "u": 0.0337,
-     "days": 375
+     "days": 375,
+     "years": 15
     },
     {
      "depth": 270,
      "u": 0.0211,
-     "days": 328
-    },
-    {
-     "depth": 275,
-     "u": -0.0021,
-     "days": 172
-    },
-    {
-     "depth": 280,
-     "u": -0.0075,
-     "days": 83
-    },
-    {
-     "depth": 285,
-     "u": -0.0012,
-     "days": 59
-    },
-    {
-     "depth": 290,
-     "u": -0.0061,
-     "days": 39
+     "days": 328,
+     "years": 13
     }
    ]
   },
@@ -934,274 +980,280 @@
    },
    "profile": [
     {
-     "depth": 10,
-     "u": -0.1347,
-     "days": 82
-    },
-    {
-     "depth": 15,
-     "u": -0.0586,
-     "days": 83
-    },
-    {
-     "depth": 20,
-     "u": 0.0204,
-     "days": 95
-    },
-    {
      "depth": 25,
      "u": 0.237,
-     "days": 279
+     "days": 279,
+     "years": 16
     },
     {
      "depth": 30,
      "u": 0.3786,
-     "days": 741
+     "days": 741,
+     "years": 27
     },
     {
      "depth": 35,
      "u": 0.4875,
-     "days": 785
+     "days": 785,
+     "years": 27
     },
     {
      "depth": 40,
      "u": 0.5893,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 45,
      "u": 0.6833,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 50,
      "u": 0.7663,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 55,
      "u": 0.8362,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 60,
      "u": 0.8898,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 65,
      "u": 0.9272,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 70,
      "u": 0.9473,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 75,
      "u": 0.9523,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 80,
      "u": 0.945,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 85,
      "u": 0.924,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 90,
      "u": 0.8951,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 95,
      "u": 0.8582,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 100,
      "u": 0.8169,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 105,
      "u": 0.7726,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 110,
      "u": 0.7268,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 115,
      "u": 0.6809,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 120,
      "u": 0.6355,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 125,
      "u": 0.5914,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 130,
      "u": 0.5488,
-     "days": 786
+     "days": 786,
+     "years": 27
     },
     {
      "depth": 135,
      "u": 0.5096,
-     "days": 776
+     "days": 776,
+     "years": 27
     },
     {
      "depth": 140,
      "u": 0.4707,
-     "days": 761
+     "days": 761,
+     "years": 27
     },
     {
      "depth": 145,
      "u": 0.4334,
-     "days": 759
+     "days": 759,
+     "years": 27
     },
     {
      "depth": 150,
      "u": 0.398,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 155,
      "u": 0.3648,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 160,
      "u": 0.3334,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 165,
      "u": 0.3038,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 170,
      "u": 0.2757,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 175,
      "u": 0.2493,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 180,
      "u": 0.2243,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 185,
      "u": 0.2009,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 190,
      "u": 0.179,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 195,
      "u": 0.1585,
-     "days": 758
+     "days": 758,
+     "years": 27
     },
     {
      "depth": 200,
      "u": 0.1394,
-     "days": 733
+     "days": 733,
+     "years": 26
     },
     {
      "depth": 205,
      "u": 0.122,
-     "days": 730
+     "days": 730,
+     "years": 26
     },
     {
      "depth": 210,
      "u": 0.1054,
-     "days": 723
+     "days": 723,
+     "years": 26
     },
     {
      "depth": 215,
      "u": 0.0906,
-     "days": 716
+     "days": 716,
+     "years": 25
     },
     {
      "depth": 220,
      "u": 0.0762,
-     "days": 670
+     "days": 670,
+     "years": 24
     },
     {
      "depth": 225,
      "u": 0.0671,
-     "days": 592
+     "days": 592,
+     "years": 23
     },
     {
      "depth": 230,
      "u": 0.0587,
-     "days": 559
+     "days": 559,
+     "years": 21
     },
     {
      "depth": 235,
      "u": 0.0494,
-     "days": 516
+     "days": 516,
+     "years": 18
     },
     {
      "depth": 240,
      "u": 0.0419,
-     "days": 452
+     "days": 452,
+     "years": 17
     },
     {
      "depth": 245,
      "u": 0.0339,
-     "days": 414
+     "days": 414,
+     "years": 17
     },
     {
      "depth": 250,
      "u": 0.0285,
-     "days": 383
-    },
-    {
-     "depth": 255,
-     "u": 0.0396,
-     "days": 204
-    },
-    {
-     "depth": 260,
-     "u": 0.0298,
-     "days": 88
-    },
-    {
-     "depth": 265,
-     "u": 0.0262,
-     "days": 67
-    },
-    {
-     "depth": 270,
-     "u": 0.0195,
-     "days": 53
-    },
-    {
-     "depth": 275,
-     "u": 0.0148,
-     "days": 50
+     "days": 383,
+     "years": 15
     }
    ]
   }
