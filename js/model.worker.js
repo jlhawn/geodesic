@@ -602,7 +602,7 @@ async function snapshot() {
   if (model.lake) for (const [name, values] of Object.entries(lakeArrays(await model.lake.serialize()))) arrays[name] = values.buffer;
   let ocean = null, land = null;
   if (model.ocean) {
-    const o = await model.ocean.serialize();
+    const { Qref, Wref, ...o } = await model.ocean.serialize({ restart: true });
     ocean = { ...groupHeader(o), ...Object.fromEntries(Object.entries(groupArrays(o)).map(([k, v]) => [k, Float64Array.from(v).buffer])) };
   }
   if (model.land) {
