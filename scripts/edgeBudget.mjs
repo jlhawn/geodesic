@@ -15,6 +15,9 @@ import { H_MIN } from '../js/ocean/column.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { diagnoseExchange } from './surfaceExchange.mjs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
+
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2], EDGES = (process.env.EDGES ?? '').split(',').map(Number), OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const N = saved.N, dt = 1350 * 16 / N, ground = stateGeography(saved), { topography } = ground;

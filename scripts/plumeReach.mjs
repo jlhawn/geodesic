@@ -30,7 +30,9 @@ import { liftingCondensationLevel, MOIST_DEFAULTS } from '../js/physics/moist.mo
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 const env = (name) => JSON.parse(process.env[name] ?? '{}');
 const RADIATION = env('RADIATION'), MOIST = env('MOIST'), BOUNDARY_LAYER = env('BOUNDARY_LAYER'), SURFACE = env('SURFACE');

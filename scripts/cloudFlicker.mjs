@@ -56,7 +56,9 @@ import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { readState, tagOf, figureHeader, gpuModelFrom, dt as stepOf, DEG } from './figures/figureState.mjs';
 import { DECK_OPEN, DECK_CLOSED } from '../js/physics/moist.module.js';
 import { CLOUD_TYPES, CLOUD_RANGES } from '../js/frames.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const [file, outDir] = process.argv.slice(2);
 if (!file || !outDir) { console.error('usage: node scripts/cloudFlicker.mjs <state.bin> <outdir>'); process.exit(2); }
 process.env.OCEAN ??= '{"everySteps":8}';

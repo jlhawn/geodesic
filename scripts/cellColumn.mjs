@@ -8,6 +8,9 @@ import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { THIN } from '../js/ocean/layered.module.js';
 import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
+
+refuseUnreadOptions(import.meta.url);
 const CELL = Number(process.env.CELL ?? 6777);
 let model = null, modelKey = null;
 for (const file of process.argv.slice(2)) {

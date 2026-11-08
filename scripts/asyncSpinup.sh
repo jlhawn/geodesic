@@ -28,7 +28,8 @@
 # COUPLED_YEARS (10), RECORD_YEARS (1), OCEAN_YEARS (100), PER_YEAR (4),
 # KEEP (4, coupled snapshots), OCEAN_KEEP (2), SNAPSHOT_DAYS (30),
 # RESTORE (30 W/m²/K), OCEAN and RADIATION (JSON, both phases), OCEAN_ONLY
-# (JSON ocean options for the ocean-only phase, OCEAN by default),
+# (JSON ocean options for the ocean-only phase, OCEAN by default), the
+# other option groups (JSON, the coupled phase only),
 # CONVERGED (off; a drift in K: after an ocean-only phase whose global SST
 # moved less than that over its last 10 years, no further cycle starts),
 # FINAL_YEARS (0: coupled years to run after the last ocean-only phase),
@@ -97,7 +98,7 @@ coupled_segment() {
   target=$(awk -v d="$day" -v q="$PER_YEAR" -v y="$YEAR_DAYS" 'BEGIN { for (k = 1; ; k++) { t = int(k * y / q + 0.5); if (t > d) { print t; exit } } }')
   [ -n "$from" ] && [ "$from" -gt "$day" ] && [ "$from" -lt "$target" ] && target=$from
   [ "$end" -lt "$target" ] && target=$end
-  set -- N="$N" TAG="$TAG" DAYS="$target" MINUTES=100000 KEEP="$KEEP" OCEAN="$OCEAN" RADIATION="$RADIATION"
+  set -- -u OCEAN_ONLY N="$N" TAG="$TAG" DAYS="$target" MINUTES=100000 KEEP="$KEEP" OCEAN="$OCEAN" RADIATION="$RADIATION"
   [ -n "$from" ] && [ "$day" -ge "$from" ] && set -- "$@" RECORD="$OUT/$(cycle_tag "$cycle")_forcing"
   if [ -n "$ocean" ] && [ "$day" -eq "$handoff" ]; then
     [ -f "$ocean" ] || { note "cycle $cycle: $ocean is missing, so the ocean cannot be handed to day $day"; return 1; }
@@ -175,7 +176,7 @@ while [ $cycle -le "$last" ] && [ $status -eq 0 ] && ! stopped; do
     forcing=$OUT/${tag}_forcing
     count=$(ls "$forcing" 2>/dev/null | grep -cE '^forcing-[0-9]+\.bin$')
     if [ "$count" -lt $((RECORD_YEARS * YEAR_DAYS)) ]; then note "cycle $cycle: $forcing holds $count of $((RECORD_YEARS * YEAR_DAYS)) days"; status=1; break; fi
-    supervise "$OUT/$tag.out" N="$N" TAG="$tag" STATE="$OUT/$(printf '%s_day%04d.bin' "$TAG" "$end")" FORCING="$forcing" YEARS="$OCEAN_YEARS" DAYS_PER_YEAR="$YEAR_DAYS" LOOP_DAYS=$((RECORD_YEARS * YEAR_DAYS)) KEEP="$OCEAN_KEEP" SNAPSHOT_DAYS="$SNAPSHOT_DAYS" RESTORE="$RESTORE" OCEAN="$OCEAN_ONLY" RADIATION="$RADIATION" node scripts/oceanSpinup.mjs; status=$?
+    supervise "$OUT/$tag.out" $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)={.*/-u \1/p') N="$N" TAG="$tag" STATE="$OUT/$(printf '%s_day%04d.bin' "$TAG" "$end")" FORCING="$forcing" YEARS="$OCEAN_YEARS" DAYS_PER_YEAR="$YEAR_DAYS" LOOP_DAYS=$((RECORD_YEARS * YEAR_DAYS)) KEEP="$OCEAN_KEEP" SNAPSHOT_DAYS="$SNAPSHOT_DAYS" RESTORE="$RESTORE" OCEAN="$OCEAN_ONLY" RADIATION="$RADIATION" node scripts/oceanSpinup.mjs; status=$?
     continue
   fi
   finish_cycle "$cycle"

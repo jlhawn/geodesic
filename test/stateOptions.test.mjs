@@ -6,7 +6,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, terrainCache, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
-import { recordedOptions, givenOptions, headerOptions, differingGroups, runTerrain, moveOntoTerrain, requireOwnSubgrid, stateTerrain } from '../scripts/stateOptions.mjs';
+import { recordedOptions, givenOptions, headerOptions, differingGroups, rebuiltOptions, runTerrain, moveOntoTerrain, requireOwnSubgrid, stateTerrain } from '../scripts/stateOptions.mjs';
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 
@@ -31,6 +31,22 @@ test('differingGroups names the groups whose options differ, in any key order, a
   assert.deepEqual(differingGroups({ dynamics: { a: 1, b: 2 } }, { dynamics: { b: 2, a: 1 } }), []);
   assert.deepEqual(differingGroups({ dynamics: { a: 1 }, moist: {} }, { moist: {} }), ['dynamics']);
   assert.deepEqual(differingGroups({ terrain: { conserveVolume: true } }, { terrain: { conserveVolume: false } }), ['terrain']);
+});
+
+test('a run that rebuilds a saved state takes the groups its header records under given, each group it is given over the recorded one key by key and false in its place, and refuses a header without them unless a stand-in is given', () => {
+  const { options, given } = headerOptions({ radiation: { aerosol: 'flat' }, moist: { pcapeMinimum: 0 }, land: { soil: 'slab' }, dynamics: { verticalAdvection: 'vanLeerWater' }, orography: false, gravityWaves: {} });
+  const header = { options, given };
+  assert.deepEqual(rebuiltOptions(header), given);
+  const rebuilt = rebuiltOptions(header, { moist: { bergeronAutoconversion: false }, orography: { constants: 'cy41r2' }, gravityWaves: false, ocean: { mixing: 'kpp' } });
+  assert.deepEqual(rebuilt.moist, { ...given.moist, bergeronAutoconversion: false });
+  assert.equal(rebuilt.moist.pcapeMinimum, 0);
+  assert.deepEqual(rebuilt.orography, { constants: 'cy41r2' });
+  assert.equal(rebuilt.gravityWaves, false);
+  assert.deepEqual(rebuilt.ocean, { mixing: 'kpp' });
+  assert.deepEqual([rebuilt.radiation, rebuilt.land, rebuilt.dynamics], [given.radiation, given.land, given.dynamics]);
+  assert.throws(() => rebuiltOptions({ options }, { moist: {} }), /records no given options/);
+  assert.deepEqual(rebuiltOptions({ options }, { moist: { pcapeMinimum: 0.05 } }, {}), { moist: { pcapeMinimum: 0.05 } });
+  assert.deepEqual(rebuiltOptions(header, {}, { moist: {} }), given);
 });
 
 test("a state saved over terrain of other options keeps its options, given and terrain options through the file and resumes on that terrain through spinup.mjs's runTerrain and moveOntoTerrain, with TERRAIN or without, its surface pressure unmoved; a state over the default terrain moves onto it once", async () => {

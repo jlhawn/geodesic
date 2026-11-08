@@ -7,6 +7,9 @@
 // reports how far the box's columns sum from the barotropic solver's free
 // surface, the water the rescale spreads through each column.
 import { readFileSync } from 'node:fs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
+
+refuseUnreadOptions(import.meta.url);
 const R = new URL('../', import.meta.url).pathname;
 const [{ decodeState, savedLevels, stateTerrain }, { stateGrid }, { stateGeography }, { createParallelModel }] = await Promise.all([
   import(R + 'js/stateFile.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/geography.module.js'), import(R + 'js/parallel.module.js')]);

@@ -23,7 +23,9 @@ import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../js/dynamics/operators.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2], LAT = Number(process.env.LAT ?? 3);
 const BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));

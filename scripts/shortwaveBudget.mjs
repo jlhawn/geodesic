@@ -19,7 +19,9 @@ import { savedGeography, checkGeography, readTopography, geographyOptions } from
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS } from '../js/physics/regrid.module.js';
 import { placeCumulus } from '../js/physics/moist.module.js';
 import { withCadence } from '../js/cadence.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2], OUT = process.argv[3], TIMES = Number(process.env.TIMES ?? 8), PASS = process.env.PASS ?? 'all';
 const RADIATION_OPTIONS = JSON.parse(process.env.RADIATION ?? '{"cloudColumns":true,"cloudSpread":0.75,"varianceCover":"water","buoyancyLength":0.53}');
 const MOIST = JSON.parse(process.env.MOIST ?? '{"stratocumulusInversion":7,"cumulusEntrainmentHeight":1,"cumulusAscent":"kinetic"}');

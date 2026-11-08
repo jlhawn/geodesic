@@ -25,7 +25,9 @@ import { spongeGeometry, spongeRates, dampEddies, spongeSigmaFor, SPONGE, lidFri
 import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 import { verticalVelocity } from '../js/levels.module.js';
 import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const KAPPA = R_DRY / CP_DRY, DEG = 180 / Math.PI;
 
 export function upperLayers(levels, below = 0.2) {

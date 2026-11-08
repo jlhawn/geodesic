@@ -12,6 +12,9 @@ import { readFileSync } from 'node:fs';
 import { SECTIONS, sectionName as binName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable } from './equatorialSections.mjs';
 import { diagnoseExchange } from './surfaceExchange.mjs';
 import { stateTerrain } from '../js/stateFile.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
+
+refuseUnreadOptions(import.meta.url);
 const R = new URL('../', import.meta.url).pathname;
 const [{ stateGeography, terrainKey }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
   import(R + 'js/geography.module.js'), import(R + 'js/model.module.js'), import(R + 'js/stateFile.module.js'), import(R + 'js/physics/regrid.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/physics/moist.module.js')]);

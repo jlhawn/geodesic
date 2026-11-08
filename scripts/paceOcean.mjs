@@ -11,7 +11,9 @@
 //   OCEAN='{"vertical":"hybrid"}' node scripts/paceOcean.mjs runs/eleven128h_day1825.bin
 import { gpuModelFrom, readState, dt as dtOf } from './figures/figureState.mjs';
 import { profileGpu } from '../js/gpu/profile.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const file = process.argv[2], STEPS = Number(process.argv[3] ?? process.env.STEPS ?? 32), REPS = Number(process.env.REPS ?? 3), ROWS = Number(process.env.ROWS ?? 12);
 if (!file) { console.error('usage: [OCEAN=json] [REPS=3] [SPLIT=1] node scripts/paceOcean.mjs <state.bin> [STEPS=32]'); process.exit(1); }
 const saved = await readState(file);

@@ -11,7 +11,9 @@
 import { writeFileSync } from 'node:fs';
 import { THERMOCLINE_DENSITY, LAYER_DENSITIES, savedDensities } from '../../js/ocean/layered.module.js';
 import { readState, figureHeader, gpuModelFrom, dt as stepOf, DEG, eastNorth, rounded } from './figureState.mjs';
+import { refuseUnreadOptions } from '../optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/eqpanels.mjs <state.bin> <out.json>'); process.exit(2); }
 const saved = await readState(file);
