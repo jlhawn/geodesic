@@ -51,7 +51,8 @@ test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid
   assert.equal(budget.status, 0, budget.stderr);
   assert.doesNotMatch(budget.stdout, /NaN|Infinity/);
   const dtOcean = ocean.everySteps * 1350, part = dtOcean / Math.max(1, Math.ceil(dtOcean / inertialStepLimit(model.mesh)));
-  assert.match(budget.stdout, new RegExp(`pinned rows relax at 1/${Math.max(3600, part).toFixed(0)} s`));
+  ocean.phases.dynamics(part);
+  assert.match(budget.stdout, new RegExp(`pinned rows relax at 1/${(1 / new Float64Array(ocean.shared.params)[0]).toFixed(0)} s`));
   const rows = budget.stdout.split('\n').filter((line) => /^edge \d+ layer \d+ /.test(line)), pinned = (line) => / pinned,/.test(line);
   const term = (line, name) => Number(new RegExp(`${name} (\\S+)`).exec(line)[1]), key = (line) => /^edge (\d+) layer (\d+) /.exec(line).slice(1).join(':');
   assert.equal(rows.find((line) => term(line, 'rest') !== 0), undefined);
