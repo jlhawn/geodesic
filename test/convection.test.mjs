@@ -2067,18 +2067,23 @@ test("with midLevelConvection and condensation 'saturation' the engines agree on
   assert.ok(offsets >= 10 && dryEnds >= 25 && overshoots >= 10 && perturbed >= 10, `${offsets} columns whose LCL lies above the source top, ${dryEnds} whose plume the dry end ends, ${overshoots} whose plume the overshoot limit ends, ${perturbed} that the limit moves beyond the engines' tolerances`);
 });
 const cloudTermGrid = Float64Array.from([...levels.filter((s) => s < 0.65), 0.675, 0.695, 0.7, 0.825, ...levels.filter((s) => s > 0.85)]);
-const cloudTermColumns = () => [8e-3, 8.5e-3].flatMap((lapse) => [0.81, 0.83].flatMap((source) => Array.from({ length: 42 }, (_, n) => (z, p) => { const T = 292 - lapse * Math.min(z, 11000), s = p / 101500; return { T, q: (s > 0.7 && s < 0.825 ? source : s > 0.695 && s < 0.7 ? 0.93 + 0.0015 * n : 0.3) * saturationHumidity(T, p) }; })));
+const cloudTermColumns = (base, step) => [8e-3, 8.5e-3].flatMap((lapse) => [0.81, 0.83].flatMap((source) => Array.from({ length: 42 }, (_, n) => (z, p) => { const T = 292 - lapse * Math.min(z, 11000), s = p / 101500; return { T, q: (s > 0.7 && s < 0.825 ? source : s > 0.695 && s < 0.7 ? base + step * n : 0.3) * saturationHumidity(T, p) }; })));
 test('with midLevelConvection a plume from a thick source layer ends in the thin cloudy layer above it, its first cloud layer, where the vapor it takes in leaves the mixture short of saturation by less than (1 - full) qc of the cloud condensation left there: one run of that layer\'s humidity in each of four families', () => {
   const model = createModel(new Grid(16), { ocean: false, levels: cloudTermGrid, moist: { midLevelConvection: true } }), { moist, core } = model, [pi, theta, , , q, qc] = model.state;
-  placeMidLevel(cloudTermColumns(), -0.2)(model, randomColumns(model));
+  placeMidLevel(cloudTermColumns(0.928, 0.00172), -0.2)(model, randomColumns(model));
   const runs = [0, 1, 2, 3].map((family) => Array.from({ length: 42 }, (_, n) => n).filter((n) => { const i = 7 * (42 * family + n) + 3; core.diagnoseColumn(i, pi, theta, q, qc); model.phases.adjust(i, i + 1, 900); return moist.deep.midLevel && moist.deep.midCloudEnd && moist.deep.top === 23; }));
   const spans = runs.map((run) => [run[0], run[run.length - 1]]);
-  assert.ok(runs.every((run) => run.length > 0 && run.length === run[run.length - 1] - run[0] + 1) && JSON.stringify(spans) === JSON.stringify([[12, 38], [11, 36], [9, 33], [8, 32]]), `under 8 and 8.5 K/km over sources at RH 0.81 and 0.83, the thin layer's humidity 0.93 + 0.0015 n ends the plume there by its cloud water for n in ${spans.map(([a, b]) => `${a}-${b}`).join(', ')}: ${runs.map((run) => run.join(' ')).join(' | ')}`);
+  assert.ok(runs.every((run) => run.length > 0 && run.length === run[run.length - 1] - run[0] + 1) && JSON.stringify(spans) === JSON.stringify([[12, 34], [11, 33], [9, 30], [8, 29]]), `under 8 and 8.5 K/km over sources at RH 0.81 and 0.83, the thin layer's humidity 0.928 + 0.00172 n ends the plume there by its cloud water for n in ${spans.map(([a, b]) => `${a}-${b}`).join(', ')}: ${runs.map((run) => run.join(' ')).join(' | ')}`);
 });
 test('with midLevelConvection the engines agree on random columns on a 36-layer grid among which are placed columns whose plume ends in a thin cloudy first cloud layer above a thick source, held there by the cloud water it takes in', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const placed = cloudTermColumns(), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
+  const placed = cloudTermColumns(0.928, 0.00172), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
   console.log(`${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: the dry end ends ${dryEnds} plumes, ${cloudEnds} of them where the cloud water the plume takes in decides`);
   assert.ok(cloudEnds >= 80, `${cloudEnds} plumes whose end the cloud water they take in decides`);
+});
+test('with midLevelConvection and a liquid plume phase the engines agree on random columns on the same 36-layer grid, among which are placed columns whose plume ends in the thin cloudy layer, held there by the cloud water it takes in, with that layer\'s humidity at 0.95 + 0.0015 n of saturation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const placed = cloudTermColumns(0.95, 0.0015), { midLevel, dryEnds, cloudEnds } = await parity({ midLevelConvection: true, plumePhase: 'liquid' }, { ascent: true, grid: cloudTermGrid, columns: placeMidLevel(placed, -0.2) });
+  console.log(`with a liquid plume phase, ${placed.length} placed columns, ${midLevel} columns convect at mid-level on the CPU: the dry end ends ${dryEnds} plumes, ${cloudEnds} of them where the cloud water the plume takes in decides`);
+  assert.ok(cloudEnds >= 100, `${cloudEnds} plumes whose end the cloud water they take in decides`);
 });
 
 test("a rainEvaporationLaw other than 'deficit', 'kessler' or 'cloudsc', a rainCover other than 'overlap' or a share in (0, 1] and a rainEvaporationCeiling other than null or a relative humidity from 0 to 1 are refused on both engines", async () => {
