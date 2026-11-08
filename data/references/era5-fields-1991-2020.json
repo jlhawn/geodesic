@@ -1,0 +1,60 @@
+{
+ "name": "ERA5 1991–2020 monthly climatology of 2 m temperature (30–70N), sea-level pressure and eastward surface stress (10S–10N) on 1°",
+ "source": {
+  "dataset": "ERA5 monthly means of daily means, NCAR RDA ds633.1 (e5.moda.an.sfc, e5.moda.fc.sfc.meanflux)",
+  "doi": "10.5065/P8GT-0R61",
+  "url": "https://thredds.rda.ucar.edu/thredds/catalog/files/g/d633001/catalog.html",
+  "references": [
+   "Hersbach et al. 2020, Q. J. R. Meteorol. Soc. 146, 1999–2049"
+  ],
+  "license": "Copernicus license (free use with attribution: \"Contains modified Copernicus Climate Change Service information 2025\")"
+ },
+ "period": "1991-01 to 2020-12, each calendar month the mean of 30 years",
+ "box": "per field: south to north, all longitudes",
+ "mask": "none in the file: a box row samples it on the model's own land or sea cells (bilinear at each cell center, area-weighted)",
+ "definition": "float32 little-endian, fields in this order, each [month][row][column], rows from `south` northward at 1°, columns from 0°E at 1°. Matching model quantities, all from the run's day means: t2m the model's air temperature at 2 m above its surface, not the skin and not the lowest layer (about 20 m up): the model keeps no 2 m diagnostic, so a row brings each cell's lowest-layer air to 2 m along the surface-layer profile of the run's own exchange coefficients; msl its mean sea-level pressure; metss its eastward turbulent stress on the surface (the run's exchange, not a rebuilt one).",
+ "script": "scripts/referenceEra5Fields.mjs",
+ "sha256": "84d6458fa966dd952fc3dd98d53f60cb8ca6e2645bf71f1b198e4c9b63e0a0c5",
+ "fields": [
+  {
+   "name": "t2m",
+   "units": "K",
+   "south": 30,
+   "north": 70,
+   "rows": 41,
+   "months": 12,
+   "columns": 360,
+   "source": "e5.moda.an.sfc.128_167_2t"
+  },
+  {
+   "name": "msl",
+   "units": "Pa",
+   "south": -10,
+   "north": 10,
+   "rows": 21,
+   "months": 12,
+   "columns": 360,
+   "source": "e5.moda.an.sfc.128_151_msl"
+  },
+  {
+   "name": "metss",
+   "units": "N/m²",
+   "south": -10,
+   "north": 10,
+   "rows": 21,
+   "months": 12,
+   "columns": 360,
+   "source": "e5.moda.fc.sfc.meanflux.235_041_metss"
+  },
+  {
+   "name": "lsm",
+   "units": "fraction",
+   "south": -10,
+   "north": 70,
+   "rows": 81,
+   "months": 1,
+   "columns": 360,
+   "source": "e5.moda.an.sfc.128_172_lsm, January 2000"
+  }
+ ]
+}

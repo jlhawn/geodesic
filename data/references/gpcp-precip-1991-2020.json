@@ -1,0 +1,19 @@
+{
+ "name": "Precipitation, GPCP v2.3 1991–2020 monthly climatology on 2.5°",
+ "source": {
+  "dataset": "GPCP Version 2.3 Combined Precipitation Data Set, monthly long-term mean 1991–2020 (NOAA PSL precip.mon.ltm.1991-2020.nc)",
+  "doi": "10.7289/V56971M6",
+  "url": "https://psl.noaa.gov/data/gridded/data.gpcp.html",
+  "references": [
+   "Adler et al. 2018, Atmosphere 9, 138"
+  ],
+  "license": "public (NOAA PSL); cite Adler et al. and acknowledge NOAA PSL"
+ },
+ "period": "1991-01 to 2020-12",
+ "box": "global 2.5° grid",
+ "mask": "none: a box score samples the grid on the model's own land or sea cells of the box (boxes of the scorecard)",
+ "definition": "mm/day, float32 little-endian [month 12][row 72][column 144], rows from 88.75°S northward, columns from 1.25°E eastward. The model's matching quantity is the day-mean total precipitation over the box's model cells, the reference interpolated bilinearly to each cell center and area-weighted the same way.",
+ "script": "scripts/referenceGpcp.mjs",
+ "sha256": "188a64454478b7f148475689e93b3f0951de293b482ee6435217081e72002f07",
+ "globalMean": 2.691
+}
