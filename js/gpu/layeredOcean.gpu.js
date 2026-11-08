@@ -2102,7 +2102,7 @@ ${core.fieldConstants}
     upwellingFolds = 0; upwellingTime = NaN; upwellingSeen = upwellingSteps;
     for (const name of RETAINED) delete outside[name];
     const velocity = Float32Array.from(u);
-    for (let e = 0; e < E; e++) if (!edgeOcean[e]) velocity[e] = 0;
+    for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) velocity[k * E + e] = 0;
     const heat = Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), salt = Wref ?? Float64Array.from(W, (w, n) => w - SALT_REFERENCE * h[n]);
     const packed = new Float32Array(OS.total);
     packed.set(toCells(h, L), OS.OH); packed.set(toEdges(velocity, L), OS.OU); packed.set(toCells(heat, L), OS.OQ); packed.set(toCells(salt, L), OS.OW);

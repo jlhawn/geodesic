@@ -53,7 +53,10 @@ function scenario(n, options = HYBRID) {
   for (let i = 0; i < cpuModel.mesh.nCells; i++) if (cpuModel.geography.land[i]) cpuModel.state[6][i] = 0;
   const surfaceT = Float64Array.from(cpuModel.state[3]), ice = Float64Array.from(cpuModel.state[6]), stress = buildStress(cpuModel.mesh);
   const cpu = createCpuOcean(cpuModel.mesh, { geography: cpuModel.geography, ...options });
-  return { cpuModel, mesh: cpuModel.mesh, cpu, surfaceT, ice, stress };
+  // The GPU's upload drops a current on a coastal edge, as the CPU's load does; a CPU ocean given one directly keeps it.
+  const { land } = cpuModel.geography, { cellsOnEdge } = cpuModel.mesh;
+  const sea = Uint8Array.from({ length: cpuModel.mesh.nEdges }, (_, e) => (land[cellsOnEdge[2 * e]] || land[cellsOnEdge[2 * e + 1]] ? 0 : 1));
+  return { cpuModel, mesh: cpuModel.mesh, cpu, surfaceT, ice, stress, sea };
 }
 const cpuFields = (ocean, C) => {
   const T = Float64Array.from(ocean.Q, (q, n) => q / Math.max(1e-9, ocean.h[n])), S = Float64Array.from(ocean.W, (w, n) => w / Math.max(1e-9, ocean.h[n]));
@@ -137,21 +140,15 @@ async function tracking(options) {
  * An option's change to the state over a few steps on the GPU against its
  * change on the CPU, both engines from the CPU's start under the same
  * surface and stress: it sees an option that moves the state by less than
- * the engines part. The sheared start, a current in the upper layers that
- * varies from edge to edge, parts the engines by a few 1e-3 K rms in
- * the top four layers over six steps and by about 5e-5 K below them; the
- * GPU misses 10 to 15 % of the change from halving shearDiffusivity or
- * raising lateralDiffusionSpeed tenfold there. From the still start, the
- * sea at rest, they part by about 1e-5 K in the top four layers, so an
- * option that needs no current is measured there over every layer.
+ * the engines part.
  */
 async function optionChange(base, extra, { still = false, steps = 6 } = {}) {
   const runs = [];
   for (const options of [base, { ...base, ...extra }]) {
-    const { mesh, cpu, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, flux = new Float64Array(C);
+    const { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, flux = new Float64Array(C);
     const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options }), gpu = gpuModel.oceanEngine;
     cpu.initialize(Float64Array.from(surfaceT), ice);
-    if (!still) for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+    if (!still) for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = sea[e] * 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
     await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
     for (let n = 0; n < steps; n++) { cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT); await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT); }
     runs.push({ cpu: cpuFields(cpu, C), gpu: await gpu.download(), wet: Array.from(cpu.h, (v) => v > 1), layers: cpu.layers });
@@ -183,10 +180,10 @@ test(`${OPTION_CHANGE}: shearDiffusivityResolution, under a strengthened shear-s
 async function optionSteps(base, extra, steps = 6) {
   const runs = [];
   for (const options of [base, { ...base, ...extra }]) {
-    const { mesh, cpu, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, flux = new Float64Array(C), run = [];
+    const { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, flux = new Float64Array(C), run = [];
     const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: options }), gpu = gpuModel.oceanEngine;
     cpu.initialize(Float64Array.from(surfaceT), ice);
-    for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+    for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = sea[e] * 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
     for (let n = 0; n < steps; n++) {
       const start = { ...cpuFields(cpu, C), u: Float64Array.from(cpu.u) };
       await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity, boundaryDepths: cpu.boundaryDepths, mixedDepths: cpu.mixedDepths }, Float64Array.from(surfaceT), ice);
@@ -217,10 +214,10 @@ test('the GPU hybrid ocean takes each of six steps under an option as the CPU do
   for (const [f, bound] of [['T', 0.2], ['S', 0.25]]) assert.ok(change[f].ratio < bound, `${f}: the GPU misses ${change[f].ratio} of the CPU's step`);
 });
 test('under isoneutralDiffusion and 30 m boundary layers the κS² diffusivity the GPU hybrid ocean\'s column takes from a dynamics phase is the CPU\'s 1:2:2:1 mean of the four stages\', not the fourth stage\'s, and its triads move the tracers above 30 m as the CPU\'s do', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const options = { ...HYBRID, isoneutralDiffusion: true }, { mesh, cpu, surfaceT, ice, stress } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, zeros = new Float64Array(C), dt = 4 * DT;
+  const options = { ...HYBRID, isoneutralDiffusion: true }, { mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, options), C = mesh.nCells, E = mesh.nEdges, zeros = new Float64Array(C), dt = 4 * DT;
   const off = scenario(N, HYBRID).cpu, sheared = (ocean) => {
     ocean.initialize(Float64Array.from(surfaceT), ice);
-    for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = 0.6 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+    for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = sea[e] * 0.6 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
     ocean.boundaryDepths.fill(30);
   };
   sheared(cpu); sheared(off);
@@ -324,6 +321,21 @@ for (const eddyTracers of ['third', 'centered']) test(`${OPTION_CHANGE}: eddyTra
 test(`${OPTION_CHANGE}: mixedLayerRestratification taperLatitude, under a strengthened restratification, from the still start`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const change = await optionChange({ ...HYBRID, mixedLayerRestratification: { coefficient: 1000 } }, { mixedLayerRestratification: { coefficient: 1000, taperLatitude: 15 } }, { still: true });
   for (const f of ['T', 'S']) assert.ok(change[f].ratio < 0.02, `${f}: the GPU misses ${change[f].ratio} of the CPU's change`);
+});
+
+test('the GPU hybrid ocean uploads a state that carries the restart arrays with the current the CPU\'s load keeps, none on a coastal edge in any layer', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice } = scenario(N), C = mesh.nCells, E = mesh.nEdges;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  cpu.u.fill(0.3);
+  const saved = { ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity };
+  await gpu.upload(saved, Float64Array.from(surfaceT), ice);
+  const { u } = await gpu.download();
+  gpuModel.destroy();
+  cpu.load(saved, Float64Array.from(surfaceT), ice);
+  const apart = new Set();
+  for (let n = 0; n < cpu.layers * E; n++) if (u[n] !== Math.fround(cpu.u[n])) apart.add(n % E);
+  assert.equal(apart.size, 0, `${apart.size} edges hold a current the CPU's load does not`);
 });
 
 const TRACKING ='the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps';
