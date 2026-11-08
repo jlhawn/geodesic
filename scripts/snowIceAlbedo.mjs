@@ -34,7 +34,9 @@ import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.j
 import { DAY } from '../js/physics/radiation.module.js';
 import { SNOW_AGEING } from '../js/physics/ice.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/snowIceAlbedo.mjs <state.bin>'); process.exit(1); }
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));

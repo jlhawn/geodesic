@@ -29,7 +29,9 @@ import { createRadiation } from '../js/physics/radiation.module.js';
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { BENCHMARK, MOLAR, modelColumn, meanMixingRatio, referenceAt, referenceHeating, layerHeating, interfaceAt } from './standardAtmospheres.mjs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const BEFORE = { longwaveScheme: 'gray', solarGases: 'lacisHansen', ...JSON.parse(process.env.RADIATION_BEFORE ?? '{}') };
 const AFTER = JSON.parse(process.env.RADIATION ?? '{}');
 const LEVELS = process.env.LEVELS ?? 'bl34', levels = sigmaInterfaces(LEVELS);

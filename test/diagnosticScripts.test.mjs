@@ -10,7 +10,8 @@ import { stateGeography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState } from '../js/stateFile.module.js';
 import { gridHeader } from '../js/stateGrid.module.js';
-import { oceanCells } from '../js/ocean/layered.module.js';
+import { oceanCells, inertialStepLimit } from '../js/ocean/layered.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 const dir = mkdtempSync(join(tmpdir(), 'diagnostic-scripts-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -33,33 +34,34 @@ for (let k = 0; k < ocean.layers; k++) {
 const [pi, theta, u, surfaceT, q, qc, ice] = state;
 const file = join(dir, 'state16_day0000.bin');
 writeFileSync(file, encodeState({ ...header, K: model.core.K, levels: model.core.levels, day: 0, time: 0, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, ocean: await ocean.serialize(), land: await model.land.serialize() }));
-const run = (script, env) => spawnSync(process.execPath, [new URL(`../scripts/${script}.mjs`, import.meta.url).pathname, file], { env: { ...process.env, ...env }, encoding: 'utf8' });
+const run = (script, env) => spawnSync(process.execPath, [new URL(`../scripts/${script}.mjs`, import.meta.url).pathname, file], { env: { ...withoutOptionGroups(), ...env }, encoding: 'utf8', maxBuffer: 1 << 28 });
 
-test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid computes: on a state at N=16 they add up to the tendency in each of the top 20 layers of open equatorial edges, far above the floor, where no drag acts, and in the top layer of edges under an ice shelf, where the shelf\'s drag does', () => {
-  const edges = [], shelfEdges = [], { shelf } = oceanCells(model.mesh.nCells, model.geography);
+test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid computes: on a state at N=16 they add up to the tendency on every row of every ocean edge, a pinned row\'s relaxation at the run\'s rate included, with the fixed layers shown and the wind, the bottom\'s and the shelves\' drags at work', () => {
+  const wet = [], open = [], shelfEdges = [], { shelf } = oceanCells(model.mesh.nCells, model.geography);
   for (let e = 0; e < E; e++) {
+    if (!ocean.edgeOcean[e]) continue;
     const { lat, lon } = edgeAt(e), [a, b] = [model.mesh.cellsOnEdge[2 * e], model.mesh.cellsOnEdge[2 * e + 1]];
-    if (edges.length < 3 && ocean.edgeOcean[e] && !model.geography.land[a] && !model.geography.land[b] && Math.abs(lat) < 10 && lon > 200 && lon < 250) edges.push(e);
-    if (shelfEdges.length < 2 && ocean.edgeOcean[e] && shelf[a] + shelf[b] > 0) shelfEdges.push(e);
+    wet.push(e);
+    if (open.length < 3 && !model.geography.land[a] && !model.geography.land[b] && Math.abs(lat) < 10 && lon > 200 && lon < 250) open.push(e);
+    if (shelfEdges.length < 2 && shelf[a] + shelf[b] > 0) shelfEdges.push(e);
   }
-  assert.equal(edges.length, 3);
+  assert.equal(open.length, 3);
   assert.equal(shelfEdges.length, 2);
-  const budget = run('edgeBudget', { EDGES: [...edges, ...shelfEdges].join(',') });
+  const budget = run('edgeBudget', { EDGES: wet.join(',') });
   assert.equal(budget.status, 0, budget.stderr);
   assert.doesNotMatch(budget.stdout, /NaN|Infinity/);
-  const lines = budget.stdout.split('\n').filter((line) => /^edge \d+ layer \d+ /.test(line)), of = (e) => lines.filter((line) => line.startsWith(`edge ${e} `));
-  const term = (line, name) => Number(new RegExp(`${name} (\\S+)`).exec(line)[1]);
-  for (const e of shelfEdges) {
-    const [top] = of(e);
-    assert.match(top, / layer 0 .* shelf drag -?\d/);
-    assert.notEqual(term(top, 'shelf drag'), 0, top);
-    assert.equal(Math.abs(term(top, 'drag\\+rest')), 0, top);
-  }
-  const upper = edges.flatMap(of).filter((line) => Number(/ layer (\d+) /.exec(line)[1]) < 20);
-  for (const e of edges) assert.ok(upper.filter((line) => line.startsWith(`edge ${e} `)).length >= ocean.table.fixed, `edge ${e} shows ${upper.filter((line) => line.startsWith(`edge ${e} `)).length} of the top 20 layers`);
-  for (const line of upper) assert.equal(Math.abs(term(line, 'drag\\+rest')), 0, line);
-  for (const name of ['Coriolis', 'baroclinic', '-grad K']) assert.ok(upper.some((line) => term(line, name) !== 0), `${name} is zero on every edge`);
-  assert.ok(upper.some((line) => / layer 0 /.test(line) && term(line, 'stress') !== 0), 'the wind is zero on every edge');
+  const dtOcean = ocean.everySteps * 1350, part = dtOcean / Math.max(1, Math.ceil(dtOcean / inertialStepLimit(model.mesh)));
+  ocean.phases.dynamics(part);
+  assert.match(budget.stdout, new RegExp(`pinned rows relax at 1/${(1 / new Float64Array(ocean.shared.params)[0]).toFixed(0)} s`));
+  const rows = budget.stdout.split('\n').filter((line) => /^edge \d+ layer \d+ /.test(line)), pinned = (line) => / pinned,/.test(line);
+  const term = (line, name) => Number(new RegExp(`${name} (\\S+)`).exec(line)[1]), key = (line) => /^edge (\d+) layer (\d+) /.exec(line).slice(1).join(':');
+  assert.equal(rows.find((line) => term(line, 'rest') !== 0), undefined);
+  const active = new Map(rows.filter((line) => !pinned(line)).map((line) => [key(line), line]));
+  for (const e of open) for (let k = 0; k < ocean.table.fixed; k++) assert.ok(active.has(`${e}:${k}`), `edge ${e} layer ${k} is not shown as an active row`);
+  for (const e of shelfEdges) assert.notEqual(term(active.get(`${e}:0`), 'shelf drag'), 0, active.get(`${e}:0`));
+  assert.ok(rows.some(pinned), 'no row is pinned');
+  for (const name of ['Coriolis', 'baroclinic', '-grad K', 'bottom drag', 'nu4']) assert.ok([...active.values()].some((line) => term(line, name) !== 0), `${name} is zero on every row`);
+  assert.ok(open.some((e) => term(active.get(`${e}:0`), 'stress') !== 0), 'the wind is zero on the open edges');
 });
 
 test('radiationProfiles runs the defaults against OTHER\'s gray longwave and Lacis–Hansen gases on the sequential shortwave, on a state at N=16', () => {

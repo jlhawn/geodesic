@@ -12,6 +12,7 @@ import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
 import { SST_FIELDS } from '../js/sstMeans.module.js';
 import { withoutMeans } from '../js/intervalMeans.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -23,12 +24,12 @@ const N = 16, DT = 1350 * 16 / N, PER_DAY = 86400 / DT;
 let dir, fresh, forcing;
 
 function run(script, env) {
-  const result = spawnSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...process.env, N: String(N), ...env }, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), ...env }, encoding: 'utf8' });
   if (result.status !== 0) console.log(`${script} exited ${result.status}: ${result.stderr.slice(-2000)}`);
   return result.status;
 }
 function driver(env) {
-  const result = spawnSync('bash', [join(root, 'scripts/asyncSpinup.sh')], { cwd: root, env: { ...process.env, N: String(N), YEAR_DAYS: '2', COUPLED_YEARS: '1', PER_YEAR: '1', SNAPSHOT_DAYS: '0', RETRY_WAIT: '1', ...env }, encoding: 'utf8' });
+  const result = spawnSync('bash', [join(root, 'scripts/asyncSpinup.sh')], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), YEAR_DAYS: '2', COUPLED_YEARS: '1', PER_YEAR: '1', SNAPSHOT_DAYS: '0', RETRY_WAIT: '1', ...env }, encoding: 'utf8' });
   if (result.status !== 0) console.log(`asyncSpinup.sh exited ${result.status}: ${result.stderr.slice(-2000)}`);
   return result.status;
 }
@@ -132,7 +133,7 @@ test('the driver leaves a lock held in this boot by another live driver alone an
     assert.ok(!existsSync(join(out, 'async16_cycles.lock')), 'the lock goes with the driver');
 
     out = locked('lockOwnPid', '');
-    const self = spawnSync('bash', ['-c', `echo "$$ ${boot}" > "$OUT/async16_cycles.lock/pid"; exec bash scripts/asyncSpinup.sh`], { cwd: root, env: { ...process.env, N: String(N), OUT: out }, encoding: 'utf8' });
+    const self = spawnSync('bash', ['-c', `echo "$$ ${boot}" > "$OUT/async16_cycles.lock/pid"; exec bash scripts/asyncSpinup.sh`], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), OUT: out }, encoding: 'utf8' });
     assert.equal(self.status, 0, self.stderr);
     assert.doesNotMatch(log(out), /another driver/);
     assert.match(log(out), /taking over .*async16_cycles\.lock from pid \d+, which is gone[\s\S]*stopped at STOP_async or STOP_async16/);
@@ -165,7 +166,7 @@ test('SIGTERM makes an ocean-only run save and exit 0, and the run continues to 
   const env = { TAG: 'alone', STATE: join(dir, 'recorded/rec_day0002.bin'), FORCING: forcing, YEARS: '20', DAYS_PER_YEAR: '2', SNAPSHOT_DAYS: '0' };
   const whole = outDir('signalWhole'), parts = outDir('signalParts');
   assert.equal(run('oceanSpinup.mjs', { ...env, OUT: whole }), 0);
-  const child = spawn(process.execPath, [join(root, 'scripts/oceanSpinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), ...env, OUT: parts }, stdio: 'ignore' });
+  const child = spawn(process.execPath, [join(root, 'scripts/oceanSpinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), ...env, OUT: parts }, stdio: 'ignore' });
   await waitFor(() => existsSync(join(parts, 'alone.log')) && text(join(parts, 'alone.log')).includes('saved alone_year0002.bin'));
   const sent = Date.now();
   child.kill('SIGTERM');
@@ -227,7 +228,7 @@ test('with surface.relativeWind a coupled run split at a day\'s end ends byte fo
 
 test('a state saved over terrain and resumed without it has its surface pressure moved down to sea level', { skip }, async () => {
   const out = outDir('flatResume', 'f_day0000.bin');
-  const result = spawnSync(process.execPath, [join(root, 'scripts', 'spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), TAG: 'f', MINUTES: '100', OUT: out, DAYS: '1', TERRAIN: 'false' }, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [join(root, 'scripts', 'spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), TAG: 'f', MINUTES: '100', OUT: out, DAYS: '1', TERRAIN: 'false' }, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr.slice(-2000));
   assert.match(result.stdout, /surface pressure moved from terrain true onto false/);
   assert.equal((await load(join(out, 'f_day0001.bin'))).terrain, false);
@@ -282,9 +283,9 @@ test('a coupled run split inside a day ends the day with the uninterrupted run\'
   assert.deepEqual(apart(a, b, means), []);
 });
 
-test('the asynchronous driver alternates coupled and ocean-only phases, hands the ocean over and picks up where it stands', { skip }, async () => {
+test('the asynchronous driver alternates coupled and ocean-only phases, each given only the option groups it reads, hands the ocean over and picks up where it stands', { skip }, async () => {
   const out = outDir('driver', 'async16_day0000.bin');
-  assert.equal(driver({ OUT: out, CYCLES: '2', OCEAN_YEARS: '2' }), 0);
+  assert.equal(driver({ OUT: out, CYCLES: '2', OCEAN_YEARS: '2', OCEAN_ONLY: '{}', MOIST: '{}' }), 0);
   assert.deepEqual(readdirSync(out).filter((f) => f.endsWith('.bin')).sort(), ['async16_c01_year0002.bin', 'async16_c02_year0002.bin', 'async16_day0000.bin', 'async16_day0002.bin', 'async16_day0004.bin']);
   assert.ok(!existsSync(join(out, 'async16_c01_forcing')) && !existsSync(join(out, 'async16_c02_forcing')), 'the records are deleted once used');
   assert.equal(text(join(out, 'async16_cycles.txt')), 'start=0\ndone=1\ndone=2\n');
@@ -311,7 +312,7 @@ test('SIGTERM to the driver reaches its running phase, and a second start finish
   const env = { N: String(N), YEAR_DAYS: '2', COUPLED_YEARS: '1', PER_YEAR: '1', SNAPSHOT_DAYS: '0', RETRY_WAIT: '1', CYCLES: '1', OCEAN_YEARS: '20' };
   const whole = outDir('driverWhole', 'async16_day0000.bin'), parts = outDir('driverParts', 'async16_day0000.bin');
   assert.equal(driver({ ...env, OUT: whole }), 0);
-  const child = spawn('bash', [join(root, 'scripts/asyncSpinup.sh')], { cwd: root, env: { ...process.env, ...env, OUT: parts }, stdio: 'ignore' });
+  const child = spawn('bash', [join(root, 'scripts/asyncSpinup.sh')], { cwd: root, env: { ...withoutOptionGroups(), ...env, OUT: parts }, stdio: 'ignore' });
   await waitFor(() => existsSync(join(parts, 'async16_c01.log')) && text(join(parts, 'async16_c01.log')).includes('saved async16_c01_year0002.bin'));
   assert.equal(driver({ ...env, OUT: parts }), 0);
   assert.match(text(join(parts, 'async16_cycles.log')), new RegExp(`another driver \\(pid ${child.pid}\\) holds .*async16_cycles\\.lock; not starting`));

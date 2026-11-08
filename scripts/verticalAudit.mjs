@@ -89,7 +89,9 @@ import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { clearSkyClasses } from './clearSkyClasses.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/verticalAudit.mjs <state.bin>'); process.exit(1); }
 const CLASS_TIMES = Number(process.env.CLASS_TIMES ?? 24), STEPS = Number(process.env.STEPS ?? 8), SKIP = Number(process.env.SKIP ?? 0), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');

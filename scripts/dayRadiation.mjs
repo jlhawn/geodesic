@@ -11,7 +11,9 @@ import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;

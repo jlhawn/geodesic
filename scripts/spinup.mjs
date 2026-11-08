@@ -227,7 +227,9 @@ import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
 import { watchSkin } from './skinWatch.mjs';
 import { lakeArrays, savedLake } from '../js/physics/lake.module.js';
 import { loadSavedLand } from './savedLand.mjs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
   seAsia: [10, 25, 95, 110], borneo: [-4, 7, 108, 119], europe: [45, 55, 0, 30], eastUS: [32, 45, -95, -75], siberia: [55, 65, 60, 120],

@@ -29,7 +29,9 @@ import { serialize, deserialize } from 'node:v8';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { stateTerrain } from '../js/stateFile.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const flagValue = (flag) => (process.argv.includes(flag) ? process.argv[process.argv.indexOf(flag) + 1] : null);
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--') && !['--out', '--gpu-dump', '--against'].some((flag) => a === flagValue(flag)));

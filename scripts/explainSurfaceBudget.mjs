@@ -11,7 +11,9 @@ import { withCadence } from '../js/cadence.module.js';
 import { LATENT_HEAT, placeCumulus } from '../js/physics/moist.module.js';
 import { readState, tagOf } from './figures/figureState.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const file = process.argv[2] ?? new URL('../runs/eleven64_day1825.bin', import.meta.url).pathname;
 const out = process.argv[3] ?? new URL('../explain/data/surface_budget.json', import.meta.url).pathname;
 const saved = await readState(file);

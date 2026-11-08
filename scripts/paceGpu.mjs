@@ -8,7 +8,9 @@
 // step.
 //   BATCH=8 node scripts/paceGpu.mjs runs/eleven128_day1825.bin
 import { gpuModelFrom, readState } from './figures/figureState.mjs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const file = process.argv[2] ?? new URL('../runs/eleven128_day1825.bin', import.meta.url).pathname;
 const WARM = Number(process.env.WARM ?? 8), DAYS = Number(process.env.DAYS ?? 1), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 const saved = await readState(file);

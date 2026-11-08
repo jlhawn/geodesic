@@ -40,7 +40,9 @@ import { LATENT_HEAT, saturationHumidity, placeCumulus } from '../js/physics/moi
 import { inLongitudes } from '../js/audit.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/deckGate.mjs <state.bin>'); process.exit(1); }
 const env = (name) => JSON.parse(process.env[name] ?? '{}');

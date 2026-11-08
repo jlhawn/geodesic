@@ -9,9 +9,10 @@
 // observed values (Trenberth and Caron 2001, Ganachaud and Wunsch 2000,
 // RAPID at 26.5N). A single day's value carries the day's Ekman and eddy
 // cells, several petawatts at the equator; read the mean over a year's
-// saves. SILLS=1 applies the geography's edge sills, for states run
-// with them.
-//   [SILLS=1] [QUIET=1] node scripts/oceanHeatTransport.mjs STATE.bin [STATE.bin ...]
+// saves. SILLS=0 cuts each edge column at the shallower bed rather than
+// at the geography's sills, for a state run before the model took them
+// (355c7c3, Oct 18).
+//   [SILLS=0] [QUIET=1] node scripts/oceanHeatTransport.mjs STATE.bin [STATE.bin ...]
 import { readFileSync } from 'node:fs';
 import { decodeState } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
@@ -29,7 +30,7 @@ for (const path of process.argv.slice(2)) {
   const lat = (i) => mesh.latCell[i] * deg, lon = (i) => mesh.lonCell[i] * deg, { cellsOnEdge, dvEdge } = mesh;
   const D = new Float64Array(C); for (let i = 0; i < C; i++) { let col = 0; for (let k = 0; k < L; k++) col += h[at(k, i)]; D[i] = col - (oc.eta ? oc.eta[i] : 0); }
   const edgeOcean = new Uint8Array(E); for (let e = 0; e < E; e++) edgeOcean[e] = water.edgeOcean[e] && sea[cellsOnEdge[2 * e]] && sea[cellsOnEdge[2 * e + 1]] ? 1 : 0;
-  const sillEdge = hybrid ? restingColumns(mesh, Float64Array.from(D, (d, i) => d + draft[i]), draft, edgeOcean, process.env.SILLS ? water.edgeSill : null, 50).sillEdge : null;
+  const sillEdge = hybrid ? restingColumns(mesh, Float64Array.from(D, (d, i) => d + draft[i]), draft, edgeOcean, process.env.SILLS === '0' ? null : water.edgeSill, 50).sillEdge : null;
   const column = new Float64Array(L);
   const edgeColumn = (e, a, b) => {
     column[0] = 0.5 * (h[a] + h[b]); for (let k = 1; k < L; k++) column[k] = Math.min(h[at(k, a)], h[at(k, b)]);

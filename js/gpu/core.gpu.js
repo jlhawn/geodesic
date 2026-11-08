@@ -1,5 +1,5 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, readAcross, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
-import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, TEMPERATURE_CLOSURES, STANDARD_TEMPERATURE, VERTICAL_ADVECTION, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, TEMPERATURE_CLOSURES, STANDARD_TEMPERATURE, VERTICAL_ADVECTION, THETA_FACES, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, sunDistance, DEFAULT_ORBIT, DEFAULT_SHORTWAVE, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { createAerosolSampler, loadAerosol, AEROSOL_FIELDS, DEFAULT_AEROSOL } from '../aerosol.module.js';
@@ -122,6 +122,16 @@ function limitedInterfaces(body) {
   return select(face, downwind, (face - downwind) * across > 0.0);
 }
 ${body.replace(at, `if (k < K - 1) { ${faces('lower', 'k', 'lowerFlow')} }\n    if (k > 0) { ${faces('upper', 'k - 1', 'upperFlow')} }\n    ${at}`)}`;
+}
+
+/*
+ * cellTendency with θ at the layer interfaces weighted as the hydrostatic
+ * step weights θ_v (thetaFace 'arakawaSuarez' in sigmaCore.module.js).
+ */
+function hydrostaticThetaFaces(body) {
+  const lower = 'lowerT = fT + t * (nextT - fT);', upper = 'upperT = aboveT + t * (fT - aboveT);';
+  if (!body.includes(lower) || !body.includes(upper)) throw new Error('cellTendency no longer lays the θ faces as the hydrostatic faces expect');
+  return body.replace(lower, 'lowerT = fT + (1.0 - t) * (nextT - fT);').replace(upper, 'upperT = aboveT + (1.0 - t) * (fT - aboveT);');
 }
 
 /*
@@ -917,13 +927,14 @@ export const PHYSICS_DEFAULTS = {
 
 export async function createGpuCore(mesh, {
   levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma',
-  divergenceViscosity = 0, temperatureClosure = 'sigma', verticalAdvection = 'centered',
+  divergenceViscosity = 0, temperatureClosure = 'sigma', verticalAdvection = 'centered', thetaFace = 'exner',
   dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = TOP_DRAG.sigma, topDragDays = TOP_DRAG.days, spongeRates: spongeOption, spongeMeanRates: meanOption, gravityWaves = {}, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
   registerLength = 0, lake = false,
 } = {}) {
   if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
   if (!TEMPERATURE_CLOSURES.includes(temperatureClosure)) throw new Error(`temperatureClosure is ${TEMPERATURE_CLOSURES.join(' or ')}, not ${temperatureClosure}`);
   if (!VERTICAL_ADVECTION.includes(verticalAdvection)) throw new Error(`verticalAdvection is ${VERTICAL_ADVECTION.join(' or ')}, not ${verticalAdvection}`);
+  if (!THETA_FACES.includes(thetaFace)) throw new Error(`thetaFace is ${THETA_FACES.join(' or ')}, not ${thetaFace}`);
   const hybrid = divergenceSurfaces === 'hybrid' && (divergenceDamping > 0 || divergenceViscosity > 0);
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
   if (phys.brineReservoir && !phys.iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
@@ -1045,6 +1056,7 @@ export async function createGpuCore(mesh, {
   if (!sponge) { delete kernelBodies.spongeMean; delete kernelBodies.spongeApply; }
   if (!hybrid) { delete kernelBodies.divergenceHybrid; delete kernelBodies.divergenceDampHybrid; }
   if (temperatureClosure === 'standard') kernelBodies.lapScalar1 = standardReferenceClosure(kernelBodies.lapScalar1);
+  if (thetaFace === 'arakawaSuarez') kernelBodies.cellTendency = hydrostaticThetaFaces(kernelBodies.cellTendency);
   if (verticalAdvection === 'vanLeerWater') kernelBodies.cellTendency = limitedInterfaces(kernelBodies.cellTendency);
   if (phys.rainEvaporationLaw !== 'deficit' || phys.rainEvaporationCeiling != null) kernelBodies.adjustRain = rainEvaporationOptions(kernelBodies.adjustRain);
   if (phys.convectionRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = plumeRetype(kernelBodies[name]);

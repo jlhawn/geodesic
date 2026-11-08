@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 const scripts = new URL('../scripts/', import.meta.url);
 const BUILDERS = ['createModel', 'createGpuModel', 'createParallelModel', 'createGeography'];
 const GROUND = ['stateGeography', 'savedGeography'];
-const NAME = /(?<![\w$.])[A-Za-z_$][\w$]*/g;
+const NAME = /(?<![\w$])(?:(?<=\.\.\.)|(?<!\.))[A-Za-z_$][\w$]*/g;
 
 function closing(text, i) {
   for (let depth = 1; depth && i < text.length; i++) {
@@ -59,6 +59,11 @@ function definitions(text) {
 }
 
 function grounded(value, defs, ground, seen = new Set()) {
+  value = value.trim();
+  if (value.startsWith('{') && closing(value, 1) === value.length) {
+    const members = parts(value.slice(1, -1));
+    return members.length > 0 && members.every((part) => grounded(part.startsWith('...') ? part.slice(3) : part.replace(/^[A-Za-z_$][\w$]*\s*:/, ''), defs, ground, new Set(seen)));
+  }
   if (new RegExp(`\\b(${ground.join('|')})\\(`).test(value)) return true;
   for (const { 0: name, index } of value.matchAll(NAME)) {
     if (seen.has(name) || (/[{,]\s*$/.test(value.slice(0, index)) && /^\s*:/.test(value.slice(index + name.length)))) continue;
@@ -95,6 +100,7 @@ function calls(text, names) {
 function misplaced(file, text) {
   const left = [], defs = definitions(text), ground = [...GROUND], builders = new Map(BUILDERS.map((name) => [name, name]));
   for (const match of text.matchAll(new RegExp(`\\b(${BUILDERS.join('|')})\\s*(?:\\bas\\b|:)\\s*([A-Za-z_$][\\w$]*)`, 'g'))) if (!BUILDERS.includes(match[2])) builders.set(match[2], match[1]);
+  for (const match of text.matchAll(new RegExp(`([A-Za-z_$][\\w$]*)\\s*:\\s*(${BUILDERS.join('|')})\\b(?!\\s*\\()`, 'g'))) if (!BUILDERS.includes(match[1])) builders.set(match[1], match[2]);
   for (const [alias, values] of defs) for (const value of values) if (BUILDERS.includes(value)) builders.set(alias, value);
   for (const match of text.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*['"](\.{1,2}\/[^'"]+\.mjs)['"]/g)) {
     const module = new URL(match[2], new URL(file, scripts)), theirs = definitions(readFileSync(module, 'utf8'));

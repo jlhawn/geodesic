@@ -22,7 +22,9 @@ import { DECK_CLOUD_LEVELS, UNDECIDED, sunDirection, ringMean } from '../../js/p
 import { CP_DRY as cp, GRAVITY as g, P0 } from '../../js/dynamics/sigmaCore.module.js';
 import { saturationHumidity, EPSILON } from '../../js/physics/moist.module.js';
 import { readState, figureHeader, gpuModelFrom, dt as stepOf, DEG, rounded } from './figureState.mjs';
+import { refuseUnreadOptions } from '../optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const [file, outFile] = process.argv.slice(2);
 if (!file || !outFile) { console.error('usage: node scripts/figures/mlmdeck.mjs <state.bin> <out.json>'); process.exit(2); }
 const saved = await readState(file);

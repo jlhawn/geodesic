@@ -46,7 +46,9 @@ import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { DAY, VISIBLE_PATH, LOW_CLOUD_PRESSURE, CLOUD_OPTICS, cloudOptics, overlapped, DECORRELATION_LENGTH, DECORRELATION_SLOPE } from '../js/physics/radiation.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/cloudClasses.mjs <state.bin>'); process.exit(1); }
 const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');

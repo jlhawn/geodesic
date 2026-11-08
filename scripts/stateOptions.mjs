@@ -49,6 +49,28 @@ const canonical = (value) => (value && typeof value === 'object' && !Array.isArr
  */
 export const differingGroups = (a = {}, b = {}) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((group) => canonical(a[group]) !== canonical(b[group]));
 
+const isGroup = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/*
+ * The option groups of a run that rebuilds a saved state: the groups its
+ * header records under `given`, or `standIn`'s for a header without them,
+ * with each group of `groups` over the recorded one, key by key, and one
+ * given as false or as no object in its place. Throws when neither holds
+ * a record, and when both do and differ.
+ */
+export function rebuiltOptions(header, groups = {}, standIn) {
+  if (header.given !== undefined && standIn !== undefined) {
+    const differing = differingGroups(header.given, standIn);
+    if (differing.length) throw new Error(`GIVEN stands in for the given options only where the state's header records none; this header records them, and GIVEN differs from them in ${differing.join(', ')}: unset GIVEN, and give the groups to change in their own variables`);
+  }
+  const recorded = header.given ?? standIn;
+  if (!isGroup(recorded)) throw new Error('the state\'s header records no given options (no state saved before Nov 7, 2026 does), so its run cannot be rebuilt as it was made: GIVEN (JSON, {} for today\'s defaults) stands in for them');
+  return Object.fromEntries([...new Set([...Object.keys(recorded), ...Object.keys(groups)])].map((group) => {
+    const own = recorded[group], value = groups[group];
+    return [group, value === undefined ? own : isGroup(value) && isGroup(own) ? { ...own, ...value } : value];
+  }));
+}
+
 export { savedTerrain, stateTerrain };
 
 /*

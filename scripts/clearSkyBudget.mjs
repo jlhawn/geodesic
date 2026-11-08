@@ -22,7 +22,9 @@ import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { clearSkyClasses, classTable, TERMS, REFERENCE_SOURCES } from './clearSkyClasses.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/clearSkyBudget.mjs <state.bin>'); process.exit(1); }
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));

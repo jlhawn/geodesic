@@ -7,7 +7,9 @@ import { writeFileSync } from 'node:fs';
 import { createGeography } from '../../js/geography.module.js';
 import { readState, readGeography, figureHeader, DEG, rounded } from './figureState.mjs';
 import { stateGrid } from '../../js/stateGrid.module.js';
+import { refuseUnreadOptions } from '../optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/stateMaps.mjs <state.bin> <out.json>'); process.exit(2); }
 const saved = await readState(file);

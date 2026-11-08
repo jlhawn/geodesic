@@ -22,7 +22,9 @@ import { withCadence } from '../js/cadence.module.js';
 import { levelFields } from '../js/levels.module.js';
 import { EARTH, edgeNormalVelocity, hyperdiffusion, cellVelocity } from '../explain/swCases.module.js';
 import { PUBLISHED_RADIATION, PUBLISHED_MOIST } from '../explain/published.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const which = process.argv[2], N = 16, DAY = 86400, dt = 450 * 16 / N;
 const named = { state: 'jw06state', wet: 'water' };
 const out = (which === 'wet' ? process.argv[5] : process.argv[3]) ?? new URL(`../explain/data/${named[which] ?? which}_N${N}.bin`, import.meta.url).pathname;

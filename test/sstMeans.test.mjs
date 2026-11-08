@@ -14,6 +14,7 @@ import { encodeState, decodeState, groupHeader, groupArrays, f64Names } from '..
 import { decodeMonthlySst, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { createSstRing, createSstRecorder, sstWindowOf, SST_WINDOW, SST_FIELDS } from '../js/sstMeans.module.js';
 import { biasTable, markdown, windowMonths } from '../scripts/woaSstBias.mjs';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
 const topography = topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer);
@@ -147,7 +148,7 @@ test('the ocean figure plots the window\'s mean SST against WOA23 over the same 
   const { plain, windowed, days, C } = await statesOnce();
   const dump = (state, name) => {
     const out = join(dir, name);
-    execFileSync(process.execPath, [join(root, 'scripts/figures/oceanPanels.mjs'), state, out], { cwd: root, encoding: 'utf8' });
+    execFileSync(process.execPath, [join(root, 'scripts/figures/oceanPanels.mjs'), state, out], { cwd: root, env: withoutOptionGroups(), encoding: 'utf8' });
     return { out, d: JSON.parse(readFileSync(out, 'utf8')) };
   };
   const mean = dump(windowed, 'mean.json'), instant = dump(plain, 'instant.json');

@@ -10,7 +10,9 @@
 // simulated hours per wall minute and seconds per model day.
 //   MODE=steps node scripts/pageLoop.mjs runs/eleven128_day1825.bin
 import { gpuModelFrom, readState } from './figures/figureState.mjs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const file = process.argv[2] ?? new URL('../runs/eleven128_day1825.bin', import.meta.url).pathname;
 const MODE = process.env.MODE ?? 'batch', SECONDS = Number(process.env.SECONDS ?? 120), FIELDS = (process.env.FIELDS ?? 'wind,speed').split(',');
 const saved = await readState(file);

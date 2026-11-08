@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { segmentTargets, timings, projection, reportText } from '../scripts/verdaBenchmark.mjs';
 import { wanted, listFiles } from '../scripts/verdaFiles.mjs';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
 let dir;
@@ -18,7 +19,7 @@ const script = (name, files) => {
   for (const [file, text] of Object.entries(files)) { writeFileSync(join(at, file), text); chmodSync(join(at, file), 0o755); }
   return at;
 };
-const run = (file, args, env, options = {}) => spawnSync('bash', [join(root, file), ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, ...env }, ...options });
+const run = (file, args, env, options = {}) => spawnSync('bash', [join(root, file), ...args], { cwd: root, encoding: 'utf8', env: { ...withoutOptionGroups(), ...env }, ...options });
 
 test('PER_YEAR 36 cuts three years into 108 segments of 10 or 11 days that end on days 365, 730 and 1095', () => {
   const t = segmentTargets(36, 1095);
@@ -92,14 +93,14 @@ test('the pulled files include the asynchronous spin-up\'s ocean-only year files
   assert.equal(listed, ['twelve64_c01_year0007.bin', 'twelve64_cycles.log', 'twelve64_cycles.txt', 'twelve64_day1095.bin'].map((f) => `1\t-\t${f}\n`).join(''));
 });
 
-test('the suite report names every failing test with its error and output, and the file that failed to load', () => {
+test('the suite report names every failing test with its error and output, and the file that failed to load, and runs every file without the option groups of its own environment', () => {
   const at = script('suite', {
     'bad.test.mjs': "import { test, describe } from 'node:test';\nimport assert from 'node:assert/strict';\ndescribe('outer', () => { test('fine', () => {}); test('two numbers', () => { console.log('printed by the test'); assert.equal(2.68e-4, 2.66e-4); }); });\n",
     'crash.test.mjs': 'throw new Error("cannot load");\n',
-    'good.test.mjs': "import { test } from 'node:test';\ntest('fine', () => {});\n",
+    'good.test.mjs': "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('fine', () => { assert.equal(process.env.MOIST, undefined); assert.equal(process.env.PLAIN, 'x'); });\n",
   });
   const report = join(at, 'report.txt');
-  const result = run('scripts/suiteReport.sh', [report], { FILES: ['bad', 'crash', 'good'].map((f) => join(at, `${f}.test.mjs`)).join(' '), JOBS: '3', DIR: join(at, 'report') });
+  const result = run('scripts/suiteReport.sh', [report], { FILES: ['bad', 'crash', 'good'].map((f) => join(at, `${f}.test.mjs`)).join(' '), JOBS: '3', DIR: join(at, 'report'), MOIST: ' {"pcapeMinimum":0}', PLAIN: 'x' });
   assert.equal(result.status, 1);
   const text = readFileSync(report, 'utf8');
   assert.match(text, /3 files, 1 passed, 2 failed; tests: 2 passed, 2 failed/);
@@ -352,7 +353,7 @@ test('an eviction\'s SIGTERM to the whole process group leaves the asynchronous 
     }
   };
   const log = () => (existsSync(join(out, 'twelve.log')) ? readFileSync(join(out, 'twelve.log'), 'utf8') : '');
-  const env = { ...process.env, OUT: out, PREFIX: 'twelve', SKIP_GPU_CHECK: '1', PAIRED: '', ASYNC: join(dir, 'async', 'async.sh'), MARGIN_GB: '0', ...SCHEDULE };
+  const env = { ...withoutOptionGroups(), OUT: out, PREFIX: 'twelve', SKIP_GPU_CHECK: '1', PAIRED: '', ASYNC: join(dir, 'async', 'async.sh'), MARGIN_GB: '0', ...SCHEDULE };
   const child = spawn('bash', [join(root, 'scripts/verdaEleven.sh'), 'run'], { cwd: root, env, detached: true, stdio: 'ignore' });
   const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve(code ?? signal)));
   await until(() => existsSync(join(out, 'twelve128.waiting')), 'N=128 to start');
@@ -522,7 +523,7 @@ test('the startup script does nothing without a checkout and resumes from the ke
   assert.match(text, /\[ -x "\$REPO\/scripts\/verdaEleven\.sh" \] \|\| exit 0/);
   assert.equal(spawnSync('bash', ['-n', join(root, 'scripts/verdaElevenStartup.sh')]).status, 0);
   const at = script('startup', { 'gcm-twelve.sh': text.replace(/^PREFIX=eleven$/m, 'PREFIX=twelve') });
-  const repo = join(at, 'repo'), runs = join(at, 'runs'), env = { ...process.env, REPO: repo, RUNS: runs, HOME: at };
+  const repo = join(at, 'repo'), runs = join(at, 'runs'), env = { ...withoutOptionGroups(), REPO: repo, RUNS: runs, HOME: at };
   let r = spawnSync('bash', [join(at, 'gcm-twelve.sh')], { env, encoding: 'utf8' });
   assert.equal(r.status, 0);
   assert.ok(!existsSync(runs), 'nothing happens without a checkout');

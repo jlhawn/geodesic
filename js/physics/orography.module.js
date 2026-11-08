@@ -48,7 +48,8 @@ import { cellVector } from '../dynamics/operators.module.js';
  * 2 (H_eff = 2(H − Z_b), eq. 4.8), criticalHeight H_n,crit 0.5 (§4.1),
  * criticalRichardson 0.25 (§4.4.2): at Z_b = 0 the launched stress is
  * 4.92 ρUNμσD. `constants` 'cy41r2' takes the G of the IFS's operational
- * fields instead, GKDRAG 0.3 (Cy41r2 Part II §3.5, set in SUGWD), 1.2 ρUNμσD.
+ * fields instead, GKDRAG 0.3 (the G of Cy41r2 Part IV §4.2.2, eq. 4.19, which
+ * states no value; 0.3 is set in SUGWD), 1.2 ρUNμσD.
  * LOTT_MILLER, for the 0.25° raster's fields, keeps C_d 1, G 1,
  * effectiveHeight 1 and Ri_crit 0.25, 1.0 ρUNμσD. Those are not Lott and
  * Miller's (1997) own constants: C_d 1, G 0.5, H_n,crit 0.5 and Ri_c 1

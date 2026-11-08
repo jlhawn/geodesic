@@ -13,6 +13,7 @@ import { regridState, savedDeckField, remapLevels, DECK_FIELDS } from '../js/phy
 import { buildMesh } from '../js/mesh.module.js';
 import { sigmaInterfaces, sigmaGridName, standardHeight, standardSigma, SIGMA_GRIDS, P0, R_DRY, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { encodeState, decodeState, savedLevels } from '../js/stateFile.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -371,7 +372,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   const from = join(dir, 'src_day0100.bin');
   writeFileSync(from, encodeState({ N, K: source.core.K, day: 100, time: 100 * 86400, terrain: true, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: source.radiation.mlmSubsidence, mlmHeight, mlmGate, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: { ...soil, vegetation } }));
   source.destroy();
-  const run = (env) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, FROM: from, DAYS: '1', MINUTES: '100', SURFACE: '{"exchange":"fixed"}', ...env }, encoding: 'utf8', stdio: 'pipe' });
+  const run = (env) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), OUT: dir, FROM: from, DAYS: '1', MINUTES: '100', SURFACE: '{"exchange":"fixed"}', ...env }, encoding: 'utf8', stdio: 'pipe' });
   const read = async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))));
 
   const log = run({ TAG: 'fine', LEVELS: 'bl34' });
@@ -438,7 +439,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
 test('with LEVELS=bl48, spinup.mjs starts a fresh run on bl48 and carries a bl60 state onto it, and fixedSst.mjs runs a day on bl48 from that state', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const root = new URL('..', import.meta.url).pathname, dir = mkdtempSync(join(tmpdir(), 'bl48-')), fine = sigmaInterfaces('bl48');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const node = (script, args, env) => execFileSync(process.execPath, [join(root, script), ...args], { cwd: root, env: { ...process.env, ...env }, encoding: 'utf8', stdio: 'pipe' });
+  const node = (script, args, env) => execFileSync(process.execPath, [join(root, script), ...args], { cwd: root, env: { ...withoutOptionGroups(), ...env }, encoding: 'utf8', stdio: 'pipe' });
   const spinup = (env) => node('scripts/spinup.mjs', [], { N: '16', OUT: dir, DAYS: '1', MINUTES: '100', STOP_AFTER_STEPS: '4', ...env });
   assert.match(spinup({ TAG: 'source', LEVELS: 'bl60' }), /fresh start at N=16 on bl60 \(60 layers\)/);
   assert.match(spinup({ TAG: 'fresh', LEVELS: 'bl48' }), /fresh start at N=16 on bl48 \(48 layers\)/);
