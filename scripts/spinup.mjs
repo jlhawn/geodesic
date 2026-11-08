@@ -124,8 +124,8 @@
 // sea's top-layer temperature, the surface temperature, the last step's
 // precipitation rate, column cloud water, the surface's diffuse albedo, the
 // sunlight reaching the surface, the outgoing longwave at the top, sea-ice
-// thickness and concentration, the eastward and northward surface stress
-// and the surface latent and sensible heat fluxes, less any the model's frames
+// thickness and concentration, the eastward and northward surface stress,
+// the surface latent and sensible heat fluxes and the 2 m temperature, less any the model's frames
 // do not give (the GPU engine's stress needs the implicit drag); 'none' keeps none and
 // adds nothing to the steps), MEANS_EVERY (the steps between samples, by
 // default 64 samples a day: 8 at N=128; with BATCH above 1 a sample falls

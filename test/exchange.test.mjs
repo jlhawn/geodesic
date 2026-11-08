@@ -9,6 +9,7 @@ import { saturationHumidity } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN, heatProfile, profileTemperature } from '../js/physics/exchange.module.js';
 import { PREVIOUS_LEVELS, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
+import { cpuFrameFields } from '../js/cpuFrame.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -38,17 +39,31 @@ test('the stability functions are the IFS\'s Paulson and Holtslag–De Bruin for
   assert.ok(Math.abs(psiMomentum(0)) < 1e-12 && Math.abs(psiHeat(0)) < 1e-12);
 });
 
-test('the 2 m temperature\'s profile of dry static energy meets the surface\'s at h + z0m = z0h and the lowest layer\'s air at its height, and lies between them at 2 m', () => {
-  const g = 9.80616, cp = 1004.64, z = 21;
-  for (const [zeta, z0m, z0h, surfaceT, airT] of [[-2, 0.1, 1e-3, 302, 299], [-0.05, 2e-4, 3e-5, 300.5, 299.8], [0, 2, 2, 290, 289], [0.4, 0.013, 1.3e-4, 271, 274], [3, 1.3e-3, 2e-5, 250, 258]]) {
-    const where = `ζ ${zeta}, z0m ${z0m}, z0h ${z0h}`, surface = z0h - z0m;
-    assert.ok(Math.abs(heatProfile(surface, zeta, z, z0m, z0h)) < 1e-12, where);
-    close(profileTemperature(surface, surfaceT, airT, z, zeta, z0m, z0h, g, cp) + g * surface / cp, surfaceT, 1e-12, `${where}: the surface's dry static temperature`);
-    close(profileTemperature(z, surfaceT, airT, z, zeta, z0m, z0h, g, cp), airT, 1e-12, `${where}: the lowest layer's air`);
-    const s2 = profileTemperature(2, surfaceT, airT, z, zeta, z0m, z0h, g, cp) + 2 * g / cp, s1 = airT + g * z / cp;
-    assert.ok((s2 - surfaceT) * (s1 - s2) > 0, `${where}: 2 m at ${s2} between ${surfaceT} and ${s1}`);
-    if (zeta === 0) close(s2, surfaceT + (s1 - surfaceT) * Math.log((2 + z0m) / z0h) / Math.log((z + z0m) / z0h), 1e-12, `${where}: the neutral log profile`);
+test('the 2 m temperature\'s heat profile is the exchange\'s: at the lowest layer\'s height it is κ√C_D/C_H of transfer() at the same Richardson number and roughness, unstable to z/L past 30', () => {
+  let largest = 0;
+  for (const [z0m, z0h] of [[0.1, 1e-3], [2, 2], [0.013, 1.3e-4], [2e-4, 3e-5]]) for (const ri of [-2, -0.3, 0, 0.1, 0.6, 1.2, 1.8, 3]) {
+    const c = transfer(ri, 21, z0m, z0h);
+    largest = Math.max(largest, c.zeta);
+    close(heatProfile(21, c.zeta, 21, z0m, z0h), KARMAN * Math.sqrt(c.drag) / c.heat, 1e-12, `Ri ${ri}, z0m ${z0m}, z0h ${z0h}, ζ ${c.zeta}`);
   }
+  assert.ok(largest > 30, `the largest ζ is ${largest}`);
+});
+
+test('the 2 m temperature lies along that profile with the WMO\'s open-terrain roughness wherever z0m exceeds 0.03 m and the profile uniform above z/L = 5, as the IFS interpolates its own (Cy41r2 Part IV eq. 3.95, section 3.2)', () => {
+  const g = 9.80616, cp = 1004.64, z = 21, surfaceT = 280, airT = 284;
+  const share = (zeta, z0m, z0h, top = z) => (profileTemperature(2, surfaceT, airT, top, zeta, z0m, z0h, g, cp) + 2 * g / cp - surfaceT) / (airT + g * top / cp - surfaceT);
+  for (const zeta of [-2, -0.5, 0, 1, 3, 20, 400]) {
+    assert.equal(share(zeta, 2, 2), share(zeta, 0.1, 1e-3), `ζ ${zeta}: forest and grass both take the WMO roughness`);
+    assert.equal(share(zeta, 0.1, 1e-3), share(zeta, 0.03, 0.003), `ζ ${zeta}: the WMO roughness is z0m 0.03 m and z0h 0.003 m`);
+    assert.ok(zeta >= 5 * z / 2 || share(zeta, 0.013, 1.3e-4) !== share(zeta, 0.03, 0.003), `ζ ${zeta}: a cell under 0.03 m keeps its own roughness`);
+    close(profileTemperature(z, surfaceT, airT, z, zeta, 0.1, 1e-3, g, cp), airT, 1e-12, `ζ ${zeta}: the lowest layer's air at its height`);
+  }
+  close(share(0, 0.013, 1.3e-4), Math.log(2.013 / 1.3e-4) / Math.log(21.013 / 1.3e-4), 1e-12, 'neutral: the cell\'s own log law');
+  close(share(0, 2, 2), Math.log(2.03 / 0.003) / Math.log(21.03 / 0.003), 1e-12, 'neutral: the WMO roughness\'s log law');
+  for (const zeta of [6, 20, 50]) close(share(zeta, 0.1, 1e-3), share(2 * zeta, 0.1, 1e-3, 2 * z), 1e-12, `ζ ${zeta}: uniform above h = 5 L, a lowest layer twice as high at the same L gives the same share`);
+  assert.ok(Math.abs(share(3, 0.1, 1e-3) - share(6, 0.1, 1e-3, 2 * z)) > 1e-3, 'below h = 5 L the lowest layer\'s height matters');
+  for (const zeta of [5 * z / 2, 400]) close(share(zeta, 0.1, 1e-3), 1, 1e-12, `ζ ${zeta}: with 5 L at or under 2 m the 2 m air is the lowest layer's`);
+  for (const [zeta, weight] of [[0, 0.736], [-0.5, 0.832], [1, 0.526], [10, 0.438], [20, 0.596]]) assert.ok(Math.abs(share(zeta, 2, 2) - weight) < 5e-4, `ζ ${zeta}: ${share(zeta, 2, 2)} against the review's IFS construction, ${weight}`);
 });
 
 test('the bulk Richardson number gives back the Obukhov length it came from, and its coefficients', () => {
@@ -629,4 +644,18 @@ test('both coupled engines hand the air the same sea velocity under surface.rela
   console.log(`the sea velocity under the air, then the ocean's: ${report.join('; ')}`);
   assert.deepEqual(failures, []);
   await assert.rejects(createGpuModel(new Grid(16), { topography, ocean: { gustiness: 5 } }), /ocean\.gustiness is not an option/);
+});
+
+test('under the fixed exchange the 2 m temperature is NaN at every cell on both engines', async () => {
+  const options = { topography, surface: { exchange: 'fixed' } };
+  const cpu = prepare(createModel(new Grid(16), options));
+  cpu.step(900);
+  assert.equal(cpu.exchange.fixed, true);
+  assert.ok(cpuFrameFields(cpu, { fields: ['t2m'] }).t2m.every(Number.isNaN), 'the CPU frame');
+  if (!gpuAvailable) return;
+  const gpu = prepare(await createGpuModel(new Grid(16), options));
+  await gpu.step(900);
+  await gpu.settle();
+  const [t2m] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.T2M, length: cpu.mesh.nCells }]);
+  assert.ok(t2m.every(Number.isNaN), 'the GPU');
 });

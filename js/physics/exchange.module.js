@@ -71,12 +71,16 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  * z0m = 0.123 h, z0h = 0.1 z0m, κ 0.41), which the radiation's reference
  * evapotranspiration takes.
  *
- * `temperature2m` is the air's temperature 2 m above the ground as the IFS
- * diagnoses its 2 m temperature: the dry static energy cp T + g h runs
- * from the surface's, cp T_s, to the lowest layer's at h = z along the heat
- * profile ln((h + z0m)/z0h) − ψh(ζ (h + z0m)/z) + ψh(ζ z0h/z) of the step's
- * ζ and the cell's blended roughness, which reaches the surface's value at
- * h + z0m = z0h. It is NaN under 'fixed', which has no profile.
+ * `temperature2m` is the air's temperature 2 m above the ground, the IFS's
+ * 2 m interpolation (Cy41r2 Part IV eq. 3.95): the dry static energy
+ * cp T + g h runs from the surface's, cp T_s, to the lowest layer's along
+ * the heat profile F(h) = ln((h + z0m)/z0h) − ψh((h + z0m)/L) + ψh(z0h/L),
+ * L = z/ζ with the step's ζ, the exchange's own, which no cap limits. The
+ * profile takes the WMO's open-terrain z0m 0.03 m and z0h 0.003 m where the
+ * cell's blended z0m exceeds 0.03 m (eq. 3.91), and the cell's own below;
+ * in stable air it is uniform above h = 5 L (section 3.2), so 2 m lies at
+ * F(min(2, 5 L))/F(min(z, 5 L)) of the way. It is NaN under 'fixed', which
+ * has no profile.
  *
  * exchange 'fixed' gives constant coefficients: the sea's dragCoefficient
  * (SEA_DRAG) and the land's (LAND_DRAG) for momentum, heat and vapour
@@ -165,8 +169,16 @@ export function heatProfile(height, zeta, z, z0m, z0h) {
   return Math.log((height + z0m) / z0h) - psiHeat(zeta * (height + z0m) / z) + psiHeat(zeta * z0h / z);
 }
 
+export const SCREEN_LEVEL = { height: 2, rough: 0.03, momentum: 0.03, heat: 0.003, stable: 5 };
+
+export function screenWeight(height, zeta, z, z0m, z0h) {
+  const open = z0m > SCREEN_LEVEL.rough, m = open ? SCREEN_LEVEL.momentum : z0m, h = open ? SCREEN_LEVEL.heat : z0h;
+  const top = zeta > 0 ? SCREEN_LEVEL.stable * z / zeta : Infinity;
+  return heatProfile(Math.min(height, top), zeta, z, m, h) / heatProfile(Math.min(z, top), zeta, z, m, h);
+}
+
 export function profileTemperature(height, surfaceT, airT, z, zeta, z0m, z0h, g, cp) {
-  return surfaceT + (airT + g * z / cp - surfaceT) * heatProfile(height, zeta, z, z0m, z0h) / heatProfile(z, zeta, z, z0m, z0h) - g * height / cp;
+  return surfaceT + (airT + g * z / cp - surfaceT) * screenWeight(height, zeta, z, z0m, z0h) - g * height / cp;
 }
 
 export function andreasScalar(z0, ustar, viscosity) {
@@ -302,7 +314,7 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
     drag[i] = coefficients.drag;
     heat[i] = coefficients.heat;
     reference[i] = referenceCoefficient(z, o.referenceCrop);
-    temperature2m[i] = profileTemperature(2, skin, theta[b] * exnerLayer[b], z, coefficients.zeta, blend.momentum, blend.heat, g, cp);
+    temperature2m[i] = profileTemperature(SCREEN_LEVEL.height, skin, theta[b] * exnerLayer[b], z, coefficients.zeta, blend.momentum, blend.heat, g, cp);
     last.z = z; last.ri = ri; last.momentum = blend.momentum; last.heat = blend.heat;
     return last;
   }

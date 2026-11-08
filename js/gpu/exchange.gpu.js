@@ -1,4 +1,4 @@
-import { EXCHANGE_DEFAULTS, ROUGHNESS, ANDREAS, KARMAN, FAO_KARMAN } from '../physics/exchange.module.js';
+import { EXCHANGE_DEFAULTS, ROUGHNESS, ANDREAS, KARMAN, FAO_KARMAN, SCREEN_LEVEL } from '../physics/exchange.module.js';
 import { TRACE_SNOW } from '../physics/land.module.js';
 
 /*
@@ -60,6 +60,12 @@ fn xTransfer(ri: f32, z: f32, z0m: f32, z0h: f32) -> vec3<f32> {
   return vec3<f32>(XKARMAN * XKARMAN / (f.x * f.x), XKARMAN * XKARMAN / (f.x * f.y), zeta);
 }
 fn xHeatProfile(h: f32, zeta: f32, z: f32, z0m: f32, z0h: f32) -> f32 { return log((h + z0m) / z0h) - xPsiH(zeta * (h + z0m) / z) + xPsiH(zeta * z0h / z); }
+fn xScreenWeight(zeta: f32, z: f32, z0m: f32, z0h: f32) -> f32 {
+  let wmo = z0m > ${SCREEN_LEVEL.rough};
+  let m = select(z0m, ${SCREEN_LEVEL.momentum}, wmo); let h = select(z0h, ${SCREEN_LEVEL.heat}, wmo);
+  let top = select(3.0e38, ${SCREEN_LEVEL.stable.toFixed(1)} * z / max(zeta, 1.0e-30), zeta > 0.0);
+  return xHeatProfile(min(${SCREEN_LEVEL.height.toFixed(1)}, top), zeta, z, m, h) / xHeatProfile(min(z, top), zeta, z, m, h);
+}
 fn xAndreas(z0: f32, ustar: f32, viscosity: f32) -> f32 {
   let reynolds = ustar * z0 / viscosity; let l = log(min(1000.0, reynolds));
   var b = AND2;
@@ -131,7 +137,7 @@ fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, sn
   }
   PH[PH_XWIND + i] = speed;
   let airT = IN[S_TH + b] * D[D_EXM + b];
-  PH[PH_T2M + i] = skin + (airT + GRAV * z / CP - skin) * xHeatProfile(2.0, c.z, z, z0m, z0h) / xHeatProfile(z, c.z, z, z0m, z0h) - GRAV * 2.0 / CP;
+  PH[PH_T2M + i] = skin + (airT + GRAV * z / CP - skin) * xScreenWeight(c.z, z, z0m, z0h) - GRAV * ${SCREEN_LEVEL.height.toFixed(1)} / CP;
   let d = 2.0 / 3.0 * REF_CROP; let rm = 0.123 * REF_CROP; let rh = 0.1 * rm;
   return vec3<f32>(c.x, c.y, REF_KARMAN * REF_KARMAN / (log((z - d) / rm) * log((z - d) / rh)));
 }

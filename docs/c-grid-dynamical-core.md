@@ -2504,7 +2504,8 @@ longwave at the top; the sea-ice thickness and concentration; the
 eastward and northward stress of the air on the surface, reconstructed
 at the cells from the implicit drag's edge stress as the wind is (a
 GPU model without the implicit drag has none, and the default leaves
-it out); and the surface latent and sensible heat fluxes. The recorder samples them
+it out); the surface latent and sensible heat fluxes; and the 2 m
+temperature (`t2m`, NaN under the fixed exchange). The recorder samples them
 every MEANS_EVERY steps, 64 samples a model day at any N (every 8th
 step at N=128). On the GPU it reads them through `model.sampleFrame`,
 which runs the frame kernel and one copy into a staging buffer without a
@@ -2517,7 +2518,7 @@ held, and with the recorder on or off the model steps bit for bit the
 same, and at N=128 the samples cost less than a timing's noise, about
 2 % of a 76 ms step. Each day's samples are averaged into a ring of
 daily means, float32 and MEANS_WINDOW = 30 days deep, held in memory:
-about 354 MB for the 18 default fields at N=128, with 24 MB of float64
+about 374 MB for the 19 default fields at N=128, with 25 MB of float64
 sums for the day under way. A save's `means.<field>` is the float32
 mean of the ring's days, and the header's
 `means: { fields, every, days, samples }` says how many days the ring
@@ -9366,12 +9367,23 @@ FAO-56's own reference grass at z₁ (eq. 4: h 0.12 m, d 2/3 h, z₀m
 2 m).
 
 The 2 m temperature (`t2m`, a frame field and one of the interval
-means) is diagnosed as the IFS diagnoses ERA5's: the dry static energy
-c_p T + g h, interpolated at h = 2 m between the skin's and the lowest
-layer's along the heat profile ln((h + z₀m)/z₀h) − ψh(ζ (h + z₀m)/z₁) +
-ψh(ζ z₀h/z₁) of the step's ζ and the cell's blended z₀m and z₀h. Both
-engines compute it in the exchange; under the fixed exchange, which has
-no profile, it is NaN.
+means) is interpolated as the IFS interpolates its 2 m temperature
+(Cy41r2 Part IV eq. 3.95). The dry static energy c_p T + g h at
+h = 2 m lies between the skin's and the lowest layer's at the share
+F(min(2 m, 5L))/F(min(z₁, 5L)) of the heat profile F(h) =
+ln((h + z₀m)/z₀h) − ψh((h + z₀m)/L) + ψh(z₀h/L).
+- L = z₁/ζ is the step's, from the exchange's own ζ above, which no cap
+  limits. The IFS caps z/L in its exchange too, so its L would differ.
+- Where the cell's blended z₀m exceeds 0.03 m (90 % of 40–60N land by
+  area in seventeen64's day-365 state), the profile takes the WMO's
+  open-terrain z₀m 0.03 m and z₀h 0.003 m in place of the cell's
+  (eq. 3.91). Below that it takes the cell's own.
+- In stable air the profile is uniform above h = 5L: the IFS limits z/L
+  to 5 in its post-processing (section 3.2). Where 5L is under 2 m,
+  t2m takes the lowest layer's dry static energy.
+
+Both engines compute it in the exchange; under the fixed exchange,
+which has no profile, it is NaN.
 
 Three consequences built with it, on both engines:
 - The surface drag is the lower boundary of the boundary layer's
