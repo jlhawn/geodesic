@@ -591,6 +591,13 @@ const oceanMessage = (model) => (model.ocean ? { ocean: true, generator: (model.
  * ocean as transferable buffers.
  */
 async function snapshot() {
+  const { arrays, ocean, land } = await snapshotArrays(model);
+  const transfer = [...Object.values(arrays), ...(ocean ? Object.values(groupArrays(ocean)) : []), ...(land ? Object.values(land) : [])];
+  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), ...geographyHeader(currentGeography), options: currentOptions, arrays, ocean, land }, transfer);
+  refresh();
+}
+
+export async function snapshotArrays(model) {
   if (model.sync) await model.sync();
   const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
   const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
@@ -603,6 +610,7 @@ async function snapshot() {
   if (model.seaFlow) arrays.seaFlow = Float64Array.from(model.seaFlow).buffer;
   if (model.skin) for (const [name, values] of Object.entries(model.skin.serialize())) arrays[name] = values.buffer;
   if (model.lake) for (const [name, values] of Object.entries(lakeArrays(await model.lake.serialize()))) arrays[name] = values.buffer;
+  for (const [name, values] of Object.entries(savedBoundaryLayer(model))) arrays[name] = values.buffer;
   let ocean = null, land = null;
   if (model.ocean) {
     const o = await model.ocean.serialize();
@@ -612,9 +620,7 @@ async function snapshot() {
     const l = await model.land.serialize();
     land = Object.fromEntries(Object.entries(l).map(([k, v]) => [k, Float64Array.from(v).buffer]));
   }
-  const transfer = [...Object.values(arrays), ...(ocean ? Object.values(groupArrays(ocean)) : []), ...(land ? Object.values(land) : [])];
-  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), ...geographyHeader(currentGeography), options: currentOptions, arrays, ocean, land }, transfer);
-  refresh();
+  return { arrays, ocean, land };
 }
 
 /*
@@ -634,20 +640,7 @@ async function restore(snapshot) {
   if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || !sameOptions(runOptions(saved.options, lastStart.options), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
-  const init = initialState(model, saved, currentN);
-  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-  placeIce(model, saved, currentN);
-  placeDeck(model, saved, currentN);
-  placeLake(model, saved, currentN);
-  if (model.load) model.load({ ocean: false });
-  await model.settle?.();
-  if (model.dragsDue) model.dragsDue();
-  if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
-  await model.settle?.();
-  placeLand(model, saved, currentN);
-  await model.settle?.();
-  placeEnergy(model, saved);
-  model.time = saved.time;
+  await placeSaved(model, saved, currentN);
   restartRain();
   serving = true;
   self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
@@ -728,11 +721,46 @@ async function start(message) {
   sourceModel = null;
 }
 
+export async function placeSaved(model, saved, N) {
+  const init = initialState(model, saved, N);
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  placeIce(model, saved, N);
+  placeDeck(model, saved, N);
+  placeLake(model, saved, N);
+  if (model.load) model.load({ ocean: false });
+  await model.settle?.();
+  if (model.dragsDue) model.dragsDue();
+  if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
+  await model.settle?.();
+  placeLand(model, saved, N);
+  await model.settle?.();
+  placeEnergy(model, saved);
+  model.time = saved.time;
+}
+
+const CARRIED_FIELDS = [
+  ['boundaryDepth', (model) => model.boundaryLayer?.depth, true],
+  ['mixingTop', (model) => model.boundaryLayer?.mixingTop, true],
+  ['boundaryRegime', (model) => model.boundaryLayer?.regime, false],
+  ['boundaryBuoyancy', (model) => model.boundaryLayer?.buoyancyFlux, false],
+  ['subcloudVirtual', (model) => model.moist?.subcloudVirtual, false],
+  ['iceOceanFlux', (model) => (model.gpu ? null : model.seaIce?.oceanFlux), false],
+];
+
+export function savedBoundaryLayer(model) {
+  const ground = model.gpu ? null : model.surfaceGeopotential, saved = {};
+  for (const [name, field, height] of CARRIED_FIELDS) {
+    const values = field(model);
+    if (values) saved[name] = Float64Array.from(values, (v, i) => (height && ground ? v - ground[i] / model.core.diagnostics.g : v));
+  }
+  return saved;
+}
+
 export function placeBoundaryLayer(model, saved) {
-  const layer = model.boundaryLayer, ground = model.gpu ? null : model.surfaceGeopotential;
-  if (!saved || !layer) return;
-  for (const [name, field, height] of [['boundaryDepth', 'depth', true], ['mixingTop', 'mixingTop', true], ['boundaryRegime', 'regime', false]]) {
-    const value = saved[name], target = layer[field];
+  const ground = model.gpu ? null : model.surfaceGeopotential;
+  if (!saved) return;
+  for (const [name, field, height] of CARRIED_FIELDS) {
+    const value = saved[name], target = field(model);
     if (!value || !target || value.length !== target.length) continue;
     target.set(value);
     if (height && ground) for (let i = 0; i < target.length; i++) target[i] += ground[i] / model.core.diagnostics.g;

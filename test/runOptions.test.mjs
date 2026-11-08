@@ -4,7 +4,8 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { encodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
+import { encodeState, decodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
+import { initializeState } from '../js/physics/init.module.js';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
@@ -74,5 +75,43 @@ test("the page's worker runs a saved state with the options it records, and its 
     globalThis.fetch = fetched;
     delete globalThis.self;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a page snapshot carries what the first step reads before it computes its own through encodeState and decodeState to the page's restore, so that the first step after a restore matches the continued run", async () => {
+  const stand = !globalThis.self;
+  if (stand) globalThis.self = { postMessage() {} };
+  try {
+    const { snapshotArrays, placeSaved } = await import('../js/model.worker.js');
+    const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 1500 + 1000 * Math.cos(lat) : -4000));
+    const build = () => { const model = createModel(new Grid(16), { topography }), init = initializeState(model, {}); for (let a = 0; a < init.length; a++) model.state[a].set(init[a]); return model; };
+    const run = build(), dt = 1350, C = run.mesh.nCells, carried = ['boundaryDepth', 'mixingTop', 'boundaryRegime', 'boundaryBuoyancy', 'subcloudVirtual', 'iceOceanFlux'];
+    for (let s = 0; s < 8; s++) run.step(dt);
+    const { arrays, ocean, land } = await snapshotArrays(run);
+    const saved = { N: 16, K: run.core.K, day: run.time / 86400, time: run.time, terrain: true };
+    for (const [key, buffer] of Object.entries(arrays)) saved[key] = new Float64Array(buffer.slice(0));
+    saved.ocean = { ...groupHeader(ocean), ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
+    saved.land = Object.fromEntries(Object.entries(land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
+    const back = await decodeState(encodeState(saved, { f64: f64Names(saved) }));
+    for (const key of carried) assert.equal(back[key]?.length, key === 'subcloudVirtual' ? run.moist.subcloudVirtual.length : C, `the snapshot carries ${key}`);
+    const restored = async (drop) => { const model = build(), kept = { ...back }; for (const key of drop) delete kept[key]; await placeSaved(model, kept, 16); return model; };
+    const twin = await restored([]), bare = await restored(carried);
+    const g = run.core.diagnostics.g;
+    for (let i = 0; i < C; i++) {
+      const ground = run.surfaceGeopotential[i] / g;
+      assert.ok(Math.abs(back.boundaryDepth[i] + ground - run.boundaryLayer.depth[i]) <= 1e-12 * Math.abs(run.boundaryLayer.depth[i]), `cell ${i}: the save holds the depth above the ground`);
+      for (const [mine, theirs] of [[twin.boundaryLayer.depth, run.boundaryLayer.depth], [twin.boundaryLayer.mixingTop, run.boundaryLayer.mixingTop]]) assert.ok(Math.abs(mine[i] - theirs[i]) <= 1e-12 * Math.abs(theirs[i]), `cell ${i}: a height comes back to round-off`);
+      for (const [mine, theirs] of [[twin.boundaryLayer.regime, run.boundaryLayer.regime], [twin.boundaryLayer.buoyancyFlux, run.boundaryLayer.buoyancyFlux], [twin.seaIce.oceanFlux, run.seaIce.oceanFlux]]) assert.equal(mine[i], theirs[i], `cell ${i}`);
+    }
+    assert.deepEqual(twin.moist.subcloudVirtual, run.moist.subcloudVirtual);
+    const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
+    for (const model of [run, twin, bare]) model.step(dt);
+    const gap = (model, a) => { let d = 0, s = 0; for (let i = 0; i < run.state[a].length; i++) { d = Math.max(d, Math.abs(model.state[a][i] - run.state[a][i])); s = Math.max(s, Math.abs(run.state[a][i])); } return s > 0 ? d / s : d; };
+    const restoredGaps = names.map((_, a) => gap(twin, a)), bareGaps = names.map((_, a) => gap(bare, a));
+    console.log(`the first step after a restore against the continued run (largest gap over the field's largest value): ${names.map((name, a) => `${name} ${restoredGaps[a].toExponential(1)}`).join(', ')}; restored without the carried fields: ${names.map((name, a) => `${name} ${bareGaps[a].toExponential(1)}`).join(', ')}`);
+    names.forEach((name, a) => assert.ok(restoredGaps[a] <= 1e-12, `${name}: the first step after the restore parts from the continued run by ${restoredGaps[a]}`));
+    assert.ok(Math.max(...bareGaps) > 1e-3, `without the carried fields the first step parts by only ${Math.max(...bareGaps)}`);
+  } finally {
+    if (stand) delete globalThis.self;
   }
 });
