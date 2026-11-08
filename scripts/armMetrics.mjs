@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { SECTIONS, sectionName as binName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable } from './equatorialSections.mjs';
 import { diagnoseExchange } from './surfaceExchange.mjs';
-import { savedTerrain, stateTerrain } from '../js/stateFile.module.js';
+import { stateTerrain } from '../js/stateFile.module.js';
 const R = new URL('../', import.meta.url).pathname;
 const [{ stateGeography, terrainKey }, { createModel, STATE_NAMES }, { decodeState, savedLevels }, { savedDeckField, DECK_FIELDS }, { stateGrid }, { saturationHumidity }] = await Promise.all([
   import(R + 'js/geography.module.js'), import(R + 'js/model.module.js'), import(R + 'js/stateFile.module.js'), import(R + 'js/physics/regrid.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/physics/moist.module.js')]);
@@ -19,7 +19,7 @@ const [LABEL, ...FILES] = process.argv.slice(2), LAT = Number(process.env.LAT ??
 const env = (n) => JSON.parse(process.env[n] ?? '{}');
 const first = await decodeState(new Uint8Array(readFileSync(FILES[0])));
 const { topography, geography, land: landOptions } = stateGeography(first);
-const model = createModel(stateGrid(first, topography).mesh, { terrain: savedTerrain(first) ?? true, topography, geography, land: landOptions, levels: savedLevels(first), ocean: false, radiation: env('RADIATION'), moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
+const model = createModel(stateGrid(first, topography).mesh, { terrain: stateTerrain(first), topography, geography, land: landOptions, levels: savedLevels(first), ocean: false, radiation: env('RADIATION'), moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
 const { mesh, core, state, radiation, seaIce, land, surface } = model;
 const { K, C, E, sigmaMid, R: Rd, g, exnerLayer, geopotential } = core.diagnostics;
 const { thetaV } = core.arrays;

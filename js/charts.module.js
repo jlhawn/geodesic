@@ -3,7 +3,7 @@ import { topographyFromInt16, savedGeography, topographyUrl, geographyOptions, l
 import { stateGrid } from './stateGrid.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { LEVELS, levelFields } from './levels.module.js';
-import { fetchState, stateName, listedStates, savedLevels, savedTerrain } from './stateFile.module.js';
+import { fetchState, stateName, listedStates, savedLevels, stateTerrain } from './stateFile.module.js';
 import { DEFAULT_RUN } from './defaultRun.module.js';
 
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796;
@@ -56,7 +56,7 @@ function gridFor(state, topography) {
  * terrain it records.
  */
 export function chartModel(state, topography = null, geography = null) {
-  const found = gridFor(state, topography), levels = savedLevels(state), terrain = savedTerrain(state) ?? true;
+  const found = gridFor(state, topography), levels = savedLevels(state), terrain = stateTerrain(state);
   const key = [state.N, found.relax, levels.join(' '), topography?.name ?? 'none', JSON.stringify(savedGeography(state)), terrainKey(terrain)].join(' ');
   if (!models.has(key)) models.set(key, createModel(found.mesh, { levels, physics: false, terrain, ...(topography ? { topography, ...(geography ? { geography } : {}) } : {}) }));
   return { found, model: models.get(key) };
