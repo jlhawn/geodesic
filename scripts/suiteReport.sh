@@ -11,7 +11,8 @@
 #   scripts/suiteReport.sh runs/suite.txt
 #   FILES="test/grid.test.mjs test/mesh.test.mjs" JOBS=4 scripts/suiteReport.sh /tmp/r.txt
 # Environment: FILES (test/*.test.mjs), JOBS, TIMEOUT_MIN, DIR (REPORT less
-# its .txt).
+# its .txt). Option groups in it (values that start with '{') are unset, so
+# each test file sees only the groups it gives.
 cd "$(dirname "$0")/.."
 REPORT=${1:-runs/suite.txt}
 DIR=${DIR:-${REPORT%.txt}}
@@ -21,6 +22,8 @@ TIMEOUT_MIN=${TIMEOUT_MIN:-60}
 LIMIT=; command -v timeout > /dev/null && LIMIT="timeout ${TIMEOUT_MIN}m"
 mkdir -p "$(dirname "$REPORT")" && rm -rf "$DIR" && mkdir -p "$DIR"
 unset NODE_TEST_CONTEXT
+group='^[[:space:]]*\{'
+for name in $(compgen -e); do [[ ${!name} =~ $group ]] && unset "$name"; done
 
 start=$(date +%s)
 printf '%s\n' $FILES | xargs -P "$JOBS" -I{} bash -c '

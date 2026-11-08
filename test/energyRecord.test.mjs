@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createEnergyRecord, balanceLine, RECORD_DAYS, FIELDS } from '../js/physics/energyRecord.module.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -67,7 +68,7 @@ test('the record goes through the state file as float64 and loads back whole', a
 
 test('the spin-up adds each whole day to the record, carries it across a split, and prints the balance', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'energy-'));
-  const run = (env) => spawnSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: '16', MINUTES: '100', OUT: out, ...env }, encoding: 'utf8' });
+  const run = (env) => spawnSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: '16', MINUTES: '100', OUT: out, ...env }, encoding: 'utf8' });
   let r = run({ TAG: 'whole', DAYS: '3' });
   assert.equal(r.status, 0, r.stderr.slice(-1500));
   const whole = await decodeState(new Uint8Array(readFileSync(join(out, 'whole_day0003.bin'))));

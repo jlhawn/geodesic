@@ -11,6 +11,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { encodeState } from '../js/stateFile.module.js';
 import { gridHeader } from '../js/stateGrid.module.js';
 import { oceanCells, inertialStepLimit } from '../js/ocean/layered.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 const dir = mkdtempSync(join(tmpdir(), 'diagnostic-scripts-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -33,7 +34,7 @@ for (let k = 0; k < ocean.layers; k++) {
 const [pi, theta, u, surfaceT, q, qc, ice] = state;
 const file = join(dir, 'state16_day0000.bin');
 writeFileSync(file, encodeState({ ...header, K: model.core.K, levels: model.core.levels, day: 0, time: 0, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, ocean: await ocean.serialize(), land: await model.land.serialize() }));
-const run = (script, env) => spawnSync(process.execPath, [new URL(`../scripts/${script}.mjs`, import.meta.url).pathname, file], { env: { ...process.env, ...env }, encoding: 'utf8', maxBuffer: 1 << 28 });
+const run = (script, env) => spawnSync(process.execPath, [new URL(`../scripts/${script}.mjs`, import.meta.url).pathname, file], { env: { ...withoutOptionGroups(), ...env }, encoding: 'utf8', maxBuffer: 1 << 28 });
 
 test('edgeBudget splits the ocean\'s momentum tendency into the terms the hybrid computes: on a state at N=16 they add up to the tendency on every row of every ocean edge, a pinned row\'s relaxation at the run\'s rate included, with the fixed layers shown and the wind, the bottom\'s and the shelves\' drags at work', () => {
   const wet = [], open = [], shelfEdges = [], { shelf } = oceanCells(model.mesh.nCells, model.geography);

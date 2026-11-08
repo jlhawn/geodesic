@@ -22,10 +22,14 @@ export function envNames(url, names = new Set(), seen = new Set()) {
   return names;
 }
 
+const optionGroup = (value) => /^\s*\{/.test(value);
+
 export const unreadOptions = (url, env = process.env) => {
   const read = envNames(url);
-  return Object.keys(env).filter((name) => /^\s*\{/.test(env[name]) && !read.has(name)).sort();
+  return Object.keys(env).filter((name) => optionGroup(env[name]) && !read.has(name)).sort();
 };
+
+export const withoutOptionGroups = (env = process.env) => Object.fromEntries(Object.entries(env).filter(([, value]) => !optionGroup(value)));
 
 export function refuseUnreadOptions(url) {
   let main;
@@ -33,4 +37,16 @@ export function refuseUnreadOptions(url) {
   if (main !== fileURLToPath(url)) return;
   const unread = unreadOptions(url);
   if (unread.length) throw new Error(`${main.split('/').pop()} does not read ${unread.join(', ')}, given ${unread.length > 1 ? 'as option groups' : 'as an option group'}: unset or rename ${unread.length > 1 ? 'them' : 'it'}`);
+}
+
+/*
+ * `node scripts/optionEnvironment.mjs SCRIPT` prints `-u NAME` for each
+ * option group in the environment SCRIPT does not read, for a driver's
+ * `env` to give a stage only the groups its script reads.
+ */
+let self = null;
+try { self = realpathSync(process.argv[1]); } catch {}
+if (self === fileURLToPath(import.meta.url)) {
+  if (!process.argv[2]) throw new Error('usage: node scripts/optionEnvironment.mjs SCRIPT');
+  console.log(unreadOptions(pathToFileURL(realpathSync(process.argv[2]))).map((name) => `-u ${name}`).join(' '));
 }

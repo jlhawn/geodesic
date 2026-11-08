@@ -9,6 +9,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 import { createIntervalMeans, meansGroup, meansEvery, MEANS } from '../js/intervalMeans.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 /*
  * The 30-day means of js/intervalMeans.module.js on the GPU engine at
@@ -96,7 +97,7 @@ test('a recorder leaves the GPU model and its day-mean diagnostics bit for bit a
 
 const runDir = (name) => { const out = join(dir, name); mkdirSync(out); return out; };
 function spin(out, env) {
-  const result = spawnSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), TAG: 's', MINUTES: '100', OUT: out, ...env }, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), TAG: 's', MINUTES: '100', OUT: out, ...env }, encoding: 'utf8' });
   if (result.status !== 0) console.log(`spinup.mjs exited ${result.status}: ${result.stderr.slice(-2000)}`);
   return result.status;
 }

@@ -176,7 +176,7 @@ while [ $cycle -le "$last" ] && [ $status -eq 0 ] && ! stopped; do
     forcing=$OUT/${tag}_forcing
     count=$(ls "$forcing" 2>/dev/null | grep -cE '^forcing-[0-9]+\.bin$')
     if [ "$count" -lt $((RECORD_YEARS * YEAR_DAYS)) ]; then note "cycle $cycle: $forcing holds $count of $((RECORD_YEARS * YEAR_DAYS)) days"; status=1; break; fi
-    supervise "$OUT/$tag.out" $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)={.*/-u \1/p') N="$N" TAG="$tag" STATE="$OUT/$(printf '%s_day%04d.bin' "$TAG" "$end")" FORCING="$forcing" YEARS="$OCEAN_YEARS" DAYS_PER_YEAR="$YEAR_DAYS" LOOP_DAYS=$((RECORD_YEARS * YEAR_DAYS)) KEEP="$OCEAN_KEEP" SNAPSHOT_DAYS="$SNAPSHOT_DAYS" RESTORE="$RESTORE" OCEAN="$OCEAN_ONLY" RADIATION="$RADIATION" node scripts/oceanSpinup.mjs; status=$?
+    supervise "$OUT/$tag.out" $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=[[:space:]]*{.*/-u \1/p') N="$N" TAG="$tag" STATE="$OUT/$(printf '%s_day%04d.bin' "$TAG" "$end")" FORCING="$forcing" YEARS="$OCEAN_YEARS" DAYS_PER_YEAR="$YEAR_DAYS" LOOP_DAYS=$((RECORD_YEARS * YEAR_DAYS)) KEEP="$OCEAN_KEEP" SNAPSHOT_DAYS="$SNAPSHOT_DAYS" RESTORE="$RESTORE" OCEAN="$OCEAN_ONLY" RADIATION="$RADIATION" node scripts/oceanSpinup.mjs; status=$?
     continue
   fi
   finish_cycle "$cycle"

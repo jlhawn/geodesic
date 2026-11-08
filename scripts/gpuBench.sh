@@ -21,7 +21,8 @@
 # (32), FRESH_DAYS (0.25), FRESH_OCEAN ('{"everySteps":4}'), PACE_DAYS (1;
 # 2 at N=64), BATCH (8), SITE
 # (https://gcm.echorelay.net), and whatever scripts/spinup.mjs and
-# scripts/figures/figureState.mjs read (OCEAN, RADIATION, MOIST, ...).
+# scripts/figures/figureState.mjs read (OCEAN, RADIATION, MOIST, ...); each
+# stage is given only the option groups its own script reads.
 cd "$(dirname "$0")/.."
 OUT=${OUT:-runs/bench} NS=${NS-"64 128"} FRESH=${FRESH-"256"} FRESH_STEPS=${FRESH_STEPS:-32} FRESH_DAYS=${FRESH_DAYS:-0.25}
 BATCH=${BATCH:-8} SITE=${SITE:-https://gcm.echorelay.net} FRESH_OCEAN=${FRESH_OCEAN-'{"everySteps":4}'}
@@ -30,6 +31,7 @@ OUT=$(cd "$OUT" && pwd)
 REPORT=$OUT/report.txt
 : > "$REPORT"
 say() { echo "$*" | tee -a "$REPORT"; }
+unread() { node scripts/optionEnvironment.mjs "$1"; }
 
 stage() {
   local name=$1 start=$SECONDS; shift
@@ -60,10 +62,10 @@ fetch() {
 
 timed() {
   local label=$1 state=$2 days=$3
-  stage "profile$label" env WARM=8 STEPS=32 node scripts/profileGpu.mjs "$state" && { head -n 1 "$OUT/profile$label.txt" | cut -c1-400; sed -n '2,13p' "$OUT/profile$label.txt"; } | tee -a "$REPORT"
-  stage "split$label" env WARM=8 STEPS=32 SPLIT=1 ROWS=400 node scripts/profileGpu.mjs "$state" && say "  by kernel: $OUT/split$label.txt"
-  sampled "pace$label" env DAYS="$days" node scripts/paceGpu.mjs "$state" && say "  $(cat "$OUT/pace$label.txt")"
-  sampled "pace${label}b$BATCH" env DAYS="$days" BATCH="$BATCH" node scripts/paceGpu.mjs "$state" && say "  $(cat "$OUT/pace${label}b$BATCH.txt")"
+  stage "profile$label" env $(unread scripts/profileGpu.mjs) WARM=8 STEPS=32 node scripts/profileGpu.mjs "$state" && { head -n 1 "$OUT/profile$label.txt" | cut -c1-400; sed -n '2,13p' "$OUT/profile$label.txt"; } | tee -a "$REPORT"
+  stage "split$label" env $(unread scripts/profileGpu.mjs) WARM=8 STEPS=32 SPLIT=1 ROWS=400 node scripts/profileGpu.mjs "$state" && say "  by kernel: $OUT/split$label.txt"
+  sampled "pace$label" env $(unread scripts/paceGpu.mjs) DAYS="$days" node scripts/paceGpu.mjs "$state" && say "  $(cat "$OUT/pace$label.txt")"
+  sampled "pace${label}b$BATCH" env $(unread scripts/paceGpu.mjs) DAYS="$days" BATCH="$BATCH" node scripts/paceGpu.mjs "$state" && say "  $(cat "$OUT/pace${label}b$BATCH.txt")"
 }
 
 say "GPU benchmark at $(git rev-parse --short HEAD 2> /dev/null || echo '?') on $(hostname), $(date -u +%Y-%m-%dT%H:%M:%SZ), node $(node --version), $(nproc 2> /dev/null || sysctl -n hw.ncpu) cores"
@@ -75,7 +77,7 @@ for N in $NS; do
   if [ -s "runs/$name.bin" ]; then cp "runs/$name.bin" "$OUT/start/$name.bin"; else stage "fetch$N" fetch "$name" || continue; fi
   rm -f "$OUT/start/eleven${N}_day1826.bin" "$OUT/start/eleven$N.log"
   start=$SECONDS
-  stage "day$N" env N="$N" TAG="eleven$N" DAYS=1 STRATOSPHERE=1 OUT="$OUT/start" node scripts/spinup.mjs || continue
+  stage "day$N" env $(unread scripts/spinup.mjs) N="$N" TAG="eleven$N" DAYS=1 STRATOSPHERE=1 OUT="$OUT/start" node scripts/spinup.mjs || continue
   [ -s "$OUT/start/eleven${N}_day1826.bin" ] || { say "  no day-1826 state"; continue; }
   say "  one spin-up day with its load and save: $((SECONDS - start)) s; $(grep -c '^day ' "$OUT/start/eleven$N.log") day line(s), $(grep '^day ' "$OUT/start/eleven$N.log" | tail -n 1 | cut -c1-160)"
   timed "$N" "$OUT/start/eleven${N}_day1826.bin" "${PACE_DAYS:-$([ "$N" -le 64 ] && echo 2 || echo 1)}"
@@ -86,7 +88,7 @@ for N in $FRESH; do
   say "N=$N from the atlas, $FRESH_STEPS steps in${FRESH_OCEAN:+, ocean $FRESH_OCEAN}"
   rm -f "$OUT/start/fresh${N}"_day*.bin "$OUT/start/fresh$N.log"
   start=$SECONDS
-  stage "fresh$N" env N="$N" TAG="fresh$N" DAYS=1 STOP_AFTER_STEPS="$FRESH_STEPS" MINUTES=60 STRATOSPHERE=1 OUT="$OUT/start" node scripts/spinup.mjs || continue
+  stage "fresh$N" env $(unread scripts/spinup.mjs) N="$N" TAG="fresh$N" DAYS=1 STOP_AFTER_STEPS="$FRESH_STEPS" MINUTES=60 STRATOSPHERE=1 OUT="$OUT/start" node scripts/spinup.mjs || continue
   state=$(ls "$OUT/start/fresh${N}"_day*_step*.bin 2> /dev/null | tail -n 1)
   [ -n "$state" ] || { say "  no checkpoint"; continue; }
   say "  fresh start to the checkpoint: $((SECONDS - start)) s ($(grep -o 'after [0-9]* s of setup' "$OUT/start/fresh$N.log" | head -n 1)), state $(du -m "$state" | cut -f1) MiB"

@@ -33,7 +33,7 @@ test('differingGroups names the groups whose options differ, in any key order, a
   assert.deepEqual(differingGroups({ terrain: { conserveVolume: true } }, { terrain: { conserveVolume: false } }), ['terrain']);
 });
 
-test('a run that rebuilds a saved state takes the groups its header records under given, each group it is given over the recorded one key by key and false in its place, and refuses a header without them unless a stand-in is given', () => {
+test('a run that rebuilds a saved state takes the groups its header records under given, each group it is given over the recorded one key by key and false in its place, and refuses a header without them unless a stand-in is given, and a stand-in beside a header that records them unless the two agree', () => {
   const { options, given } = headerOptions({ radiation: { aerosol: 'flat' }, moist: { pcapeMinimum: 0 }, land: { soil: 'slab' }, dynamics: { verticalAdvection: 'vanLeerWater' }, orography: false, gravityWaves: {} });
   const header = { options, given };
   assert.deepEqual(rebuiltOptions(header), given);
@@ -46,7 +46,10 @@ test('a run that rebuilds a saved state takes the groups its header records unde
   assert.deepEqual([rebuilt.radiation, rebuilt.land, rebuilt.dynamics], [given.radiation, given.land, given.dynamics]);
   assert.throws(() => rebuiltOptions({ options }, { moist: {} }), /records no given options/);
   assert.deepEqual(rebuiltOptions({ options }, { moist: { pcapeMinimum: 0.05 } }, {}), { moist: { pcapeMinimum: 0.05 } });
-  assert.deepEqual(rebuiltOptions(header, {}, { moist: {} }), given);
+  assert.throws(() => rebuiltOptions(header, {}, { moist: {} }), /this header records them, and GIVEN differs from them in radiation, moist, land, dynamics, orography, gravityWaves:/);
+  assert.throws(() => rebuiltOptions(header, {}, {}), /GIVEN differs from them in/);
+  const agreeing = Object.fromEntries(Object.entries(given).reverse().map(([group, values]) => [group, values && Object.fromEntries(Object.entries(values).reverse())]));
+  assert.deepEqual(rebuiltOptions(header, { moist: { pcapeMinimum: 0.05 } }, agreeing), { ...given, moist: { ...given.moist, pcapeMinimum: 0.05 } });
 });
 
 test("a state saved over terrain of other options keeps its options, given and terrain options through the file and resumes on that terrain through spinup.mjs's runTerrain and moveOntoTerrain, with TERRAIN or without, its surface pressure unmoved; a state over the default terrain moves onto it once", async () => {

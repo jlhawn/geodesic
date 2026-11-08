@@ -10,7 +10,8 @@
 // repeating SST of QBOi's experiment 2 (Butchart et al. 2018). The run
 // takes every option group the state's header records under given but
 // the ocean's; a header without them is refused unless GIVEN (JSON, {}
-// for today's defaults) stands in for them. MOIST, BOUNDARY_LAYER,
+// for today's defaults) stands in for them, and GIVEN beside a header
+// that records them is refused unless the two agree. MOIST, BOUNDARY_LAYER,
 // SURFACE, RADIATION, GRAVITY_WAVES and OROGRAPHY (JSON, or false) and
 // DYNAMICS and LAND (JSON) go over the recorded groups key by key, and
 // TERRAIN (JSON) replaces the terrain the state records; LEVELS (a grid

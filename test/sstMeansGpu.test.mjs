@@ -10,6 +10,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
 import { createSstRecorder } from '../js/sstMeans.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 /*
  * The SST recorders of js/sstMeans.module.js and js/gpu/sstMeans.gpu.js
@@ -120,7 +121,7 @@ test('a GPU recorder leaves the model bit for bit as it steps without one, a ste
 const STEPS = PER_DAY, OCEAN_STEPS = STEPS / 4, INSIDE = `s_day0001_step${String(STEPS / 2).padStart(4, '0')}.bin`;
 const runDir = (name) => { const out = join(dir, name); mkdirSync(out); return out; };
 function spin(out, env) {
-  const result = spawnSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), TAG: 's', MINUTES: '100', OUT: out, ...env }, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), TAG: 's', MINUTES: '100', OUT: out, ...env }, encoding: 'utf8' });
   if (result.status !== 0) console.log(`spinup.mjs exited ${result.status}: ${result.stderr.slice(-2000)}`);
   return result.status;
 }

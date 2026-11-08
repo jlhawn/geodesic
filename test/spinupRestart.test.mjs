@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeState } from '../js/stateFile.module.js';
 import { withoutMeans } from '../js/intervalMeans.module.js';
+import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -23,7 +24,7 @@ for (const [arm, env] of Object.entries(arms)) {
   test(`at N=${N} spinup.mjs with ${arm === 'cavity' ? 'the ice-shelf cavities' : 'the cavitating ice drift'} run 2 days whole and run 1 day, saved, then resumed for the second, ends on the same state bit for bit`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const out = mkdtempSync(join(tmpdir(), `restart-${arm}-`));
     try {
-      const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), MINUTES: '100', OUT: out, ...env, ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), MINUTES: '100', OUT: out, ...env, ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       run({ TAG: 'whole', DAYS: '2' });
       run({ TAG: 'split', DAYS: '1' });
       run({ TAG: 'split', DAYS: '2' });
