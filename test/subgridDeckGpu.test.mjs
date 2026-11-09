@@ -9,7 +9,7 @@ const LEVELS = ['bl60', ...(SIGMA_GRIDS.includes('bl48') ? ['bl48'] : [])];
 import { deckProfile } from './helpers/deckProfile.mjs';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, radiationTraces } from './helpers/decisions.mjs';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
-import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 import { F32_RMS } from './helpers/distribution.mjs';
 import { groupLayout, bandLayers, spreadGroups, groupChecks } from './helpers/spreadGroups.mjs';
 
@@ -48,7 +48,7 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', surface 
   const physics = { ...PREVIOUS_RADIATION, mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options }, sigma = sigmaInterfaces(levels);
   const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence, velocityScale: 'capped', ...boundaryLayer }, surface: { exchange: 'roughness', ...PREVIOUS_SURFACE, ...surface } });
   const { ambiguous } = deckProfile(model), traces = radiationTraces(model);
-  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, ...surface, turbulence, velocityScale: 'capped', ...boundaryLayer, surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
+  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, ...PREVIOUS_AIR_SEA, ...surface, turbulence, velocityScale: 'capped', ...boundaryLayer, surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   const C = model.mesh.nCells, K = model.core.K, decisions = decisionTracker(K, C), runs = new Set();
@@ -105,6 +105,19 @@ const SEAL_BACKSTOP = {
   bl48: { share: 3.2e-05, top: 0.0076, height: 0.0074, water: 1.91e-05, entrainment: 4.11e-07, deck: 1.2e-08, fraction: F32_RMS, olr: 0.00181, sw: 0.00272, blEntrainment: 4.11e-07 },
 };
 
+const NEAR_BACKSTOP = {
+  'deckCloud top': { share: F32_RMS, top: 6.22, height: 16.3, water: 0.00259, deck: 0.000595, fraction: 0.00397, olr: 0.047 },
+  'levels bl60, deckCloud top, deckInversion subgrid': { share: 0.0000298, top: 0.0073, height: 0.0075, water: 0.0000378, deck: 1.2e-8, fraction: F32_RMS, olr: 0.000377 },
+  'deckCloud top, deckInversion subgrid, radiationEvery 2': { share: 0.0000346, top: 0.00845, height: 0.00789, water: 0.0000356, deck: 1.16e-8, fraction: F32_RMS, olr: 0.000459 },
+  'deckResolved above, deckCloud top, deckInversion subgrid': { share: 0.0000316, top: 0.00747, height: 0.00717, water: 0.0000195, deck: 1.2e-8, fraction: F32_RMS, olr: 0.000381 },
+  'deckResolved above, deckCloud top, deckInversion subgrid, radiationEvery 2': { share: 0.000044, top: 0.0105, height: 0.00954, water: 0.0000196, deck: 1.2e-8, fraction: F32_RMS, olr: 0.000649 },
+  'bl60 subgrid, dry': { share: 0.000035, top: 0.0084, height: 0.00844, water: 0.000019, deck: 1.2e-8, fraction: F32_RMS, olr: 0.000568 },
+  'bl48 deckCloud top, deckInversion subgrid': { share: 0.0000335, top: 0.00793, height: 0.00753, water: 0.0000194, deck: 1.2e-8, fraction: F32_RMS, olr: 0.000397 },
+  'bl48 deckResolved above': { share: F32_RMS, top: 0.000386, height: 0.000429, water: 0.0000195, deck: 1.08e-8, fraction: F32_RMS, olr: 0.00101 },
+  virtualDensity: { share: F32_RMS, top: 0.000441, height: 0.000482, water: 0.0000177, deck: 1.08e-8, fraction: F32_RMS, olr: 0.000701 },
+};
+const backstopFor = (label) => { assert.ok(NEAR_BACKSTOP[label], `${label}: no bound for the cells left out`); return NEAR_BACKSTOP[label]; };
+
 function agree(label, run, onMeans = [], backstop = null) {
   const pick = (name) => (run.s9[name] ? 0 : onMeans.includes(name) ? run.means[name] : run[name].rmsRel);
   assert.ok(run.decked > 0.5 * run.C && run.gpuDecked === run.decked, `${label}: deck on ${run.decked} cells, ${run.gpuDecked} on the GPU`);
@@ -133,7 +146,7 @@ test('on bl60, and bl48 where it is built, the deck\'s cloud at its own top, on 
   for (const options of [{ deckCloud: 'top' }, ...LEVELS.map((levels) => ({ levels, deckCloud: 'top', deckInversion: 'subgrid' })), { deckCloud: 'top', deckInversion: 'subgrid', radiationEvery: 2 }]) {
     const plain = options.levels === 'bl48' && !options.radiationEvery, label = Object.entries(options).map(([key, value]) => `${key} ${value}`).join(', ') + (plain ? ', with the boundary layer diagnosed after the deposit' : ''), run = await deckPair(3, plain ? { ...options, boundaryLayer: PREVIOUS_BOUNDARY_LAYER } : options);
     show(label, run);
-    agree(label, run);
+    agree(label, run, [], plain ? null : backstopFor(label));
     assert.ok(run.moved > 0.5 * run.decked, `${label}: ${run.moved} of ${run.decked} decks off σ 0.92`);
   }
 });
@@ -144,7 +157,7 @@ test('on bl48 the deck that replaces the resolved cloud at and below its top ins
     const held = Object.keys(options).length === 1, label = Object.entries(options).map(([key, value]) => `${key} ${value}`).join(', ') + (held ? ', with the boundary layer diagnosed after the deposit' : '');
     const run = await deckPair(3, { levels: 'bl48', cloudColumns: true, cloudSpread: 0.75, boundaryLayer: held ? PREVIOUS_BOUNDARY_LAYER : {}, ...options });
     show(label, run);
-    agree(label, run);
+    agree(label, run, [], held ? null : backstopFor(label));
     console.log(`${label}: the replaced layers start apart on ${run.fromMiss} columns; worst GPU column off its boundary fluxes by ${run.gpuEnergy.toExponential(2)} W/m²`);
     assert.ok(run.fromMiss === 0 && run.gpuEnergy < 1e-2, `${label}: replaced layers apart on ${run.fromMiss}, ${run.gpuEnergy} W/m² off`);
   }
@@ -184,13 +197,13 @@ test('at the default order the deck matches between the engines on bl60 under th
     const run = await deckPair(3, options);
     show(label, run);
     means(label, run);
-    agree(label, run, onMeans);
+    agree(label, run, onMeans, backstopFor(label));
     extra(run);
   }
   const on = await deckPair(3, { surface: { virtualDensity: true } }), off = await deckPair(3);
   show('virtualDensity', on);
   means('virtualDensity', on);
-  agree('virtualDensity', on, ['q', 'blEntrainment', 'sw', 'longwave']);
+  agree('virtualDensity', on, ['q', 'blEntrainment', 'sw', 'longwave'], backstopFor('virtualDensity'));
   const both = new Set(off.kept);
   let gap = 0, move = 0, cells = 0;
   for (const i of on.kept) {

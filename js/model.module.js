@@ -111,7 +111,7 @@ export function createModel(gridOrMesh, {
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;
   const mode = exchangeMode(surfaceOptions, landOptions), rough = mode === 'roughness';
   const { seaHumidity } = exchangeOptions(surfaceOptions);
-  const skinSet = skinOptions(surfaceOptions);
+  const skinSet = skinOptions(surfaceOptions, mode);
   skinRequiresRoughness(skinSet, mode);
   const implicitDrag = rough && physics && boundaryLayerOptions !== false && surfaceOptions.implicitDrag !== false;
   let spacing = 0;
@@ -132,7 +132,7 @@ export function createModel(gridOrMesh, {
   const aerosol = physics && climatologyOn(radiationOptions) ? createAerosolSampler(mesh, loadAerosol(radiationOptions.aerosolData)) : null;
   const gustiness = surfaceOptions.gustiness ?? 3;
   const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, ...(aerosol ? { aerosolFields: aerosol.fields } : {}), gustiness: gusty ? 0 : gustiness, virtualDensity: surfaceOptions.virtualDensity === true, exchangeCoefficients: heatCoefficients, referenceCoefficients: rough ? exchange.reference : null, surfaceLayer: rough, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, seaHumidity, ...radiationOptions });
-  const relativeWind = relativeWindOf(surfaceOptions);
+  const relativeWind = relativeWindOf(surfaceOptions, !!implicitDrag);
   if (relativeWind && !implicitDrag) throw new Error('surface.relativeWind needs the implicit drag of the roughness exchange');
   const seaFlow = relativeWind ? new Float64Array(buffers && buffers.seaFlow ? buffers.seaFlow : new SharedArrayBuffer(8 * mesh.nEdges)) : null;
   const virtualBefore = surfaceOptions.virtualDensity === true ? new Float64Array(C).fill(1) : null;

@@ -75,7 +75,7 @@ export async function createGpuModel(gridOrMesh, {
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;
   const lakeCpu = geography && lakeModelOf(geography, lakeOptions) !== 'off' ? createLake(mesh, geography, lakeOptions) : null;
   const mode = exchangeMode(surface, landOptions);
-  const skinSet = skinOptions(surface), skinOn = skinSet.warmLayer || skinSet.coolSkin;
+  const implicitDrag = mode === 'roughness' && surface.implicitDrag !== false, skinSet = skinOptions(surface, mode), skinOn = skinSet.warmLayer || skinSet.coolSkin;
   skinRequiresRoughness(skinSet, mode);
   const subgrid = geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, givenSubgrid, GRAVITY, terrain) : null;
   const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};
@@ -95,7 +95,7 @@ export async function createGpuModel(gridOrMesh, {
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
-    orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, relativeWind: relativeWindOf(surface), virtualDensity: surface.virtualDensity === true, exchangeOptions: exchangeOptions(surface),
+    orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag, relativeWind: relativeWindOf(surface, implicitDrag), virtualDensity: surface.virtualDensity === true, exchangeOptions: exchangeOptions(surface),
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
     keepSmallIce: ice.keepSmallIce ?? (oceanOptions !== false && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift)),
     ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],

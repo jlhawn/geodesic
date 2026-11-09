@@ -8,6 +8,7 @@ import { withCadence } from '../js/cadence.module.js';
 import { createSkin, SEA_RHO_CP, SKIN_DEFAULTS, absorbedAbove, surfaceShare } from '../js/physics/skin.module.js';
 import { JERLOV } from '../js/ocean/layered.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
+import { PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 
 /*
  * The skin driven as the survey's column drives its schemes: a 12 h
@@ -123,12 +124,12 @@ test('over a 20 m slab the skin adds its own range to the slab\'s', () => {
 });
 
 test('with both options off the skin adds nothing and steps nothing, and the model builds none', () => {
-  const skin = createSkin(1, {});
+  const skin = createSkin(1, PREVIOUS_AIR_SEA);
   skin.step(0, -100, 800, 0.1, 1.2, 300, 50 * SEA_RHO_CP, 600);
   assert.equal(skin.offset(0, 50 * SEA_RHO_CP), 0);
   assert.equal(skin.warm[0], 0);
   assert.equal(skin.cool[0], 0);
-  assert.equal(createModel(new Grid(16), {}).skin, null);
+  assert.equal(createModel(new Grid(16), { surface: PREVIOUS_AIR_SEA }).skin, null);
   assert.throws(() => createModel(new Grid(16), { surface: { exchange: 'fixed', warmLayer: true } }), /exchange 'roughness'/);
   assert.throws(() => createModel(new Grid(16), { surface: { dragCoefficient: 1.2e-3, coolSkin: true } }), /exchange 'roughness'/);
 });

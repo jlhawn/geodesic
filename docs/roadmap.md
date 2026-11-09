@@ -484,3 +484,6 @@ the M1 with otherwise identical weather, to be read before the M5 is
 trusted for books. Its skin parity (`test/skinGpu.test.mjs`) drifts
 2e-4 to 1e-3 K in the warm layer over 20 steps against under 1e-4 K on
 the M1; the test allows what the M5 shows until that cause is read too.
+
+**Nov 9, 2026.** `coolSkin` is on by default wherever the exchange is
+'roughness', with `surface.relativeWind` (Joshua's call); `warmLayer` stays off.

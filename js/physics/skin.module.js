@@ -20,12 +20,13 @@ import { JERLOV } from '../ocean/layered.module.js';
  * that the profile's mean over h₀ is the slab's temperature.
  * GPU twin: SKIN_WGSL in gpu/physics.gpu.js.
  */
-export const SKIN_DEFAULTS = { warmLayer: false, coolSkin: false, warmLayerDepth: 3, warmLayerProfile: 0.3, warmLayerLangmuir: 2.23, warmLayerCap: 5 };
+export const SKIN_DEFAULTS = { warmLayer: false, coolSkin: true, warmLayerDepth: 3, warmLayerProfile: 0.3, warmLayerLangmuir: 2.23, warmLayerCap: 5 };
 export const SKIN = { karman: 0.4, gravity: 9.81, waterDensity: 1025, specificHeat: 3985, conductivity: 0.6, viscosity: 1e-6, coolCap: 1, firstDepth: 1e-3, maxDepth: 0.01, ustarFloor: 1e-6 };
 export const SEA_RHO_CP = SKIN.waterDensity * SKIN.specificHeat;
 
-export function skinOptions(surface = {}) {
-  const o = Object.fromEntries(Object.keys(SKIN_DEFAULTS).map((key) => [key, surface[key] ?? SKIN_DEFAULTS[key]]));
+export function skinOptions(surface = {}, mode = 'roughness') {
+  const defaults = mode === 'roughness' ? SKIN_DEFAULTS : { ...SKIN_DEFAULTS, warmLayer: false, coolSkin: false };
+  const o = Object.fromEntries(Object.keys(SKIN_DEFAULTS).map((key) => [key, surface[key] ?? defaults[key]]));
   if (!(o.warmLayerDepth > 0 && o.warmLayerProfile > 0 && o.warmLayerLangmuir >= 1 && o.warmLayerCap >= 0)) throw new Error('the warm layer takes a depth and profile above 0, a Langmuir factor of 1 or more and a cap of 0 or more');
   return o;
 }

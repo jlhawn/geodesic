@@ -15,6 +15,7 @@ import { createModel } from '../js/model.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 import { headerOptions } from '../scripts/stateOptions.mjs';
+import { PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -141,7 +142,7 @@ test('two recorded days replayed over the ocean alone, the ice drifting under th
   fresh.destroy();
   const forcing = join(dir, 'forcing');
   const run = (script, env) => execFileSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), OUT: dir, ...env }, encoding: 'utf8' });
-  run('spinup.mjs', { TAG: 'rec', RECORD: forcing, DAYS: '2', MINUTES: '100', MOIST: JSON.stringify({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 }) });
+  run('spinup.mjs', { TAG: 'rec', RECORD: forcing, DAYS: '2', MINUTES: '100', MOIST: JSON.stringify({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 }), SURFACE: JSON.stringify(PREVIOUS_AIR_SEA) });
   assert.deepEqual(readdirSync(forcing).sort(), [forcingName(1), forcingName(2)]);
   run('oceanSpinup.mjs', { TAG: 'alone', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
   run('oceanSpinup.mjs', { TAG: 'set', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2', OCEAN: JSON.stringify({ everySteps: 1 }) });
