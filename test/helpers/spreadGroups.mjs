@@ -4,10 +4,11 @@
  * field split by its layers' reference pressure, σ·1000 hPa, at 700 and
  * 100 hPa. A group's gap at a cell is the signed gap of largest magnitude
  * over the group's layers, and its reference is the CPU field over the same
- * cells and layers. The tests' bounds were built from CPU twins grouped by
- * these same functions, so a change here needs the bounds rebuilt.
+ * cells and layers. groupChecks requires every tier of S9 in each group's
+ * bounds. The tests' bounds were built from CPU twins grouped by these same
+ * functions, so a change here needs the bounds rebuilt.
  */
-import { hemispheres, columnLargest, magnitude, distributionCheck } from './distribution.mjs';
+import { hemispheres, columnLargest, magnitude, distributionCheck, S9_TIERS } from './distribution.mjs';
 
 const SURFACES = ['sea', 'land', 'coast'];
 export const BANDS = [['low', (sigma) => sigma >= 0.7], ['mid', (sigma) => sigma >= 0.1 && sigma < 0.7], ['high', (sigma) => sigma < 0.1]];
@@ -36,11 +37,11 @@ export function spreadGroups(cpu, gpu, layout, bands) {
   return groups;
 }
 
-export function groupChecks(groups, spreads) {
+export function groupChecks(groups, spreads, { require = S9_TIERS } = {}) {
   const failed = [], rows = [];
   for (const [name, group] of Object.entries(groups)) {
     if (!spreads[name]) { failed.push(`${name}: no bounds for this group`); continue; }
-    const check = distributionCheck(group.gaps, group.where, spreads[name], group.reference, { cells: group.cells });
+    const check = distributionCheck(group.gaps, group.where, spreads[name], group.reference, { cells: group.cells, require });
     failed.push(...check.failed.map((text) => `${name}: ${text}`));
     rows.push(`${name}: ${check.text}`);
   }
