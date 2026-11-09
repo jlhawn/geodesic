@@ -10,6 +10,7 @@
  */
 import { groupHeader, groupArrays, savedTerrain } from './stateFile.module.js';
 import { pickGeography } from './geography.module.js';
+import { savedLakeOptions } from './physics/lake.module.js';
 const DB_NAME = 'climate', VERSION = 2;
 export const RUN_STORE_LIMIT = 1024 * 1048576;
 const ORPHAN_AGE = 3600e3;
@@ -54,10 +55,12 @@ const buffers = (group) => Object.fromEntries(Object.entries(groupArrays(group))
  */
 export const messageState = (message) => ({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, terrainOptions: message.terrainOptions, grid: message.grid, ...pickGeography(message), options: message.options, soilSeed: message.soilSeed, ...f64(message.arrays), ocean: message.ocean ? { ...groupHeader(message.ocean), ...f64(message.ocean) } : null, land: message.land ? f64(message.land) : null });
 
+const withLakeOptions = (saved) => { const lake = savedLakeOptions(saved); return Object.keys(lake).length ? { ...(saved.options ?? {}), lake } : saved.options ?? null; };
+
 export function toSnapshot(saved, source = null) {
   const arrays = buffers(saved), ocean = saved.ocean ? { ...groupHeader(saved.ocean), ...buffers(saved.ocean) } : null, land = saved.land ? buffers(saved.land) : null;
   const bytes = [arrays, ocean, land].reduce((sum, group) => sum + Object.values(groupArrays(group)).reduce((n, b) => n + b.byteLength, 0), 0);
-  return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, terrainOptions: savedTerrain(saved) ?? null, grid: saved.grid ?? null, ...pickGeography(saved), options: saved.options ?? null, soilSeed: saved.soilSeed ?? null, bytes, source }, data: { arrays, ocean, land } };
+  return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, terrainOptions: savedTerrain(saved) ?? null, grid: saved.grid ?? null, ...pickGeography(saved), options: withLakeOptions(saved), soilSeed: saved.soilSeed ?? null, bytes, source }, data: { arrays, ocean, land } };
 }
 
 export function exportState(meta, data) {

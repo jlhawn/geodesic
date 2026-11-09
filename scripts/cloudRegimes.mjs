@@ -25,8 +25,8 @@
 // liquid and ice by the optics' phase ramp, and the high class's
 // condensate colder than 235 K is given apart. The saved day means of
 // the cloud effects are printed where the state carries them.
-// RADIATION, MOIST, BOUNDARY_LAYER and SURFACE (JSON) pass options as to
-// scripts/verticalAudit.mjs. Earth's values are printed beside each regime
+// RADIATION, MOIST, BOUNDARY_LAYER, SURFACE and LAKE (JSON) pass options as
+// to scripts/verticalAudit.mjs. Earth's values are printed beside each regime
 // with their sources; "from memory" marks a value not looked up for this
 // table.
 import { readFileSync } from 'node:fs';
@@ -39,7 +39,7 @@ import { saturationHumidity } from '../js/physics/moist.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
-import { loadSavedLake } from './savedLand.mjs';
+import { loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
@@ -50,7 +50,7 @@ const t0 = performance.now();
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, dSigma, g, exnerLayer } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));

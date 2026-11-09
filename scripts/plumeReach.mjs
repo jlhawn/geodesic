@@ -31,7 +31,7 @@ import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
-import { loadSavedLake } from './savedLand.mjs';
+import { loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
@@ -39,7 +39,7 @@ const env = (name) => JSON.parse(process.env[name] ?? '{}');
 const RADIATION = env('RADIATION'), MOIST = env('MOIST'), BOUNDARY_LAYER = env('BOUNDARY_LAYER'), SURFACE = env('SURFACE');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);

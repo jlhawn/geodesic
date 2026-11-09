@@ -1,12 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { encodeState, decodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
+import { decodeMask, pickGeography } from '../js/geography.module.js';
+import { messageState, toSnapshot, restoreMessage, exportState } from '../js/snapshots.module.js';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { LAKE_FIELDS, lakeArrays, savedLakeOptions, holdsLake, savedLake } from '../js/physics/lake.module.js';
-import { loadSavedLake, savedLakeOff } from '../scripts/savedLand.mjs';
+import { loadSavedLake, savedLakeOff, lakeOptionsFor } from '../scripts/savedLand.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -16,10 +22,10 @@ const N = 32, DT = 1350 * 16 / N, topography = readTopography('etopo2022');
 const sheets = geographyOptions({ ...FRESH_GEOGRAPHY, mask: 'n1024' });
 const setup = (lake = { model: 'flake' }) => ({ topography, geography: sheets.geography, land: sheets.land, lake });
 
-function savedColumns(lake) {
+function savedColumns(lake, frozenAt = (n) => n % 2 === 0) {
   const C = lake.depth.length, columns = Object.fromEntries([...LAKE_FIELDS, 'passed'].map((name) => [name, new Float64Array(C)]));
   lake.cells.forEach((i, n) => {
-    const D = lake.depth[i], frozen = n % 2 === 0;
+    const D = lake.depth[i], frozen = frozenAt(n);
     const column = frozen
       ? { mixed: 273.15, mean: 276.8, bottom: 277.1, shape: 0.6, mixedDepth: 0, ice: 0.4 + 0.01 * (n % 30), iceT: 270.5 }
       : { mixed: 281.2, mean: 279.4, bottom: 277.6, shape: 0.6, mixedDepth: Math.min(4, 0.5 * D), ice: 0, iceT: 273.15 };
@@ -90,16 +96,120 @@ test(`at N=${N} a save whose lake arrays hold no lake loads as none, and a save 
   assert.ok(savedLake(empty) && !holdsLake(savedLake(empty)) && !holdsLake(null));
   assert.equal(loadSavedLake(model, empty), 0);
   assert.ok(model.lake.mean.every((v) => v === 0));
+  const open = savedColumns(model.lake, () => false);
+  assert.ok(holdsLake(savedLake(open)), 'a save whose lakes are all open holds lakes');
+  assert.equal(loadSavedLake(model, open), model.lake.cells.length);
+  assert.ok(model.lake.cells.every((i) => model.lake.ice[i] === 0 && model.lake.mean[i] === Math.fround(279.4)));
   const saved = savedColumns(model.lake);
   assert.throws(() => loadSavedLake(prepare(createModel(new Grid(N), setup({ model: 'off' })), null), saved), /the save holds lakes and the model has none/);
 });
 
-test('the page and compareEngines build their lakes with the save\x27s lake options', () => {
-  const worker = readFileSync('js/model.worker.js', 'utf8'), engines = readFileSync('scripts/compareEngines.mjs', 'utf8');
-  assert.match(worker, /const lakeGiven = saved \? savedLakeOptions\(saved\) : \{\};\n\s*const given = runOptions\(saved \? \{ \.\.\.saved\.options, \.\.\.\(Object\.keys\(lakeGiven\)\.length \? \{ lake: lakeGiven \} : \{\}\) \}/);
-  assert.match(worker, /missingBed === 'hydrolakes'\) options\.lake = \{ \.\.\.options\.lake, lakeDepths: decodeLakeDepths\(await \(await fetch\(lakeDepthsUrl\)\)\.arrayBuffer\(\)\) \}/);
-  assert.match(engines, /const lakeOptions = \{ \.\.\.savedLakeOptions\(saved\), \.\.\.JSON\.parse\(process\.env\.LAKE \?\? '\{\}'\) \};\n\s*if \(Object\.keys\(lakeOptions\)\.length\) options\.lake = lakeOptions;/);
-  assert.match(engines, /lake options: /);
+const LAKES = [190, 303, 933];
+
+function lakeMask(bytes) {
+  const mask = decodeMask(bytes), { flags, landFraction, elevation, wetDepth, edgeSill, ice, sea, lakes } = mask;
+  const index = Uint32Array.from([...lakes.index, ...LAKES]), level = Int16Array.from([...lakes.level, ...LAKES.map((i) => elevation[i])]);
+  for (const i of LAKES) { flags[i] = 4; landFraction[i] = 16384; elevation[i] = 0; wetDepth[i] = 0; }
+  const head = new DataView(new ArrayBuffer(48));
+  [71, 77, 75, 49].forEach((b, j) => head.setUint8(j, b));
+  [mask.N, mask.relax, mask.nCells, mask.nEdges, ice.index.length, sea.index.length, sea.edges.length, index.length].forEach((v, j) => head.setUint32(4 + 4 * j, v, true));
+  const parts = [head, flags, landFraction, elevation, wetDepth, edgeSill, ice.index, ice.iceFraction, ice.shelfFraction, ice.iceThickness, ice.shelfThickness, sea.index, sea.flags, sea.elevation, sea.wetDepth, sea.edges, sea.edgeSill, index, level];
+  return Buffer.concat(parts.map((part) => new Uint8Array(part.buffer, part.byteOffset, part.byteLength)));
+}
+
+test("the page's worker fetches HydroLAKES depths with no node read, starts a spin-up save with the lake options it records and loads its columns, and restores in place unless the run lacks a stored import's options", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lake-options-')), messages = [], fetched = globalThis.fetch, builtin = process.getBuiltinModule;
+  let depthReads = 0;
+  process.getBuiltinModule = (name) => {
+    const module = builtin.call(process, name);
+    if (name !== 'node:fs' && name !== 'fs') return module;
+    return { ...module, readFileSync: (file, ...rest) => { if (String(file).endsWith('/data/lakedepth.bin')) throw new Error('data/lakedepth.bin read through node: the page has no such fallback'); return module.readFileSync(file, ...rest); } };
+  };
+  globalThis.self = { postMessage: (message) => messages.push(message) };
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).startsWith('file:')) return fetched(url, init);
+    if (String(url).endsWith('/data/lakedepth.bin')) depthReads++;
+    let bytes;
+    try { bytes = readFileSync(new URL(String(url))); } catch { return new Response(null, { status: 404 }); }
+    return new Response(String(url).endsWith('/geography_n1024_N16.bin') ? lakeMask(bytes) : bytes);
+  };
+  try {
+    await import('../js/model.worker.js?lakeOptions');
+    const send = async (data, type) => {
+      messages.length = 0;
+      await self.onmessage({ data });
+      for (let wait = 0; wait < 12000 && !messages.some((m) => m.type === type); wait++) await new Promise((resolve) => setTimeout(resolve, 10));
+      const failed = messages.find((m) => m.type === 'status' && String(m.text).startsWith('error'));
+      assert.equal(failed, undefined, failed && failed.text);
+      const found = messages.find((m) => m.type === type);
+      assert.ok(found, `no ${type} message`);
+      return found;
+    };
+    const LAKE = { missingBed: 'hydrolakes', freshDepth: 20 };
+    const start = (file) => send({ type: 'start', N: 16, engine: 'cpu', paused: true, ...(file ? { from: pathToFileURL(file).href } : {}) }, 'ready');
+    const snapshot = () => send({ type: 'snapshot' }, 'snapshotData');
+    const write = (taken, name, edit) => {
+      const saved = { N: taken.N, K: taken.K, day: taken.day, time: taken.time, terrain: taken.terrain, ...(taken.grid ? { grid: taken.grid } : {}), ...pickGeography(taken), given: { lake: LAKE } };
+      for (const [key, buffer] of Object.entries(taken.arrays)) saved[key] = new Float64Array(buffer.slice(0));
+      saved.ocean = { ...groupHeader(taken.ocean), ...Object.fromEntries(Object.entries(groupArrays(taken.ocean)).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))])) };
+      saved.land = Object.fromEntries(Object.entries(taken.land).map(([key, buffer]) => [key, new Float64Array(buffer.slice(0))]));
+      edit(saved);
+      const file = join(dir, `${name}_day0000.bin`);
+      writeFileSync(file, encodeState(saved, { f64: f64Names(saved) }));
+      return file;
+    };
+    const rebuilt = () => messages.some((m) => m.type === 'status' && /^building the N=/.test(m.text));
+    await start();
+    const plain = await snapshot(), plainDepth = new Float64Array(plain.arrays.lakeDepth);
+    assert.deepEqual(LAKES.map((i) => plainDepth[i]), [10, 10, 10], 'the default depth of a lake without a bed');
+    const page = toSnapshot(messageState(structuredClone(plain)));
+    await send({ type: 'restore', snapshot: restoreMessage(page.meta, page.data) }, 'ready');
+    assert.equal(rebuilt(), false, 'a restore of the unchanged run places the snapshot in the running model');
+    const unlaked = write(plain, 'unlaked', (saved) => { for (const key of Object.keys(saved)) if (/^lake[A-Z]/.test(key)) delete saved[key]; });
+    assert.deepEqual((await start(unlaked)).options.lake, LAKE, 'the run takes the lake options the save records under given');
+    assert.equal(depthReads, 1, 'HydroLAKES read once');
+    const depth = new Float64Array((await snapshot()).arrays.lakeDepth);
+    assert.deepEqual(LAKES.map((i) => depth[i]), [Math.fround(41.1), 20, 20], 'Lake Victoria takes its HydroLAKES depth, the others freshDepth');
+    const frozen = write(plain, 'frozen', (saved) => {
+      for (const i of LAKES) Object.assign(saved, Object.fromEntries(Object.entries({ lakeMixed: 273.15, lakeMean: 276.8, lakeBottom: 277.1, lakeShape: 0.6, lakeMixedDepth: 0, lakeIce: 0.5, lakeIceT: 270.5, lakeDepth: depth[i] }).map(([key, v]) => { saved[key][i] = Math.fround(v); return [key, saved[key]]; })));
+    });
+    assert.deepEqual((await start(frozen)).options.lake, LAKE);
+    const loaded = await snapshot(), ice = new Float64Array(loaded.arrays.lakeIce), mean = new Float64Array(loaded.arrays.lakeMean);
+    assert.deepEqual(LAKES.map((i) => [ice[i], mean[i]]), LAKES.map(() => [0.5, Math.fround(276.8)]), 'the saved columns load with no depth refusal');
+    assert.deepEqual(loaded.options.lake, LAKE);
+    const { meta, data } = toSnapshot(await decodeState(readFileSync(frozen)));
+    assert.deepEqual(meta.options.lake, LAKE, 'the store keeps the lake options');
+    assert.deepEqual(restoreMessage(meta, data).options.lake, LAKE);
+    assert.deepEqual(savedLakeOptions(exportState(meta, data).saved), LAKE, 'an export keeps them');
+    await start();
+    const restored = await send({ type: 'restore', snapshot: restoreMessage(meta, structuredClone(data)) }, 'ready');
+    assert.ok(rebuilt(), 'a run started without the import\x27s lake options restarts with them');
+    assert.deepEqual(restored.options.lake, LAKE, 'a restore from the store runs with them');
+    const placed = await snapshot(), placedIce = new Float64Array(placed.arrays.lakeIce), placedDepth = new Float64Array(placed.arrays.lakeDepth);
+    assert.deepEqual(LAKES.map((i) => [placedIce[i], placedDepth[i]]), LAKES.map((i) => [0.5, depth[i]]));
+    await send({ type: 'restore', snapshot: restoreMessage(meta, structuredClone(data)) }, 'ready');
+    assert.equal(rebuilt(), false, 'a second restore runs in place');
+    assert.equal(depthReads, 1, 'the decoded depths are kept across restarts');
+  } finally {
+    globalThis.fetch = fetched;
+    process.getBuiltinModule = builtin;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the tools build their lakes with the save\x27s lake options, LAKE over them', () => {
+  const was = process.env.LAKE;
+  try {
+    delete process.env.LAKE;
+    assert.deepEqual(lakeOptionsFor({ options: { lake: { freshDepth: 20, salineDepth: 4 } }, given: { lake: { freshDepth: 30 } } }), { freshDepth: 30, salineDepth: 4 });
+    process.env.LAKE = '{"model":"off"}';
+    assert.deepEqual(lakeOptionsFor({ given: { lake: { freshDepth: 30 } } }), { freshDepth: 30, model: 'off' });
+  } finally { if (was === undefined) delete process.env.LAKE; else process.env.LAKE = was; }
+  const loaders = [...readdirSync('scripts').filter((f) => f.endsWith('.mjs')).map((f) => `scripts/${f}`), 'scripts/figures/figureState.mjs'].filter((f) => /^\s*(await )?loadSavedLake\(|= loadSavedLake\(/m.test(readFileSync(f, 'utf8')));
+  const own = { 'scripts/spinup.mjs': 'records and takes its own LAKE', 'scripts/explainOcean.mjs': 'resumes only its own runs', 'scripts/fixedSst.mjs': 'rebuilds every given group, LAKE among its env groups' };
+  assert.deepEqual(loaders.filter((f) => !(f in own) && !/\bcreate(Gpu)?Model\([^;{]*\{\s*lake: lakeOptionsFor\(saved\), /.test(readFileSync(f, 'utf8'))), []);
+  assert.match(readFileSync('scripts/fixedSst.mjs', 'utf8'), /\['lake', 'LAKE'\]/);
+  assert.ok(loaders.length >= 16, `${loaders.length} loaders`);
 });
 
 const READ_ONLY = ['adjustStages', 'armMetrics', 'cellColumn', 'clearSkyBudget', 'compareStates', 'edgeBudget', 'equatorialMomentum', 'shortwaveBudget', 'snowIceAlbedo'];

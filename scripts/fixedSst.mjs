@@ -52,7 +52,7 @@ const [FILE, OUT, TAG] = process.argv.slice(2);
 const DAYS = Number(process.env.DAYS ?? 12), SAVE_DAYS = Number(process.env.SAVE_DAYS ?? 3), SAVE_FROM = Number(process.env.SAVE_FROM ?? 0), SST = process.env.SST ?? 'own', CAP = Number(process.env.CAP ?? 1e12), BATCH = 8;
 const TEM_HOURS = Number(process.env.TEM_HOURS ?? 0), TEM_FROM = Number(process.env.TEM_FROM ?? 0), WINDS = process.env.WINDS === '1';
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const ENV_GROUPS = [['radiation', 'RADIATION'], ['moist', 'MOIST'], ['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY'], ['dynamics', 'DYNAMICS'], ['land', 'LAND']].filter(([, name]) => process.env[name] !== undefined);
+const ENV_GROUPS = [['radiation', 'RADIATION'], ['moist', 'MOIST'], ['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY'], ['dynamics', 'DYNAMICS'], ['land', 'LAND'], ['lake', 'LAKE']].filter(([, name]) => process.env[name] !== undefined);
 const rebuilt = rebuiltOptions(saved, Object.fromEntries(ENV_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), process.env.GIVEN === undefined ? undefined : JSON.parse(process.env.GIVEN));
 const RUN = Object.fromEntries(Object.entries(rebuilt).filter(([group]) => group !== 'ocean' && group !== 'terrain'));
 console.log(`options: ${saved.given ? 'the header\'s given' : 'GIVEN, the header recording none'}${ENV_GROUPS.length ? `, ${ENV_GROUPS.map(([, name]) => name).join(', ')} over it` : ''}: ${JSON.stringify(RUN)}`);

@@ -34,7 +34,7 @@ import { cloudSaturation, criticalHumidityAt, LATENT_HEAT, MOIST_DEFAULTS } from
 import { inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
-import { loadSavedLake } from './savedLand.mjs';
+import { loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
@@ -42,7 +42,7 @@ const env = (name) => JSON.parse(process.env[name] ?? '{}');
 const RADIATION = env('RADIATION'), MOIST = env('MOIST'), BOUNDARY_LAYER = env('BOUNDARY_LAYER'), SURFACE = env('SURFACE');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, g, exnerLayer, geopotential } = core.diagnostics;
 const exnerLower = core.diagnostics.exnerLower ?? core.arrays.exnerLower, thetaV = core.arrays.thetaV;

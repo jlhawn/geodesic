@@ -12,7 +12,7 @@ import { LATENT_HEAT, placeCumulus } from '../js/physics/moist.module.js';
 import { readState, tagOf } from './figures/figureState.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
-import { loadSavedLake } from './savedLand.mjs';
+import { loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const file = process.argv[2] ?? new URL('../runs/eleven64_day1825.bin', import.meta.url).pathname;
@@ -20,7 +20,7 @@ const out = process.argv[3] ?? new URL('../explain/data/surface_budget.json', im
 const saved = await readState(file);
 const dt = 1350 * 16 / saved.N, steps = Number(process.env.STEPS ?? Math.round(86400 / dt));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography, geography: ground.geography, land: ground.land });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography, geography: ground.geography, land: ground.land });
 const { moist, boundaryLayer, radiation, mesh, geography } = model, C = mesh.nCells;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => model.state[a].set(saved[name]));
 if (saved.boundaryDepth) boundaryLayer.depth.set(saved.boundaryDepth);

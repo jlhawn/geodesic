@@ -1,4 +1,4 @@
-import { LAKE_FIELDS, holdsLake, savedLake } from '../js/physics/lake.module.js';
+import { LAKE_FIELDS, holdsLake, savedLake, savedLakeOptions } from '../js/physics/lake.module.js';
 
 /*
  * The land of a saved state onto a model whose arrays are loaded. The ice
@@ -10,6 +10,8 @@ import { LAKE_FIELDS, holdsLake, savedLake } from '../js/physics/lake.module.js'
 export function loadSavedLand(model, saved) {
   model.land.load(saved.land, undefined, saved.time, model.state[3]);
 }
+
+export const lakeOptionsFor = (saved) => ({ ...savedLakeOptions(saved), ...JSON.parse(process.env.LAKE ?? '{}') });
 
 export function savedLakeOff(field, columns, cells) {
   return LAKE_FIELDS.filter((name) => columns[name]).map((name) => {
@@ -30,9 +32,12 @@ function checkSavedLake(lake, columns) {
  * device, so the result is a promise there. Without them each lake starts
  * a fresh column at its first step and drops the ice the save holds.
  */
-export function loadSavedLake(model, saved) {
+export function loadSavedLake(model, saved, { quiet = false } = {}) {
   const columns = savedLake(saved);
-  if (!holdsLake(columns)) return model.lake && model.lake.read ? Promise.resolve(0) : 0;
+  if (!holdsLake(columns)) {
+    if (model.lake?.cells.length && !quiet) console.error(`the save's lake columns are absent or never stepped: the ${model.lake.cells.length} lake cells start from fresh columns at their first step`);
+    return model.lake && model.lake.read ? Promise.resolve(0) : 0;
+  }
   if (!model.lake?.cells.length) throw new Error('the save holds lakes and the model has none');
   model.lake.load(columns);
   return model.lake.read ? model.lake.read().then(() => checkSavedLake(model.lake, columns)) : checkSavedLake(model.lake, columns);

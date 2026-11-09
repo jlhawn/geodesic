@@ -26,8 +26,9 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * by group ({ radiation, moist, land }), which the page's model starts with;
  * `given`, every option group the run was given, and `terrainOptions`, its
  * terrain's options (see terrainOptions in geography.module.js), are the
- * scripts' records, of which the page reads only the terrain
- * (savedTerrain) and builds its model's surface on it.
+ * scripts' records, of which the page reads the terrain (savedTerrain),
+ * building its model's surface on it, and the lake options (savedLakeOptions
+ * in physics/lake.module.js, `given` over `options`).
  */
 export function stateName(file) {
   return file.replace(/(?:\.json(?:\.gz)?|\.parts\.json|\.bin(?:\.gz)?)$/, '');
