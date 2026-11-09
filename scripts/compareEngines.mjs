@@ -12,12 +12,15 @@
 // MAY_BE_ZERO, holds a non-finite value, differs from its CPU array by more than TOL (env, relative rms,
 // default 1e-3; a row in ABSOLUTE_FLOOR passes too while its largest gap is under the floor, and once the
 // ocean has stepped the row in CARRIED (PEN) counts only each cell's gap past ρc_p times CARRY_GRAINS f32
-// grains of the one heat store h·(T − HEAT_REFERENCE) the GPU's deposit of the light fills last, which the
-// deposit's own walk down the GPU's post-step h finds: below the top layer, the layer with thickness that
-// reaches PENETRATION_DEPTH, so the one straddling it, or the deepest with thickness in a shallower column.
+// grains of the one heat store h·(T − HEAT_REFERENCE) the GPU's deposit of the light fills last, plus 2·L·2⁻²⁴ of
+// the light the CPU's last deposit took (the ocean's lightIn), the f32 sum of the shares given to the L layers.
+// The deposit runs on the h the previous ocean step left, the earlier report's when one ocean step separates
+// them, so the deposit's own walk runs down the GPU's h and T at the earlier report and at this one and the
+// larger grain counts: below the top layer, the layer with thickness that reaches PENETRATION_DEPTH, so the
+// one straddling it, or the deepest with thickness in a shallower column; the top layer where PH_TRANS is 0.
 // settle() leaves at most one grain there to wait for the next ocean step, half from rounding the change
 // and half from aligning a store that crossed into the next binade; the quarter grain more covers the f32
-// rounding of the light and of the store recomputed from h and T), or, for the
+// rounding of the store recomputed from h and T), or, for the
 // DECISION_ROWS below, differs by more than TOL times the row's largest CPU magnitude in a larger share of
 // its entries than the row's bound, or has its gaps under that threshold exceed, as a root sum of squares,
 // 3·TOL of the root sum of squares of the CPU's values over all its entries. The rows in ABSOLUTE_BOUNDS
@@ -108,16 +111,20 @@ export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAI
 const ABSOLUTE_FLOOR = { RUNOFF: 2.5e-4, DISCHARGE: 2.5e-4 };
 const CARRIED = new Set(['PEN']), CARRY_GRAINS = 1.25;
 const f32Grain = (x) => 2 ** (x ? Math.max(Math.floor(Math.log2(Math.abs(x))) - 23, -126) : -24);
-const carriedLight = (ocean, rhoCp) => {
-  const L = ocean.h.length / C, bound = new Float64Array(C);
-  for (let i = 0; i < C; i++) {
-    let z = ocean.h[i], last = 0;
-    for (let k = 1; k < L; k++) {
-      z += ocean.h[k * C + i];
-      if (ocean.h[k * C + i] > 0) last = k;
-      if (z >= PENETRATION_DEPTH && last > 0) break;
+const carriedLight = (reports, light, rhoCp) => {
+  const bound = new Float64Array(C);
+  for (const { ocean, regions } of reports) {
+    const L = ocean.h.length / C, taken = regions.TRANS;
+    for (let i = 0; i < C; i++) {
+      let z = ocean.h[i], last = 0;
+      if (!taken || taken[i] > 0) for (let k = 1; k < L; k++) {
+        z += ocean.h[k * C + i];
+        if (ocean.h[k * C + i] > 0) last = k;
+        if (z >= PENETRATION_DEPTH && last > 0) break;
+      }
+      const grains = CARRY_GRAINS * rhoCp * f32Grain(ocean.h[last * C + i] * (ocean.T[last * C + i] - HEAT_REFERENCE));
+      bound[i] = Math.max(bound[i], grains + 2 * L * 2 ** -24 * Math.abs(light ? light[i] : 0));
     }
-    bound[i] = CARRY_GRAINS * rhoCp * f32Grain(ocean.h[last * C + i] * (ocean.T[last * C + i] - HEAT_REFERENCE));
   }
   return bound;
 };
@@ -334,7 +341,7 @@ for (const target of STEPS) {
     let r = g.regions[n];
     if ((n === 'DEPTH' || n === 'MIXTOP') && cpu.surfaceGeopotential) { r = Float32Array.from(r); for (let i = 0; i < C; i++) r[i] += cpu.surfaceGeopotential[i] / cpu.core.diagnostics.g; }
     return r;
-  }, done, oceanStepped && g.ocean ? carriedLight(g.ocean, cpu.ocean.rhoCp) : null);
+  }, done, oceanStepped && g.ocean ? carriedLight([gBefore, g], cpu.ocean.lightIn, cpu.ocean.rhoCp) : null);
   before = cpu.state.map((x) => Float64Array.from(x));
   if (cpu.ocean) oceanBefore = cpu.ocean.serialize();
   gBefore = g;
