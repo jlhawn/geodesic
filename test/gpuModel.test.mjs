@@ -6,6 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { sunDirection, sunDistance, orbitOf, YEAR } from '../js/physics/radiation.module.js';
 import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, DECISION_KINDS } from './helpers/decisions.mjs';
+import { distributionCheck } from './helpers/distribution.mjs';
 import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 const CAPPED = { velocityScale: 'capped' };
 
@@ -122,9 +123,9 @@ test('the stratiform share of the estimated inversion strength and the boundary-
   }
 });
 
-const THETA_TWIN_PARTED = { 1637: 1.28e-2 }, WIND_TWIN_PARTED = {}, SKIPPED_BOUNDS = { theta: 3.2e-3, wind: 7e-4 }, THETA_EVENTS = { count: 2, cap: 2.56e-2 };
+const DAMPING_S7 = { theta: { largest: 0.572, counts: [[0.286, 4], [0.0286, 18], [0.00286, 58]], hemisphere: 3.17e-3 }, wind: { largest: 0.25, counts: [[0.125, 4], [0.0125, 68], [0.00125, 382]], hemisphere: 7.83e-4 } };
 
-for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines, with the boundary layer diagnosed after the deposit' : 'with the ∇⁴ closures off at the default order, the divergence damping alone and the heat it returns match between the engines in the columns more than a ring from where a decision parted in either run, θ column by column and the wind edge by edge, but for the columns and edges eight CPU twins part, each within 1.5 times the twins\' gap there', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines, with the boundary layer diagnosed after the deposit' : 'with the ∇⁴ closures off at the default order, the divergence damping alone parts the engines no further than thirty CPU twins part themselves: each column\'s largest θ gap and each edge\'s largest wind gap, in the largest, the count at or over three thresholds and each hemisphere\'s mean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (divergenceDamping) => {
     const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping, radiation: PREVIOUS_AEROSOL, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), ...CAPPED } });
     const init = initializeState(model, {});
@@ -144,34 +145,15 @@ for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, t
   const moved = stats(free.model.state[2], damped.model.state[2]), heated = stats(free.model.state[1], damped.model.state[1]);
   console.log(`four steps at N=${N}, c = 0.1 and no ∇⁴: over the ${kept.length} of ${C} columns where no discrete decision parted (${parted.size} did: ${Object.entries(kinds).map(([kind, cells]) => `${kind} ${cells.size}`).join(', ')}) the engines differ in θ by rms ${theta.rmsRel.toExponential(1)}, max ${theta.maxDiff.toExponential(1)} K, in wind by at most ${u.maxDiff.toExponential(1)} m/s; the damping moves the wind by up to ${moved.maxDiff.toFixed(3)} m/s and θ by rms ${heated.rmsRel.toExponential(1)}, up to ${heated.maxDiff.toExponential(1)} K`);
   if (!plain) {
-    const { cellsOnEdge, nEdges: E } = damped.model.mesh, either = new Set([...parted, ...free.decisions.parted]), { dSigma } = damped.model.core.diagnostics;
-    const near = neighbourhood(damped.model.mesh, either, 1), calm = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i));
-    const calmEdges = Array.from({ length: E }, (_, e) => e).filter((e) => !near.has(cellsOnEdge[2 * e]) && !near.has(cellsOnEdge[2 * e + 1]));
-    const layers = (values, members, n) => Float64Array.from(members.flatMap((x) => Array.from({ length: K }, (_, k) => values[k * n + x])));
-    const calmTheta = stats(layers(damped.model.state[1], calm, C), layers(damped.state[1], calm, C)), calmU = stats(layers(damped.model.state[2], calmEdges, E), layers(damped.state[2], calmEdges, E));
-    const own = (on, off) => Float64Array.from(on, (v, x) => v - off[x]), worst = calm[Math.floor(calmTheta.at / K)];
-    const effect = stats(layers(own(damped.model.state[1], free.model.state[1]), calm, C), layers(own(damped.state[1], free.state[1]), calm, C));
-    const freeGap = Math.max(...Array.from({ length: K }, (_, k) => Math.abs(free.state[1][k * C + worst] - free.model.state[1][k * C + worst])));
+    const { nEdges: E, latCell, latEdge } = damped.model.mesh, { dSigma } = damped.model.core.diagnostics;
     const content = (theta) => { let sum = 0; for (let x = 0; x < K * C; x++) sum += theta[x] * damped.model.state[0][x % C] * dSigma[Math.floor(x / C)]; return sum; };
     const heat = Math.abs(content(damped.state[1]) - content(damped.model.state[1])) / Math.abs(content(damped.model.state[1]) - content(free.model.state[1]));
-    console.log(`at the default order, four steps at N=${N}, c = 0.1 and no ∇⁴: a decision parted in ${parted.size} columns with the damping and ${free.decisions.parted.size} without, ${either.size} in either and ${near.size} within a ring of them; over the other ${calm.length} the engines' θ differs by rms ${calmTheta.rmsRel.toExponential(1)}, at most ${calmTheta.maxDiff.toExponential(1)} K in column ${worst} (its boundary layer ${damped.model.boundaryLayer.depth[worst].toFixed(1)} m deep on the CPU, ${damped.physics.DEPTH[worst].toFixed(1)} on the GPU), and there by at most ${freeGap.toExponential(1)} K without the damping; the damping's own change to θ parts by at most ${effect.maxDiff.toExponential(1)} K over those columns, where it moves θ by up to ${heated.maxDiff.toExponential(1)}; on the ${calmEdges.length} of ${E} edges between them the wind by at most ${calmU.maxDiff.toExponential(1)} m/s, where the damping moved it by up to ${moved.maxDiff.toExponential(1)}; the engines' πdσ-weighted θ parts by ${heat.toExponential(1)} of the change the damping makes to it`);
-    const failed = [], excused = [];
     const deepest = (field, n, x) => { let gap = 0; for (let k = 0; k < K; k++) gap = Math.max(gap, Math.abs(damped.state[field][k * n + x] - damped.model.state[field][k * n + x])); return gap; };
-    const events = [];
-    for (const i of calm) {
-      const gap = deepest(1, C, i);
-      if (gap >= 1.2e-2) (gap <= 1.5 * (THETA_TWIN_PARTED[i] ?? 0) ? excused : gap < THETA_EVENTS.cap ? events : failed).push(`θ in column ${i} ${gap.toExponential(2)} K`);
-    }
-    if (events.length > THETA_EVENTS.count) failed.push(...events);
-    for (const e of calmEdges) {
-      const gap = deepest(2, E, e);
-      if (gap >= 0.05 * moved.maxDiff) (gap <= 1.5 * (WIND_TWIN_PARTED[e] ?? 0) ? excused : failed).push(`wind on edge ${e} ${gap.toExponential(2)} m/s`);
-    }
-    const skippedEdges = Array.from({ length: E }, (_, e) => e).filter((e) => near.has(cellsOnEdge[2 * e]) || near.has(cellsOnEdge[2 * e + 1]));
-    const skippedTheta = [...near].reduce((sum, i) => sum + deepest(1, C, i), 0) / Math.max(near.size, 1), skippedWind = skippedEdges.reduce((sum, e) => sum + deepest(2, E, e), 0) / Math.max(skippedEdges.length, 1);
-    console.log(`at the default order, past 1.2e-2 K or 5 % of the damping's move of ${moved.maxDiff.toExponential(2)} m/s: excused ${excused.join(', ') || 'none'}, under ${THETA_EVENTS.cap} K ${events.join(', ') || 'none'}; over the ${near.size} columns and ${skippedEdges.length} edges within a ring of a parted decision the mean largest gap is ${skippedTheta.toExponential(3)} K and ${skippedWind.toExponential(3)} m/s`);
-    assert.ok(skippedTheta < SKIPPED_BOUNDS.theta && skippedWind < SKIPPED_BOUNDS.wind, `over the columns and edges within a ring of a parted decision the mean largest gap is ${skippedTheta} K and ${skippedWind} m/s`);
-    assert.deepEqual(failed, [], 'columns and edges past the bounds that no twin parts, or past 1.5 times the twins\' gap');
+    const magnitude = (values) => { let max = 0, sum = 0; for (const v of values) { max = Math.max(max, Math.abs(v)); sum += v * v; } return { max, rms: Math.sqrt(sum / values.length) }; };
+    const thetaGaps = Array.from({ length: C }, (_, i) => deepest(1, C, i)), windGaps = Array.from({ length: E }, (_, e) => deepest(2, E, e));
+    const columns = distributionCheck(thetaGaps, latCell, DAMPING_S7.theta, magnitude(damped.model.state[1])), edges = distributionCheck(windGaps, latEdge, DAMPING_S7.wind, magnitude(damped.model.state[2]));
+    console.log(`at the default order, four steps at N=${N}, c = 0.1 and no ∇⁴: each column's largest θ gap over its layers, ${columns.text} K; each edge's largest wind gap, ${edges.text} m/s, where the damping moved the wind by up to ${moved.maxDiff.toExponential(1)}; the engines' πdσ-weighted θ parts by ${heat.toExponential(1)} of the change the damping makes to it`);
+    assert.deepEqual([...columns.failed, ...edges.failed], [], 'the distribution of the engines\' gaps past the bounds thirty twins set');
     return;
   }
   assert.ok(parted.size <= C / 20, `a decision parted in ${parted.size} of ${C} columns`);

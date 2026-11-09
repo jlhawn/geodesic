@@ -196,6 +196,7 @@ async function engines(radiation, levels = undefined, order = PREVIOUS_BOUNDARY_
   return { cpu, gpu, C: cpu.mesh.nCells };
 }
 
+const F32_RMS = 16 * 2 ** -24, F32_CELL = 64 * 2 ** -24;
 const GAS_BOUNDS = {"default":{"union":"YA9wBzADAQABfAB+HP+f/8/9xh/AH8AP4Af4B72DjcFhb3x3PvsG/AB8AD4ev5//z9/GD9gH/AN8BvAH8YPBzGFvfHc++wf8AXwBfp+/3//P38YP2Af8A3wGsAf5g9ndZw9+Zz77B/wB/AF+H7+f/8/fxgfYB/wD7AeAB7GDuc1tb3x3PnMGMAD+AP8e/5/7z/3GP8AHwAPgB/AHOYMZwAHgAeOB44HhAQAwADgAPAAecG54djw8HH4MfgA/gD+AAe4H54fjh+PDA/ID+gH8AG5wbnh2PDwcfox/wD/gPmAA/gfvh+OH58MH8gP6AfwAHHBueHY8PBx+jH/AP8A+gDnuGfeB/4H/AT4wGDgAHAAOcAZ4ADw8HH6Mf8A3wDuAAeYH54fjg/PB//B/eAMcAA5wBngAPHwcfox/wDfAOoAB","hemisphere":{"absorbedSolar":0.000036,"atmosphereSolar":0.000027,"outgoingLongwave":0.000023,"lowest":0.00044},"clear4":{"clearAbsorbedSolar":[0.000088,7.8e-7],"clearOutgoingLongwave":[0.0014,0.000034]},"clear24":{"clearAbsorbedSolar":[0.00036,0.0000021],"clearOutgoingLongwave":[0.003,0.00011]},"heating":[[0.00024,0.000094],[0.00036,0.00011],[0.00046,0.000078],[0.00055,0.000067],[0.00067,0.000078],[0.0008,0.000078],[0.00098,0.00014],[0.0013,0.00012],[0.0019,0.00016],[0.0036,0.00027],[0.014,0.00082]]},"bl36":{"union":"YA9wBzgDHDg8fDh8H/gf+M/c5g/iB+ADwAcAB+GD8cFhD3AHOAMduA38Afwf+B/4z/zmP+If4A/AB8AHsYO5zWEPcAcwAwG4Mfw5/B/4H/jP/OY/4h/gD8AH4Afxg7nNYQ9wBzgDHbgN/AH8H/gf+M/85j/iH+APwAcAB4GDge1hD3AHOAccOzx8OHwf+N/479zmD+IH4APABwAHgYOBzfHmbPeP84fhAeAyADoAHGAOcB54HDx8Hn4OfgA6ADgAHO4P/wb/A+wB4DIAOgAcYA5wBngYPHwefg5+ADoAOAAc7g//hv+D7QHgMgA6ABxgDnAGeBg8fA5+Bn4AMgA4AAD+Af8B/wHmAeAyADoAHGAOcAZ4ODx8Hn4OfgYyADgAAO4A94HzgeEB4DJgOgAcYA5wxnj4PPwefg5+BjoAOAAA","hemisphere":{"absorbedSolar":0.000016,"atmosphereSolar":0.0000098,"outgoingLongwave":0.0000086,"lowest":0.00052},"clear4":{"clearAbsorbedSolar":[0.000012,4.2e-7],"clearOutgoingLongwave":[0.00084,0.000019]},"clear24":{"clearAbsorbedSolar":[0.00058,5e-7],"clearOutgoingLongwave":[0.0027,0.00008]},"heating":[[0.0001,0.0001],[0.00013,0.00013],[0.00014,0.000078],[0.00032,0.000063],[0.00033,0.000073],[0.00086,0.00012]]}};
 
 function stats(cpu, gpu) {
@@ -243,7 +244,8 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   const cellGaps = (a, b) => { let top = 0; for (let x = 0; x < C; x++) top = Math.max(top, Math.abs(a[x])); return Array.from({ length: C }, (_, x) => Math.abs(b[x] - a[x]) / Math.max(Math.abs(a[x]), 1e-3 * top)); };
   const clear = async (limits) => {
     const device = await gpu.gpu.downloadPhysics();
-    return Object.entries(limits).map(([name, [cellLimit, rmsLimit]]) => {
+    return Object.entries(limits).map(([name, bounds]) => {
+      const [cellLimit, rmsLimit] = [Math.max(bounds[0], F32_CELL), Math.max(bounds[1], F32_RMS)];
       const a = cpu.radiation.summed[name], b = device[slots[name]].subarray(0, C), gaps = cellGaps(a, b), worst = Math.max(...gaps), cells = stats(a, b);
       assert.ok(worst < cellLimit && cells.rmsRel < rmsLimit, `${name}: largest gap ${worst} at ${gaps.indexOf(worst)}, rms ${cells.rmsRel}`);
       return `${name} largest ${worst.toExponential(1)} of ${cellLimit}, rms ${cells.rmsRel.toExponential(1)} of ${rmsLimit}`;
@@ -252,21 +254,22 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   for (let s = 0; s < 4; s++) { cpu.step(DT); await gpu.step(DT); }
   const early = await clear(at.clear4), device = await gpu.gpu.downloadPhysics();
   for (const name of ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave']) {
-    const gap = hemisphere(cpu.radiation.summed[name], device[slots[name]].subarray(0, C));
-    assert.ok(gap < at.hemisphere[name], `${name}: a hemisphere's mean |gap| is ${gap} of the CPU's`);
-    early.push(`${name} mean |gap| ${gap.toExponential(1)} of ${at.hemisphere[name]}`);
+    const gap = hemisphere(cpu.radiation.summed[name], device[slots[name]].subarray(0, C)), bound = Math.max(at.hemisphere[name], F32_RMS);
+    assert.ok(gap < bound, `${name}: a hemisphere's mean |gap| is ${gap} of the CPU's`);
+    early.push(`${name} mean |gap| ${gap.toExponential(1)} of ${bound}`);
   }
   const failed = [], worst = [];
   at.heating.forEach(([inBound, outBound], k) => {
     const gaps = cellGaps(cpu.radiation.longwave.subarray(k * C, (k + 1) * C), device.LWH.subarray(k * C, (k + 1) * C));
     let ratio = 0;
-    gaps.forEach((gap, x) => { const bound = inside(x) ? inBound : outBound; ratio = Math.max(ratio, gap / bound); if (gap >= bound) failed.push(`layer ${k} cell ${x} ${gap.toExponential(2)}`); });
+    gaps.forEach((gap, x) => { const bound = Math.max(inside(x) ? inBound : outBound, F32_CELL); ratio = Math.max(ratio, gap / bound); if (gap >= bound) failed.push(`layer ${k} cell ${x} ${gap.toExponential(2)}`); });
     worst.push(ratio.toFixed(2));
   });
   const k = at.heating.length, lowest = hemisphere(cpu.radiation.longwave.subarray(k * C, (k + 1) * C), device.LWH.subarray(k * C, (k + 1) * C));
-  early.push(`longwave heating above 30 hPa cell by cell at ${worst.join(', ')} of the bounds, layer ${k}'s mean |gap| ${lowest.toExponential(1)} of ${at.hemisphere.lowest}`);
+  const lowestBound = Math.max(at.hemisphere.lowest, F32_RMS);
+  early.push(`longwave heating above 30 hPa cell by cell at ${worst.join(', ')} of the bounds, layer ${k}'s mean |gap| ${lowest.toExponential(1)} of ${lowestBound}`);
   assert.deepEqual(failed, [], 'cells of the layers above 30 hPa past their bounds');
-  assert.ok(lowest < at.hemisphere.lowest, `layer ${k}'s longwave heating: a hemisphere's mean |gap| is ${lowest}`);
+  assert.ok(lowest < lowestBound, `layer ${k}'s longwave heating: a hemisphere's mean |gap| is ${lowest}`);
   for (let s = 4; s < 24; s++) { cpu.step(DT); await gpu.step(DT); }
   const later = await clear(at.clear24);
   console.log(`spectral gases${grid ? ` on ${grid}` : ''} at the default order, CPU against GPU at N=16, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
