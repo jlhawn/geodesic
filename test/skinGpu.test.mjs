@@ -7,7 +7,7 @@ import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { SKIN_DEFAULTS, SEA_RHO_CP, surfaceShare } from '../js/physics/skin.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL, PREVIOUS_BERGERON, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL, PREVIOUS_BERGERON, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 
 /*
  * The sea's skin on both engines at N = 16. A GPU file: run it alone,
@@ -91,7 +91,7 @@ for (const [label, options, warmStart, onMeans] of CASES) test(`${label} over th
 });
 
 test('on the GPU, options absent and present but off give the same layout and the same buffers after 64 steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const absent = start(await createGpuModel(new Grid(N), OPTIONS)), off = start(await createGpuModel(new Grid(N), { ...OPTIONS, surface: { ...SKIN_DEFAULTS } }));
+  const absent = start(await createGpuModel(new Grid(N), { ...OPTIONS, surface: PREVIOUS_AIR_SEA })), off = start(await createGpuModel(new Grid(N), { ...OPTIONS, surface: { ...SKIN_DEFAULTS, ...PREVIOUS_AIR_SEA } }));
   assert.deepEqual(off.gpu.layout.PH, absent.gpu.layout.PH);
   assert.equal(absent.gpu.layout.PH.WARM, undefined);
   for (let n = 0; n < 64; n++) { await absent.step(DT); await off.step(DT); }

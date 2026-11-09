@@ -8,6 +8,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { inLongitudes, convectionLine, equatorialOcean, equatorLine, heatingProfile, tropicalBoxOf, TROPICAL_BOXES } from '../js/audit.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
+import { PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 
 const mesh = buildMesh(new Grid(16));
 const C = mesh.nCells, E = mesh.nEdges;
@@ -115,14 +116,14 @@ test('scripts/tropicalHeating.mjs replays the moist step exactly, closes the hea
   const { initializeState } = await import('../js/physics/init.module.js');
   const { encodeState } = await import('../js/stateFile.module.js');
   const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const model = createModel(new Grid(16), { topography, ocean: false });
+  const model = createModel(new Grid(16), { topography, ocean: false, surface: PREVIOUS_AIR_SEA });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   model.land.initialize();
   for (let n = 0; n < 6; n++) model.step(1350);
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
   const dir = mkdtempSync(join(tmpdir(), 'tropicalHeating-')), file = join(dir, 'heat16_day0000.bin');
   writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
-  const run = spawnSync(process.execPath, [new URL('../scripts/tropicalHeating.mjs', import.meta.url).pathname, file], { env: { ...withoutOptionGroups(), STEPS: '3' }, encoding: 'utf8' });
+  const run = spawnSync(process.execPath, [new URL('../scripts/tropicalHeating.mjs', import.meta.url).pathname, file], { env: { ...withoutOptionGroups(), STEPS: '3', SURFACE: JSON.stringify(PREVIOUS_AIR_SEA) }, encoding: 'utf8' });
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 0, run.stderr);
   const [, mismatch, columns, heat, water, sensible, own] = run.stdout.match(/differs from the model's in (\d+) of (\d+) column-steps.*close on the temperature change to ([0-9.e+-]+) K a step and on the change of q_t to ([0-9.e+-]+) kg\/kg a step.*global sensible heat (-?[0-9.]+) against the model's (-?[0-9.]+) W\/m2/);

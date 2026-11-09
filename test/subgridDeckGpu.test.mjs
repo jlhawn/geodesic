@@ -9,7 +9,7 @@ const LEVELS = ['bl60', ...(SIGMA_GRIDS.includes('bl48') ? ['bl48'] : [])];
 import { deckProfile } from './helpers/deckProfile.mjs';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, radiationTraces } from './helpers/decisions.mjs';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
-import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 import { F32_RMS } from './helpers/distribution.mjs';
 import { groupLayout, bandLayers, spreadGroups, groupChecks } from './helpers/spreadGroups.mjs';
 
@@ -48,7 +48,7 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', surface 
   const physics = { ...PREVIOUS_RADIATION, mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options }, sigma = sigmaInterfaces(levels);
   const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence, velocityScale: 'capped', ...boundaryLayer }, surface: { exchange: 'roughness', ...PREVIOUS_SURFACE, ...surface } });
   const { ambiguous } = deckProfile(model), traces = radiationTraces(model);
-  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, ...surface, turbulence, velocityScale: 'capped', ...boundaryLayer, surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
+  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, ...PREVIOUS_AIR_SEA, ...surface, turbulence, velocityScale: 'capped', ...boundaryLayer, surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   const C = model.mesh.nCells, K = model.core.K, decisions = decisionTracker(K, C), runs = new Set();

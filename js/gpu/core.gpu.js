@@ -6,13 +6,13 @@ import { createAerosolSampler, loadAerosol, AEROSOL_FIELDS, DEFAULT_AEROSOL } fr
 import { physicsConstants, physicsFunctions, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, boundaryLayerDiagnosis, relativeWindKernels, virtualDensityKernels, bergeronRain, deepStoreRain, midLevelPlume, sentBackMidLevel, omegaStore, rainEvaporationOptions, plumeRetype, shallowPlumeRetype, PHYSICS_PASSES, LAYERED_PASSES, layeredPass, LAYERED_SLOTS, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS, LATENT_HEAT } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, SURFACE_VERTICAL_SIGMA } from '../frames.module.js';
-import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
+import { SEA_DRAG, TOP_DRAG, relativeWindOf } from '../physics/surface.module.js';
 import { SNOW_AGEING } from '../physics/ice.module.js';
 import { DEEP_CAPACITY, FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
 import { orographyConstants, OROGRAPHY_KERNELS } from './orography.gpu.js';
 import { spongeGeometry, spongeRates as layerRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { longwaveTableFor } from '../physics/longwave.module.js';
-import { SKIN_DEFAULTS } from '../physics/skin.module.js';
+import { SKIN_DEFAULTS, skinOptions } from '../physics/skin.module.js';
 import { lakeKernels, LAKE_SLOTS } from './lake.gpu.js';
 import { JERLOV } from '../ocean/layered.module.js';
 import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveColumns, gravityWaveBreaking, gravityWaveLid } from '../physics/gravityWaves.module.js';
@@ -922,7 +922,7 @@ export const PHYSICS_DEFAULTS = {
   treeline: true, seasonThreshold: 0.9, minimumSeason: 94, treelineWarmth: [6.4, 8.0], seasonMemory: 3 * 365 * 86400, treeGrowthTime: 10 * 365 * 86400, treeDeclineTime: 3 * 365 * 86400,
   treeMoisture: true, moistureMemory: 3 * 365 * 86400, forestAridity: FOREST_ARIDITY, grassland: true, forestAlbedo: 0.13, grassAlbedo: 0.20, grassSnowDarkening: 0.06, coverGoal: 'water', deepCapacity: null, ...SOIL_CARBON,
   growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, snowHold: false, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,
-  surfaceExchange: 'roughness', implicitDrag: true, relativeWind: false, virtualDensity: false, exchangeOptions: {}, ...SKIN_DEFAULTS, skinLight: JERLOV.IB,
+  surfaceExchange: 'roughness', implicitDrag: true, virtualDensity: false, exchangeOptions: {}, ...SKIN_DEFAULTS, skinLight: JERLOV.IB,
 };
 
 export async function createGpuCore(mesh, {
@@ -937,6 +937,7 @@ export async function createGpuCore(mesh, {
   if (!THETA_FACES.includes(thetaFace)) throw new Error(`thetaFace is ${THETA_FACES.join(' or ')}, not ${thetaFace}`);
   const hybrid = divergenceSurfaces === 'hybrid' && (divergenceDamping > 0 || divergenceViscosity > 0);
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
+  Object.assign(phys, skinOptions(physicsOptions, phys.surfaceExchange), { relativeWind: relativeWindOf(physicsOptions, phys.surfaceExchange === 'roughness' && !!phys.implicitDrag) });
   if (phys.brineReservoir && !phys.iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
   phys.deckResolved ??= phys.mixedLayerDeck && phys.prognosticHeight ? 'above' : 'added';
   phys.cloudColumns ??= phys.cloudCover === 'pdf' && phys.cloudOverlap === 'exponentialRandom';

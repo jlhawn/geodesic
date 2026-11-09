@@ -4,9 +4,10 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { STEFAN_BOLTZMANN, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
+import { PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 
 function heldModel(radiationEvery, options = {}) {
-  const model = createModel(new Grid(16), { ocean: false, radiation: { stratus: true, clearSkyPass: true, radiationEvery, ...options }, surface: { exchange: 'roughness' } });
+  const model = createModel(new Grid(16), { ocean: false, radiation: { stratus: true, clearSkyPass: true, radiationEvery, ...options }, surface: { exchange: 'roughness', ...PREVIOUS_AIR_SEA } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   return model;
 }
@@ -62,7 +63,7 @@ test('between calls the sunlight scales with the cosine of the zenith angle and 
 });
 
 test('with radiationEvery 1 the model steps as without the option', () => {
-  const plain = createModel(new Grid(16), { ocean: false, radiation: { stratus: true }, surface: { exchange: 'roughness' } });
+  const plain = createModel(new Grid(16), { ocean: false, radiation: { stratus: true }, surface: { exchange: 'roughness', ...PREVIOUS_AIR_SEA } });
   initializeState(plain, {}).forEach((values, a) => plain.state[a].set(values));
   const once = heldModel(1, { clearSkyPass: false });
   for (let n = 0; n < 3; n++) { plain.step(900); once.step(900); }

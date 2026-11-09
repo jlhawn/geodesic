@@ -64,7 +64,8 @@ test("the page's worker runs a saved state with the options and the terrain it r
     const fresh = await snapshot();
     assert.deepEqual(fresh.options, FRESH);
     assert.equal(fresh.soilSeed, null, 'a fresh start descends from no soil seed');
-    assert.equal(fresh.arrays.seaFlow, undefined);
+    const atRest = ({ seaFlow }) => seaFlow !== undefined && seaFlow.byteLength > 0 && new Float64Array(seaFlow).every((v) => v === 0);
+    assert.ok(atRest(fresh.arrays), 'a fresh start puts the sea at rest under the air');
     assert.equal(fresh.terrain, true);
     assert.equal(fresh.terrainOptions, undefined);
     const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, terrainOptions: TERRAIN, ...(fresh.grid ? { grid: fresh.grid } : {}), options: OPTIONS, soilSeed: SEED };
@@ -98,7 +99,7 @@ test("the page's worker runs a saved state with the options and the terrain it r
     assert.deepEqual(new Float64Array(taken.arrays.pi), saved.pi);
     assert.deepEqual((await restore(fresh)).options, FRESH);
     const unseeded = await snapshot();
-    assert.equal(unseeded.arrays.seaFlow, undefined);
+    assert.ok(atRest(unseeded.arrays), 'a restore that starts over puts the sea back at rest under the air');
     assert.equal(unseeded.terrainOptions, undefined);
     assert.equal(unseeded.soilSeed, null, "a restore that starts over takes the snapshot's record");
     assert.deepEqual((await restore(taken)).options, MADE);

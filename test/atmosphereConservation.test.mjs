@@ -12,6 +12,7 @@ import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { geographyOptions, readTopography, topographyFromInt16, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { CLIMATOLOGY_FILE, loadClimatology } from '../js/ocean/climatology.module.js';
 import { FLAKE } from '../js/physics/lake.module.js';
+import { PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -20,7 +21,7 @@ const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') :
 
 const N = 16, DT = 1350 * 16 / N, SPINUP_STEPS = 16, MEASURED_STEPS = 6;
 const cadence = withCadence({ ocean: false }, DT, N);
-const OPTIONS = { ocean: false, levels: sigmaInterfaces('bl36'), ...cadence };
+const OPTIONS = { ocean: false, levels: sigmaInterfaces('bl36'), surface: PREVIOUS_AIR_SEA, ...cadence };
 
 /*
  * An aquaplanet over a slab six hours from initializeState, so that the
@@ -92,7 +93,7 @@ function spunUpBergeron() {
 /*
  * The spun-up air over a layered ocean started under it.
  */
-function overOcean(surface = {}) {
+function overOcean(surface = PREVIOUS_AIR_SEA) {
   const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: {}, surface });
   slab.state.forEach((values, s) => model.state[s].set(values));
   model.seaIce.load(model.state[6], slab.seaIce.concentration);
@@ -118,7 +119,7 @@ function seaWork(model) {
  * water so that the air sees T_s ≠ T_slab from the first step.
  */
 function overOceanSkin() {
-  const model = overOcean({ warmLayer: true, coolSkin: true });
+  const model = overOcean({ warmLayer: true, coolSkin: true, relativeWind: false });
   for (let i = 0; i < model.mesh.nCells; i++) if (!(model.state[6][i] > 0)) model.skin.warm[i] = 1;
   return model;
 }

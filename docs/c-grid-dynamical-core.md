@@ -2262,7 +2262,7 @@ lose at night 0.38 of their day's sunlight (median), shallow by their
 own physics, so the floor there stands in for missing shear and
 advection rather than for the night. Not adopted (M30).
 
-**The sea's skin (M30, off by default).** Over open water, stepped
+**The sea's skin (M30; the cool skin on by default, the warm layer off).** Over open water, stepped
 with the atmosphere in the surface step (`js/physics/skin.module.js`,
 `SKIN_WGSL` on the GPU; both need exchange 'roughness'), a diurnal warm
 layer and a cool skin sit inside the mixed layer's heat as a profile
@@ -2280,7 +2280,8 @@ profile's mean over the mixed layer is T₀ and the ocean's books are
 untouched. In the June N=64 arms it gives 23 of 24 low-wind bins within
 0.5–1.5× of Gentemann et al. (2003) and a 20S–20N mean range of 0.26 K,
 but in the March arms the Benguela box lies 0.34–0.53 K further from
-WOA23 in April and May. Not adopted (M30).
+WOA23 in April and May. The warm layer is not adopted (M30); `coolSkin` is on by
+default wherever the exchange is 'roughness' (Nov 9, with `relativeWind`).
 
 **Momentum through the exchanges.** The exchanges move water between
 the mixed layer and the classes, and velocities live on edges, layer by
@@ -12435,7 +12436,8 @@ before it, by default, and leaves the model bit-identical when it is
 unset, except `boundaryLayer.diagnoseFirst`: it is on by default, and
 diagnoseFirst false gives the earlier order, bit for bit.
 
-`surface.relativeWind` (false): the stress and the bulk heat and
+`surface.relativeWind` (true wherever the roughness exchange's implicit drag
+runs, false elsewhere): the stress and the bulk heat and
 moisture fluxes take the lowest layer's wind relative to the sea's
 surface current, τ = ρ C_D |v − u_s| (v − u_s).
 - u_s is the ocean's top-layer velocity on each edge under open water
@@ -12444,8 +12446,9 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
 - The ocean-only phase of `scripts/asyncSpinup.sh` replays the coupled
   phase's recorded stress and fluxes, so it has no current feedback.
 - A state's header does not record the `surface` group
-  (`scripts/stateOptions.mjs`), so the page opens such a state without
-  the option.
+  (`scripts/stateOptions.mjs`), so the page opens such a state under
+  the defaults, and one saved without them starts the sea's velocity under
+  the air and the skin at zero.
 
 `boundaryLayer.diagnoseFirst` (true) and `surfaceExcess` (0).
 - With diagnoseFirst, the diagnosis (top, K, regime) sees the lowest
@@ -12517,8 +12520,10 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
     fixed-scale score of 0.683 against 0.688, and 0.740 against 0.713
     without the shared biases. coolSkin alone never ran there. On the
     control, coolSkin alone was 1 toward and 0 away in year 1, and
-    relativeWind with coolSkin 3 toward and 1 away in year 2. Both stay
-    off by default.
+    relativeWind with coolSkin 3 toward and 1 away in year 2. Both are
+    on by default since Nov 9, Joshua's call: the pair was neutral on the
+    diagnoseFirst base (V2) and better on the control base (V3: the cold
+    tongue and the stress).
 - The engines part more under diagnoseFirst at seventeen64 day 365 than
   under the plain order:
   - MIX shares: 2.1× at step 2 and 1.3× at step 8.
