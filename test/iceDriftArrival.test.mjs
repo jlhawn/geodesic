@@ -93,7 +93,7 @@ test('the thermodynamics keep the arrived ice and freeze the leads around it, wh
   assert.equal(old.h, 0); assert.equal(old.A, 0);
 
   const kept = pack(true, { water: 0.6 }), melted = pack(false, { water: 0.6 }), flux = new Float64Array(kept.C).fill(-30), growth = [];
-  const beyond = (r) => Array.from({ length: r.C }, (_, i) => i).filter((i) => !r.initial[i] && r.thickness[i] > 0);
+  const beyond = (r) => Array.from({ length: r.C }, (_, i) => i).filter((i) => !r.initial[i] && !(r.thickness[i] <= 0));
   for (let n = 0; n < 6; n++) {
     for (const r of [kept, melted]) {
       for (let i = 0; i < r.C; i++) r.seaIce.update(r.surfaceT, r.thickness, flux, i, DT);

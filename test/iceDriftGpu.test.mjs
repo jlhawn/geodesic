@@ -275,7 +275,7 @@ test('over a hundred calls the GPU conserves the ice volume and snow mass to sin
   s.ocean.driftStep(DT); await s.gpu.device.queue.onSubmittedWorkDone();
   const { previousIceVolume } = await s.ocean.restartArrays(), g = await s.readIce();
   let worst = 0, scale = 0;
-  for (let i = 0; i < s.C; i++) if (g.h[i] > 0) { worst = Math.max(worst, Math.abs(previousIceVolume[i] - g.h[i] * g.conc[i])); scale = Math.max(scale, g.h[i] * g.conc[i]); }
+  for (let i = 0; i < s.C; i++) if (!(g.h[i] <= 0)) { worst = Math.max(worst, Math.abs(previousIceVolume[i] - g.h[i] * g.conc[i])); scale = Math.max(scale, g.h[i] * g.conc[i]); }
   console.log(`the stored ice volume differs from the measured by ${worst.toExponential(2)} m of ${scale.toFixed(3)} m after a transport alone`);
   assert.ok(worst < 1e-5 * scale, 'previousVolume follows the transport');
   s.gpuModel.destroy();
