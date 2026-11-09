@@ -14,16 +14,20 @@
 // ocean has stepped the row in CARRIED (PEN) counts only each cell's gap past ρc_p times twice the largest
 // f32 grain of the heat stores h·(T − HEAT_REFERENCE) above PENETRATION_DEPTH, under which the GPU's
 // deposit of the light leaves a remainder that waits for the next ocean step), or, for the
-// DECISION_ROWS below, differs by more than TOL in a larger share of cells than the row's bound, or by a
-// relative rms above 3·TOL over the cells under that threshold. The rows in ABSOLUTE_BOUNDS
+// DECISION_ROWS below, differs by more than TOL times the row's largest CPU magnitude in a larger share of
+// its entries than the row's bound, or has its gaps under that threshold exceed, as a root sum of squares,
+// 3·TOL of the root sum of squares of the CPU's values over all its entries. The rows in ABSOLUTE_BOUNDS
 // (T2M) are judged in their own units instead, by the rms gap and the share of cells past a gap, whatever
 // TOL is. A row reads n/a, and cannot fail, where the model does not compute it: ROW_NEEDS gives T2M n/a
 // without the roughness exchange, STRESS and SDRAG without the implicit drag, WARM without the warm
-// layer and COOL without the cool skin, and the clear-sky, form-drag and held-radiation rows read n/a
-// without the clear-sky pass, the form drag or the held radiation. The run also exits 1 when the CPU model
-// takes the raster sub-grid orography, which has no form drag and is not the configuration a saved state
-// runs; env NO_SUBGRID builds both models without sub-grid orography and lifts this. The state arrays are
-// only reported, with each engine's own rms change since the last report.
+// layer, COOL without the cool skin and UO without the relative wind, and the clear-sky, form-drag and
+// held-radiation rows read n/a without the clear-sky pass, the form drag or the held radiation. The run
+// also exits 1 when the CPU model takes the raster sub-grid orography, which has no form drag and is not
+// the configuration a saved state runs; env NO_SUBGRID builds both models without sub-grid orography and
+// lifts this. The state arrays are only reported, with each engine's own rms change since the last
+// report. The ocean's rows, OFLUX and UO change only at an ocean step, the first at step 8 at N=64 and
+// N=128, so a run through steps 1 and 2 compares them at their loaded values, UO at zero from a save
+// without a sea flow.
 //   --cpu-only   builds only the CPU model (no GPU is imported), steps it, and checks that every
 //                mapped CPU array exists and is not all zero: the dry run of this tool
 //   --gpu-dump P builds only the GPU model, steps it and writes its states at 0 and at each count in STEPS to
@@ -128,7 +132,7 @@ for (const name of (process.env.DECISION_EXTRA ?? '').split(',').filter(Boolean)
 export const DECISION_ROWS = new Set(Object.keys(DECISION_BOUNDS));
 const NO_CLEAR_SKY = JSON.parse(process.env.RADIATION ?? '{}').clearSkyPass === false, CLEAR_SKY_ROWS = new Set(['ABSCLRSUM', 'OLRCLRSUM', 'RADCLROLR', 'RADCLRSW', 'RADTC']);
 const drags = (model) => !!model.boundaryLayer?.implicitDrag;
-const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin] };
+const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin], UO: ['no relative wind', (model) => !!model.seaFlow] };
 const decisionBound = (name) => (process.env.SHARE ? Number(process.env.SHARE) : DECISION_BOUNDS[name]);
 
 const typed = (v) => ArrayBuffer.isView(v) && !(v instanceof DataView);
