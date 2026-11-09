@@ -625,7 +625,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
               move += cpuMove ** 2; gap += (gpuMove - cpuMove) ** 2; before += base[0][x] ** 2;
             }
           }
-          const relative = scale > 0 ? Math.sqrt(apart / scale) : 0, lowRelative = lowScale > 0 ? Math.sqrt(lowApart / lowScale) : 0, moved = before > 0 ? Math.sqrt(move / before) : 0, moveGap = move > 0 ? Math.sqrt(gap / move) : gap > 0 ? Infinity : 0;
+          const share = (part, whole) => (whole === 0 ? 0 : Math.sqrt(part / whole)), relative = share(apart, scale), lowRelative = share(lowApart, lowScale), moved = share(move, before), moveGap = move === 0 && gap === 0 ? 0 : Math.sqrt(gap / move);
           classes.push(`${kind} (${columns}) ${relative.toExponential(1)} apart, ${lowRelative.toExponential(1)} at the lowest interface${base ? `, moved ${moved.toExponential(1)}, the moves ${moveGap.toExponential(1)} apart` : ''}`);
           if (!(relative < apartBound[kind] && lowRelative < 2e-4)) failures.push(`${where}, ${field}, ${kind} columns: the engines are ${relative} rms apart, ${lowRelative} at the lowest interface`);
           if (acting.includes(`${field} ${kind}`) && !(columns >= 20 && moved > 1e-3 && moveGap < 0.02)) failures.push(`${where}, ${field}, ${kind} columns: ${columns} of them, the options move it ${moved} rms, the engines' moves ${moveGap} of the move apart`);

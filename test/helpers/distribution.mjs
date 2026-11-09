@@ -27,7 +27,11 @@
  * twin that set M. A check fails an empty group, a non-finite gap, reference
  * or bound, a hemisphere's bound that is missing for cells the group has
  * there or given where it has none, an empty ladder that a required counts
- * tier gives no reason for, a reason the group's floor or size contradicts,
+ * tier gives no reason for, a reason the group's floor or size contradicts
+ * or that the largest bound does not tie to (the bound at least the
+ * reason's threshold and at most K_MOST, S9(f)'s ceiling on k, times the
+ * larger of that threshold and the cell floor, past the two roundings; a
+ * half reason's limit at most K_MOST times the group plus 2),
  * and a dropped hemisphere that has a bound too or whose reason falls short;
  * buildSpread throws on an empty group or a non-finite gap.
  *
@@ -36,7 +40,7 @@
  * both. hemispheres() gives 0 to a cell whose center lies within EQUATOR of
  * the equatorial plane (|z| of the unit center).
  */
-export const F32_RMS = 16 * 2 ** -24, F32_CELL = 64 * 2 ** -24, TRIM = 0.05, LADDER_DEPTH = 10, EQUATOR = 1e-9, EVENT_SPREAD = 3;
+export const F32_RMS = 16 * 2 ** -24, F32_CELL = 64 * 2 ** -24, TRIM = 0.05, LADDER_DEPTH = 10, EQUATOR = 1e-9, EVENT_SPREAD = 3, K_MOST = 3;
 export const S9_TIERS = ['largest', 'counts', 'hemisphere', 'bulk'];
 
 export function magnitude(values) {
@@ -69,6 +73,11 @@ const sidesOf = (where, n) => {
 const inHemisphere = (side, north) => side === 0 || (side > 0) === north;
 const middle = (values) => { const s = [...values].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const eventSet = ({ largest, median, loo } = {}) => largest > EVENT_SPREAD * median || loo > 1;
+const ROUNDING = 1.01 / 0.99;
+const reasonHolds = (reason, largest, cellFloor, n) => {
+  const { why, threshold, limit } = reason ?? {}, tied = threshold <= largest && largest <= K_MOST * ROUNDING * Math.max(threshold, cellFloor);
+  return why === 'floor' ? tied && (threshold === 0 || (threshold > 0 && threshold < cellFloor)) : why === 'half' && tied && threshold > 0 && limit >= n / 2 && limit <= K_MOST * n + 2;
+};
 
 export function spreadStatistics(gaps, where, thresholds = [], trim = TRIM) {
   const n = gaps.length, sides = sidesOf(where, n);
@@ -130,7 +139,7 @@ export function distributionCheck(gaps, where, spread, { max, rms }, { cells = n
   const cellFloor = F32_CELL * max, meanFloor = F32_RMS * rms;
   if (emptyLadder !== undefined) {
     if (counts.length) failed.push('a ladder with rungs and a reason for having none');
-    else if (!(emptyLadder?.why === 'floor' ? emptyLadder.threshold < cellFloor || emptyLadder.threshold <= 0 : emptyLadder?.why === 'half' && emptyLadder.limit >= gaps.length / 2)) failed.push(`no ladder, for a reason the group contradicts: ${JSON.stringify(emptyLadder)} against a cell floor of ${cellFloor} and ${gaps.length} entries`);
+    else if (!reasonHolds(emptyLadder, largest, cellFloor, gaps.length)) failed.push(`no ladder, for a reason the group contradicts: ${JSON.stringify(emptyLadder)} against a cell floor of ${cellFloor}, a largest bound of ${largest} and ${gaps.length} entries`);
   } else if (require.includes('counts') && spread.counts?.length === 0) failed.push('an empty ladder with no reason given');
   if (largest !== undefined && finite('largest', largest)) { const top = Math.max(largest, cellFloor); if (!(s.largest <= top)) failed.push(`largest ${s.largest} at ${id(s.at)}, past ${top}`); }
   counts.forEach(([threshold, limit], j) => {
