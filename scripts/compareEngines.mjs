@@ -10,7 +10,10 @@
 // PH_MAP nor PH_INPUT is reported first as UNMAPPED, and the run exits 1 when any region is unmapped, is
 // missing on the CPU, is all zero on one side only, is all zero on the GPU without being listed in
 // MAY_BE_ZERO, holds a non-finite value, differs from its CPU array by more than TOL (env, relative rms,
-// default 1e-3; a row in ABSOLUTE_FLOOR passes too while its largest gap is under the floor), or, for the
+// default 1e-3; a row in ABSOLUTE_FLOOR passes too while its largest gap is under the floor, and once the
+// ocean has stepped the row in CARRIED (PEN) counts only each cell's gap past ρc_p times twice the largest
+// f32 grain of the heat stores h·(T − HEAT_REFERENCE) above PENETRATION_DEPTH, under which the GPU's
+// deposit of the light leaves a remainder that waits for the next ocean step), or, for the
 // DECISION_ROWS below, differs by more than TOL in a larger share of cells than the row's bound, or by a
 // relative rms above 3·TOL over the cells under that threshold. The rows in ABSOLUTE_BOUNDS
 // (T2M) are judged in their own units instead, by the rms gap and the share of cells past a gap, whatever
@@ -95,6 +98,24 @@ export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'O
 export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001, COND: 0.001, MIXH: 0.0078, STRESS: 0.0165, DRAG: 0.0066, HEATX: 0.0048, DECKF: 0.001, MLMCOVER: 0.001, MLMENT: 0.001, OBETA: 0.001, OBLOCK: 0.001, OLAUNCH: 0.00156, OSTRESS: 0.00126, CONC: 0.001, STRAT: 0.001, USTAR: 0.001 };
 // f32 rounding of the soil store: eight spacings at 300 kg/m²
 const ABSOLUTE_FLOOR = { RUNOFF: 2.5e-4, DISCHARGE: 2.5e-4 };
+const CARRIED = new Set(['PEN']);
+const f32Grain = (x) => 2 ** (x ? Math.max(Math.floor(Math.log2(Math.abs(x))) - 23, -126) : -24);
+const carriedLight = (ocean, rhoCp) => {
+  const L = ocean.h.length / C, bound = new Float64Array(C);
+  for (let i = 0; i < C; i++) for (let k = 0, top = 0; k < L && top < PENETRATION_DEPTH; k++) {
+    const h = ocean.h[k * C + i];
+    if (h > 0) bound[i] = Math.max(bound[i], 2 * rhoCp * f32Grain(h * (ocean.T[k * C + i] - HEAT_REFERENCE)));
+    top += h;
+  }
+  return bound;
+};
+const pastCarry = (g, c, bound) => {
+  const n = Math.min(g.length, c.length, bound.length);
+  let ee = 0, cc = 0, past = 0;
+  for (let x = 0; x < n; x++) { const e = Math.abs(g[x] - c[x]) - bound[x]; if (e > 0) { ee += e * e; past++; } cc += c[x] * c[x]; }
+  return { rms: cc > 0 ? Math.sqrt(ee / cc) : ee > 0 ? Infinity : 0, past };
+};
+let oceanStepped = false;
 // judged in kelvin, by the rms gap and the share of cells parting past `over`: about ten times the parity of seventeen64 day 365 and combined128 day 1460 through 2 steps
 export const ABSOLUTE_BOUNDS = { T2M: { rms: 0.01, over: 0.05, share: 5e-4 } };
 const absoluteGap = (g, c, over) => {
@@ -127,6 +148,7 @@ if (!NO_GPU) {
 const { createModel } = await import(`${REPO}/js/model.module.js`);
 const { createGpuModel } = NO_GPU ? {} : await import(`${REPO}/js/gpu/model.gpu.js`);
 const { readBuffer } = NO_GPU ? {} : await import(`${REPO}/js/gpu/device.module.js`);
+const { HEAT_REFERENCE, PENETRATION_DEPTH } = await import(`${REPO}/js/ocean/layered.module.js`);
 
 async function build(file) {
   const fs = await import(`${REPO}/scripts/figures/figureState.mjs`);
@@ -208,7 +230,7 @@ function nonFinite(region) {
   return count ? `NON-FINITE (${count} of ${region.length}, first at layer ${Math.floor(first / C)} cell ${first % C})` : null;
 }
 
-function mappedReport(phNames, phArray, step) {
+function mappedReport(phNames, phArray, step, carry = null) {
   lines.push(`\n### PH regions against the fixed name map\n\n| PH | CPU array | rel rms | rel max | zero % gpu/cpu | max abs cpu | verdict |\n|---|---|---|---|---|---|---|`);
   const decisions = [];
   const unmapped = phNames.filter((n) => !(n in PH_MAP) && !(n in PH_INPUT));
@@ -231,6 +253,7 @@ function mappedReport(phNames, phArray, step) {
     let verdict = 'ok', note = '';
     if (s.nan) verdict = `NON-FINITE (${s.nan} of ${Math.min(region.length, c.length)})`; else if (!gNonzero && cNonzero) verdict = 'GPU ALL ZERO'; else if (gNonzero && !cNonzero) verdict = 'CPU ALL ZERO'; else if (!gNonzero && !cNonzero) verdict = MAY_BE_ZERO.has(name) ? 'zero on both (listed)' : 'ZERO ON BOTH (not exercised)';
     else if (ABSOLUTE_BOUNDS[name]) { const b = ABSOLUTE_BOUNDS[name], a = absoluteGap(region, c, b.over); note = ` (rms ${fmt(a.rms)}, ${a.past} cells past ${b.over})`; verdict = a.rms > b.rms ? `OFF (rms > ${b.rms})` : a.share > b.share ? `OFF (share past ${b.over} > ${b.share})` : 'ok'; }
+    else if (carry && CARRIED.has(name)) { const p = pastCarry(region, c, carry); note = ` (rel rms ${fmt(p.rms)} past the GPU's carry, ${p.past} cells past it)`; verdict = p.rms > TOL ? `OFF (past the carry > ${TOL})` : 'ok'; }
     else if (DECISION_ROWS.has(name)) verdict = s.share > decisionBound(name) ? `OFF (share > ${decisionBound(name)})` : s.rest > 3 * TOL ? `OFF (rms under the threshold > ${3 * TOL})` : 'ok';
     else if (!(s.rms <= TOL) && !(s.max * s.scale <= ABSOLUTE_FLOOR[name])) verdict = `OFF (> ${TOL})`;
     if (verdict !== 'ok' && verdict !== 'zero on both (listed)' && !((MAY_BE_ZERO.has(name) || landless) && verdict.startsWith('ZERO'))) failures++;
@@ -269,6 +292,7 @@ for (const target of STEPS) {
   lines.push(row('seaIce.concentration', stats(g.concentration, cpu.seaIce.concentration)));
   if (cpu.ocean && g.ocean) {
     const co = cpu.ocean.serialize(), go = g.ocean, gb = gBefore.ocean;
+    oceanStepped ||= co.T.some((v, n) => v !== oceanBefore.T[n]);
     lines.push(`\n### ocean\n\n${HEAD}`);
     for (const key of ['h', 'u', 'T', 'S', 'eta']) lines.push(row(key, stats(go[key], co[key], oceanBefore[key], undefined, 0, 0, gb[key])));
     const content = (o, key) => Float64Array.from(o[key], (v, n) => v * o.h[n]);
@@ -283,7 +307,7 @@ for (const target of STEPS) {
     let r = g.regions[n];
     if ((n === 'DEPTH' || n === 'MIXTOP') && cpu.surfaceGeopotential) { r = Float32Array.from(r); for (let i = 0; i < C; i++) r[i] += cpu.surfaceGeopotential[i] / cpu.core.diagnostics.g; }
     return r;
-  }, done);
+  }, done, oceanStepped && g.ocean ? carriedLight(g.ocean, cpu.ocean.rhoCp) : null);
   before = cpu.state.map((x) => Float64Array.from(x));
   if (cpu.ocean) oceanBefore = cpu.ocean.serialize();
   gBefore = g;
