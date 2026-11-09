@@ -9,6 +9,7 @@ import { saturationHumidity } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN, heatProfile, profileTemperature } from '../js/physics/exchange.module.js';
 import { PREVIOUS_LEVELS, PREVIOUS_SURFACE, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
+import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
 import { cpuFrameFields } from '../js/cpuFrame.module.js';
 
 let gpuAvailable = true;
@@ -439,6 +440,45 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
   await assert.rejects(createGpuModel(new Grid(16), { topography, boundaryLayer: { surfaceExcess: -8.5 } }), /surfaceExcess must be 0 or more/);
 });
 
+test('surface.virtualDensity takes the moist density alike on both engines at the default order under the fixed exchange: the boundary layer\'s kinematic surface fluxes and the lowest wind, outside the cells where the lowest layer\'s humidity or the step\'s convective rain parts between the engines in either run', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const boundaryLayer = { countergradient: 7.2 }, moist = { fogDroplets: null, fogDepositionLimit: 1e-3 }, names = ['CGH', 'CGW'], runs = [];
+  for (const surface of [{ exchange: 'fixed', virtualDensity: true }, { exchange: 'fixed' }]) {
+    const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer, moist })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer, moist }));
+    cpu.step(900); await gpu.step(900); await gpu.settle(); await gpu.sync();
+    const { nCells: C, nEdges: E } = cpu.mesh, PH = gpu.gpu.layout.PH, lowest = (cpu.core.K - 1) * E, low = (cpu.core.K - 1) * C, bl = cpu.boundaryLayer;
+    const [heat, water, gpuRain] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [...names, 'CONV'].map((name) => ({ offset: PH[name], length: C }))), rain = cpu.moist.convectivePrecipitation;
+    runs.push({
+      humid: Array.from({ length: C }, (_, i) => Math.abs(gpu.state[4][low + i] - cpu.state[4][low + i]) > 1e-2 * cpu.state[4][low + i]),
+      rained: Array.from({ length: C }, (_, i) => Math.abs(gpuRain[i] - rain[i]) > 1e-2 * Math.max(Math.abs(rain[i]), Math.abs(gpuRain[i])) + 1e-9),
+      cpu: { CGH: Float64Array.from(bl.kinematicHeat), CGW: Float64Array.from(bl.kinematicWater), u: Float64Array.from(cpu.state[2].subarray(lowest, lowest + E)) },
+      gpu: { CGH: Float64Array.from(heat), CGW: Float64Array.from(water), u: Float64Array.from(gpu.state[2].subarray(lowest, lowest + E)) },
+      cellsOnEdge: cpu.mesh.cellsOnEdge, raining: rain.filter((r) => r > 0).length,
+    });
+    gpu.destroy();
+  }
+  const [on, off] = runs, { cellsOnEdge } = on, report = [];
+  const split = on.humid.map((s, i) => s || off.humid[i] || on.rained[i] || off.rained[i]), parted = split.filter(Boolean).length;
+  const rainOnly = split.map((s, i) => s && !on.humid[i] && !off.humid[i] ? i : -1).filter((i) => i >= 0);
+  report.push(`${parted} cells left out, ${rainOnly.length} for the convective rain alone (${rainOnly.join(', ')}) of ${on.raining} and ${off.raining} raining`);
+  assert.ok(parted <= 0.005 * split.length, `the lowest layer's humidity or the convective rain parts between the engines on ${parted} of ${split.length} cells`);
+  const left = (name, i) => (name === 'u' ? split[cellsOnEdge[2 * i]] || split[cellsOnEdge[2 * i + 1]] : split[i]);
+  for (const name of [...names, 'u']) {
+    let apart = 0, scale = 0, gap = 0, move = 0;
+    for (let i = 0; i < on.cpu[name].length; i++) {
+      if (left(name, i)) continue;
+      const cpuMove = on.cpu[name][i] - off.cpu[name][i], gpuMove = on.gpu[name][i] - off.gpu[name][i];
+      apart += (on.gpu[name][i] - on.cpu[name][i]) ** 2; scale += on.cpu[name][i] ** 2;
+      gap += (gpuMove - cpuMove) ** 2; move += cpuMove ** 2;
+    }
+    const relative = Math.sqrt(apart / scale), moved = Math.sqrt(move / scale), moveApart = move > 0 ? Math.sqrt(gap / move) : 0;
+    report.push(`${name} apart ${relative.toExponential(1)}, moved ${moved.toExponential(1)}, moves apart ${moveApart.toExponential(1)}`);
+    assert.ok(relative < 1e-4, `fixed ${name}: the engines are apart by ${relative} of it`);
+    if (name === 'u') assert.ok(moved > 1e-5 && moveApart < 0.02, `fixed u: the option moves it by ${moved} of it, the engines' moves apart by ${moveApart}`);
+    else assert.ok(moveApart < 0.05, `fixed ${name}: the engines' moves apart by ${moveApart}`);
+  }
+  console.log(`fixed exchange at the default order, virtualDensity against none (relative rms): ${report.join('; ')}`);
+});
+
 test('both engines refuse under boundaryLayer the options they take from the surface or the orography', async () => {
   for (const [key, value, group] of [['virtualDensity', true, 'surface'], ['gustiness', 1, 'surface'], ['implicitDrag', false, 'surface'], ['relativeWind', true, 'surface'], ['seaHumidity', 0.5, 'surface'], ['formDrag', false, 'orography']]) {
     const refused = new RegExp(`boundaryLayer\\.${key} is not a boundary-layer option: set ${group}\\.${key}`);
@@ -658,6 +698,39 @@ test('both coupled engines hand the air the same sea velocity under surface.rela
   console.log(`the sea velocity under the air, then the ocean's: ${report.join('; ')}`);
   assert.deepEqual(failures, []);
   await assert.rejects(createGpuModel(new Grid(16), { topography, ocean: { gustiness: 5 } }), /ocean\.gustiness is not an option/);
+});
+
+test('both coupled engines hand the air the same sea velocity under surface.relativeWind at the default order, with the ice drift and without it, on the edges between the columns where no discrete decision parted in either run, and the drift moves it alike there', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const flows = {}, report = [], failures = [];
+  let mesh = null;
+  for (const [name, ocean] of [['drift', {}], ['no drift', { iceDrift: false }]]) {
+    const options = { topography, surface: { relativeWind: true }, ocean: { everySteps: 2, ...ocean } };
+    const cpu = prepare(createModel(new Grid(16), options)), gpu = prepare(await createGpuModel(new Grid(16), options)), decisions = decisionTracker(cpu.core.K, cpu.mesh.nCells);
+    for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.gpu.download(), await gpu.gpu.downloadPhysics())); }
+    await gpu.settle(); await gpu.sync();
+    const [flow] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.UO, length: cpu.mesh.nEdges }]);
+    flows[name] = { cpu: Float64Array.from(cpu.seaFlow), gpu: Float64Array.from(flow), parted: decisions.parted };
+    mesh = cpu.mesh;
+    gpu.destroy();
+  }
+  const either = new Set([...flows.drift.parted, ...flows['no drift'].parted]), near = neighbourhood(mesh, either, 1), { cellsOnEdge, nCells: C, nEdges: E } = mesh;
+  const keptOf = (cells) => Array.from({ length: E }, (_, e) => e).filter((e) => !cells.has(cellsOnEdge[2 * e]) && !cells.has(cellsOnEdge[2 * e + 1]));
+  const kept = keptOf(either), ringKept = keptOf(near), energy = (a) => a.reduce((sum, v) => sum + v * v, 0);
+  const rms = (a, b = null) => Math.sqrt(kept.reduce((sum, e) => sum + (a[e] - (b ? b[e] : 0)) ** 2, 0) / kept.length);
+  const whole = (a, b) => Math.sqrt(a.reduce((sum, v, e) => sum + (v - b[e]) ** 2, 0) / a.reduce((sum, v) => sum + v * v, 0));
+  report.push(`a decision parted in ${either.size} of ${C} columns; ${kept.length} of ${E} edges kept, ${ringKept.length} more than a ring from them`);
+  if (!(either.size <= C / 4)) failures.push(`a decision parted in ${either.size} of ${C} columns`);
+  for (const name of ['drift', 'no drift']) {
+    const { cpu, gpu } = flows[name], scale = rms(cpu), apart = rms(gpu, cpu) / scale;
+    report.push(`${name}: ${scale.toExponential(1)} m/s rms, the engines ${apart.toExponential(1)} of it apart on the kept edges, ${(Math.sqrt(ringKept.reduce((sum, e) => sum + (gpu[e] - cpu[e]) ** 2, 0) / ringKept.reduce((sum, e) => sum + cpu[e] ** 2, 0))).toExponential(1)} beyond a ring, ${whole(gpu, cpu).toExponential(1)} on all; the flow's energy ${(Math.abs(energy(gpu) - energy(cpu)) / energy(cpu)).toExponential(1)} apart`);
+    if (!(scale > 1e-4 && apart < 2e-4)) failures.push(`${name}: the velocity is ${scale} m/s rms, the engines ${apart} of it apart on the kept edges`);
+  }
+  const cpuMove = flows['no drift'].cpu.map((v, e) => v - flows.drift.cpu[e]), gpuMove = flows['no drift'].gpu.map((v, e) => v - flows.drift.gpu[e]);
+  const move = rms(cpuMove) / rms(flows.drift.cpu), gap = rms(gpuMove, cpuMove) / rms(cpuMove);
+  report.push(`no drift against drift: it moves ${move.toExponential(1)} of it, the engines' moves ${gap.toExponential(1)} apart`);
+  if (!(move > 1e-2 && gap < 0.05)) failures.push(`no drift against drift: the velocity moves ${move} of it, the engines' moves ${gap} of the move apart`);
+  console.log(`the sea velocity under the air at the default order: ${report.join('; ')}`);
+  assert.deepEqual(failures, []);
 });
 
 test('under the fixed exchange the 2 m temperature is NaN at every cell on both engines', async () => {
