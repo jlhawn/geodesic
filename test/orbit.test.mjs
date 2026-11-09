@@ -140,7 +140,7 @@ test('daily means at the model\'s cells match S₀/π (a/r)² (h₀ sin φ sin �
         mean += radiation.insolation(i) / samples;
       }
       const error = Math.abs(mean - textbookAt(lat, noon));
-      if (error > worst) { worst = error; at = `day ${day}, ${(lat / D).toFixed(1)}°`; }
+      if (!(error <= worst) && !Number.isNaN(worst)) { worst = error; at = `day ${day}, ${(lat / D).toFixed(1)}°`; }
     }
   }
   console.log(`daily means of the kepler orbit on the N = 16 mesh against the textbook form: worst difference ${worst.toFixed(3)} W/m² (${at})`);
