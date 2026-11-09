@@ -12430,8 +12430,10 @@ against the interpolated reference.
 
 #### The boundary layer's and the surface exchange's options
 
-Each is off, or at the value the scheme had before it, by default. Each
-runs on both engines and leaves the model bit-identical when it is unset.
+Each runs on both engines. Each is off, or at the value the scheme had
+before it, by default, and leaves the model bit-identical when it is
+unset, except `boundaryLayer.diagnoseFirst`: it is on by default, and
+diagnoseFirst false gives the earlier order, bit for bit.
 
 `surface.relativeWind` (false): the stress and the bulk heat and
 moisture fluxes take the lowest layer's wind relative to the sea's
@@ -12450,13 +12452,32 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
   layer before the step's surface sensible heat and evaporation enter
   it, as CAM's does. The implicit solve still takes them. With it false
   the diagnosis sees the layer as deposited.
-- The default rests on N=64 coupled pairs from seventeen64, scored on the
-  corrected references in day means (scorer ef3656c,
-  `~/.cache/webgcm-scratch/pairs/scorecard2.md`).
-  - Each arm ran a year from two starts: days 365 and 548 for year 1,
-    days 730 and 913 for year 2.
-  - A row moves past 3.04σ, where σ is the twin control's RMS over the
-    two starts.
+- The default rests on N=64 coupled pairs from seventeen64. Each save's
+  30-day window of day means is reduced by `reduceState` in
+  `scripts/scorecard64.mjs` and scored on its corrected references (the
+  scorer and the saves are in this machine's scratch, not in the
+  repository).
+  - The diagnoseFirst arm, the plain-order control and the control's twin
+    each ran two years from seventeen64's days 365 and 548. Year 2
+    continues each arm's year-1 run: each year-2 start is byte-identical
+    to the arm's own year-1 end. The arms with relativeWind and coolSkin
+    started from the diagnoseFirst arm's day-730 and day-913 states and
+    from the control's.
+  - A row's move is the arm's bias less the control's, averaged over the
+    two starts. It is resolved past t(0.975, 2)·σ/√2 = 3.04σ, where σ is
+    the RMS over the two starts of the twin's difference from the control
+    (ctl2 − ctl), on the same windows and year. A resolved row is toward
+    the observations when the arm's bias is the smaller in magnitude, and
+    away otherwise. The rest are unresolved.
+  - Six rows are guards: SST 30S–30N, the cold-tongue SST, global Ts, the
+    eastward stress over 160–100W, the SLP contrast and ASR.
+  - The fixed-scale score is the mean over the rows of |bias|, in K, W/m²
+    or hPa, or as a fraction of the reference for rain, stress, the cloud
+    effects and sea ice. Lower is better. The rows whose biases both arms
+    share (the warm-pool SST, SWCRE, LWCRE and the sea-ice extents) are
+    also left out for a second score.
+  - An arm is better on balance when more rows move toward than away, its
+    score is lower and no guard moves away.
   - Year 1: 7 rows toward the observations and 5 away. The fixed-scale
     score is 0.744 against the plain order's 0.908.
   - Year 2: 9 toward, 3 away and 10 unresolved, with a fixed-scale score
@@ -12468,22 +12489,29 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
     - LWCRE: −1.0 W/m².
     - Net TOA: +3.3 W/m². That is a bias of +3.1 over CERES, against +2.8
       in year 1.
-  - relativeWind with coolSkin on this base moves no row toward and one
-    away, so both stay off.
+  - On the diagnoseFirst base only relativeWind and coolSkin together
+    ran: 0 rows toward and 1 away (40–60N land +1.99 → +2.06 K), with a
+    fixed-scale score of 0.683 against 0.688, and 0.740 against 0.713
+    without the shared biases. coolSkin alone never ran there. On the
+    control, coolSkin alone was 1 toward and 0 away in year 1, and
+    relativeWind with coolSkin 3 toward and 1 away in year 2. Both stay
+    off by default.
 - The engines part more under diagnoseFirst at seventeen64 day 365 than
   under the plain order:
   - MIX shares: 2.1× at step 2 and 1.3× at step 8.
   - The CPU against its own copy, perturbed by one f32 ulp: 1.4× and
     1.2×.
 - The offline tools (`diagnoseExchange` in `scripts/surfaceExchange.mjs`,
-  and `scripts/adjustStages.mjs`) diagnose a saved state as it stands,
+  `scripts/adjustStages.mjs` and the deck geometry in
+  `scripts/verticalAudit.mjs`) diagnose a saved state as it stands,
   through the plain entry `{ withhold: false }`.
 - With surfaceExcess b > 0, a column with B0 > 0 searches again from the
   lowest layer's θ_v plus Troen and Mahrt's excess b (w'θ_v')₀ / w_m.
   Holtslag and Boville, and CAM, take b = 8.5.
 
 How the lowest layer's humidity over the sea is set was measured on the
-CPU over two days from seventeen64 day 365, in the cold tongue (160–100W,
+CPU, in the plain order (diagnoseFirst false), over two days from
+seventeen64 day 365, in the cold tongue (160–100W,
 3S–3N, 353 sea cells). The box's mean surface pressure, 1006.9 hPa, puts
 1000 hPa about 61 m up, and the layer, its midpoint at 21 m, holds
 0.080 ± 0.014 g/kg more than 1000 hPa. That it holds too little is not
@@ -12513,8 +12541,9 @@ on day 2), the deposit falls from 48.3 to 42.8 and the difference from
   run's 0.072, and the evaporation by −3.1 ± 0.6 %, and in it the
   boundary layer's mixing takes up what the adjustment took. It is a
   transient, and nothing is attributed from it.
-- diagnoseFirst moves the difference by −0.006 ± 0.002 g/kg, and the
-  plume's term on the lowest layer (−1.1 ± 0.1) is 2.5 % of the deposit.
+- diagnoseFirst, the default, moves the difference by −0.006 ± 0.002
+  g/kg from that, and the plume's term on the lowest layer (−1.1 ± 0.1)
+  is 2.5 % of the deposit.
 - Exempting the lowest interface in the surface and coupled regimes, or
   keeping the adjustment above the boundary layer, would be a design
   change.
