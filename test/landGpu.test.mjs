@@ -5,7 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
+import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
 import { PREVIOUS_LEVELS, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
@@ -49,13 +49,51 @@ function prepare(model, fog = false) {
   return model;
 }
 
-const LAND_EVENTS = {
-  default: { ts: { 2097: -0.0513, 2241: 0.270, 2253: 0.2174 }, soil: { 1119: -4.89e-3, 2097: -2.74e-2, 2184: 2.71e-3 }, bound: { ts: 0.04, soil: 1.5e-3, snow: 1e-4 }, mixed: { ts: [2, 0.145], soil: [6, 1.6e-2] } },
-  held: { ts: { 173: -0.348, 1210: -0.0489, 2097: -0.0394, 2374: -0.0538 }, soil: { 173: -1.22e-3, 2097: -2.81e-2, 2184: 2.69e-3 }, bound: { ts: 0.02, soil: 1.2e-3, snow: 1e-4 }, mixed: { ts: [0, 0], soil: [0, 0] } },
+/*
+ * Each field's spread of engine gaps against that of 30 CPU twins of the
+ * CPU run per order (U4 and U8 nudges, f32 rounding every step, nudges after
+ * the first step): the largest gap, the cells at or past the twins' largest
+ * gap, a tenth and a hundredth of it, and the mean gap per hemisphere over
+ * the field's own cells, each at most twice the twins' worst (counts plus 2)
+ * and none below the f32 floor (64 ulps for a cell, 16 for a mean).
+ */
+const LAND_TWINS = {
+  default: {
+    ts: { largest: 0.27, at: [0.27, 0.027, 0.0027], over: [1, 3, 14], north: 0.000569, south: 0.00077 },
+    soil: { largest: 0.0274, at: [0.0274, 0.00274, 0.000274], over: [0, 3, 14], north: 6.22e-5, south: 4.75e-5 },
+    snow: { largest: 5.34e-5, at: [5.34e-5, 2.06e-5], over: [1, 2], north: 3.66e-6, south: 1.65e-6 },
+    surface: { largest: 0.0401, at: [0.0401, 0.00401, 0.000401], over: [0, 2, 10], north: 4.69e-6, south: 0.000112 },
+  },
+  held: {
+    ts: { largest: 0.348, at: [0.348, 0.0348, 0.00348], over: [1, 3, 3], north: 0.000699, south: 0.000191 },
+    soil: { largest: 0.0281, at: [0.0281, 0.00281, 0.000281], over: [1, 1, 4], north: 5.54e-5, south: 8.43e-6 },
+    snow: { largest: 5.59e-5, at: [5.59e-5, 2.05e-5], over: [0, 2], north: 3.8e-6, south: 1.9e-6 },
+    surface: { largest: 0.00548, at: [0.00548, 0.000548, 5.48e-5], over: [0, 2, 9], north: 1.18e-5, south: 1.27e-6 },
+  },
 };
-const EVENT_WIDTH = { ts: 2e-3, soil: 2e-4 }, MIXED_ONLY = new Set([2253]);
 
-for (const held of [true, false]) test(`eight GPU steps over a continent${held ? ', with the boundary layer diagnosed after the deposit,' : ' at the default order'} track the CPU model cell by cell: the surface temperature, soil water and snow of every cell but for the events the twins take, and a few complete mixes the tracker notes apart, the vegetation and the coast-bound ocean`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+function landSpread(gaps, values, own, north, twins) {
+  const floor = (scale, ulps) => ulps * 2 ** -24 * scale, failed = [], rows = [];
+  for (const [field, twin] of Object.entries(twins)) {
+    const gap = gaps[field], value = values[field], cells = own[field], C = gap.length;
+    const cellFloor = floor(Math.max(...cells.map((i) => Math.abs(value[i]))), 64);
+    let largest = 0, at = -1;
+    for (let i = 0; i < C; i++) if (Math.abs(gap[i]) > largest) { largest = Math.abs(gap[i]); at = i; }
+    const check = (what, got, bound) => { rows.push(`${field} ${what} ${+got.toPrecision(3)} of ${+bound.toPrecision(3)}`); if (!(got <= bound)) failed.push(`${field} ${what}: ${got} past ${bound}`); };
+    check('largest', largest, Math.max(2 * twin.largest, cellFloor));
+    twin.at.forEach((threshold, k) => { let n = 0; for (let i = 0; i < C; i++) if (Math.abs(gap[i]) >= threshold) n++; check(`over ${threshold.toExponential(2)}`, n, 2 * twin.over[k] + 2); });
+    for (const [h, side] of [['north', true], ['south', false]]) {
+      const cellsHere = cells.filter((i) => north[i] === side);
+      if (!cellsHere.length) continue;
+      const mean = cellsHere.reduce((sum, i) => sum + Math.abs(gap[i]), 0) / cellsHere.length, scale = cellsHere.reduce((sum, i) => sum + Math.abs(value[i]), 0) / cellsHere.length;
+      check(`${h} mean`, mean, Math.max(2 * twin[h], floor(scale, 16)));
+    }
+    rows.push(`${field} largest at ${at}`);
+  }
+  return { failed, rows };
+}
+
+for (const held of [true, false]) test(`eight GPU steps over a continent${held ? ', with the boundary layer diagnosed after the deposit,' : ' at the default order'} track the CPU model within the spread of its f32 twins: the surface temperature, soil water, snow and surface layer by their largest gap, the cells past each of three thresholds and the mean per hemisphere, the vegetation and the coast-bound ocean`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
   const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
   const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
@@ -74,38 +112,22 @@ for (const held of [true, false]) test(`eight GPU steps over a continent${held ?
   assert.ok(fog.maxDiff < 1e-3 * Math.max(...fogCpu) + 1e-6 && fog.rmsRel < 1e-4, `fog differs by ${fog.maxDiff} at ${fog.at}, rms ${fog.rmsRel}`);
   const saved = await gpu.land.serialize();
   const d = await gpu.diagnostics(), dc = cpu.diagnostics();
-  const near = neighbourhood(cpu.mesh, decisions.parted, 1), ts = stats(cpu.state[3], gpu.state[3], near), theta = stats(cpu.state[1], gpu.state[1]);
-  const soil = stats(cpu.land.soil, saved.soil), snow = stats(cpu.land.snow, saved.snow), vegetation = stats(cpu.land.vegetation, saved.vegetation), surface = stats(cpu.land.surface, saved.surface);
-  assert.ok(surface.maxDiff < 1e-2, `surface layer max ${surface.maxDiff} at ${surface.at}`);
+  const theta = stats(cpu.state[1], gpu.state[1]), vegetation = stats(cpu.land.vegetation, saved.vegetation);
   let moved = 0;
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) moved = Math.max(moved, Math.abs(cpu.land.vegetation[i] - 0.5));
   assert.ok(moved > 0.2, `the vegetation moved at most ${moved} from its start`);
   assert.ok(vegetation.maxDiff < 1e-3, `vegetation max ${vegetation.maxDiff} at ${vegetation.at}`);
-  console.log(`eight steps over a continent at N=16: Ts max ${ts.maxDiff.toExponential(1)} K outside the ${near.size} cells within one of the ${decisions.parted.size} where the engines took a discrete decision apart, θ rms ${theta.rmsRel.toExponential(1)}, soil max ${soil.maxDiff.toExponential(1)} kg/m², snow max ${snow.maxDiff.toExponential(1)} kg/m²; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
-  const C = cpu.mesh.nCells, at = LAND_EVENTS[held ? 'held' : 'default'], mixed = neighbourhood(cpu.mesh, decisions.kinds.mix, 1);
   if (held) assert.equal(gpu.boundaryLayer.diagnoseFirst, false);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
-  const failed = [], excused = [], skipped = { ts: [], soil: [] };
-  const judge = (field, i, gap, inMix) => {
-    if (Math.abs(gap) < at.bound[field]) return;
-    const event = at[field][i];
-    if (event !== undefined && Math.abs(gap - event) <= EVENT_WIDTH[field] && (!MIXED_ONLY.has(i) || decisions.kinds.mix.has(i))) excused.push(`${field} at ${i} ${gap.toExponential(3)}`);
-    else if (inMix) skipped[field].push(`${i} ${gap.toExponential(3)}`);
-    else failed.push(`${field} at ${i} ${gap.toExponential(3)}`);
-  };
-  for (let i = 0; i < C; i++) {
-    judge('ts', i, gpu.state[3][i] - cpu.state[3][i], decisions.kinds.mix.has(i));
-    judge('soil', i, saved.soil[i] - cpu.land.soil[i], mixed.has(i));
-    const s = Math.abs(saved.snow[i] - cpu.land.snow[i]);
-    if (s >= at.bound.snow) failed.push(`snow at ${i} ${s.toExponential(2)}`);
-  }
-  for (const field of ['ts', 'soil']) {
-    const [count, mean] = at.mixed[field], gaps = skipped[field].map((cell) => Math.abs(Number(cell.split(' ')[1])));
-    if (gaps.length > count || gaps.reduce((sum, gap) => sum + gap, 0) > mean * gaps.length) failed.push(`${field} at ${gaps.length} complete-mix partings (${skipped[field].join(', ')}), past ${count} cells or a mean of ${mean}`);
-  }
-  const inside = [...near].map((i) => [i, Math.abs(gpu.state[3][i] - cpu.state[3][i])]).sort((x, y) => y[1] - x[1]).slice(0, 6);
-  console.log(`${held ? 'held' : 'default'} order, cell by cell: Ts outside the decisions' neighborhoods ${ts.maxDiff.toExponential(3)} K at ${ts.at}, inside them ${inside.map(([i, gap]) => `${i} ${gap.toExponential(2)}`).join(', ')}; soil ${soil.maxDiff.toExponential(2)} at ${soil.at}, snow ${snow.maxDiff.toExponential(2)} at ${snow.at}; complete mixes parted at ${[...decisions.kinds.mix].join(', ') || 'none'}; events ${excused.join(', ') || 'none'}; skipped at complete mixes: Ts ${skipped.ts.join(', ') || 'none'}, soil ${skipped.soil.join(', ') || 'none'}`);
-  assert.deepEqual(failed, [], 'cells past the per-cell bounds');
+  const C = cpu.mesh.nCells, landCells = [...cpu.geography.land.keys()].filter((i) => cpu.geography.land[i]);
+  const snowy = landCells.filter((i) => cpu.land.snow[i] > 0 || cpu.mesh.latCell[i] > 1.0), north = Array.from(cpu.mesh.latCell, (lat) => lat >= 0);
+  const gap = (a, b) => Float64Array.from(b.subarray(0, C), (v, i) => v - a[i]);
+  const spread = landSpread(
+    { ts: gap(cpu.state[3], gpu.state[3]), soil: gap(cpu.land.soil, saved.soil), snow: gap(cpu.land.snow, saved.snow), surface: gap(cpu.land.surface, saved.surface) },
+    { ts: cpu.state[3], soil: cpu.land.soil, snow: cpu.land.snow, surface: cpu.land.surface },
+    { ts: landCells, soil: landCells, snow: snowy, surface: landCells }, north, LAND_TWINS[held ? 'held' : 'default']);
+  console.log(`${held ? 'held' : 'default'} order: ${spread.rows.join('; ')}; complete mixes parted at ${[...decisions.kinds.mix].join(', ') || 'none'}; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
+  assert.deepEqual(spread.failed, [], 'statistics past the twins\x27 spread');
   assert.ok(Math.abs(dc.landMeanT - d.landMeanT) < 0.01 && Math.abs(dc.soilWater - d.soilWater) < 0.01 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 0.2);
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) assert.equal(gpu.state[6][i], 0);
 });

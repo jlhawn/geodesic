@@ -8,9 +8,12 @@ import { CLOUD_TOP_DEFAULTS } from '../../js/physics/boundaryLayer.module.js';
  * cloud water against the cloud-top threshold, and a merge of the dry
  * adjustment (two adjacent layers' θ and q each equal to 1e-6 of
  * themselves: the adjustment writes both, and only θ changes after it), and,
- * for a tracker built with `mix`, a complete mix of two adjacent layers' q
- * and q_c (each equal to 1e-6 of themselves, one of them cloudy past the
- * threshold). The same
+ * for a tracker built with `mix`, such a merge of a cloudy block: two
+ * adjacent layers' q and q_c each equal to 1e-6 of themselves, one of them
+ * past the cloud-top threshold (the adjustment writes one mass-weighted q
+ * and q_c to every layer of a merged block; the boundary layer's own mixing
+ * leaves q_c at 0, and a block diluted to the threshold or below is not
+ * noted). The same
  * rule serves the CPU against the GPU in the parity tests and the CPU
  * against itself under θ noise in scripts/perturbedRain.mjs. A run watched
  * by radiationTraces also notes the plume layers whose cloud water, as the

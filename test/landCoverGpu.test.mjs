@@ -31,10 +31,24 @@ function prepare(model) {
   return model;
 }
 
+/*
+ * The cells where 20 f32 twins of the CPU run at the held order part a
+ * field by more than 1e-5, with the twins' largest gap there, and the
+ * twins' largest gap at every other cell: a cell of the union may part by
+ * 1.5 times its twins' gap, any other by twice theirs.
+ */
+const HELD_UNION = { 222: 2.32e-5, 224: 1.17e-4, 2180: 1.75e-4, 2467: 6.16e-5 };
+const HELD_TWINS = { cover: { outside: 8.08e-6, union: HELD_UNION }, trees: { outside: 3.01e-6, union: {} }, free: { outside: 8.08e-6, union: HELD_UNION } };
+const pastTwins = (a, b, keep, { outside, union }) => {
+  const failed = [];
+  for (let i = 0; i < a.length; i++) if (keep(i)) { const gap = Math.abs(b[i] - a[i]), bound = Math.max(2 * outside, 1.5 * (union[i] ?? 0)); if (gap > bound) failed.push(`${i} ${gap.toExponential(2)} past ${bound.toExponential(2)}`); }
+  return failed;
+};
+
 const apart = (a, b, keep) => { let worst = 0; for (let i = 0; i < a.length; i++) if (keep(i)) worst = Math.max(worst, Math.abs(a[i] - b[i])); return worst; };
 
 for (const [coverGoal, snowHold, plain] of [['water', false, false], ['observed', false, true], ['observed', true, true], ['observed', false, false], ['observed', true, false]]) {
-  test(`from an observed start both engines relax the cover and the trees alike under coverGoal '${coverGoal}'${snowHold ? ' with snowHold' : ''}, hold the carbon at the placeholder, and a jump leaves the trees${plain ? ', with the boundary layer diagnosed after the deposit' : coverGoal === 'observed' ? ' at the default order, the cover, the trees and the snow-free cover on their means over the vegetated cells' : ''}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  test(`from an observed start both engines relax the cover and the trees alike under coverGoal '${coverGoal}'${snowHold ? ' with snowHold' : ''}, hold the carbon at the placeholder, and a jump leaves the trees${plain ? ', with the boundary layer diagnosed after the deposit, the cover, the trees and the snow-free cover cell by cell within the spread of f32 twins' : coverGoal === 'observed' ? ' at the default order, the cover, the trees and the snow-free cover on their means over the vegetated cells' : ''}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const land = { ...FAST, coverGoal, snowHold };
     const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } })), gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }));
     const C = cpu.mesh.nCells, grown = (i) => cpu.geography.land[i] && !cpu.geography.iceSheet[i], count = Array.from({ length: C }, (_, i) => i).filter(grown).length;
@@ -52,6 +66,13 @@ for (const [coverGoal, snowHold, plain] of [['water', false, false], ['observed'
     if (coverGoal === 'observed' && !plain) {
       console.log(`at the default order the means over the vegetated cells part by: cover ${means.cover.toExponential(1)}, trees ${means.trees.toExponential(1)}, snow-free cover ${means.free.toExponential(1)}`);
       assert.ok(means.cover < 1e-5 && means.trees < 1e-5 && means.free < 1e-5, `means apart: cover ${means.cover}, trees ${means.trees}, snow-free cover ${means.free}`);
+    } else if (plain) {
+      const fields = { cover: [cpu.land.vegetation, saved.vegetation], trees: [cpu.land.canopy, saved.canopy], free: [cpu.land.snowFreeCover, saved.snowFreeCover] };
+      const failed = Object.fromEntries(Object.entries(fields).map(([name, [a, b]]) => [name, pastTwins(a, b, grown, HELD_TWINS[name])]));
+      const union = Object.entries(fields).map(([name, [a, b]]) => `${name} ${Object.keys(HELD_TWINS[name].union).map((i) => `${i} ${Math.abs(b[i] - a[i]).toExponential(1)}`).join(', ') || 'none'}`);
+      const outside = Object.entries(fields).map(([name, [a, b]]) => { let worst = 0, at = -1; for (let i = 0; i < C; i++) if (grown(i) && !(i in HELD_TWINS[name].union) && Math.abs(b[i] - a[i]) > worst) { worst = Math.abs(b[i] - a[i]); at = i; } return `${name} ${worst.toExponential(2)} at ${at}`; });
+      console.log(`held order, cell by cell: the largest gaps outside the twins' union, ${outside.join(', ')}; in it, ${union.join('; ')}`);
+      assert.deepEqual(failed, { cover: [], trees: [], free: [] }, 'cells past the twins\x27 spread');
     } else assert.ok(vegetation < 1e-4 && trees < 1e-4 && free < 1e-4, `cover ${vegetation}, trees ${trees}, snow-free cover ${free}`);
     assert.ok(carbon < 1e-6 && held < 1e-6, `carbon ${carbon}, held to ${held}`);
     const snowy = Array.from({ length: C }, (_, i) => i).filter((i) => grown(i) && cpu.land.snow[i] > 0 && saved.snow[i] > 0);
