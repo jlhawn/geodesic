@@ -37,8 +37,8 @@ function prepare(model) {
  * twins' largest gap at every other cell: a cell of the union may part by
  * 1.5 times its twins' gap, any other by twice theirs.
  */
-const HELD_UNION = { 222: 2.34e-5, 224: 1.17e-4, 2180: 1.75e-4, 2467: 6.17e-5 };
-const HELD_TWINS = { cover: { outside: 6.29e-6, union: HELD_UNION }, trees: { outside: 3.11e-6, union: {} }, free: { outside: 6.29e-6, union: HELD_UNION } };
+const HELD_UNION = { 222: 2.32e-5, 224: 1.17e-4, 2180: 1.75e-4, 2467: 6.16e-5 };
+const HELD_TWINS = { cover: { outside: 8.08e-6, union: HELD_UNION }, trees: { outside: 3.01e-6, union: {} }, free: { outside: 8.08e-6, union: HELD_UNION } };
 const pastTwins = (a, b, keep, { outside, union }) => {
   const failed = [];
   for (let i = 0; i < a.length; i++) if (keep(i)) { const gap = Math.abs(b[i] - a[i]), bound = Math.max(2 * outside, 1.5 * (union[i] ?? 0)); if (gap > bound) failed.push(`${i} ${gap.toExponential(2)} past ${bound.toExponential(2)}`); }

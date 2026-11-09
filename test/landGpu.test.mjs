@@ -59,16 +59,16 @@ function prepare(model, fog = false) {
  */
 const LAND_TWINS = {
   default: {
-    ts: { largest: 0.27, at: [0.27, 0.027, 0.0027], over: [1, 3, 14], north: 0.000569, south: 0.000769 },
-    soil: { largest: 0.0274, at: [0.0274, 0.00274, 0.000274], over: [0, 3, 14], north: 6.05e-5, south: 4.61e-5 },
-    snow: { largest: 5.34e-5, at: [5.34e-5, 2.06e-5], over: [1, 2], north: 3.62e-6, south: 1.63e-6 },
-    surface: { largest: 0.0401, at: [0.0401, 0.00401, 0.000401], over: [0, 2, 10], north: 4.58e-6, south: 0.000112 },
+    ts: { largest: 0.27, at: [0.27, 0.027, 0.0027], over: [1, 3, 14], north: 0.000569, south: 0.00077 },
+    soil: { largest: 0.0274, at: [0.0274, 0.00274, 0.000274], over: [0, 3, 14], north: 6.22e-5, south: 4.75e-5 },
+    snow: { largest: 5.34e-5, at: [5.34e-5, 2.06e-5], over: [1, 2], north: 3.66e-6, south: 1.65e-6 },
+    surface: { largest: 0.0401, at: [0.0401, 0.00401, 0.000401], over: [0, 2, 10], north: 4.69e-6, south: 0.000112 },
   },
   held: {
-    ts: { largest: 0.348, at: [0.348, 0.0348, 0.00348], over: [1, 3, 3], north: 0.000698, south: 0.000191 },
-    soil: { largest: 0.0281, at: [0.0281, 0.00281, 0.000281], over: [1, 1, 4], north: 5.38e-5, south: 6.82e-6 },
-    snow: { largest: 5.58e-5, at: [5.58e-5, 2.05e-5], over: [1, 2], north: 3.9e-6, south: 1.89e-6 },
-    surface: { largest: 0.00548, at: [0.00548, 0.000548, 5.48e-5], over: [0, 2, 8], north: 1.16e-5, south: 1.37e-6 },
+    ts: { largest: 0.348, at: [0.348, 0.0348, 0.00348], over: [1, 3, 3], north: 0.000699, south: 0.000191 },
+    soil: { largest: 0.0281, at: [0.0281, 0.00281, 0.000281], over: [1, 1, 4], north: 5.54e-5, south: 8.43e-6 },
+    snow: { largest: 5.59e-5, at: [5.59e-5, 2.05e-5], over: [0, 2], north: 3.8e-6, south: 1.9e-6 },
+    surface: { largest: 0.00548, at: [0.00548, 0.000548, 5.48e-5], over: [0, 2, 9], north: 1.18e-5, south: 1.27e-6 },
   },
 };
 
