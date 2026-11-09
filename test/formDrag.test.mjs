@@ -92,11 +92,11 @@ test('a column of the edge solve against the hand profile: σ_flt 100 m on every
 });
 
 test('on a real state the form drag conserves each edge column’s momentum against its stresses, heats by what it removes and stays off the sea', () => {
-  const model = prepare(createModel(new Grid(16), { topography, levels: sigmaInterfaces('bl34'), boundaryLayer: { diagnoseFirst: false } })), dt = 1350;
+  const model = prepare(createModel(new Grid(16), { topography, levels: sigmaInterfaces('bl34') })), dt = 1350;
   assert.ok(model.boundaryLayer.formDrag, 'the bundled N=16 fields switch the form drag on');
   for (let n = 0; n < 3; n++) model.step(dt);
   const { mesh, core, boundaryLayer: bl, state, geography } = model, { K, C, E, dSigma, g } = core.diagnostics;
-  bl.diagnose(state);
+  bl.diagnose(state, 0, C, dt, { withhold: false });
   const u = Float64Array.from(state[2]), before = Float64Array.from(u), heat = new Float64Array(K * E);
   bl.mixEdges(state[0], u, 0, E, dt, heat);
   let energy = 0, warmed = 0, formed = 0;
