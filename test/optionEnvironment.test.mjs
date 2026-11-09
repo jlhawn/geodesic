@@ -83,6 +83,6 @@ test('fixedSst.mjs refuses a state whose header records no given options, and an
   writeFileSync(recorded, encodeState({ N: 16, ...gridHeader(mesh), ...FRESH_GEOGRAPHY, terrain: true, K: 48, day: 0, time: 0, ...headerOptions({ moist: { pcapeMinimum: 0 } }) }));
   const differing = fixed({ GIVEN: '{"moist":{"pcapeMinimum":0.05}}' }, recorded);
   assert.notEqual(differing.status, 0);
-  assert.match(differing.stderr, /this header records them, and GIVEN differs from them in radiation, moist, land: unset GIVEN/);
+  assert.match(differing.stderr, /this header records them, and GIVEN differs from them in radiation, moist, land, boundaryLayer: unset GIVEN/);
   assert.doesNotMatch(differing.stdout, /options:/);
 });

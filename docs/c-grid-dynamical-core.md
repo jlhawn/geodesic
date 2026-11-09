@@ -12452,6 +12452,14 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
   layer before the step's surface sensible heat and evaporation enter
   it, as CAM's does. The implicit solve still takes them. With it false
   the diagnosis sees the layer as deposited.
+- A state's header records the order in `options` and `given`
+  (`scripts/stateOptions.mjs`). The page starts a state whose options
+  record a boundaryLayer group as it was made, and runs today's default on
+  a state whose options record none, as on the page's default states. A
+  `given` without diagnoseFirst predates the default and reads as false.
+  A resume of a state that records no `given` (saved before Nov 7, 2026)
+  logs that the boundary layer now runs diagnoseFirst over a state made
+  in the plain order.
 - The default rests on N=64 coupled pairs from seventeen64. Each save's
   30-day window of day means is reduced by `reduceState` in
   `scripts/scorecard64.mjs` and scored on its corrected references (the

@@ -18,7 +18,7 @@ import { gzipSync } from 'node:zlib';
 import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { SST_FIELDS, withoutSstRing } from '../js/sstMeans.module.js';
 import { withoutMeans } from '../js/intervalMeans.module.js';
-import { recordedOptions, soilOptions } from './stateOptions.mjs';
+import { recordedOptions, soilOptions, asMade } from './stateOptions.mjs';
 
 const [file, mib = '10'] = process.argv.slice(2);
 if (!file) { console.error('usage: node scripts/splitState.mjs <state.json|state.bin[.gz]|name.parts.json> [chunkMiB]'); process.exit(1); }
@@ -40,7 +40,7 @@ if (file.endsWith('.parts.json')) {
   if (stamped && !saved) throw new Error('RADIATION and MOIST are recorded in binary states only');
   const ringed = !!saved && SST_FIELDS.some((name) => name in saved), meaned = !!saved && 'means' in saved;
   const bare = saved ? withoutMeans(withoutSstRing(saved)) : null;
-  const kept = stamped ? { ...bare, options: { ...saved.options, ...recordedOptions(saved.options, given) } } : ringed || meaned ? bare : null;
+  const kept = stamped ? { ...bare, options: { ...saved.options, ...recordedOptions(saved.given ? { boundaryLayer: asMade(saved.given).boundaryLayer } : {}, saved.options, given) } } : ringed || meaned ? bare : null;
   const gz = kept ? gzipSync(encodeState(kept, { f64: f64Names(saved) }), { level: 9 }) : file.endsWith('.gz') ? raw : gzipSync(raw, { level: 9 });
   const parts = [];
   for (let at = 0; at < gz.length; at += chunk) {

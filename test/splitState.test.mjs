@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { runId, encodeState, decodeState } from '../js/stateFile.module.js';
 import { SST_FIELDS } from '../js/sstMeans.module.js';
+import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 
 const SCRIPT = new URL('../scripts/splitState.mjs', import.meta.url).pathname;
 const hex = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -69,7 +70,7 @@ test('splitState leaves a binary state\'s 30-day means out of its parts and the 
   assert.deepEqual(parted, await decodeState(encodeState(state, { f64 })));
 });
 
-test('splitState records RADIATION and MOIST in the header of a binary state\'s parts as its options with the shortwave scheme, the aerosol, bergeronAutoconversion, pcapeMinimum and the land\'s soil at their defaults where not given, and keeps the arrays as they were saved', async () => {
+test('splitState records RADIATION and MOIST in the header of a binary state\'s parts as its options with the shortwave scheme, the aerosol, bergeronAutoconversion, pcapeMinimum, the land\'s soil and the boundary layer\'s diagnoseFirst at their defaults where not given, and keeps the arrays as they were saved', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'split-'));
   const C = 42, values = (length, from) => Float64Array.from({ length }, (_, i) => from + i / 3);
   const state = { N: 2, K: 3, day: 12, time: 12 * 86400, grid: { relax: 30 }, pi: values(C, 1e5), theta: Float32Array.from(values(3 * C, 290)), ocean: { vertical: 'hybrid', h: values(2 * C, 10) } };
@@ -82,16 +83,16 @@ test('splitState records RADIATION and MOIST in the header of a binary state\'s 
     return decodeState(new Uint8Array(gunzipSync(Buffer.concat(parts.map((part) => readFileSync(join(dir, part.file)))))));
   };
   const both = await split('f_day0012', plain, { RADIATION: JSON.stringify(radiation), MOIST: JSON.stringify(moist) });
-  assert.deepEqual(both.options, { radiation: { shortwave: 'layered', aerosol: 'mac', ...radiation }, moist: { bergeronAutoconversion: true, pcapeMinimum: 0.05, ...moist }, land: { soil: 'layers' } });
+  assert.deepEqual(both.options, { radiation: { shortwave: 'layered', aerosol: 'mac', ...radiation }, moist: { bergeronAutoconversion: true, pcapeMinimum: 0.05, ...moist }, land: { soil: 'layers' }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } });
   const arrays = { ...both };
   delete arrays.options;
   assert.deepEqual(arrays, await decodeState(plain));
   const moistOnly = await split('g_day0012', plain, { MOIST: JSON.stringify(moist) });
-  assert.deepEqual(moistOnly.options, { radiation: { shortwave: 'layered', aerosol: 'mac' }, moist: { bergeronAutoconversion: true, pcapeMinimum: 0.05, ...moist }, land: { soil: 'layers' } });
+  assert.deepEqual(moistOnly.options, { radiation: { shortwave: 'layered', aerosol: 'mac' }, moist: { bergeronAutoconversion: true, pcapeMinimum: 0.05, ...moist }, land: { soil: 'layers' }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } });
   const previous = await split('h_day0012', plain, { RADIATION: JSON.stringify({ shortwave: 'sequential', aerosol: 'flat' }), MOIST: JSON.stringify({ bergeronAutoconversion: false, pcapeMinimum: 0 }) });
-  assert.deepEqual(previous.options, { radiation: { shortwave: 'sequential', aerosol: 'flat' }, moist: { bergeronAutoconversion: false, pcapeMinimum: 0 }, land: { soil: 'layers' } });
+  assert.deepEqual(previous.options, { radiation: { shortwave: 'sequential', aerosol: 'flat' }, moist: { bergeronAutoconversion: false, pcapeMinimum: 0 }, land: { soil: 'layers' }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } });
   const recorded = await split('i_day0012', encodeState({ ...state, options: { radiation: { shortwave: 'sequential' }, ocean: { everySteps: 8 } } }, { f64 }), { MOIST: JSON.stringify(moist) });
-  assert.deepEqual(recorded.options, { radiation: { shortwave: 'sequential', aerosol: 'mac' }, ocean: { everySteps: 8 }, moist: { bergeronAutoconversion: true, pcapeMinimum: 0.05, ...moist }, land: { soil: 'layers' } });
+  assert.deepEqual(recorded.options, { radiation: { shortwave: 'sequential', aerosol: 'mac' }, ocean: { everySteps: 8 }, moist: { bergeronAutoconversion: true, pcapeMinimum: 0.05, ...moist }, land: { soil: 'layers' }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } });
   const slab = await split('j_day0012', plain, { LAND: JSON.stringify({ soil: 'slab', treeMoisture: false }) });
-  assert.deepEqual(slab.options, { radiation: { shortwave: 'layered', aerosol: 'mac' }, moist: { bergeronAutoconversion: true, pcapeMinimum: 0.05 }, land: { soil: 'slab' } });
+  assert.deepEqual(slab.options, { radiation: { shortwave: 'layered', aerosol: 'mac' }, moist: { bergeronAutoconversion: true, pcapeMinimum: 0.05 }, land: { soil: 'slab' }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } });
 });

@@ -6,24 +6,26 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, terrainCache, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
-import { recordedOptions, givenOptions, headerOptions, differingGroups, rebuiltOptions, runTerrain, moveOntoTerrain, requireOwnSubgrid, stateTerrain } from '../scripts/stateOptions.mjs';
+import { startOptions } from '../js/snapshots.module.js';
+import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
+import { recordedOptions, givenOptions, headerOptions, differingGroups, rebuiltOptions, resumeNotes, runTerrain, moveOntoTerrain, requireOwnSubgrid, stateTerrain } from '../scripts/stateOptions.mjs';
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 
-test("a spin-up's header keeps `options`, which the page reads, to the radiation, the moist physics and the land's soil whatever other groups the run is given, and records every group in `given`", () => {
+test("a spin-up's header keeps `options`, which the page reads, to the radiation, the moist physics, the land's soil and the boundary layer whatever other groups the run is given, and records every group in `given`", () => {
   const land = { soil: 'layers', coverGoal: 'observed', treeMoisture: false }, groups = { dynamics: { verticalAdvection: 'vanLeerWater' }, orography: false, terrain: { conserveVolume: true }, ocean: { mixing: 'kpp' } };
   const plain = headerOptions({ radiation: {}, moist: {}, land }), wide = headerOptions({ radiation: {}, moist: {}, land, ...groups });
   assert.deepEqual(wide.options, plain.options);
   assert.deepEqual(wide.options, recordedOptions({ radiation: {}, moist: {}, land: { soil: 'layers' } }));
-  assert.deepEqual(Object.keys(wide.options), ['radiation', 'moist', 'land']);
+  assert.deepEqual(Object.keys(wide.options), ['radiation', 'moist', 'land', 'boundaryLayer']);
   assert.deepEqual(wide.options.land, { soil: 'layers' }, 'the page sees no coverGoal');
-  assert.deepEqual(Object.keys(wide.given), ['radiation', 'moist', 'land', 'dynamics', 'orography', 'terrain', 'ocean']);
+  assert.deepEqual(Object.keys(wide.given), ['radiation', 'moist', 'land', 'boundaryLayer', 'dynamics', 'orography', 'terrain', 'ocean']);
   assert.deepEqual(wide.given.dynamics, { verticalAdvection: 'vanLeerWater' });
   assert.equal(wide.given.orography, false);
   assert.deepEqual(wide.given.terrain, { conserveVolume: true });
   assert.deepEqual(wide.given.land, land);
   assert.deepEqual(wide.given.radiation, wide.options.radiation);
-  assert.deepEqual(Object.keys(recordedOptions(groups)), ['radiation', 'moist', 'land']);
+  assert.deepEqual(Object.keys(recordedOptions(groups)), ['radiation', 'moist', 'land', 'boundaryLayer']);
   assert.deepEqual(givenOptions({ land: { soil: 'slab', treeMoisture: false } }).land, { soil: 'slab', treeMoisture: false });
 });
 
@@ -46,7 +48,7 @@ test('a run that rebuilds a saved state takes the groups its header records unde
   assert.deepEqual([rebuilt.radiation, rebuilt.land, rebuilt.dynamics], [given.radiation, given.land, given.dynamics]);
   assert.throws(() => rebuiltOptions({ options }, { moist: {} }), /records no given options/);
   assert.deepEqual(rebuiltOptions({ options }, { moist: { pcapeMinimum: 0.05 } }, {}), { moist: { pcapeMinimum: 0.05 } });
-  assert.throws(() => rebuiltOptions(header, {}, { moist: {} }), /this header records them, and GIVEN differs from them in radiation, moist, land, dynamics, orography, gravityWaves:/);
+  assert.throws(() => rebuiltOptions(header, {}, { moist: {} }), /this header records them, and GIVEN differs from them in radiation, moist, land, boundaryLayer, dynamics, orography, gravityWaves:/);
   assert.throws(() => rebuiltOptions(header, {}, {}), /GIVEN differs from them in/);
   const agreeing = Object.fromEntries(Object.entries(given).reverse().map(([group, values]) => [group, values && Object.fromEntries(Object.entries(values).reverse())]));
   assert.deepEqual(rebuiltOptions(header, { moist: { pcapeMinimum: 0.05 } }, agreeing), { ...given, moist: { ...given.moist, pcapeMinimum: 0.05 } });
@@ -117,4 +119,43 @@ test('a run over terrain of other options than the default refuses to start with
   } finally {
     if (before === undefined) delete process.env.TERRAIN_CACHE; else process.env.TERRAIN_CACHE = before;
   }
+});
+
+const blank = () => {
+  const model = createModel(new Grid(16), { topography, physics: false }), [pi, theta] = initializeState(model, {});
+  return (records) => decodeState(encodeState({ N: 16, K: model.core.K, day: 0, time: 0, terrain: true, ...records, pi, theta }));
+};
+
+test('a header records the boundary layer\'s order its run was given in `options` and `given`, for both values, through the file, and the default where the run is given none', async () => {
+  const save = blank();
+  for (const diagnoseFirst of [true, false]) {
+    const kept = await save(headerOptions({ boundaryLayer: { diagnoseFirst } }));
+    assert.deepEqual([kept.options.boundaryLayer, kept.given.boundaryLayer], [{ diagnoseFirst }, { diagnoseFirst }]);
+  }
+  const unset = await save(headerOptions({}));
+  assert.deepEqual([unset.options.boundaryLayer, unset.given.boundaryLayer], [{ diagnoseFirst: DIAGNOSE_FIRST }, { diagnoseFirst: DIAGNOSE_FIRST }]);
+});
+
+test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a year-2 control\'s header rebuilds and records so, as in fixedSst, a resume at the default names boundaryLayer, and a resume of a state that records no `given` says the boundary layer now runs diagnoseFirst over a plain-order state', async () => {
+  const save = blank(), strip = ({ boundaryLayer, ...rest }) => rest;
+  const fresh = headerOptions({ land: { coverGoal: 'observed' } }), plainGiven = headerOptions({ land: { coverGoal: 'observed' }, boundaryLayer: { diagnoseFirst: false } }).given;
+  const control = await save({ options: strip(fresh.options), given: strip(fresh.given) });
+  assert.deepEqual(Object.keys(control.given), ['radiation', 'moist', 'land']);
+  const run = rebuiltOptions(control), rerecorded = headerOptions(run);
+  assert.deepEqual([run.boundaryLayer, rerecorded.options.boundaryLayer, rerecorded.given.boundaryLayer], [{ diagnoseFirst: false }, { diagnoseFirst: false }, { diagnoseFirst: false }]);
+  assert.deepEqual(resumeNotes(fresh.given, control, 'ctl'), ["options other than ctl's header records: boundaryLayer"]);
+  assert.deepEqual(resumeNotes(plainGiven, control, 'ctl'), []);
+  assert.deepEqual(resumeNotes(fresh.given, await save(fresh), 'c'), []);
+  const early = await save({ options: strip(fresh.options) });
+  assert.deepEqual(resumeNotes(fresh.given, early, 'seventeen64'), ['seventeen64 records no given options (saved before Nov 7, 2026): the boundary layer now runs diagnoseFirst over a state made in the plain order']);
+  assert.deepEqual(resumeNotes(plainGiven, early, 'seventeen64'), []);
+  assert.deepEqual(resumeNotes(fresh.given, null, 'none'), []);
+});
+
+test('the page starts a state whose options record diagnoseFirst false in the plain order, one whose options record no boundaryLayer group at today\'s default, and records the order it starts', async () => {
+  const save = blank();
+  const plain = startOptions((await save(headerOptions({ boundaryLayer: { diagnoseFirst: false } }))).options, {}), bare = startOptions((await save({})).options, {});
+  assert.deepEqual([plain.boundaryLayer, bare.boundaryLayer], [{ diagnoseFirst: false }, { diagnoseFirst: DIAGNOSE_FIRST }]);
+  assert.equal(createModel(new Grid(16), { topography, ...plain }).boundaryLayer.diagnoseFirst, false);
+  assert.equal(createModel(new Grid(16), { topography, ...bare }).boundaryLayer.diagnoseFirst, DIAGNOSE_FIRST);
 });

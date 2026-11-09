@@ -12,7 +12,7 @@ import { regridCellField } from './physics/regrid.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels, groupHeader, groupArrays, savedTerrain, stateTerrain } from './stateFile.module.js';
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
-import { runStore } from './snapshots.module.js';
+import { runStore, startOptions } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
 import { RAIN_MEMORY, frameIsFinite } from './frames.module.js';
 import { cpuFrameFields } from './cpuFrame.module.js';
@@ -597,15 +597,6 @@ async function profile() {
 
 let lastStart = null, currentN = null, currentOptions = {}, currentTerrain = true, currentSoilSeed = null;
 
-/*
- * The model options a run starts with: those its saved state records
- * (stateFile.module.js), each group overridden by the start message's.
- */
-const runOptions = (saved, given) => {
-  const options = { ...(given ?? {}) };
-  for (const [group, values] of Object.entries(saved ?? {})) options[group] = { ...values, ...(options[group] ?? {}) };
-  return options;
-};
 const canonical = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value));
 const sameOptions = (a, b) => canonical(a) === canonical(b);
 
@@ -681,7 +672,7 @@ async function restore(snapshot) {
   if (snapshot.soilSeed) saved.soilSeed = snapshot.soilSeed;
   const sameGeography = JSON.stringify(savedGeography(saved)) === JSON.stringify(currentGeography);
   if (model && saved.N === currentN && sameGeography && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
-  if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || terrainKey(startTerrain(lastStart, saved)) !== terrainKey(currentTerrain) || !sameOptions(runOptions(saved.options, lastStart.options), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
+  if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || terrainKey(startTerrain(lastStart, saved)) !== terrainKey(currentTerrain) || !sameOptions(startOptions(saved.options, lastStart.options), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   await placeSaved(model, saved, currentN);
@@ -702,7 +693,7 @@ async function start(message) {
   const N = message.N ?? saved?.N ?? 16;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const lakeGiven = saved ? savedLakeOptions(saved) : {};
-  const given = runOptions(saved ? { ...saved.options, ...(Object.keys(lakeGiven).length ? { lake: lakeGiven } : {}) } : null, message.options), options = { ...given };
+  const given = startOptions(saved ? { ...saved.options, ...(Object.keys(lakeGiven).length ? { lake: lakeGiven } : {}) } : null, message.options), options = { ...given };
   if (options.lake?.missingBed === 'hydrolakes') options.lake = { ...options.lake, lakeDepths: await loadLakeDepths() };
   const geography = message.land === false ? { ...LEGACY_GEOGRAPHY } : saved ? savedGeography(saved) : checkGeography({ ...FRESH_GEOGRAPHY, ...(message.geography ?? {}) });
   if (message.land !== false) {

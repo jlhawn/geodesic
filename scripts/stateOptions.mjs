@@ -2,20 +2,22 @@ import { DEFAULT_SHORTWAVE } from '../js/physics/radiation.module.js';
 import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { DEFAULT_SOIL } from '../js/physics/land.module.js';
 import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
+import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 import { terrainKey, terrainOptions, terrainCache, surfaceGeopotential, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { savedTerrain, stateTerrain } from '../js/stateFile.module.js';
 
 const SOIL_OPTIONS = ['soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity'];
 export const soilOptions = (land = {}) => Object.fromEntries(SOIL_OPTIONS.filter((name) => land[name] !== undefined).map((name) => [name, land[name]]));
 
-const DEFAULTS = { radiation: { shortwave: DEFAULT_SHORTWAVE, aerosol: DEFAULT_AEROSOL }, moist: { bergeronAutoconversion: MOIST_DEFAULTS.bergeronAutoconversion, pcapeMinimum: MOIST_DEFAULTS.pcapeMinimum }, land: { soil: DEFAULT_SOIL } };
+const DEFAULTS = { radiation: { shortwave: DEFAULT_SHORTWAVE, aerosol: DEFAULT_AEROSOL }, moist: { bergeronAutoconversion: MOIST_DEFAULTS.bergeronAutoconversion, pcapeMinimum: MOIST_DEFAULTS.pcapeMinimum }, land: { soil: DEFAULT_SOIL }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } };
 
 /*
  * The options a state's header records (js/stateFile.module.js), by group:
  * those the run was given, over the radiation's shortwave scheme and
  * aerosol, the moist physics' Bergeron-Findeisen conversion and PCAPE
- * minimum and the land's soil at their defaults, so that the page starts
- * the state as it was made when those defaults change. Later layers win.
+ * minimum, the land's soil and the boundary layer's diagnoseFirst at their
+ * defaults, so that the page starts the state as it was made when those
+ * defaults change. Later layers win.
  */
 export function recordedOptions(...layers) {
   return Object.fromEntries(Object.entries(DEFAULTS).map(([group, values]) => [group, Object.assign({}, values, ...layers.map((layer) => layer?.[group]))]));
@@ -36,10 +38,13 @@ export function givenOptions(...layers) {
 
 /*
  * A spin-up header's two records of the groups it was given: `options`,
- * the radiation, the moist physics and the land's soil, which the page
- * starts the state with, and `given`, every group.
+ * the radiation, the moist physics, the land's soil and the boundary
+ * layer, which the page starts the state with, and `given`, every group.
  */
-export const headerOptions = ({ radiation, moist, land, ...groups } = {}) => ({ options: recordedOptions({ radiation, moist, land: soilOptions(land) }), given: givenOptions({ radiation, moist, land, ...groups }) });
+export const headerOptions = ({ radiation, moist, land, boundaryLayer, ...groups } = {}) => {
+  const options = recordedOptions({ radiation, moist, land: soilOptions(land), boundaryLayer });
+  return { options: boundaryLayer === false ? { ...options, boundaryLayer: false } : options, given: givenOptions({ radiation, moist, land, boundaryLayer, ...groups }) };
+};
 
 const canonical = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value));
 
@@ -50,6 +55,31 @@ const canonical = (value) => (value && typeof value === 'object' && !Array.isArr
 export const differingGroups = (a = {}, b = {}) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((group) => canonical(a[group]) !== canonical(b[group]));
 
 const isGroup = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/*
+ * A header's `given` as its run was made: a given written while the plain
+ * order was the default holds no boundaryLayer.diagnoseFirst, and reads as
+ * false.
+ */
+export function asMade(given) {
+  const group = given?.boundaryLayer;
+  if (!isGroup(given) || group === false || (isGroup(group) && group.diagnoseFirst !== undefined)) return given;
+  return { ...given, boundaryLayer: { ...(isGroup(group) ? group : {}), diagnoseFirst: false } };
+}
+
+/*
+ * The lines a run that resumes `base` under the record `given` logs: the
+ * groups whose options differ from those base's `given` records as made,
+ * or, for a base that records no `given` (saved before Nov 7, 2026), that
+ * the boundary layer runs diagnoseFirst over a state made in the plain
+ * order.
+ */
+export function resumeNotes(given, base, name) {
+  if (!base) return [];
+  if (base.given === undefined) return given.boundaryLayer?.diagnoseFirst === true ? [`${name} records no given options (saved before Nov 7, 2026): the boundary layer now runs diagnoseFirst over a state made in the plain order`] : [];
+  const other = differingGroups(given, asMade(base.given));
+  return other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : [];
+}
 
 /*
  * The option groups of a run that rebuilds a saved state: the groups its
@@ -65,7 +95,7 @@ export function rebuiltOptions(header, groups = {}, standIn) {
     const differing = differingGroups(header.given, standIn);
     if (differing.length) throw new Error(`GIVEN stands in for the given options only where the state's header records none; this header records them, and GIVEN differs from them in ${differing.join(', ')}: unset GIVEN, and give the groups to change in their own variables`);
   }
-  const recorded = header.given ?? standIn;
+  const recorded = header.given === undefined ? standIn : asMade(header.given);
   if (!isGroup(recorded)) throw new Error('the state\'s header records no given options (no state saved before Nov 7, 2026 does), so its run cannot be rebuilt as it was made: GIVEN (JSON, {} for today\'s defaults) stands in for them');
   return Object.fromEntries([...new Set([...Object.keys(recorded), ...Object.keys(groups)])].map((group) => {
     const own = recorded[group], value = groups[group];
