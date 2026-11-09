@@ -11,12 +11,12 @@ let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
-const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
+const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0.5 && Math.abs(lat) < 1.2 ? 300 : Math.cos(lon) > 0 ? -40 - 200 * (1 + Math.sin(3 * lat)) : -4000));
 const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
 const N = 16, DT = 1350, CARRY_GRAINS = 1.25;
 const grain = (x) => 2 ** (x ? Math.max(Math.floor(Math.log2(Math.abs(x))) - 23, -126) : -24);
 
-test('a known pending light goes into the GPU hybrid ocean\'s stores below the top layer as on the CPU, each layer\'s change in h·(T − HEAT_REFERENCE) within the f32 grains of its store and the one above, the column\'s whole light kept, and what PH_PEN holds back, under 1.25 grains of the store the deposit fills last, waits there through the rest of the ocean step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('a known pending light goes into the GPU hybrid ocean\'s stores below the top layer as on the CPU, over the deep sea and a shelf 40 to 440 m deep whose floor takes what light reaches it, each layer\'s change in h·(T − HEAT_REFERENCE) within the f32 grains of its store and the one above, the column\'s whole light kept, and what PH_PEN holds back, under 1.25 grains of the store the deposit fills last, waits there through the rest of the ocean step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cpuModel = createModel(new Grid(N), { topography });
   const init = initializeState(cpuModel, {});
   for (let a = 0; a < init.length; a++) cpuModel.state[a].set(init[a]);
@@ -44,7 +44,7 @@ test('a known pending light goes into the GPU hybrid ocean\'s stores below the t
   cpu.readSurface(Float64Array.from(surfaceT), ice);
   gpu.readSurface(Float64Array.from(surfaceT), ice);
   const after = await gpu.restartArrays(), { h } = await gpu.download();
-  let layerWorst = 0, columnWorst = 0, cpuColumnWorst = 0, carryWorst = 0, carried = 0, deep = 0;
+  let layerWorst = 0, columnWorst = 0, cpuColumnWorst = 0, carryWorst = 0, carried = 0, deep = 0, shallow = 0, shallowWorst = 0;
   for (const i of lit) {
     let gpuSum = 0, cpuSum = 0, cpuRounding = 0, above = 0;
     for (let k = 1; k < L; k++) {
@@ -67,6 +67,7 @@ test('a known pending light goes into the GPU hybrid ocean\'s stores below the t
     if (z >= PENETRATION_DEPTH) deep++;
     const ratio = Math.abs(after.penetrated[i]) / (rhoCp * grain(after.Qref[last * C + i]));
     carryWorst = Math.max(carryWorst, ratio);
+    if (z < PENETRATION_DEPTH) { shallow++; shallowWorst = Math.max(shallowWorst, ratio); }
     if (after.penetrated[i] !== 0) carried++;
   }
   const remainder = Float64Array.from(after.penetrated);
@@ -76,8 +77,8 @@ test('a known pending light goes into the GPU hybrid ocean\'s stores below the t
   const [waiting] = await readRanges(device, buffers.PH, [{ offset: layout.PH.PEN, length: C }]);
   let moved = 0;
   for (const i of lit) if (waiting[i] !== remainder[i]) moved++;
-  console.log(`${lit.length} lit cells, ${deep} reaching ${PENETRATION_DEPTH} m: worst layer gap ${layerWorst.toFixed(3)} of its grains, column ${columnWorst.toFixed(3)} of its f32 bound (CPU ${cpuColumnWorst.toFixed(3)} of its stores' f64 rounding), PH_PEN at most ${carryWorst.toFixed(3)} grains of the last store, nonzero on ${carried}, changed by the rest of the step on ${moved}`);
-  assert.ok(deep > lit.length / 2, `${deep} of ${lit.length} columns reach ${PENETRATION_DEPTH} m`);
+  console.log(`${lit.length} lit cells, ${deep} reaching ${PENETRATION_DEPTH} m and ${shallow} shallower (PH_PEN there at most ${shallowWorst.toFixed(3)} grains): worst layer gap ${layerWorst.toFixed(3)} of its grains, column ${columnWorst.toFixed(3)} of its f32 bound (CPU ${cpuColumnWorst.toFixed(3)} of its stores' f64 rounding), PH_PEN at most ${carryWorst.toFixed(3)} grains of the last store, nonzero on ${carried}, changed by the rest of the step on ${moved}`);
+  assert.ok(deep > lit.length / 2 && shallow >= 100, `${deep} of ${lit.length} columns reach ${PENETRATION_DEPTH} m and ${shallow} stop short of it`);
   assert.ok(layerWorst <= 1, `a layer's deposit parts by ${layerWorst} of its and the store above's grains`);
   assert.ok(columnWorst <= 1 && cpuColumnWorst <= 1, `the column keeps its light to ${columnWorst} of the f32 bound on the GPU and ${cpuColumnWorst} of its stores' f64 rounding on the CPU`);
   assert.ok(carryWorst <= CARRY_GRAINS, `PH_PEN holds back ${carryWorst} grains of the store the deposit fills last`);
