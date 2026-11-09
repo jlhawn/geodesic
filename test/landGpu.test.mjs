@@ -56,9 +56,10 @@ function prepare(model, fog = false) {
  * after the first step and every carried array rounded to f32 each step,
  * and 10 with every carried array nudged by up to 4 f32 ulps each step.
  * The groups are Ts over land and over the sea, and soil water, snow and the
- * surface layer over land. One tier sits above twice the twins, where 30
- * further twins needed it: the held surface layer's northern trimmed signed
- * mean, at 2.3.
+ * surface layer over land; over the sea, where the CPU and every twin hold
+ * exactly 0, soil water, snow and the surface layer must be exactly 0. One
+ * tier sits above twice the twins: the held surface layer's northern
+ * trimmed signed mean, at 2.3.
  */
 const LAND_S9 = {
   default: {
@@ -108,7 +109,8 @@ for (const held of [true, false]) test(`eight GPU steps over a continent${held ?
   const groups = { tsLand: [cpu.state[3], gpu.state[3], landCells], tsSea: [cpu.state[3], gpu.state[3], seaCells], soil: [cpu.land.soil, saved.soil, landCells], snow: [cpu.land.snow, saved.snow, landCells], surface: [cpu.land.surface, saved.surface, landCells] };
   const checks = Object.entries(groups).map(([name, [a, b, cells]]) => [name, distributionCheck(cells.map((i) => b[i] - a[i]), hemispheres(cpu.mesh, cells), LAND_S9[held ? 'held' : 'default'][name], magnitude(cells.map((i) => a[i])), { cells })]);
   console.log(`${held ? 'held' : 'default'} order:\n${checks.map(([name, check]) => `  ${name}: ${check.text}`).join('\n')}\n  complete mixes parted at ${[...decisions.kinds.mix].join(', ') || 'none'}; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
-  assert.deepEqual(checks.flatMap(([name, check]) => check.failed.map((failure) => `${name}: ${failure}`)), [], 'groups past the twins\x27 spread');
+  const seaWater = ['soil', 'snow', 'surface'].flatMap((name) => seaCells.filter((i) => !(cpu.land[name][i] === 0 && saved[name][i] === 0)).map((i) => `${name} at sea cell ${i}: ${cpu.land[name][i]}/${saved[name][i]}`));
+  assert.deepEqual([...checks.flatMap(([name, check]) => check.failed.map((failure) => `${name}: ${failure}`)), ...seaWater], [], 'groups past the twins\x27 spread, or land water at sea');
   assert.ok(Math.abs(dc.landMeanT - d.landMeanT) < 0.01 && Math.abs(dc.soilWater - d.soilWater) < 0.01 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 0.2);
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) assert.equal(gpu.state[6][i], 0);
 });

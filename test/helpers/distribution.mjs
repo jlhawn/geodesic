@@ -1,26 +1,33 @@
 /*
  * The distribution of one group's engine gaps against an ensemble of CPU
- * twins (S7, S9). A spread holds a group's bounds, each tier applying only
- * when its constants are given:
+ * twins (S7, S9). A spread holds a group's bounds, each tier applying when
+ * its constants are given:
  * - largest: the largest |gap|;
  * - counts: [threshold, limit] rungs, the cells at or past each threshold;
  * - hemisphere: the mean |gap| per hemisphere, one bound or { north, south };
  * - bulk: { north, south } of { trimmed, signed }, the mean |gap| and the
  *   absolute mean signed gap over the cells left once a run drops its own
  *   largest TRIM share (rounded up) by |gap|.
- * buildSpread computes every one of them from the twins' gap arrays, at k
- * times the twins' worst (counts plus 2), rounded up to three figures and
- * floored at the f32 floors: F32_CELL of the reference's largest value for
- * a cell, F32_RMS of its rms for a mean. Its ladder halves the threshold
- * from the twins' largest gap M down to the cell floor, M/1024, or the last
- * rung whose limit stays under half the group's cells. A non-finite gap or
- * reference fails every check.
+ * distributionCheck fails a tier its require names that the spread lacks;
+ * an S9 group requires S9_TIERS. buildSpread computes every tier from the
+ * twins' gap arrays, at k times the twins' worst (counts plus 2), rounded up
+ * to three figures and floored at the f32 floors: F32_CELL of the
+ * reference's largest value for a cell, F32_RMS of its rms for a mean. Its
+ * ladder halves the threshold from the twins' largest gap M down to the cell
+ * floor, M/1024, or the last rung whose limit stays under half the group's
+ * cells. Thresholds round down to three figures, so the top rung counts the
+ * twin that set M. A check fails an empty group, a non-finite gap, reference
+ * or bound, and a hemisphere's bound that is missing for cells the group has
+ * there or given where it has none; buildSpread throws on an empty group or
+ * a non-finite gap.
  *
- * Hemispheres: a cell whose center lies within EQUATOR of the equatorial
- * plane (|z| of the unit center) counts in both; a latitude array in place
- * of sides puts a cell north when its latitude is at least 0.
+ * Hemispheres: `where` holds one value per gap, a side as hemispheres()
+ * gives it or a latitude: positive is north, negative south, and 0 counts in
+ * both. hemispheres() gives 0 to a cell whose center lies within EQUATOR of
+ * the equatorial plane (|z| of the unit center).
  */
 export const F32_RMS = 16 * 2 ** -24, F32_CELL = 64 * 2 ** -24, TRIM = 0.05, LADDER_DEPTH = 10, EQUATOR = 1e-9;
+export const S9_TIERS = ['largest', 'counts', 'hemisphere', 'bulk'];
 
 export function magnitude(values) {
   let max = 0, sum = 0, n = 0;
@@ -34,12 +41,21 @@ export function hemispheres(mesh, cells = null) {
 }
 
 export function columnLargest(gaps, C, layers) {
-  return Float64Array.from({ length: C }, (_, i) => { let worst = 0; for (const k of layers) { const g = gaps[k * C + i]; if (!(Math.abs(g) <= Math.abs(worst))) worst = g; } return worst; });
+  return Float64Array.from({ length: C }, (_, i) => { let worst = 0; for (const k of layers) { const g = gaps[k * C + i]; if (Number.isNaN(worst)) break; if (!(Math.abs(g) <= Math.abs(worst))) worst = g; } return worst; });
 }
 
-export const roundUp = (x) => { if (!(x > 0) || !Number.isFinite(x)) return x; const unit = 10 ** (Math.floor(Math.log10(x)) - 2), up = +(Math.ceil(x / unit) * unit).toPrecision(3); return up >= x ? up : +(up + unit).toPrecision(3); };
+const nextFigure = (x, by) => {
+  const [mantissa, exponent] = x.toExponential(2).split('e'), digits = Math.round(mantissa * 100) + by;
+  return digits < 100 ? +`999e${exponent - 3}` : +`${digits}e${exponent - 2}`;
+};
+export const roundUp = (x) => { if (!(x > 0) || !Number.isFinite(x)) return x; const near = +x.toPrecision(3); return near >= x ? near : nextFigure(near, 1); };
+export const roundDown = (x) => { if (!(x > 0) || !Number.isFinite(x)) return x; const near = +x.toPrecision(3); return near <= x ? near : nextFigure(near, -1); };
 
-const sidesOf = (where, n) => (where instanceof Int8Array ? where : Int8Array.from({ length: n }, (_, x) => (where[x] >= 0 ? 1 : -1)));
+const sidesOf = (where, n) => {
+  if (where.length !== n) throw new Error(`where holds ${where.length} entries for ${n} gaps`);
+  if (where instanceof Int8Array) return where;
+  return Int8Array.from({ length: n }, (_, x) => { const v = where[x]; if (!Number.isFinite(v)) throw new Error(`where holds ${v} at ${x}`); return v > 0 ? 1 : v < 0 ? -1 : 0; });
+};
 const inHemisphere = (side, north) => side === 0 || (side > 0) === north;
 
 export function spreadStatistics(gaps, where, thresholds = [], trim = TRIM) {
@@ -60,13 +76,17 @@ export function spreadStatistics(gaps, where, thresholds = [], trim = TRIM) {
 }
 
 export function buildSpread(runs, where, reference, { k = 2, trim = TRIM } = {}) {
+  if (!runs.length) throw new Error('no twins to build a spread from');
   const n = runs[0].length, cellFloor = F32_CELL * reference.max, meanFloor = F32_RMS * reference.rms;
+  if (!n) throw new Error('an empty group');
+  if (runs.some((gaps) => gaps.length !== n)) throw new Error('the twins hold different numbers of gaps');
+  if (!(k > 0) || !Number.isFinite(k)) throw new Error(`k is ${k}`);
   if (!Number.isFinite(cellFloor) || !Number.isFinite(meanFloor)) throw new Error('the reference field is not finite');
   const first = runs.map((gaps) => spreadStatistics(gaps, where, [], trim));
   if (first.some((s) => !s.finite)) throw new Error('a twin gap is not finite');
   const M = Math.max(...first.map((s) => s.largest)), counts = [];
   for (let j = 0; j <= LADDER_DEPTH; j++) {
-    const threshold = +(M * 2 ** -j).toPrecision(3);
+    const threshold = roundDown(M * 2 ** -j);
     if (!(threshold >= cellFloor) || threshold <= 0) break;
     const worst = Math.max(...runs.map((gaps) => spreadStatistics(gaps, where, [threshold], trim).over[0])), limit = Math.ceil(k * worst) + 2;
     if (limit >= n / 2) break;
@@ -82,23 +102,34 @@ export function buildSpread(runs, where, reference, { k = 2, trim = TRIM } = {})
   return { largest: bound([M], cellFloor), counts, hemisphere, bulk, twins: { largest: M, over: counts.map(([threshold]) => Math.max(...runs.map((gaps) => spreadStatistics(gaps, where, [threshold], trim).over[0]))) } };
 }
 
-export function distributionCheck(gaps, where, { largest, counts = [], hemisphere, bulk }, { max, rms }, { cells = null, trim = TRIM } = {}) {
-  const s = spreadStatistics(gaps, where, counts.map(([threshold]) => threshold), trim), failed = [], id = (x) => (cells ? cells[x] : x);
+export function distributionCheck(gaps, where, spread, { max, rms }, { cells = null, trim = TRIM, require = [] } = {}) {
+  const { largest, counts = [], hemisphere, bulk } = spread, failed = [], id = (x) => (cells ? cells[x] : x);
+  if (cells && cells.length !== gaps.length) throw new Error(`${cells.length} cell ids for ${gaps.length} gaps`);
+  const s = spreadStatistics(gaps, where, counts.map(([threshold]) => threshold), trim);
+  const finite = (name, bound) => Number.isFinite(bound) || (failed.push(`the ${name} bound is ${bound}`), false);
+  for (const tier of require) if (spread[tier] === undefined) failed.push(`the spread has no ${tier} tier`);
+  if (!gaps.length) failed.push('an empty group');
   if (!s.finite) failed.push(`a non-finite gap at ${id(s.at)}`);
   if (!Number.isFinite(max) || !Number.isFinite(rms)) failed.push(`a non-finite reference: largest ${max}, rms ${rms}`);
   const cellFloor = F32_CELL * max, meanFloor = F32_RMS * rms;
-  if (largest !== undefined) { const top = Math.max(largest, cellFloor); if (!(s.largest <= top)) failed.push(`largest ${s.largest} at ${id(s.at)}, past ${top}`); }
+  if (largest !== undefined && finite('largest', largest)) { const top = Math.max(largest, cellFloor); if (!(s.largest <= top)) failed.push(`largest ${s.largest} at ${id(s.at)}, past ${top}`); }
   counts.forEach(([threshold, limit], j) => {
+    if (!finite(`rung ${j} threshold`, threshold)) return;
     if (!(limit < gaps.length)) failed.push(`the count at or over ${threshold} allows ${limit} of the ${gaps.length} entries, so it bounds nothing`);
     else if (!(s.over[j] <= limit)) failed.push(`${s.over[j]} at or over ${threshold}, past ${limit}`);
   });
+  const sidesBounded = (tier) => (tier === undefined || typeof tier === 'number' ? [] : Object.keys(tier));
+  for (const name of new Set([...sidesBounded(hemisphere), ...sidesBounded(bulk)])) if (!s.hemisphere[name]) failed.push(`${name}ern bounds for a group with no ${name}ern cells`);
   for (const [name, h] of Object.entries(s.hemisphere)) {
-    if (hemisphere !== undefined) { const b = Math.max(typeof hemisphere === 'number' ? hemisphere : hemisphere[name], meanFloor); if (!(h.mean <= b)) failed.push(`${name}ern mean ${h.mean}, past ${b}`); }
-    if (bulk?.[name]) {
-      const t = Math.max(bulk[name].trimmed, meanFloor), g = Math.max(bulk[name].signed, meanFloor);
-      if (!(h.trimmed <= t)) failed.push(`${name}ern trimmed mean ${h.trimmed}, past ${t}`);
-      if (!(h.trimmedSigned <= g)) failed.push(`${name}ern trimmed signed mean ${h.trimmedSigned}, past ${g}`);
+    if (hemisphere !== undefined) {
+      const b = typeof hemisphere === 'number' ? hemisphere : hemisphere[name];
+      if (b === undefined) failed.push(`no ${name}ern mean bound`);
+      else if (finite(`${name}ern mean`, b)) { const top = Math.max(b, meanFloor); if (!(h.mean <= top)) failed.push(`${name}ern mean ${h.mean}, past ${top}`); }
     }
+    if (bulk === undefined) continue;
+    if (!bulk[name]) { failed.push(`no ${name}ern bulk bounds`); continue; }
+    if (finite(`${name}ern trimmed mean`, bulk[name].trimmed)) { const t = Math.max(bulk[name].trimmed, meanFloor); if (!(h.trimmed <= t)) failed.push(`${name}ern trimmed mean ${h.trimmed}, past ${t}`); }
+    if (finite(`${name}ern trimmed signed mean`, bulk[name].signed)) { const g = Math.max(bulk[name].signed, meanFloor); if (!(h.trimmedSigned <= g)) failed.push(`${name}ern trimmed signed mean ${h.trimmedSigned}, past ${g}`); }
   }
   const e = (v) => (Number.isFinite(v) ? v.toExponential(2) : String(v));
   const text = [`largest ${e(s.largest)} at ${id(s.at)}${largest !== undefined ? ` of ${e(Math.max(largest, cellFloor))}` : ''}`, counts.length ? `ladder ${counts.map(([threshold, limit], j) => `${s.over[j]}/${limit} ≥ ${threshold.toExponential(2)}`).join(' ')}` : '',

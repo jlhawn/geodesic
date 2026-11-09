@@ -45,7 +45,7 @@ test('the figure\'s column: open water at 0 °C on the September equinox freezes
   let first = 0;
   while (!(r.coverMax[first] > 0)) first++;
   assert.equal(phrase(run, first), '45 days after the September equinox');
-  for (let d = first; d < run.days; d++) if (!(r.thickness[d] <= 0)) assert.equal(r.water[d], Math.fround(FREEZING_POINT), `day ${d}: the water under the ice`);
+  for (let d = first; d < run.days; d++) { assert.ok(Number.isFinite(r.thickness[d]), `day ${d}: thickness ${r.thickness[d]}`); if (r.thickness[d] > 0) assert.equal(r.water[d], Math.fround(FREEZING_POINT), `day ${d}: the water under the ice`); }
   const solstice = 91;
   assert.equal(phrase(run, solstice), 'the December solstice');
   const flow = run.conducted[solstice], growth = 100 * 86400 * flow / run.sea.latent;

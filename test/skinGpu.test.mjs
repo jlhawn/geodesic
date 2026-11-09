@@ -48,7 +48,7 @@ for (const [label, options, warmStart, onMeans] of CASES) test(`${label} over th
   if (gpu.ocean) gpu.ocean.initialize(gpu.state[3], gpu.state[6]);
   const C = cpu.mesh.nCells, PH = gpu.gpu.layout.PH, first = { warm: 0, cool: 0, ts: 0, net: 0, sensible: 0, bulk: 0 }, worst = { ...first };
   const capacityOf = (i) => (cpu.ocean ? cpu.ocean.capacity[i] : cpu.seaIce.slabHeatCapacity);
-  let thin = 0, kept = 0, overNet = 0, gapSquare = 0;
+  let thin = 0, kept = 0, overNet = 0, gapSquare = 0, unfinished = 0;
   const decided = new Uint8Array(C), meanWorst = { warm: 0, cool: 0, ts: 0 };
   for (let n = 0; n < STEPS; n++) {
     cpu.step(DT); await gpu.step(DT); await gpu.settle();
@@ -57,6 +57,7 @@ for (const [label, options, warmStart, onMeans] of CASES) test(`${label} over th
     await gpu.sync();
     for (let i = 0; i < C; i++) {
       if (cpu.state[6][i] > 0 || gpu.state[6][i] > 0) continue;
+      if (!Number.isFinite(warm[i] + cool[i] + net[i] + sensible[i] + capacity[i] + cpu.radiation.surfaceFlux[i] + cpu.radiation.sensibleHeat[i])) unfinished++;
       if (n === 0 && capacityOf(i) < 3 * 1025 * 3985) thin++;
       if (Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) > FLIP) decided[i] = 1;
       const cpuSurface = cpu.state[3][i] + cpu.skin.offset(i, capacityOf(i)), gpuSurface = gpu.state[3][i] + surfaceShare(capacity[i], SKIN_DEFAULTS) * warm[i] - cool[i];
@@ -65,7 +66,7 @@ for (const [label, options, warmStart, onMeans] of CASES) test(`${label} over th
       if (!decided[i]) worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
       if (!decided[i]) { sums.warm += warm[i] - cpu.skin.warm[i]; sums.cool += cool[i] - cpu.skin.cool[i]; sums.ts += gpuSurface - cpuSurface; sums.n++; }
       worst.bulk = Math.max(worst.bulk, Math.abs(gpu.state[3][i] - cpu.state[3][i]));
-      if (!decided[i]) { const gap = net[i] - cpu.radiation.surfaceFlux[i]; kept++; gapSquare += gap * gap; if (Math.abs(gap) > 0.1 * Math.max(FLIP, Math.abs(cpu.radiation.surfaceFlux[i]))) overNet++; }
+      if (!decided[i]) { const gap = net[i] - cpu.radiation.surfaceFlux[i]; kept++; gapSquare += gap * gap; if (!(Math.abs(gap) <= 0.1 * Math.max(FLIP, Math.abs(cpu.radiation.surfaceFlux[i])))) overNet++; }
       if (!decided[i]) worst.sensible = Math.max(worst.sensible, Math.abs(sensible[i] - cpu.radiation.sensibleHeat[i]) / Math.max(1, Math.abs(cpu.radiation.sensibleHeat[i])));
       if (n === 0) first.net = Math.max(first.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
     }
@@ -81,6 +82,7 @@ for (const [label, options, warmStart, onMeans] of CASES) test(`${label} over th
   assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
   assert.ok(flipped <= Math.min(46, 0.02 * C), `${flipped} of ${C} cells have a flux the engines decided apart`);
   assert.ok(onMeans ? meanWorst.warm < WARM_BOUND / 10 : worst.warm < WARM_BOUND, onMeans ? `the warm layer's mean to ${WARM_BOUND / 10} K over every step` : `the warm layer to ${WARM_BOUND} K over every step`);
+  assert.equal(unfinished, 0, `${unfinished} cell-steps whose skin, net flux, sensible heat or capacity is not finite on one engine or the other`);
   if (warmStart) return;
   assert.ok(onMeans ? meanWorst.cool < 1e-3 && meanWorst.ts < 1e-3 : worst.cool < 1e-2 && worst.ts < 1e-2, onMeans ? 'the means of the cool skin and the surface to 1e-3 K over every step' : 'the surface to 1e-2 K over every step');
   assert.ok(worst.sensible < 0.1, 'the sensible heat to 0.1 relative over every step');

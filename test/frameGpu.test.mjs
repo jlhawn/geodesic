@@ -6,7 +6,7 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { levelFields, verticalVelocity, smoothCells, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
 import { VERTICAL_MEMORY, SURFACE_UPWELLING_DEPTH } from '../js/frames.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
-import { layerVelocities, velocityAt } from './helpers/upwelling.mjs';
+import { layerVelocities, velocityAt, unheldCells } from './helpers/upwelling.mjs';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
 import { createModel } from '../js/model.module.js';
@@ -23,12 +23,12 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const N = 16;
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
 
-function worst(reference, got, { skipNaN = false } = {}) {
+function worst(reference, got, expectedNaN = null) {
   let max = 0, at = -1;
   for (let x = 0; x < reference.length; x++) {
-    if (skipNaN && Number.isNaN(reference[x])) { assert.ok(Number.isNaN(got[x]), `NaN expected at ${x}`); continue; }
-    const d = Math.abs(reference[x] - got[x]);
-    if (!Number.isNaN(max) && !(d <= max)) at = x;
+    if (expectedNaN && expectedNaN[x] && Number.isNaN(reference[x]) && Number.isNaN(got[x])) continue;
+    const d = Number.isFinite(reference[x]) && Number.isFinite(got[x]) ? Math.abs(reference[x] - got[x]) : Infinity;
+    if (!(d <= max)) at = x;
     max = Math.max(max, d);
   }
   return { max, at };
@@ -89,7 +89,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     cloudCumulus: cumulus, cloudDeck: Float64Array.from({ length: C }, (_, i) => physics.DECKF[i] * physics.DECK[i]),
   };
   for (const name of ['cloudLow', 'cloudMid', 'cloudHigh']) assert.ok(types[name].some((v) => v > 1e-4), `some ${name}`);
-  const visible = { top: new Float64Array(C), base: new Float64Array(C) }, seen = { top: Float64Array.from(f.cloudTop), base: Float64Array.from(f.cloudBase) };
+  const visible = { top: new Float64Array(C), base: new Float64Array(C) }, seen = { top: Float64Array.from(f.cloudTop), base: Float64Array.from(f.cloudBase) }, borderline = new Uint8Array(C);
   {
     const z = new Float64Array(core.K), paths = new Float64Array(core.K), out = [0, 0], geopotential = core.diagnostics.geopotential;
     for (let i = 0; i < C; i++) {
@@ -102,7 +102,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
       }
       visibleCloudHeights(core.K, z, phis[i] / gravity, paths, physics.DECKF[i] * physics.DECK[i], Math.max(physics.DEPTH[i], physics.MLMTOP[i]) + phis[i] / gravity, out);
       const opacity = 1 - Math.exp(-total / CLOUD_OPACITY_PATH);
-      if (Math.abs(opacity - CLOUD_SEEN) < 1e-4) { visible.top[i] = visible.base[i] = seen.top[i] = seen.base[i] = NaN; continue; }
+      if (Math.abs(opacity - CLOUD_SEEN) < 1e-4) { borderline[i] = 1; visible.top[i] = visible.base[i] = seen.top[i] = seen.base[i] = NaN; continue; }
       visible.top[i] = out[0]; visible.base[i] = out[1];
       if (opacity < CLOUD_SEEN) assert.ok(f.cloudTop[i] === 0 && f.cloudBase[i] === 0, `a clear column has no cloud heights at ${i}`);
       else assert.ok(f.cloudBase[i] <= f.cloudTop[i], `cloud base ${f.cloudBase[i]} above the top ${f.cloudTop[i]} at ${i}`);
@@ -110,6 +110,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   }
   assert.ok(f.cloudTop.some((height) => height > 6000), 'some cloud tops above 6 km');
   const sea = (source) => Float64Array.from({ length: C }, (_, i) => (model.geography.land[i] ? NaN : source[i]));
+  const unheldSurface = unheldCells(C, model.oceanEngine.layers, ocean.h, model.oceanEngine.cellOcean, 0);
   const currents = cellVector(mesh, ocean.u1);
   for (let i = 0; i < C; i++) if (model.geography.land[i]) currents.fill(0, 3 * i, 3 * i + 3);
   const current = sea(Float64Array.from({ length: C }, (_, i) => Math.hypot(currents[3 * i], currents[3 * i + 1], currents[3 * i + 2])));
@@ -119,8 +120,8 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     ps: [pi, 0.1], mslp: [mslp, 0.5], water: [water, 1e-3], cloud: [cloud, 1e-6], rain: [physics.RAIN.subarray(0, C), 1e-6], ice: [ice, 1e-6], concentration: [model.seaIce.concentration, 1e-6],
     albedo: [physics.ADIF.subarray(0, C), 1e-6], shortwave: [physics.SWDN.subarray(0, C), 1e-3], longwave: [physics.OLR.subarray(0, C), 1e-3],
     soil: [Float64Array.from({ length: C }, (_, i) => physics.SOIL[i] + physics.SURF[i] + (physics.DEEP ? physics.DEEP[i] : 0)), 1e-4], snow: [physics.SNOW.subarray(0, C), 1e-4],
-    sst: [sea(ocean.T1), 1e-3], sss: [sea(ocean.S1), 1e-4], layerDepth: [sea(ocean.h1), 1e-3], thermocline: [ocean.thermoclineDepth, 1e-2], ssh: [sea(ocean.eta), 1e-5],
-    current: [current, 1e-5], currents: [currents, 1e-5],
+    sst: [sea(ocean.T1), 1e-3, unheldSurface], sss: [sea(ocean.S1), 1e-4, unheldSurface], layerDepth: [sea(ocean.h1), 1e-3, unheldSurface], thermocline: [ocean.thermoclineDepth, 1e-2, unheldSurface], ssh: [sea(ocean.eta), 1e-5, unheldSurface],
+    current: [current, 1e-5, unheldSurface], currents: [currents, 1e-5],
     surfaceT: [surfaceT, 1e-3], precipitation: [Float64Array.from(physics.STEPRAIN.subarray(0, C), (r) => r * 86400 / 900), 1e-4],
     latentHeat: [Float64Array.from(physics.EVAP.subarray(0, C), (e) => LATENT_HEAT * e), 1e-3], sensibleHeat: [physics.SH.subarray(0, C), 1e-4],
     zonalStress: [Float64Array.from({ length: C }, (_, i) => -Math.sin(mesh.lonCell[i]) * stress[3 * i] + Math.cos(mesh.lonCell[i]) * stress[3 * i + 1]), 1e-6],
@@ -128,13 +129,13 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     ...Object.fromEntries(Object.entries(types).map(([name, values]) => [name, [values, 1e-6]])),
   };
   const misses = ['top', 'base'].map((name) => {
-    const { max, at } = worst(visible[name], seen[name], { skipNaN: true });
+    const { max, at } = worst(visible[name], seen[name], borderline);
     assert.ok(max < 2, `cloud ${name}: ${max} m at ${at} (${visible[name][at]} against ${seen[name][at]})`);
     return max;
   });
   console.log(`cloud tops up to ${Math.max(...f.cloudTop).toFixed(0)} m, the GPU's within ${misses[0].toFixed(2)} m (tops) and ${misses[1].toFixed(2)} m (bases) of double precision`);
-  for (const [name, [values, tolerance]] of Object.entries(checks)) {
-    const { max, at } = worst(values, f[name], { skipNaN: true });
+  for (const [name, [values, tolerance, expectedNaN = null]] of Object.entries(checks)) {
+    const { max, at } = worst(values, f[name], expectedNaN);
     assert.ok(max < tolerance, `${name}: ${max} at ${at} (${values[at]} against ${f[name][at]})`);
   }
 
@@ -182,8 +183,9 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     let magnitude = 0;
     for (let i = 0; i < C; i++) if (!Number.isNaN(expected.upwelling[i])) magnitude = Math.max(magnitude, Math.abs(expected.upwelling[i]));
     assert.ok(Number.isFinite(magnitude) && magnitude > 0);
-    for (const [name, [values, tolerance]] of Object.entries({ sst: [expected.temperature, 1e-3], current: [speed, 1e-5], currents: [expected.current, 1e-5], upwelling: [expected.upwelling, 1e-3 * magnitude] })) {
-      const { max, at: worstAt } = worst(values, at.fields[name], { skipNaN: true });
+    const unheld = unheldCells(C, L, column.h, cellOcean, top ? 0 : depth);
+    for (const [name, [values, tolerance, expectedNaN = null]] of Object.entries({ sst: [expected.temperature, 1e-3, unheld], current: [speed, 1e-5, unheld], currents: [expected.current, 1e-5], upwelling: [expected.upwelling, 1e-3 * magnitude, unheld] })) {
+      const { max, at: worstAt } = worst(values, at.fields[name], expectedNaN);
       assert.ok(max < tolerance, `${name} at ${depth} m: ${max} at ${worstAt} (${values[worstAt]} against ${at.fields[name][worstAt]})`);
     }
   }
@@ -223,7 +225,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   for (const depth of [137, 903]) {
     const averaged = (await model.beginFrame({ depth, fields: ['upwelling'] })).fields.upwelling, expected = velocityAt(C, L, moved.h, cellOcean, mean, depth);
     for (let i = 0; i < C; i++) if (!Number.isNaN(expected[i])) scale = Math.max(scale, Math.abs(expected[i]));
-    const { max, at } = worst(expected, averaged, { skipNaN: true });
+    const { max, at } = worst(expected, averaged, unheldCells(C, L, moved.h, cellOcean, depth));
     assert.ok(Number.isFinite(scale) && scale > 0 && max < 1e-3 * scale, `the memory at ${depth} m is the mean of the two states: ${max} at ${at} against ${scale}`);
   }
 });
@@ -243,6 +245,7 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
     const gpuCumulus = Float64Array.from({ length: C }, (_, i) => { let path = 0; for (let k = K0; k < K; k++) { const slot = (k - K0) * C + i; path += pi[i] * dSigma[k] / g * physics.CUCOVER[slot] * physics.CUWATER[slot]; } return path; });
     const parted = [];
     for (let i = 0; i < C; i++) if (decisions.parted.has(i) || (cpu.moist.cumulusCloudPath(pi, i) > 0) !== (gpuCumulus[i] > 0)) parted.push(i);
+    const partedCells = Uint8Array.from({ length: C }, (_, i) => parted.includes(i));
     const kept = (values) => Float64Array.from(values, (x, i) => (parted.includes(i) ? NaN : x));
     const parts = Array.from({ length: C }, (_, i) => cpu.cloudParts(i));
     const types = Object.fromEntries(CLOUD_TYPES.map((name) => [name, { cpu: kept(parts.map((part) => part[name])), gpu: kept(frame.fields[name]) }]));
@@ -250,24 +253,24 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
     cpu.core.diagnose(cpu.state[0], cpu.state[1], cpu.state[4], cpu.state[5]);
     const heights = cpu.cloudHeights();
     const seen = { top: { cpu: kept(heights.top), gpu: kept(frame.fields.cloudTop) }, base: { cpu: kept(heights.base), gpu: kept(frame.fields.cloudBase) } };
-    return { cpu: kept(Array.from({ length: C }, (_, i) => cpu.cloudWater(i))), gpu: kept(frame.fields.cloud), types, summed, all: frame.fields.cloud, deck: Float64Array.from({ length: C }, (_, i) => cpu.radiation.stratusFraction[i] * cpu.radiation.stratus[i]), parted, seen };
+    return { cpu: kept(Array.from({ length: C }, (_, i) => cpu.cloudWater(i))), gpu: kept(frame.fields.cloud), types, summed, all: frame.fields.cloud, deck: Float64Array.from({ length: C }, (_, i) => cpu.radiation.stratusFraction[i] * cpu.radiation.stratus[i]), parted, partedCells, seen };
   };
   const on = await run(true), off = await run(false);
   for (const [label, r] of Object.entries({ on, off })) {
-    for (const [name, { cpu, gpu }] of Object.entries(r.types)) { const { max, at } = worst(cpu, gpu, { skipNaN: true }); assert.ok(max < 1e-4, `deck ${label}: ${name} differs between the engines by ${max} at ${at}`); }
-    for (const [name, { cpu, gpu }] of Object.entries(r.seen)) { const { max, at } = worst(cpu, gpu, { skipNaN: true }); assert.ok(max < 5, `deck ${label}: the cloud ${name} differs between the engines by ${max} m at ${at} (${cpu[at]} against ${gpu[at]})`); }
+    for (const [name, { cpu, gpu }] of Object.entries(r.types)) { const { max, at } = worst(cpu, gpu, r.partedCells); assert.ok(max < 1e-4, `deck ${label}: ${name} differs between the engines by ${max} at ${at}`); }
+    for (const [name, { cpu, gpu }] of Object.entries(r.seen)) { const { max, at } = worst(cpu, gpu, r.partedCells); assert.ok(max < 5, `deck ${label}: the cloud ${name} differs between the engines by ${max} m at ${at} (${cpu[at]} against ${gpu[at]})`); }
     const { max, at } = worst(r.all, r.summed);
     assert.ok(max <= 1e-6 * Math.max(...r.all), `deck ${label}: the GPU's types sum to its cloud to ${max} at ${at}`);
   }
   assert.ok(on.parted.length + off.parted.length <= 0.02 * on.cpu.length, `a discrete decision parted in ${on.parted.length} + ${off.parted.length} of ${on.cpu.length} columns`);
   let at = 0;
   for (let i = 0; i < on.deck.length; i++) if (on.deck[i] > on.deck[at] && Number.isFinite(on.cpu[i]) && Number.isFinite(off.cpu[i])) at = i;
-  const engines = worst(on.cpu, on.gpu, { skipNaN: true });
+  const engines = worst(on.cpu, on.gpu, on.partedCells);
   console.log(`under a 10 K inversion the thickest deck adds ${(1000 * on.deck[at]).toFixed(1)} g/m² to cell ${at}'s cloud: ${(1000 * on.cpu[at]).toFixed(1)} against ${(1000 * off.cpu[at]).toFixed(1)} g/m² without it; the engines' cloud fields differ by at most ${engines.max.toExponential(1)} kg/m²`);
   assert.ok(on.deck[at] > 1e-3, `deck ${on.deck[at]} kg/m²`);
   assert.ok(on.cpu[at] > off.cpu[at] + 0.5 * on.deck[at] && on.gpu[at] > off.gpu[at] + 0.5 * on.deck[at], `cloud ${on.cpu[at]} (GPU ${on.gpu[at]}) against ${off.cpu[at]} (GPU ${off.gpu[at]}) without the deck`);
   assert.ok(engines.max < 1e-4, `cloud differs between the engines by ${engines.max} at ${engines.at}`);
-  const apart = worst(off.cpu, off.gpu, { skipNaN: true });
+  const apart = worst(off.cpu, off.gpu, off.partedCells);
   assert.ok(apart.max < 1e-4, `without the deck the engines' cloud fields differ by ${apart.max} kg/m² at ${apart.at} (${off.cpu[apart.at]} against ${off.gpu[apart.at]})`);
 });
 
