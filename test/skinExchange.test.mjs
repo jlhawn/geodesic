@@ -9,15 +9,16 @@ import { withCadence } from '../js/cadence.module.js';
 import { transfer } from '../js/physics/exchange.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { SEA_RHO_CP, warmLayerStep } from '../js/physics/skin.module.js';
-import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_OCEAN, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_OCEAN } from './helpers/previousDefaults.mjs';
 import { skinRecords, SEEN, STEP } from './helpers/skinProbe.mjs';
 
 /*
  * The exchange guard: N = 16 over the layered ocean with Jerlov IB light,
  * warmLayer and coolSkin on, from initializeState at the March equinox,
  * with half the longitudes land below 69°, a polar cap of sea ice that
- * keeps its skin cleared, and the sea 6 K cooler than the start's between
- * 15° and 45°, so that warm air crosses cooler water by day. At each of
+ * keeps its skin cleared, and the sea 1 K cooler than the start's between
+ * 15° and 45° under a fifth of the start's wind, so that warm air crosses
+ * cooler water by day at low wind. At each of
  * the physics' exchange calls over open water the cell is also asked at
  * T_slab, to find where the skin alone puts the
  * surface layer on its unstable branch, Ri_b(T_s) < 0 ≤ Ri_b(T_slab), and
@@ -32,12 +33,13 @@ const N = 16, DT = 1350, DAYS = Number(process.env.SKIN_EXCHANGE_DAYS ?? 12), NE
 test(`over ${DAYS} days at N = 16 every cell-step the skin turns unstable is open, sunlit water below the cap, on the warm-layer equation, without a limit cycle or the Oct 6 runaway`, async (t) => {
   const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
   const grid = new Grid(N), records = skinRecords(grid.size);
-  const model = await createParallelModel(grid, { topography, levels: sigmaInterfaces('bl36'), ...withCadence({ ocean: { ...PREVIOUS_OCEAN, penetration: 'IB' } }, DT, N), radiation: PREVIOUS_RADIATION, moist: PREVIOUS_MOIST, boundaryLayer: PREVIOUS_BOUNDARY_LAYER, surface: { warmLayer: true, coolSkin: true } }, Math.min(8, availableParallelism()), { module: new URL('./helpers/skinProbe.mjs', import.meta.url).href, data: records.data });
+  const model = await createParallelModel(grid, { topography, levels: sigmaInterfaces('bl36'), ...withCadence({ ocean: { ...PREVIOUS_OCEAN, penetration: 'IB' } }, DT, N), radiation: PREVIOUS_RADIATION, moist: PREVIOUS_MOIST, surface: { warmLayer: true, coolSkin: true } }, Math.min(8, availableParallelism()), { module: new URL('./helpers/skinProbe.mjs', import.meta.url).href, data: records.data });
   t.after(() => model.close());
   initializeState(model, {}).forEach((values, s) => model.state[s].set(values));
+  for (let e = 0; e < model.state[2].length; e++) model.state[2][e] *= 0.2;
   const concentration = new Float64Array(model.mesh.nCells);
   for (let i = 0; i < model.mesh.nCells; i++) if (!model.geography.land[i] && Math.abs(model.mesh.latCell[i]) > 1.2) { model.state[6][i] = 1.5; concentration[i] = 0.9; model.state[3][i] = 262; }
-  for (let i = 0; i < model.mesh.nCells; i++) { const lat = Math.abs(model.mesh.latCell[i]) * 180 / Math.PI; if (!model.geography.land[i] && lat > 15 && lat < 45) model.state[3][i] -= 6; }
+  for (let i = 0; i < model.mesh.nCells; i++) { const lat = Math.abs(model.mesh.latCell[i]) * 180 / Math.PI; if (!model.geography.land[i] && lat > 15 && lat < 45) model.state[3][i] -= 1; }
   model.seaIce.load(model.state[6], concentration);
   model.ocean.initialize(model.state[3], model.state[6]);
   const { exchange, radiation, skin, state, core, ocean } = model, C = model.mesh.nCells, K = core.K, bottom = (K - 1) * C;
