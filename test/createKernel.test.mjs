@@ -18,7 +18,7 @@ function boundBy(kernel, buffers) {
   return group.buffers;
 }
 
-test('a createKernel kernel binds each run\'s own buffers, unlabeled or sharing labels, and reuses a bind group for the same buffers', () => {
+test('a createKernel kernel binds each run\'s own buffers, unlabeled, sharing labels or swapped between bindings, and reuses a bind group for the same buffers in the same order', () => {
   const device = fakeDevice(), kernel = createKernel(device, '', 'probe');
   const sets = [
     [{ label: '' }, { label: '' }],
@@ -26,6 +26,7 @@ test('a createKernel kernel binds each run\'s own buffers, unlabeled or sharing 
     [{ label: 'A' }, { label: 'B' }],
     [{ label: 'A' }, { label: 'B' }],
   ];
+  sets.push([sets[0][1], sets[0][0]], [sets[2][1], sets[2][0]]);
   for (const set of sets) {
     const bound = boundBy(kernel, set);
     assert.equal(bound.length, set.length);
