@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { F32_CELL, F32_RMS, S9_TIERS, buildSpread, columnLargest, distributionCheck, hemispheres, roundDown, roundUp, spreadStatistics } from './helpers/distribution.mjs';
+import { EVENT_SPREAD, F32_CELL, F32_RMS, S9_TIERS, buildSpread, columnLargest, distributionCheck, hemispheres, roundDown, roundUp, spreadStatistics } from './helpers/distribution.mjs';
 import { bandLayers, groupChecks, groupLayout, spreadGroups } from './helpers/spreadGroups.mjs';
 
 const mesh = buildMesh(new Grid(16)), n = mesh.nCells, sides = hemispheres(mesh), REFERENCE = { max: 20, rms: 5 };
@@ -198,4 +198,25 @@ test('bandLayers puts every layer in one band and throws on a sigma that is not 
   assert.throws(() => spreadGroups(field, field, layout, { low: [0], high: [2] }), /not each of 0 to 1 once/);
   assert.throws(() => spreadGroups(field, field, layout, { low: [0, 1], mid: [1, 2] }), /not each of 0 to 3 once/);
   assert.equal(Object.keys(spreadGroups(field, field, layout, three)).length, 3);
+});
+
+test('under dropEventHemispheres buildSpread leaves out the mean bound of a hemisphere where single columns\' events set the twins\' means, and a check fails such a side that has a bound too, a reason short of those events, or no cells', () => {
+  const south = Array.from({ length: n }, (_, x) => x).filter((x) => sides[x] < 0), event = build.map((gaps, t) => { const copy = Float64Array.from(gaps); if (t === 0) copy[south[0]] = 4; return copy; });
+  const kept = buildSpread(event, sides, REFERENCE), dropped = buildSpread(event, sides, REFERENCE, { dropEventHemispheres: true }), reason = dropped.hemisphereDropped?.south;
+  assert.ok(kept.hemisphere.south > 0 && kept.hemisphereDropped === undefined, JSON.stringify(kept.hemisphere));
+  assert.ok(reason && reason.largest > EVENT_SPREAD * reason.median && reason.loo > 1 && dropped.hemisphere.south === undefined && dropped.hemisphere.north === kept.hemisphere.north && dropped.hemisphereDropped.north === undefined, JSON.stringify(dropped.hemisphereDropped));
+  const three = Float64Array.from(fresh[0]);
+  for (const x of south.slice(0, 3)) three[x] = 3.9;
+  assert.ok(caughtBy(failures(three, kept), /southern mean/), failures(three, kept).join('; '));
+  const check = distributionCheck(three, sides, dropped, REFERENCE, { require: S9_TIERS });
+  assert.deepEqual(check.failed, []);
+  assert.match(check.text, /south: [^;]* unbounded \(the twins' means: largest /);
+  const level = (southern) => southern.map((c) => Float64Array.from(sides, (side) => (side < 0 ? c : 1e-3))), dropOf = (southern) => buildSpread(level(southern), sides, REFERENCE, { dropEventHemispheres: true }).hemisphereDropped;
+  const byMedian = dropOf([...Array(18).fill(1e-3), 4e-3, 4e-3])?.south, byLoo = dropOf([...Array(19).fill(1e-3), 2.5e-3])?.south;
+  assert.ok(byMedian && byMedian.largest > EVENT_SPREAD * byMedian.median && !(byMedian.loo > 1), JSON.stringify(byMedian));
+  assert.ok(byLoo && !(byLoo.largest > EVENT_SPREAD * byLoo.median) && byLoo.loo > 1, JSON.stringify(byLoo));
+  assert.equal(dropOf(Array(20).fill(1e-3)), undefined);
+  assert.ok(caughtBy(failures(three, { ...dropped, hemisphere: { ...dropped.hemisphere, south: kept.hemisphere.south } }), /a southern mean bound and a reason for having none/));
+  for (const short of [{ largest: 2e-3, median: 1e-3, loo: 0.9 }, { largest: NaN, median: 1e-3, loo: NaN }, {}, null]) assert.ok(caughtBy(failures(three, { ...dropped, hemisphereDropped: { south: short } }), /no southern mean bound, for a reason short of single columns' events/), JSON.stringify(short));
+  assert.ok(caughtBy(distributionCheck(fresh[0], new Int8Array(n).fill(1), { ...dropped, bulk: { north: dropped.bulk.north } }, REFERENCE, { require: S9_TIERS }).failed, /southern bounds for a group with no southern cells/));
 });

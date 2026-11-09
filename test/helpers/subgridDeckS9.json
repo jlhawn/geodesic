@@ -1,0 +1,369 @@
+{
+  "bl60 moist {\"surface\":{},\"boundaryLayer\":{},\"deckInversion\":\"subgrid\"}": {
+    "q": {
+      "sea low": {"largest":0.00102,"counts":[[0.000508,4],[0.000254,6],[0.000127,6],[0.0000635,6],[0.0000317,8],[0.0000158,10],[0.00000794,10],[0.00000397,14],[0.00000198,16],[9.93e-7,16],[4.96e-7,16]],"hemisphere":{"south":0.00000149},"hemisphereDropped":{"north":{"largest":1.61e-7,"median":1.49e-8,"loo":1.65}},"bulk":{"north":{"trimmed":2.61e-8,"signed":4.35e-9},"south":{"trimmed":2.61e-8,"signed":4.35e-9}}},
+      "sea mid": {"largest":4.68e-9,"counts":[],"emptyLadder":{"why":"floor","threshold":2.33e-9},"hemisphere":{"north":8.4e-10,"south":8.42e-10},"bulk":{"north":{"trimmed":7.51e-10,"signed":1.7e-10},"south":{"trimmed":7.57e-10,"signed":1.7e-10}}},
+      "sea high": {"largest":5.52e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.75e-11},"hemisphere":{"north":1.38e-11,"south":1.38e-11},"bulk":{"north":{"trimmed":1.31e-11,"signed":3.59e-12},"south":{"trimmed":1.31e-11,"signed":3.59e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.464,"counts":[[0.231,4],[0.115,8],[0.0579,8],[0.0289,8],[0.0144,12],[0.00724,14],[0.00362,16],[0.00181,16]],"hemisphere":{"north":0.000689,"south":0.00124},"bulk":{"north":{"trimmed":0.000384,"signed":0.00027},"south":{"trimmed":0.000386,"signed":0.00027}}},
+      "sea mid": {"largest":0.00156,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000372},"hemisphere":{"north":0.000476,"south":0.000474},"bulk":{"north":{"trimmed":0.000467,"signed":0.000318},"south":{"trimmed":0.000465,"signed":0.000318}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00377},"hemisphere":{"north":0.00236,"south":0.00237},"bulk":{"north":{"trimmed":0.00226,"signed":0.0012},"south":{"trimmed":0.00227,"signed":0.0012}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.248,"counts":[[0.123,4],[0.0617,6],[0.0308,10],[0.0154,10],[0.00772,10],[0.00386,10],[0.00193,10],[0.000965,10],[0.000482,14],[0.000241,14],[0.00012,14]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.000155,"median":0.0000289,"loo":0.604},"south":{"largest":0.000127,"median":0.0000274,"loo":0.508}},"bulk":{"north":{"trimmed":0.00000773,"signed":5.71e-7},"south":{"trimmed":0.00000794,"signed":4.13e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":15.5,"counts":[[7.72,4],[3.86,6],[1.93,6],[0.965,10],[0.482,10],[0.241,10],[0.12,10],[0.0603,10],[0.0301,16],[0.015,24],[0.00754,48]],"hemisphere":{"south":0.00771},"hemisphereDropped":{"north":{"largest":0.0122,"median":0.00224,"loo":0.629}},"bulk":{"north":{"trimmed":0.00278,"signed":0.000326},"south":{"trimmed":0.00283,"signed":0.000206}}},
+      "sea mid": {"largest":0.00295,"counts":[[0.00147,4],[0.000736,264]],"hemisphere":{"north":0.000915,"south":0.000905},"bulk":{"north":{"trimmed":0.000878,"signed":0.0000698},"south":{"trimmed":0.000869,"signed":0.000057}}},
+      "sea high": {"largest":0.00027,"counts":[[0.000134,4],[0.0000672,4]],"hemisphere":{"north":0.0000599,"south":0.0000604},"bulk":{"north":{"trimmed":0.0000577,"signed":0.00000347},"south":{"trimmed":0.0000582,"signed":0.00000339}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.0000131,"counts":[[0.0000065,4],[0.00000325,4],[0.00000162,4],[8.13e-7,4],[4.06e-7,326]],"hemisphere":{"north":3.07e-7,"south":3.07e-7},"bulk":{"north":{"trimmed":2.67e-7,"signed":1.47e-8},"south":{"trimmed":2.69e-7,"signed":1.93e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.0000131,"counts":[[0.0000065,4],[0.00000325,4],[0.00000162,4],[8.13e-7,6],[4.06e-7,326]],"hemisphere":{"north":3.07e-7,"south":3.08e-7},"bulk":{"north":{"trimmed":2.69e-7,"signed":1.49e-8},"south":{"trimmed":2.71e-7,"signed":1.93e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":2.71,"counts":[[1.35,4],[0.675,4],[0.337,6],[0.168,6],[0.0843,6],[0.0421,6],[0.021,8],[0.0105,12],[0.00527,86],[0.00263,374]],"hemisphere":{"north":0.00117,"south":0.00365},"bulk":{"north":{"trimmed":0.000713,"signed":0.0000854},"south":{"trimmed":0.000775,"signed":0.000108}}}
+    }
+  },
+  "bl48 moist {\"surface\":{},\"boundaryLayer\":{},\"deckInversion\":\"subgrid\"}": {
+    "q": {
+      "sea low": {"largest":0.000678,"counts":[[0.000338,4],[0.000169,4],[0.0000846,4],[0.0000423,6],[0.0000211,8],[0.0000105,8],[0.00000529,8],[0.00000264,10],[0.00000132,12],[6.61e-7,14],[3.3e-7,18]],"hemisphere":{"south":9.06e-8},"hemisphereDropped":{"north":{"largest":3.23e-7,"median":5.77e-8,"loo":0.502}},"bulk":{"north":{"trimmed":2.35e-8,"signed":4.34e-9},"south":{"trimmed":2.33e-8,"signed":4.34e-9}}},
+      "sea mid": {"largest":5.37e-9,"counts":[[2.68e-9,4]],"hemisphere":{"north":6.97e-10,"south":6.71e-10},"bulk":{"north":{"trimmed":6.2e-10,"signed":1.31e-10},"south":{"trimmed":5.94e-10,"signed":1.31e-10}}},
+      "sea high": {"largest":4.49e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.24e-11},"hemisphere":{"north":1.35e-11,"south":1.36e-11},"bulk":{"north":{"trimmed":1.27e-11,"signed":3.35e-12},"south":{"trimmed":1.28e-11,"signed":3.35e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.0463,"counts":[[0.0231,4],[0.0115,10],[0.00578,10],[0.00289,10],[0.00144,12]],"hemisphere":{"north":0.000433,"south":0.000449},"bulk":{"north":{"trimmed":0.000384,"signed":0.00027},"south":{"trimmed":0.000384,"signed":0.00027}}},
+      "sea mid": {"largest":0.00155,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000372},"hemisphere":{"north":0.000471,"south":0.000468},"bulk":{"north":{"trimmed":0.000461,"signed":0.000316},"south":{"trimmed":0.000458,"signed":0.000316}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00381},"hemisphere":{"north":0.00229,"south":0.0023},"bulk":{"north":{"trimmed":0.00219,"signed":0.0013},"south":{"trimmed":0.00219,"signed":0.0013}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.133,"counts":[[0.0662,4],[0.0331,8],[0.0165,8],[0.00828,8],[0.00414,8],[0.00207,8],[0.00103,8],[0.000517,8],[0.000258,8],[0.000129,8],[0.0000647,18]],"hemisphere":{"south":0.000193},"hemisphereDropped":{"north":{"largest":0.000101,"median":0.00000362,"loo":0.886}},"bulk":{"north":{"trimmed":0.00000776,"signed":4.66e-7},"south":{"trimmed":0.00000814,"signed":6.49e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":17.7,"counts":[[8.82,4],[4.41,4],[2.2,4],[1.1,6],[0.551,10],[0.275,10],[0.137,10],[0.0689,10],[0.0344,12],[0.0172,16],[0.00861,24]],"hemisphere":{"north":0.00755,"south":0.0172},"bulk":{"north":{"trimmed":0.00242,"signed":0.000198},"south":{"trimmed":0.00246,"signed":0.000201}}},
+      "sea mid": {"largest":0.0188,"counts":[[0.00936,4],[0.00468,4],[0.00234,4],[0.00117,6],[0.000585,904]],"hemisphere":{"north":0.00087,"south":0.000888},"bulk":{"north":{"trimmed":0.000829,"signed":0.0000592},"south":{"trimmed":0.000837,"signed":0.0000579}}},
+      "sea high": {"largest":0.00194,"counts":[[0.000968,4],[0.000484,4],[0.000242,4],[0.000121,6],[0.0000605,36]],"hemisphere":{"north":0.0000684,"south":0.0000694},"bulk":{"north":{"trimmed":0.0000662,"signed":0.00000418},"south":{"trimmed":0.0000663,"signed":0.00000358}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.000041,"counts":[[0.0000204,4],[0.0000102,4],[0.00000511,4],[0.00000255,4],[0.00000127,4],[6.39e-7,4],[3.19e-7,490]],"hemisphere":{"north":2.74e-7,"south":2.96e-7},"bulk":{"north":{"trimmed":2.43e-7,"signed":1.96e-8},"south":{"trimmed":2.4e-7,"signed":1.73e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.000041,"counts":[[0.0000204,4],[0.0000102,4],[0.00000511,4],[0.00000255,4],[0.00000127,4],[6.39e-7,4],[3.19e-7,490]],"hemisphere":{"north":2.75e-7,"south":2.97e-7},"bulk":{"north":{"trimmed":2.44e-7,"signed":1.96e-8},"south":{"trimmed":2.42e-7,"signed":1.74e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":0.833,"counts":[[0.416,4],[0.208,4],[0.104,6],[0.052,6],[0.026,6],[0.013,6],[0.0065,40],[0.00325,234],[0.00162,618]],"hemisphere":{"north":0.00126,"south":0.00177},"bulk":{"north":{"trimmed":0.000693,"signed":0.00009},"south":{"trimmed":0.000711,"signed":0.0000944}}}
+    }
+  },
+  "bl60 moist {\"surface\":{},\"boundaryLayer\":{},\"deckCloud\":\"top\"}": {
+    "q": {
+      "sea low": {"largest":0.000543,"counts":[[0.000271,4],[0.000135,8],[0.0000677,8],[0.0000338,8],[0.0000169,8],[0.00000847,8],[0.00000423,12],[0.00000211,12],[0.00000105,16],[5.29e-7,18],[2.64e-7,24]],"hemisphere":{"south":0.00000107},"hemisphereDropped":{"north":{"largest":7.16e-8,"median":1.28e-8,"loo":0.511}},"bulk":{"north":{"trimmed":2.68e-8,"signed":4.34e-9},"south":{"trimmed":2.7e-8,"signed":4.34e-9}}},
+      "sea mid": {"largest":1.1e-8,"counts":[[5.48e-9,4],[2.74e-9,4]],"hemisphere":{"north":8.4e-10,"south":8.41e-10},"bulk":{"north":{"trimmed":7.53e-10,"signed":1.7e-10},"south":{"trimmed":7.57e-10,"signed":1.7e-10}}},
+      "sea high": {"largest":8.08e-11,"counts":[[4.03e-11,4]],"hemisphere":{"north":1.37e-11,"south":1.39e-11},"bulk":{"north":{"trimmed":1.3e-11,"signed":3.59e-12},"south":{"trimmed":1.31e-11,"signed":3.59e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.733,"counts":[[0.366,4],[0.183,6],[0.0916,6],[0.0458,6],[0.0229,8],[0.0114,12],[0.00572,16],[0.00286,18],[0.00143,24]],"hemisphere":{"north":0.000721,"south":0.00134},"bulk":{"north":{"trimmed":0.000377,"signed":0.00027},"south":{"trimmed":0.00038,"signed":0.00027}}},
+      "sea mid": {"largest":0.00156,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00056},"hemisphere":{"north":0.000473,"south":0.000476},"bulk":{"north":{"trimmed":0.000464,"signed":0.000318},"south":{"trimmed":0.000467,"signed":0.000318}}},
+      "sea high": {"largest":0.032,"counts":[[0.0159,4]],"hemisphere":{"north":0.00237,"south":0.00238},"bulk":{"north":{"trimmed":0.00226,"signed":0.0012},"south":{"trimmed":0.00227,"signed":0.0012}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.202,"counts":[[0.1,4],[0.0504,10],[0.0252,10],[0.0126,10],[0.0063,10],[0.00315,10],[0.00157,10],[0.000787,12],[0.000393,12],[0.000196,12],[0.0000984,16]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.000187,"median":0.00000273,"loo":1.13},"south":{"largest":0.000123,"median":0.00000531,"loo":0.854}},"bulk":{"north":{"trimmed":0.00000639,"signed":3.68e-7},"south":{"trimmed":0.00000665,"signed":5.79e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":205,"counts":[[102,4],[51,4],[25.5,4],[12.7,4],[6.37,6],[3.18,6],[1.59,6],[0.797,12],[0.398,12],[0.199,12],[0.0996,12]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.0818,"median":0.00147,"loo":0.502},"south":{"largest":0.00906,"median":0.00281,"loo":0.546}},"bulk":{"north":{"trimmed":0.00317,"signed":0.000224},"south":{"trimmed":0.0032,"signed":0.000185}}},
+      "sea mid": {"largest":0.315,"counts":[[0.157,4],[0.0786,4],[0.0393,4],[0.0196,4],[0.00983,4],[0.00491,4],[0.00245,6],[0.00122,6],[0.000614,832]],"hemisphere":{"north":0.00116,"south":0.00091},"bulk":{"north":{"trimmed":0.000879,"signed":0.0000572},"south":{"trimmed":0.000869,"signed":0.0000522}}},
+      "sea high": {"largest":0.046,"counts":[[0.0229,4],[0.0114,4],[0.00574,4],[0.00287,4],[0.00143,4],[0.000718,4],[0.000359,6],[0.000179,6],[0.0000898,6],[0.0000449,318]],"hemisphere":{"north":0.0000955,"south":0.0000605},"bulk":{"north":{"trimmed":0.0000577,"signed":0.00000391},"south":{"trimmed":0.0000582,"signed":0.00000311}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.04,"counts":[[0.02,4],[0.01,4],[0.005,4],[0.0025,4],[0.00125,4],[0.000625,4],[0.000312,4],[0.000156,4],[0.0000781,4],[0.000039,4],[0.0000195,4]],"hemisphere":{"south":4.3e-7},"hemisphereDropped":{"north":{"largest":0.0000158,"median":1.77e-7,"loo":0.501}},"bulk":{"north":{"trimmed":3.08e-7,"signed":3.76e-8},"south":{"trimmed":3.07e-7,"signed":2.13e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.00384,"counts":[[0.00191,4],[0.000957,4],[0.000478,4],[0.000239,4],[0.000119,4],[0.0000598,6],[0.0000299,6],[0.0000149,6],[0.00000748,8],[0.00000374,14],[0.00000187,18]],"hemisphere":{"south":2.64e-7},"hemisphereDropped":{"north":{"largest":0.00000155,"median":4.35e-8,"loo":0.501}},"bulk":{"north":{"trimmed":6.39e-8,"signed":4.85e-9},"south":{"trimmed":6.45e-8,"signed":6.4e-9}}}
+    },
+    "sw": {
+      "sea": {"largest":358,"counts":[[178,4],[89.4,4],[44.7,4],[22.3,4],[11.1,6],[5.59,6],[2.79,6],[1.39,6],[0.699,6],[0.349,6],[0.174,6]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.14,"median":0.000391,"loo":0.5},"south":{"largest":0.0185,"median":0.00108,"loo":0.5}},"bulk":{"north":{"trimmed":0.00085,"signed":0.000103},"south":{"trimmed":0.000904,"signed":0.000121}}}
+    }
+  },
+  "bl60 moist {\"surface\":{},\"boundaryLayer\":{},\"deckCloud\":\"top\",\"deckInversion\":\"subgrid\"}": {
+    "q": {
+      "sea low": {"largest":0.000847,"counts":[[0.000423,4],[0.000211,6],[0.000105,6],[0.0000529,6],[0.0000264,6],[0.0000132,8],[0.00000661,10],[0.0000033,12],[0.00000165,12],[8.26e-7,14],[4.13e-7,14]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":1.74e-7,"median":2.05e-8,"loo":0.526},"south":{"largest":6.71e-7,"median":2.04e-8,"loo":0.52}},"bulk":{"north":{"trimmed":2.59e-8,"signed":4.35e-9},"south":{"trimmed":2.59e-8,"signed":4.35e-9}}},
+      "sea mid": {"largest":4.66e-9,"counts":[],"emptyLadder":{"why":"floor","threshold":2.32e-9},"hemisphere":{"north":8.39e-10,"south":8.42e-10},"bulk":{"north":{"trimmed":7.53e-10,"signed":1.7e-10},"south":{"trimmed":7.57e-10,"signed":1.7e-10}}},
+      "sea high": {"largest":5.41e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.7e-11},"hemisphere":{"north":1.37e-11,"south":1.38e-11},"bulk":{"north":{"trimmed":1.3e-11,"signed":3.59e-12},"south":{"trimmed":1.31e-11,"signed":3.59e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.291,"counts":[[0.145,4],[0.0727,6],[0.0363,8],[0.0181,10],[0.00909,12],[0.00454,12],[0.00227,14]],"hemisphere":{"north":0.000606,"south":0.000937},"bulk":{"north":{"trimmed":0.000384,"signed":0.00027},"south":{"trimmed":0.000386,"signed":0.00027}}},
+      "sea mid": {"largest":0.00156,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000364},"hemisphere":{"north":0.000476,"south":0.000475},"bulk":{"north":{"trimmed":0.000467,"signed":0.000318},"south":{"trimmed":0.000465,"signed":0.000318}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00359},"hemisphere":{"north":0.00237,"south":0.00237},"bulk":{"north":{"trimmed":0.00226,"signed":0.0012},"south":{"trimmed":0.00227,"signed":0.0012}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.324,"counts":[[0.161,4],[0.0808,6],[0.0404,8],[0.0202,8],[0.0101,8],[0.00505,8],[0.00252,8],[0.00126,10],[0.000631,14],[0.000315,14],[0.000157,14]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.0003,"median":0.00000465,"loo":0.603},"south":{"largest":0.0000995,"median":0.0000274,"loo":0.63}},"bulk":{"north":{"trimmed":0.00000772,"signed":3.82e-7},"south":{"trimmed":0.00000802,"signed":5.54e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":16,"counts":[[7.99,4],[3.99,4],[1.99,6],[0.999,10],[0.499,12],[0.249,14],[0.124,14],[0.0624,14],[0.0312,18],[0.0156,20],[0.0078,46]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.00489,"median":0.00144,"loo":0.724},"south":{"largest":0.00893,"median":0.00141,"loo":0.511}},"bulk":{"north":{"trimmed":0.00272,"signed":0.000241},"south":{"trimmed":0.00277,"signed":0.000188}}},
+      "sea mid": {"largest":0.00208,"counts":[[0.00103,4]],"hemisphere":{"north":0.000914,"south":0.000905},"bulk":{"north":{"trimmed":0.000878,"signed":0.0000571},"south":{"trimmed":0.000869,"signed":0.0000611}}},
+      "sea high": {"largest":0.000133,"counts":[[0.0000663,4]],"hemisphere":{"north":0.0000599,"south":0.0000604},"bulk":{"north":{"trimmed":0.0000576,"signed":0.00000384},"south":{"trimmed":0.0000582,"signed":0.00000307}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.0000134,"counts":[[0.00000666,4],[0.00000333,6],[0.00000166,6],[8.32e-7,6],[4.16e-7,294]],"hemisphere":{"north":3.1e-7,"south":3.05e-7},"bulk":{"north":{"trimmed":2.64e-7,"signed":1.45e-8},"south":{"trimmed":2.67e-7,"signed":2.2e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.0000134,"counts":[[0.00000666,4],[0.00000333,6],[0.00000166,6],[8.32e-7,8],[4.16e-7,294]],"hemisphere":{"north":3.12e-7,"south":3.07e-7},"bulk":{"north":{"trimmed":2.67e-7,"signed":1.38e-8},"south":{"trimmed":2.7e-7,"signed":2.14e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":2.88,"counts":[[1.43,4],[0.717,4],[0.358,4],[0.179,6],[0.0897,8],[0.0448,8],[0.0224,8],[0.0112,12],[0.0056,76],[0.0028,344]],"hemisphere":{"north":0.00135},"hemisphereDropped":{"south":{"largest":0.00169,"median":0.000377,"loo":0.501}},"bulk":{"north":{"trimmed":0.000741,"signed":0.0000863},"south":{"trimmed":0.000784,"signed":0.000114}}}
+    }
+  },
+  "bl60 moist {\"surface\":{},\"boundaryLayer\":{},\"deckCloud\":\"top\",\"deckInversion\":\"subgrid\",\"radiationEvery\":2}": {
+    "q": {
+      "sea low": {"largest":0.00109,"counts":[[0.000542,4],[0.000271,6],[0.000135,6],[0.0000678,6],[0.0000339,6],[0.0000169,6],[0.00000847,12],[0.00000423,16],[0.00000211,18],[0.00000105,20],[5.29e-7,22]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":4e-7,"median":2.12e-8,"loo":0.511},"south":{"largest":4.44e-7,"median":2.16e-8,"loo":0.569}},"bulk":{"north":{"trimmed":2.8e-8,"signed":4.35e-9},"south":{"trimmed":2.79e-8,"signed":4.35e-9}}},
+      "sea mid": {"largest":4.68e-9,"counts":[],"emptyLadder":{"why":"floor","threshold":2.33e-9},"hemisphere":{"north":8.38e-10,"south":8.38e-10},"bulk":{"north":{"trimmed":7.52e-10,"signed":1.7e-10},"south":{"trimmed":7.55e-10,"signed":1.7e-10}}},
+      "sea high": {"largest":5.61e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.8e-11},"hemisphere":{"north":1.38e-11,"south":1.38e-11},"bulk":{"north":{"trimmed":1.3e-11,"signed":3.59e-12},"south":{"trimmed":1.31e-11,"signed":3.59e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.672,"counts":[[0.335,4],[0.167,4],[0.0839,6],[0.0419,6],[0.0209,10],[0.0104,18],[0.00524,22],[0.00262,22],[0.00131,22]],"hemisphere":{"north":0.000757,"south":0.000952},"bulk":{"north":{"trimmed":0.000387,"signed":0.00027},"south":{"trimmed":0.000389,"signed":0.00027}}},
+      "sea mid": {"largest":0.00156,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000369},"hemisphere":{"north":0.000474,"south":0.000472},"bulk":{"north":{"trimmed":0.000465,"signed":0.000318},"south":{"trimmed":0.000463,"signed":0.000318}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00358},"hemisphere":{"north":0.00236,"south":0.00236},"bulk":{"north":{"trimmed":0.00226,"signed":0.0012},"south":{"trimmed":0.00226,"signed":0.0012}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.304,"counts":[[0.151,4],[0.0759,6],[0.0379,10],[0.0189,10],[0.00949,10],[0.00474,10],[0.00237,10],[0.00118,10],[0.000593,14],[0.000296,14],[0.000148,14]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.00021,"median":0.0000407,"loo":0.503},"south":{"largest":0.0000979,"median":0.000005,"loo":0.505}},"bulk":{"north":{"trimmed":0.00000829,"signed":4.85e-7},"south":{"trimmed":0.00000851,"signed":7.23e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":14.8,"counts":[[7.38,4],[3.69,4],[1.84,4],[0.923,10],[0.461,14],[0.23,14],[0.115,14],[0.0577,16],[0.0288,22],[0.0144,26],[0.00721,48]],"hemisphere":{"south":0.00724},"hemisphereDropped":{"north":{"largest":0.011,"median":0.00222,"loo":0.548}},"bulk":{"north":{"trimmed":0.0027,"signed":0.000198},"south":{"trimmed":0.00273,"signed":0.00016}}},
+      "sea mid": {"largest":0.00353,"counts":[[0.00176,4],[0.000881,50]],"hemisphere":{"north":0.000922,"south":0.000913},"bulk":{"north":{"trimmed":0.000885,"signed":0.0000582},"south":{"trimmed":0.000875,"signed":0.0000659}}},
+      "sea high": {"largest":0.000164,"counts":[[0.0000818,4],[0.0000409,578]],"hemisphere":{"north":0.00006,"south":0.0000605},"bulk":{"north":{"trimmed":0.0000578,"signed":0.00000384},"south":{"trimmed":0.0000583,"signed":0.00000309}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.0000124,"counts":[[0.00000618,4],[0.00000309,4],[0.00000154,4],[7.73e-7,6],[3.86e-7,342]],"hemisphere":{"north":2.83e-7,"south":2.85e-7},"bulk":{"north":{"trimmed":2.43e-7,"signed":1.71e-8},"south":{"trimmed":2.48e-7,"signed":2.26e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.0000124,"counts":[[0.00000618,4],[0.00000309,4],[0.00000154,4],[7.73e-7,6],[3.86e-7,342]],"hemisphere":{"north":3.01e-7,"south":2.96e-7},"bulk":{"north":{"trimmed":2.55e-7,"signed":1.75e-8},"south":{"trimmed":2.6e-7,"signed":2.03e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":3.27,"counts":[[1.63,4],[0.816,4],[0.408,4],[0.204,6],[0.102,6],[0.051,6],[0.0255,10],[0.0127,12],[0.00638,58],[0.00319,304]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.00216,"median":0.00044,"loo":0.517},"south":{"largest":0.00143,"median":0.000375,"loo":0.506}},"bulk":{"north":{"trimmed":0.000783,"signed":0.0000959},"south":{"trimmed":0.000827,"signed":0.0000959}}}
+    }
+  },
+  "bl48 moist {\"surface\":{},\"boundaryLayer\":{},\"cloudColumns\":true,\"cloudSpread\":0.75,\"deckResolved\":\"above\",\"deckCloud\":\"top\",\"deckInversion\":\"subgrid\"}": {
+    "q": {
+      "sea low": {"largest":0.000384,"counts":[[0.000191,4],[0.0000958,4],[0.0000479,4],[0.0000239,4],[0.0000119,4],[0.00000598,4],[0.00000299,8],[0.00000149,12],[7.48e-7,12],[3.74e-7,12],[1.87e-7,12]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":1.62e-7,"median":1.11e-8,"loo":0.503},"south":{"largest":4.76e-8,"median":1.1e-8,"loo":0.966}},"bulk":{"north":{"trimmed":2.28e-8,"signed":4.34e-9},"south":{"trimmed":2.24e-8,"signed":4.34e-9}}},
+      "sea mid": {"largest":5.32e-9,"counts":[[2.65e-9,4]],"hemisphere":{"north":6.96e-10,"south":6.69e-10},"bulk":{"north":{"trimmed":6.19e-10,"signed":1.31e-10},"south":{"trimmed":5.93e-10,"signed":1.31e-10}}},
+      "sea high": {"largest":4.48e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.23e-11},"hemisphere":{"north":1.35e-11,"south":1.36e-11},"bulk":{"north":{"trimmed":1.27e-11,"signed":3.35e-12},"south":{"trimmed":1.28e-11,"signed":3.35e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.0797,"counts":[[0.0398,4],[0.0199,4],[0.00995,8],[0.00497,8],[0.00248,12],[0.00124,12]],"hemisphere":{"north":0.000437,"south":0.000453},"bulk":{"north":{"trimmed":0.000384,"signed":0.00027},"south":{"trimmed":0.000384,"signed":0.00027}}},
+      "sea mid": {"largest":0.00155,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00037},"hemisphere":{"north":0.000468,"south":0.000469},"bulk":{"north":{"trimmed":0.000459,"signed":0.000316},"south":{"trimmed":0.00046,"signed":0.000316}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00391},"hemisphere":{"north":0.0023,"south":0.0023},"bulk":{"north":{"trimmed":0.00219,"signed":0.0013},"south":{"trimmed":0.00219,"signed":0.0013}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.508,"counts":[[0.253,4],[0.126,4],[0.0634,6],[0.0317,6],[0.0158,6],[0.00793,6],[0.00396,6],[0.00198,6],[0.000991,6],[0.000495,6],[0.000247,6]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.000203,"median":0.00000346,"loo":0.504},"south":{"largest":0.0000944,"median":0.00000371,"loo":0.5}},"bulk":{"north":{"trimmed":0.00000814,"signed":3.57e-7},"south":{"trimmed":0.00000846,"signed":6.52e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":1.9,"counts":[[0.947,4],[0.473,4],[0.236,4],[0.118,4],[0.0592,6],[0.0296,8],[0.0148,12],[0.0074,12],[0.0037,38],[0.00185,158]],"hemisphere":{"north":0.00323,"south":0.00349},"bulk":{"north":{"trimmed":0.00177,"signed":0.000104},"south":{"trimmed":0.00179,"signed":0.000134}}},
+      "sea mid": {"largest":0.00222,"counts":[[0.0011,4],[0.000553,1140]],"hemisphere":{"north":0.00087,"south":0.000876},"bulk":{"north":{"trimmed":0.000829,"signed":0.0000604},"south":{"trimmed":0.000838,"signed":0.0000583}}},
+      "sea high": {"largest":0.000147,"counts":[[0.0000734,4]],"hemisphere":{"north":0.0000684,"south":0.0000684},"bulk":{"north":{"trimmed":0.0000662,"signed":0.00000364},"south":{"trimmed":0.0000663,"signed":0.00000384}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.000041,"counts":[[0.0000204,4],[0.0000102,4],[0.00000512,4],[0.00000256,4],[0.00000128,4],[6.4e-7,4],[3.2e-7,476]],"hemisphere":{"north":2.73e-7,"south":2.95e-7},"bulk":{"north":{"trimmed":2.42e-7,"signed":1.97e-8},"south":{"trimmed":2.4e-7,"signed":1.84e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.000041,"counts":[[0.0000204,4],[0.0000102,4],[0.00000512,4],[0.00000256,4],[0.00000128,4],[6.4e-7,4],[3.2e-7,478]],"hemisphere":{"north":2.78e-7,"south":2.96e-7},"bulk":{"north":{"trimmed":2.43e-7,"signed":1.97e-8},"south":{"trimmed":2.41e-7,"signed":1.85e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":0.521,"counts":[[0.26,4],[0.13,4],[0.065,4],[0.0325,4],[0.0162,4],[0.00812,4],[0.00406,6],[0.00203,20]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.000197,"median":0.0000462,"loo":0.51},"south":{"largest":0.000268,"median":0.0000549,"loo":1.51}},"bulk":{"north":{"trimmed":0.000178,"signed":0.000178},"south":{"trimmed":0.000178,"signed":0.000178}}}
+    }
+  },
+  "bl48 moist {\"surface\":{},\"boundaryLayer\":{},\"cloudColumns\":true,\"cloudSpread\":0.75,\"deckResolved\":\"above\",\"deckCloud\":\"top\",\"deckInversion\":\"subgrid\",\"radiationEvery\":2}": {
+    "q": {
+      "sea low": {"largest":0.00104,"counts":[[0.000517,4],[0.000258,4],[0.000129,6],[0.0000646,6],[0.0000323,6],[0.0000161,8],[0.00000808,8],[0.00000404,14],[0.00000202,14],[0.00000101,18],[5.05e-7,20]],"hemisphere":{"south":1.06e-7},"hemisphereDropped":{"north":{"largest":5.72e-7,"median":1.64e-7,"loo":0.502}},"bulk":{"north":{"trimmed":2.41e-8,"signed":4.34e-9},"south":{"trimmed":2.36e-8,"signed":4.34e-9}}},
+      "sea mid": {"largest":5.39e-9,"counts":[[2.69e-9,4]],"hemisphere":{"north":6.96e-10,"south":6.7e-10},"bulk":{"north":{"trimmed":6.19e-10,"signed":1.31e-10},"south":{"trimmed":5.94e-10,"signed":1.31e-10}}},
+      "sea high": {"largest":4.5e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.24e-11},"hemisphere":{"north":1.35e-11,"south":1.35e-11},"bulk":{"north":{"trimmed":1.27e-11,"signed":3.35e-12},"south":{"trimmed":1.28e-11,"signed":3.35e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.541,"counts":[[0.27,4],[0.135,4],[0.0675,4],[0.0337,6],[0.0168,6],[0.00844,14],[0.00422,22],[0.00211,28]],"hemisphere":{"north":0.000965,"south":0.000474},"bulk":{"north":{"trimmed":0.000388,"signed":0.00027},"south":{"trimmed":0.000387,"signed":0.00027}}},
+      "sea mid": {"largest":0.00155,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000363},"hemisphere":{"north":0.000468,"south":0.00047},"bulk":{"north":{"trimmed":0.000459,"signed":0.000316},"south":{"trimmed":0.000461,"signed":0.000316}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00384},"hemisphere":{"north":0.0023,"south":0.0023},"bulk":{"north":{"trimmed":0.0022,"signed":0.0013},"south":{"trimmed":0.0022,"signed":0.0013}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.265,"counts":[[0.132,4],[0.0661,8],[0.033,14],[0.0165,14],[0.00826,14],[0.00413,16],[0.00206,16],[0.00103,16],[0.000516,16],[0.000258,16],[0.000129,16]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.00044,"median":0.000104,"loo":0.617},"south":{"largest":0.000105,"median":0.00000536,"loo":0.513}},"bulk":{"north":{"trimmed":0.00000837,"signed":3.59e-7},"south":{"trimmed":0.00000853,"signed":6.76e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":1.69,"counts":[[0.841,4],[0.42,4],[0.21,4],[0.105,8],[0.0526,16],[0.0263,18],[0.0131,20],[0.00657,20],[0.00328,48],[0.00164,410]],"hemisphere":{"north":0.00338,"south":0.00298},"bulk":{"north":{"trimmed":0.00181,"signed":0.000123},"south":{"trimmed":0.00184,"signed":0.000161}}},
+      "sea mid": {"largest":0.00451,"counts":[[0.00225,4],[0.00112,8],[0.000563,1104]],"hemisphere":{"north":0.000876,"south":0.000883},"bulk":{"north":{"trimmed":0.000835,"signed":0.0000575},"south":{"trimmed":0.000843,"signed":0.0000642}}},
+      "sea high": {"largest":0.000405,"counts":[[0.000202,4],[0.000101,8],[0.0000505,312]],"hemisphere":{"north":0.000069,"south":0.0000686},"bulk":{"north":{"trimmed":0.0000664,"signed":0.00000408},"south":{"trimmed":0.0000665,"signed":0.000004}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.0000406,"counts":[[0.0000202,4],[0.0000101,4],[0.00000506,4],[0.00000253,4],[0.00000126,4],[6.33e-7,6],[3.16e-7,542]],"hemisphere":{"north":2.77e-7,"south":2.94e-7},"bulk":{"north":{"trimmed":2.45e-7,"signed":2.15e-8},"south":{"trimmed":2.43e-7,"signed":1.84e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.0000406,"counts":[[0.0000202,4],[0.0000101,4],[0.00000506,6],[0.00000253,6],[0.00000126,8],[6.33e-7,8],[3.16e-7,546]],"hemisphere":{"north":2.8e-7,"south":3.04e-7},"bulk":{"north":{"trimmed":2.46e-7,"signed":2.16e-8},"south":{"trimmed":2.46e-7,"signed":1.85e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":0.0215,"counts":[[0.0107,4],[0.00535,8],[0.00267,16]],"hemisphere":{"north":0.000178,"south":0.000178},"bulk":{"north":{"trimmed":0.000178,"signed":0.000178},"south":{"trimmed":0.000178,"signed":0.000178}}}
+    }
+  },
+  "bl60 dry {\"surface\":{},\"boundaryLayer\":{},\"deckInversion\":\"subgrid\"}": {
+    "q": {
+      "sea low": {"largest":0.00038,"counts":[[0.000189,4],[0.0000948,4],[0.0000474,6],[0.0000237,8],[0.0000118,8],[0.00000592,8],[0.00000296,10],[0.00000148,12],[7.4e-7,12],[3.7e-7,14],[1.85e-7,22]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":4.3e-8,"median":1.36e-8,"loo":0.506},"south":{"largest":2.17e-7,"median":1.38e-8,"loo":0.665}},"bulk":{"north":{"trimmed":2.81e-8,"signed":4.35e-9},"south":{"trimmed":2.83e-8,"signed":4.35e-9}}},
+      "sea mid": {"largest":6.36e-9,"counts":[[3.17e-9,4]],"hemisphere":{"north":8.39e-10,"south":8.38e-10},"bulk":{"north":{"trimmed":7.51e-10,"signed":1.7e-10},"south":{"trimmed":7.55e-10,"signed":1.7e-10}}},
+      "sea high": {"largest":4.89e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.44e-11},"hemisphere":{"north":1.38e-11,"south":1.37e-11},"bulk":{"north":{"trimmed":1.3e-11,"signed":3.59e-12},"south":{"trimmed":1.31e-11,"signed":3.59e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.66,"counts":[[0.329,4],[0.164,4],[0.0824,4],[0.0412,4],[0.0206,6],[0.0103,10],[0.00515,12],[0.00257,12],[0.00128,12]],"hemisphere":{"north":0.000472,"south":0.000984},"bulk":{"north":{"trimmed":0.000383,"signed":0.00027},"south":{"trimmed":0.000385,"signed":0.00027}}},
+      "sea mid": {"largest":0.00156,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000373},"hemisphere":{"north":0.000475,"south":0.000474},"bulk":{"north":{"trimmed":0.000466,"signed":0.000318},"south":{"trimmed":0.000464,"signed":0.000318}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00367},"hemisphere":{"north":0.00236,"south":0.00237},"bulk":{"north":{"trimmed":0.00226,"signed":0.0012},"south":{"trimmed":0.00227,"signed":0.0012}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.005,"counts":[[0.00249,4],[0.00124,4],[0.000623,4],[0.000311,6],[0.000155,6],[0.0000779,6],[0.0000389,40],[0.0000194,156],[0.00000974,414],[0.00000487,1240]],"hemisphere":{"north":0.0000106,"south":0.0000133},"bulk":{"north":{"trimmed":0.00000652,"signed":2.86e-7},"south":{"trimmed":0.00000674,"signed":5.33e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.000041,"counts":[[0.0000204,4],[0.0000102,4],[0.00000511,4],[0.00000255,4],[0.00000127,4],[6.39e-7,20],[3.19e-7,664]],"hemisphere":{"north":3.17e-7,"south":3.07e-7},"bulk":{"north":{"trimmed":2.67e-7,"signed":1.54e-8},"south":{"trimmed":2.69e-7,"signed":1.96e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.0000495,"counts":[[0.0000247,4],[0.0000123,4],[0.00000618,4],[0.00000309,4],[0.00000154,6],[7.73e-7,66],[3.86e-7,524]],"hemisphere":{"north":3.81e-7,"south":3.63e-7},"bulk":{"north":{"trimmed":3.03e-7,"signed":1.82e-8},"south":{"trimmed":3.18e-7,"signed":2.03e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":1.82,"counts":[[0.905,4],[0.452,4],[0.226,4],[0.113,4],[0.0566,4],[0.0283,4],[0.0141,6],[0.00707,26],[0.00353,236],[0.00176,604]],"hemisphere":{"north":0.0012},"hemisphereDropped":{"south":{"largest":0.00133,"median":0.000306,"loo":0.528}},"bulk":{"north":{"trimmed":0.00072,"signed":0.0000817},"south":{"trimmed":0.000776,"signed":0.000095}}}
+    }
+  },
+  "bl48 moist {\"surface\":{},\"boundaryLayer\":{},\"deckCloud\":\"top\",\"deckInversion\":\"subgrid\"}": {
+    "q": {
+      "sea low": {"largest":0.000585,"counts":[[0.000292,4],[0.000146,6],[0.0000731,6],[0.0000365,6],[0.0000182,6],[0.00000913,8],[0.00000456,12],[0.00000228,14],[0.00000114,14],[5.71e-7,16],[2.85e-7,22]],"hemisphere":{"north":5.06e-7},"hemisphereDropped":{"south":{"largest":2e-7,"median":2.5e-8,"loo":0.56}},"bulk":{"north":{"trimmed":2.26e-8,"signed":4.34e-9},"south":{"trimmed":2.26e-8,"signed":4.34e-9}}},
+      "sea mid": {"largest":5.38e-9,"counts":[[2.68e-9,4]],"hemisphere":{"north":6.96e-10,"south":6.7e-10},"bulk":{"north":{"trimmed":6.2e-10,"signed":1.31e-10},"south":{"trimmed":5.94e-10,"signed":1.31e-10}}},
+      "sea high": {"largest":4.52e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.25e-11},"hemisphere":{"north":1.35e-11,"south":1.35e-11},"bulk":{"north":{"trimmed":1.27e-11,"signed":3.35e-12},"south":{"trimmed":1.28e-11,"signed":3.35e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.3,"counts":[[0.149,4],[0.0749,6],[0.0374,6],[0.0187,8],[0.00936,14],[0.00468,16],[0.00234,16],[0.00117,16]],"hemisphere":{"north":0.000748,"south":0.000567},"bulk":{"north":{"trimmed":0.000385,"signed":0.00027},"south":{"trimmed":0.000384,"signed":0.00027}}},
+      "sea mid": {"largest":0.00155,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000377},"hemisphere":{"north":0.000471,"south":0.000469},"bulk":{"north":{"trimmed":0.000461,"signed":0.000316},"south":{"trimmed":0.00046,"signed":0.000316}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00379},"hemisphere":{"north":0.0023,"south":0.0023},"bulk":{"north":{"trimmed":0.00219,"signed":0.0013},"south":{"trimmed":0.00219,"signed":0.0013}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.797,"counts":[[0.398,4],[0.199,4],[0.0996,6],[0.0498,6],[0.0249,6],[0.0124,6],[0.00622,6],[0.00311,6],[0.00155,6],[0.000778,6],[0.000389,8]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.000394,"median":0.00000398,"loo":0.502},"south":{"largest":0.000316,"median":0.00000388,"loo":0.5}},"bulk":{"north":{"trimmed":0.0000079,"signed":3.37e-7},"south":{"trimmed":0.00000829,"signed":6.86e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":6.14,"counts":[[3.06,4],[1.53,6],[0.767,10],[0.383,12],[0.191,14],[0.0959,14],[0.0479,14],[0.0239,14],[0.0119,14],[0.00599,34],[0.00299,150]],"hemisphere":{"south":0.0101},"hemisphereDropped":{"north":{"largest":0.00453,"median":0.00101,"loo":0.504}},"bulk":{"north":{"trimmed":0.00261,"signed":0.000153},"south":{"trimmed":0.00262,"signed":0.000151}}},
+      "sea mid": {"largest":0.00222,"counts":[[0.0011,4],[0.000553,1140]],"hemisphere":{"north":0.00087,"south":0.000875},"bulk":{"north":{"trimmed":0.000829,"signed":0.0000606},"south":{"trimmed":0.000838,"signed":0.0000584}}},
+      "sea high": {"largest":0.000144,"counts":[[0.0000716,4]],"hemisphere":{"north":0.0000684,"south":0.0000684},"bulk":{"north":{"trimmed":0.0000662,"signed":0.00000364},"south":{"trimmed":0.0000664,"signed":0.00000423}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.000041,"counts":[[0.0000204,4],[0.0000102,4],[0.00000511,4],[0.00000255,4],[0.00000127,4],[6.39e-7,4],[3.19e-7,490]],"hemisphere":{"north":2.74e-7,"south":2.96e-7},"bulk":{"north":{"trimmed":2.43e-7,"signed":1.97e-8},"south":{"trimmed":2.41e-7,"signed":1.73e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.000041,"counts":[[0.0000204,4],[0.0000102,4],[0.00000511,4],[0.00000255,4],[0.00000127,4],[6.39e-7,4],[3.19e-7,490]],"hemisphere":{"north":2.75e-7,"south":2.97e-7},"bulk":{"north":{"trimmed":2.44e-7,"signed":1.97e-8},"south":{"trimmed":2.42e-7,"signed":1.74e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":3.8,"counts":[[1.89,4],[0.949,6],[0.474,6],[0.237,6],[0.118,8],[0.0593,8],[0.0296,8],[0.0148,8],[0.00741,28],[0.0037,188],[0.00185,546]],"hemisphere":{"north":0.00126},"hemisphereDropped":{"south":{"largest":0.00285,"median":0.000351,"loo":0.697}},"bulk":{"north":{"trimmed":0.000705,"signed":0.0000888},"south":{"trimmed":0.000733,"signed":0.000117}}}
+    }
+  },
+  "bl48 moist {\"surface\":{},\"boundaryLayer\":{},\"cloudColumns\":true,\"cloudSpread\":0.75,\"deckResolved\":\"above\"}": {
+    "q": {
+      "sea low": {"largest":0.00101,"counts":[[0.000501,4],[0.00025,6],[0.000125,6],[0.0000626,6],[0.0000313,8],[0.0000156,8],[0.00000783,12],[0.00000391,18],[0.00000195,22],[9.79e-7,26],[4.89e-7,28]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":5.67e-7,"median":1.75e-7,"loo":0.497},"south":{"largest":3.16e-7,"median":1.7e-8,"loo":0.538}},"bulk":{"north":{"trimmed":2.28e-8,"signed":4.33e-9},"south":{"trimmed":2.23e-8,"signed":4.33e-9}}},
+      "sea mid": {"largest":5.39e-9,"counts":[[2.69e-9,4]],"hemisphere":{"north":6.99e-10,"south":6.7e-10},"bulk":{"north":{"trimmed":6.19e-10,"signed":1.31e-10},"south":{"trimmed":5.93e-10,"signed":1.31e-10}}},
+      "sea high": {"largest":4.54e-11,"counts":[],"emptyLadder":{"why":"floor","threshold":2.26e-11},"hemisphere":{"north":1.35e-11,"south":1.36e-11},"bulk":{"north":{"trimmed":1.27e-11,"signed":3.35e-12},"south":{"trimmed":1.28e-11,"signed":3.35e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.497,"counts":[[0.248,4],[0.124,6],[0.062,8],[0.031,8],[0.0155,12],[0.00775,20],[0.00387,24],[0.00193,26]],"hemisphere":{"north":0.000902,"south":0.000873},"bulk":{"north":{"trimmed":0.00038,"signed":0.00027},"south":{"trimmed":0.000381,"signed":0.00027}}},
+      "sea mid": {"largest":0.00155,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000448},"hemisphere":{"north":0.000467,"south":0.00047},"bulk":{"north":{"trimmed":0.000457,"signed":0.000316},"south":{"trimmed":0.00046,"signed":0.000316}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00381},"hemisphere":{"north":0.0023,"south":0.0023},"bulk":{"north":{"trimmed":0.00219,"signed":0.0013},"south":{"trimmed":0.00219,"signed":0.0013}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.226,"counts":[[0.112,8],[0.0564,8],[0.0282,10],[0.0141,10],[0.00705,10],[0.00352,10],[0.00176,16],[0.000882,16],[0.000441,16],[0.00022,16],[0.00011,20]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.000258,"median":0.0000404,"loo":0.509},"south":{"largest":0.0000979,"median":0.0000047,"loo":0.51}},"bulk":{"north":{"trimmed":0.00000704,"signed":3.78e-7},"south":{"trimmed":0.00000725,"signed":6.32e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":4.28,"counts":[[2.13,4],[1.06,4],[0.534,10],[0.267,10],[0.133,10],[0.0668,14],[0.0334,24],[0.0167,24],[0.00835,28],[0.00417,86],[0.00208,262]],"hemisphere":{"north":0.00748,"south":0.00449},"bulk":{"north":{"trimmed":0.00161,"signed":0.000119},"south":{"trimmed":0.00162,"signed":0.0000833}}},
+      "sea mid": {"largest":0.00629,"counts":[[0.00314,4],[0.00157,6],[0.000785,156]],"hemisphere":{"north":0.000874,"south":0.000876},"bulk":{"north":{"trimmed":0.00083,"signed":0.0000587},"south":{"trimmed":0.000838,"signed":0.0000583}}},
+      "sea high": {"largest":0.00181,"counts":[[0.000904,4],[0.000452,4],[0.000226,6],[0.000113,6],[0.0000565,88]],"hemisphere":{"north":0.0000699,"south":0.0000684},"bulk":{"north":{"trimmed":0.0000663,"signed":0.00000461},"south":{"trimmed":0.0000664,"signed":0.00000406}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.000251,"counts":[[0.000125,4],[0.0000626,6],[0.0000313,10],[0.0000156,12],[0.00000782,14],[0.00000391,18],[0.00000195,24],[9.78e-7,182],[4.89e-7,538],[2.44e-7,1268]],"hemisphere":{"north":6.32e-7,"south":7.34e-7},"bulk":{"north":{"trimmed":2.94e-7,"signed":3.03e-8},"south":{"trimmed":3e-7,"signed":2.49e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.00121,"counts":[[0.0006,4],[0.0003,4],[0.00015,8],[0.000075,14],[0.0000375,16],[0.0000187,18],[0.00000937,18],[0.00000468,18],[0.00000234,22],[0.00000117,32],[5.86e-7,80]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":9.64e-7,"median":1.93e-7,"loo":0.545},"south":{"largest":4.77e-7,"median":1.25e-7,"loo":0.532}},"bulk":{"north":{"trimmed":1.13e-7,"signed":1.12e-8},"south":{"trimmed":1.13e-7,"signed":1.22e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":3.22,"counts":[[1.6,4],[0.803,4],[0.401,4],[0.2,8],[0.1,8],[0.0501,10],[0.025,10],[0.0125,20],[0.00627,64],[0.00313,124]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.00174,"median":0.000492,"loo":0.503},"south":{"largest":0.000457,"median":0.000129,"loo":0.878}},"bulk":{"north":{"trimmed":0.000182,"signed":0.000182},"south":{"trimmed":0.000182,"signed":0.000182}}}
+    }
+  },
+  "bl60 moist {\"surface\":{\"virtualDensity\":true},\"boundaryLayer\":{}}": {
+    "q": {
+      "sea low": {"largest":0.00056,"counts":[[0.000279,4],[0.000139,4],[0.0000699,4],[0.0000349,4],[0.0000174,8],[0.00000874,10],[0.00000437,12],[0.00000218,14],[0.00000109,16],[5.46e-7,16],[2.73e-7,18]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":2.63e-7,"median":2.11e-8,"loo":0.501},"south":{"largest":2.31e-7,"median":2.89e-8,"loo":0.547}},"bulk":{"north":{"trimmed":2.5e-8,"signed":4.34e-9},"south":{"trimmed":2.48e-8,"signed":4.34e-9}}},
+      "sea mid": {"largest":8.2e-9,"counts":[[4.09e-9,4]],"hemisphere":{"north":8.42e-10,"south":8.38e-10},"bulk":{"north":{"trimmed":7.53e-10,"signed":1.7e-10},"south":{"trimmed":7.54e-10,"signed":1.7e-10}}},
+      "sea high": {"largest":6.12e-11,"counts":[[3.05e-11,4]],"hemisphere":{"north":1.38e-11,"south":1.37e-11},"bulk":{"north":{"trimmed":1.3e-11,"signed":3.59e-12},"south":{"trimmed":1.31e-11,"signed":3.59e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.216,"counts":[[0.107,4],[0.0538,6],[0.0269,8],[0.0134,12],[0.00673,14],[0.00336,16],[0.00168,16]],"hemisphere":{"north":0.000656,"south":0.000585},"bulk":{"north":{"trimmed":0.000379,"signed":0.00027},"south":{"trimmed":0.000381,"signed":0.00027}}},
+      "sea mid": {"largest":0.00156,"counts":[],"emptyLadder":{"why":"floor","threshold":0.000371},"hemisphere":{"north":0.000474,"south":0.000475},"bulk":{"north":{"trimmed":0.000465,"signed":0.000318},"south":{"trimmed":0.000466,"signed":0.000318}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00364},"hemisphere":{"north":0.00236,"south":0.00237},"bulk":{"north":{"trimmed":0.00226,"signed":0.0012},"south":{"trimmed":0.00227,"signed":0.0012}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.274,"counts":[[0.136,4],[0.0684,4],[0.0342,8],[0.0171,8],[0.00855,8],[0.00427,8],[0.00213,8],[0.00106,8],[0.000534,14],[0.000267,14],[0.000133,14]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.000148,"median":0.00000369,"loo":0.504},"south":{"largest":0.000113,"median":0.00000568,"loo":0.5}},"bulk":{"north":{"trimmed":0.00000727,"signed":5.34e-7},"south":{"trimmed":0.00000761,"signed":5.89e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":5.15,"counts":[[2.57,4],[1.28,10],[0.642,14],[0.321,14],[0.16,16],[0.0803,18],[0.0401,18],[0.02,18],[0.01,80],[0.00502,242],[0.00251,1060]],"hemisphere":{"north":0.0131,"south":0.0101},"bulk":{"north":{"trimmed":0.00316,"signed":0.000161},"south":{"trimmed":0.00319,"signed":0.000229}}},
+      "sea mid": {"largest":0.00531,"counts":[[0.00265,4],[0.00132,8],[0.000662,568]],"hemisphere":{"north":0.000917,"south":0.000907},"bulk":{"north":{"trimmed":0.000879,"signed":0.0000666},"south":{"trimmed":0.000869,"signed":0.0000557}}},
+      "sea high": {"largest":0.000358,"counts":[[0.000178,4],[0.0000894,8],[0.0000447,322]],"hemisphere":{"north":0.00006,"south":0.0000604},"bulk":{"north":{"trimmed":0.0000576,"signed":0.00000364},"south":{"trimmed":0.0000582,"signed":0.00000338}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.000231,"counts":[[0.000115,4],[0.0000576,4],[0.0000288,4],[0.0000144,6],[0.0000072,6],[0.0000036,6],[0.0000018,26],[9e-7,228],[4.5e-7,598]],"hemisphere":{"north":4.5e-7,"south":5.51e-7},"bulk":{"north":{"trimmed":2.97e-7,"signed":3.04e-8},"south":{"trimmed":2.98e-7,"signed":1.78e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.00272,"counts":[[0.00135,4],[0.000678,4],[0.000339,6],[0.000169,6],[0.0000847,6],[0.0000423,6],[0.0000211,8],[0.0000105,10],[0.00000529,16],[0.00000264,18],[0.00000132,30]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":8.13e-7,"median":7.95e-8,"loo":1.11},"south":{"largest":0.0000016,"median":9.55e-8,"loo":0.69}},"bulk":{"north":{"trimmed":1.15e-7,"signed":8.69e-9},"south":{"trimmed":1.16e-7,"signed":1.12e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":10.5,"counts":[[5.23,4],[2.61,4],[1.3,6],[0.654,6],[0.327,6],[0.163,6],[0.0817,6],[0.0408,6],[0.0204,10],[0.0102,38],[0.0051,134]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.00584,"median":0.000521,"loo":0.504},"south":{"largest":0.0012,"median":0.00039,"loo":0.521}},"bulk":{"north":{"trimmed":0.000819,"signed":0.000102},"south":{"trimmed":0.00084,"signed":0.000102}}}
+    }
+  },
+  "bl60 moist {\"surface\":{},\"boundaryLayer\":{}}": {
+    "q": {
+      "sea low": {"largest":0.000786,"counts":[[0.000392,4],[0.000196,4],[0.0000981,6],[0.000049,6],[0.0000245,6],[0.0000122,8],[0.00000613,8],[0.00000306,10],[0.00000153,14],[7.66e-7,14],[3.83e-7,16]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":3.38e-7,"median":1.25e-8,"loo":0.502},"south":{"largest":1.4e-7,"median":2.3e-8,"loo":0.522}},"bulk":{"north":{"trimmed":2.47e-8,"signed":4.34e-9},"south":{"trimmed":2.49e-8,"signed":4.34e-9}}},
+      "sea mid": {"largest":5.61e-9,"counts":[[2.8e-9,4]],"hemisphere":{"north":8.4e-10,"south":8.43e-10},"bulk":{"north":{"trimmed":7.52e-10,"signed":1.7e-10},"south":{"trimmed":7.57e-10,"signed":1.7e-10}}},
+      "sea high": {"largest":9.38e-11,"counts":[[4.68e-11,4]],"hemisphere":{"north":1.37e-11,"south":1.39e-11},"bulk":{"north":{"trimmed":1.3e-11,"signed":3.59e-12},"south":{"trimmed":1.31e-11,"signed":3.59e-12}}}
+    },
+    "theta": {
+      "sea low": {"largest":0.341,"counts":[[0.17,4],[0.0852,6],[0.0426,10],[0.0213,10],[0.0106,12],[0.00532,14],[0.00266,14],[0.00133,14]],"hemisphere":{"north":0.000741,"south":0.000806},"bulk":{"north":{"trimmed":0.000379,"signed":0.00027},"south":{"trimmed":0.000382,"signed":0.00027}}},
+      "sea mid": {"largest":0.00156,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00052},"hemisphere":{"north":0.000475,"south":0.000477},"bulk":{"north":{"trimmed":0.000465,"signed":0.000318},"south":{"trimmed":0.000468,"signed":0.000318}}},
+      "sea high": {"largest":0.0114,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00408},"hemisphere":{"north":0.00237,"south":0.00238},"bulk":{"north":{"trimmed":0.00226,"signed":0.0012},"south":{"trimmed":0.00227,"signed":0.0012}}}
+    },
+    "mixing": {
+      "sea low": {"largest":0.274,"counts":[[0.136,4],[0.0684,6],[0.0342,8],[0.0171,8],[0.00855,10],[0.00427,10],[0.00213,10],[0.00106,10],[0.000534,14],[0.000267,14],[0.000133,18]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":0.00011,"median":0.00000308,"loo":0.535},"south":{"largest":0.000182,"median":0.0000129,"loo":0.768}},"bulk":{"north":{"trimmed":0.00000724,"signed":5.48e-7},"south":{"trimmed":0.00000781,"signed":4.75e-7}}},
+      "sea mid": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}},
+      "sea high": {"largest":0,"counts":[],"emptyLadder":{"why":"floor","threshold":0},"hemisphere":{"north":0,"south":0},"bulk":{"north":{"trimmed":0,"signed":0},"south":{"trimmed":0,"signed":0}}}
+    },
+    "longwave": {
+      "sea low": {"largest":14.6,"counts":[[7.28,4],[3.64,4],[1.82,6],[0.91,10],[0.455,12],[0.227,12],[0.113,14],[0.0568,16],[0.0284,22],[0.0142,40],[0.00711,144]],"hemisphere":{"north":0.00834},"hemisphereDropped":{"south":{"largest":0.00992,"median":0.003,"loo":0.522}},"bulk":{"north":{"trimmed":0.00315,"signed":0.000167},"south":{"trimmed":0.0032,"signed":0.000232}}},
+      "sea mid": {"largest":0.0101,"counts":[[0.005,4],[0.0025,4],[0.00125,6],[0.000625,756]],"hemisphere":{"north":0.000914,"south":0.000908},"bulk":{"north":{"trimmed":0.000878,"signed":0.0000676},"south":{"trimmed":0.000868,"signed":0.0000532}}},
+      "sea high": {"largest":0.000677,"counts":[[0.000338,4],[0.000169,4],[0.0000845,6],[0.0000422,480]],"hemisphere":{"north":0.0000599,"south":0.0000604},"bulk":{"north":{"trimmed":0.0000576,"signed":0.00000378},"south":{"trimmed":0.0000582,"signed":0.00000325}}}
+    },
+    "entrainment": {
+      "sea": {"largest":0.000232,"counts":[[0.000115,4],[0.0000577,4],[0.0000288,4],[0.0000144,6],[0.00000721,6],[0.0000036,6],[0.0000018,24],[9.02e-7,224],[4.51e-7,602]],"hemisphere":{"north":3.99e-7,"south":5.97e-7},"bulk":{"north":{"trimmed":2.97e-7,"signed":2.98e-8},"south":{"trimmed":2.97e-7,"signed":2.01e-8}}}
+    },
+    "blEntrainment": {
+      "sea": {"largest":0.0019,"counts":[[0.000948,4],[0.000474,6],[0.000237,6],[0.000118,6],[0.0000592,6],[0.0000296,6],[0.0000148,10],[0.0000074,12],[0.0000037,18],[0.00000185,24],[9.25e-7,42]],"hemisphere":{},"hemisphereDropped":{"north":{"largest":3.86e-7,"median":7.56e-8,"loo":0.522},"south":{"largest":0.00000156,"median":1.02e-7,"loo":0.616}},"bulk":{"north":{"trimmed":1.16e-7,"signed":9.49e-9},"south":{"trimmed":1.19e-7,"signed":1.08e-8}}}
+    },
+    "sw": {
+      "sea": {"largest":28.5,"counts":[[14.2,4],[7.11,4],[3.55,4],[1.77,4],[0.888,4],[0.444,6],[0.222,6],[0.111,6],[0.0555,6],[0.0277,10],[0.0138,18]],"hemisphere":{"north":0.00206},"hemisphereDropped":{"south":{"largest":0.0122,"median":0.000859,"loo":0.5}},"bulk":{"north":{"trimmed":0.000808,"signed":0.000102},"south":{"trimmed":0.000842,"signed":0.000102}}}
+    }
+  }
+}
