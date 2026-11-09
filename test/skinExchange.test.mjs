@@ -37,7 +37,7 @@ import { skinRecords, SEEN, STEP } from './helpers/skinProbe.mjs';
  */
 const N = 16, DT = 1350, DAYS = Number(process.env.SKIN_EXCHANGE_DAYS ?? 12), NEUTRAL = 0.01, PER_DAY = 86400 / DT;
 
-test(`over ${DAYS} days at N = 16 every cell-step the skin turns unstable is open, sunlit water below the cap, on the warm-layer equation, without a limit cycle`, async (t) => {
+test(`over ${DAYS} days at N = 16 every cell-step the skin turns unstable is open water below the cap, on the warm-layer equation, without a limit cycle`, async (t) => {
   const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
   const grid = new Grid(N), records = skinRecords(grid.size);
   const model = await createParallelModel(grid, { topography, levels: sigmaInterfaces('bl36'), ...withCadence({ ocean: { ...PREVIOUS_OCEAN, penetration: 'IB' } }, DT, N), radiation: PREVIOUS_RADIATION, moist: PREVIOUS_MOIST, surface: { warmLayer: true, coolSkin: true } }, Math.min(8, availableParallelism()), { module: new URL('./helpers/skinProbe.mjs', import.meta.url).href, data: records.data });
