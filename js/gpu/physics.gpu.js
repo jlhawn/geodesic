@@ -2742,11 +2742,11 @@ const PBL_FIRST = `
   let i = i32(id.x); if (i >= C) { return; }
   let base = (K - 1) * C + i; let pi = IN[S_PI + i]; let dt = P[0];
   let theta = IN[S_TH + base]; let water = IN[S_Q + base];
-  IN[S_TH + base] = theta - dt * PH[PH_SH + i] / (CP * (pi * LV[L_DS + K - 1] / GRAV)) / (pow(pi / P0, KAPPA) * LV[L_CM + K - 1]);
+  IN[S_TH + base] = theta - dt * PH[PH_SH + i] / (CP * (pi * LV[L_DS + K - 1] / GRAV)) / D[D_EXM + base];
   IN[S_Q + base] = water - dt * PH[PH_EVAP + i] * GRAV / (pi * LV[L_DS + K - 1]);
   blColumn(i);
   IN[S_TH + base] = theta; IN[S_Q + base] = water;
-  diagnoseColumnMid(i);
+  diagnoseColumn(i);
 }`;
 const seaFlowAt = (name) => `var ${name} = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {

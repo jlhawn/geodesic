@@ -306,6 +306,7 @@ async function moistEngines(options = {}, moist = {}) {
   gpu.upload(state);
   device.queue.writeBuffer(buffers.D, 4 * layout.D.PSD, Float32Array.from(piSigmaDot));
   device.queue.writeBuffer(buffers.D, 4 * layout.D.EXL, Float32Array.from(exnerLower));
+  device.queue.writeBuffer(buffers.D, 4 * layout.D.EXM, Float32Array.from(ex));
   gpu.uploadPhysics({ mlmGate: r.mlmGate });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(r.stratiform));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LWH, Float32Array.from(longwave));
