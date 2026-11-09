@@ -22,7 +22,7 @@ import { JERLOV } from '../ocean/layered.module.js';
 import { createLake, lakeWater, lakeModelOf } from '../physics/lake.module.js';
 import { lakeUpload, lakeDownload, LAKE_SLOTS } from './lake.gpu.js';
 import { COUPLED_ICE_DRIFT, iceDriftMoves } from '../ocean/iceDrift.module.js';
-import { refuseBorrowedOptions } from '../physics/boundaryLayer.module.js';
+import { refuseBorrowedOptions, DIAGNOSE_FIRST } from '../physics/boundaryLayer.module.js';
 
 export const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'soilDarkening', 'wetSoilAlbedo', 'darkeningWetness', 'rootZoneCapacity', 'dryWetness', 'wetWetness', 'growthTime', 'declineTime', 'snowDeclineTime', 'snowHold', 'oldSnowAlbedo', 'snowMasking', 'forestSnowAlbedo', 'closedCanopy', 'canopyMemory', 'treeline', 'seasonThreshold', 'minimumSeason', 'treelineWarmth', 'seasonMemory', 'treeGrowthTime', 'treeDeclineTime', 'surfaceCapacity', 'percolationTime', 'stomatalResistance', 'growthColdest', 'growthWarmest', 'iceSheetAlbedo', 'iceSheetBalance', 'snowCap', 'bareIceAlbedo', 'treeMoisture', 'moistureMemory', 'forestAridity', 'grassland', 'forestAlbedo', 'grassAlbedo', 'grassSnowDarkening', 'coverGoal', 'deepCapacity', ...Object.keys(SOIL_CARBON)];
 const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
@@ -68,6 +68,7 @@ export async function createGpuModel(gridOrMesh, {
   topography = null, geography: geographyOptions = {}, land: landOptions = {}, lake: lakeOptions = {}, terrain = true, orography: orographyOptions = {}, subgrid: givenSubgrid = undefined, levels = sigmaInterfaces(), gravityWaves = {}, dragEvery = 1,
 } = {}) {
   if (oceanOptions !== false && oceanOptions.gustiness !== undefined) throw new Error('ocean.gustiness is not an option: the ocean and the ice drift take surface.gustiness');
+  if (boundaryLayer === false) throw new Error('createGpuModel runs no model without the boundary layer: boundaryLayer is false');
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;
@@ -137,7 +138,7 @@ export async function createGpuModel(gridOrMesh, {
   const model = { skin, mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, geographyRecord: geographyRecordOf(topography, geographyOptions), subgridOrography: subgrid, exchange, surfaceGeopotential: phis, seaFlow, state, time: 0, energyRecord: createEnergyRecord(), physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
   const cumulusLength = gpu.layout.PH.CUWATER - gpu.layout.PH.CUCOVER;
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain, fogRain: moistCpu.fogRain, cumulusK0: K - cumulusLength / C, cumulusCover: new Float64Array(cumulusLength), cumulusWater: new Float64Array(cumulusLength), subcloudVirtual: new Float64Array(gpu.physics.subcloudLayers * C) };
-  model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
+  model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C), diagnoseFirst: physics.diagnoseFirst ?? DIAGNOSE_FIRST };
   model.oceanEngine = gpuOcean;
   model.cadence = { radiationEvery: gpu.physics.radiationEvery, dragEvery: gpu.physics.dragEvery, oceanEvery: gpuOcean ? gpuOcean.everySteps : 1 };
   const freshwater = [['rain', 'RAIN', 'RAINSEEN'], ['runoff', 'RUNOFF', 'RUNOFFSEEN'], ['discharge', 'DISCHARGE', 'DISCHARGESEEN']];

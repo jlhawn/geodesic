@@ -530,7 +530,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
       for (let k = kTop; k < K - 1; k++) { largest = Math.max(largest, Math.abs(a[k * C + i]), Math.abs(b[k * C + i])); gap = Math.max(gap, Math.abs(b[k * C + i] - a[k * C + i])); }
       return largest > 0 ? gap / largest : 0;
     };
-    const clearance = (run, i) => Math.abs(run.depth[i] - (run.geopotential[(K - 2) * C + i] + run.geopotential[(K - 1) * C + i]) / (2 * g));
+    const clearance = (run, i) => Math.abs(run.depth[i] - (run.laid[(K - 2) * C + i] + run.laid[(K - 1) * C + i]) / (2 * g));
     const topsApart = (run, i) => Math.abs(run.depth[i] - run.gpuDepth[i] - ground[i]);
     const flipped = (run, i) => topsApart(run, i) > Math.max(2.5e-3 * (run.depth[i] - run.geopotential[(K - 1) * C + i] / g), 1e-2);
     const twins = {};

@@ -679,7 +679,7 @@ async function restore(snapshot) {
   currentSoilSeed = saved.soilSeed ?? null;
   restartRain();
   serving = true;
-  self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
+  self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, options: currentOptions, diagnoseFirst: model.boundaryLayer ? model.boundaryLayer.diagnoseFirst : null, ...oceanMessage(model), ...geographyMessage(model) });
   await sendFrame();
   sourceModel = sourceGround = null;
 }
@@ -758,7 +758,7 @@ async function start(message) {
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
   serving = true;
-  self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
+  self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, options: currentOptions, diagnoseFirst: model.boundaryLayer ? model.boundaryLayer.diagnoseFirst : null, ...oceanMessage(model), ...geographyMessage(model) });
   refresh();
   sourceModel = sourceGround = null;
 }

@@ -14,6 +14,7 @@ import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { createModel } from '../js/model.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
+import { headerOptions } from '../scripts/stateOptions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -129,13 +130,14 @@ test('a recorded day\'s rain is the day\'s convective plus large-scale rain, cel
   model.destroy();
 });
 
-test('two recorded days replayed over the ocean alone, the ice drifting under the recorded air stress, keep its SST with the coupled run but for at most ten ice-edge cells whose ice came and went within the day, keep its ice concentration with it, and load back into the coupled model, and version-1 days without the air stress replay with the drift off', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+test('two recorded days replayed over the ocean alone, the ice drifting under the recorded air stress, keep its SST with the coupled run but for at most ten ice-edge cells whose ice came and went within the day, keep its ice concentration with it, and load back into the coupled model, and version-1 days without the air stress replay with the drift off, the year state carrying the loaded state\'s options and given with the ocean options it ran', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'oceanSpinup-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const fresh = await freshModel();
   const ocean = await fresh.ocean.serialize(), land = await fresh.land.serialize();
   const [pi, theta, u, surfaceT, q, qc, ice] = fresh.state;
-  writeFileSync(join(dir, 'rec_day0000.bin'), encodeState({ N, K: fresh.core.K, levels: fresh.core.levels, day: 0, time: 0, terrain: !!fresh.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: fresh.seaIce.concentration, mlmSubsidence: fresh.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
+  const records = headerOptions({ moist: { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 } });
+  writeFileSync(join(dir, 'rec_day0000.bin'), encodeState({ N, K: fresh.core.K, ...records, levels: fresh.core.levels, day: 0, time: 0, terrain: !!fresh.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: fresh.seaIce.concentration, mlmSubsidence: fresh.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
   fresh.destroy();
   const forcing = join(dir, 'forcing');
   const run = (script, env) => execFileSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), OUT: dir, ...env }, encoding: 'utf8' });
@@ -144,6 +146,7 @@ test('two recorded days replayed over the ocean alone, the ice drifting under th
   run('oceanSpinup.mjs', { TAG: 'alone', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
 
   const [alone, coupled] = await Promise.all(['alone_year0001.bin', 'rec_day0002.bin'].map(async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))))));
+  assert.deepEqual([alone.options, alone.given], [records.options, { ...records.given, ocean: {} }], 'the year state carries the loaded state\'s records, with the ocean options it ran in given');
   const recorded = await decodeForcing(new Uint8Array(readFileSync(join(forcing, forcingName(2)))));
   assert.ok(recorded.fields.airStress && recorded.fields.airStress.some((x) => x !== 0), 'the drifting run records the air stress');
   const model = await createGpuModel(new Grid(N), { topography });

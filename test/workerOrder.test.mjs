@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { encodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
 import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 
-test('the page worker starts a state whose options record diagnoseFirst false in that order and its snapshot records it, restores the unchanged run in place, rebuilds for a snapshot in the other order, restores an old stored snapshot without a boundaryLayer group in place on a default run, and takes a start message\'s boundaryLayer over the record', async () => {
+test('the page worker starts a state whose options record diagnoseFirst false in that order and its snapshot records it, restores the unchanged run in place, rebuilds for a snapshot in the other order, restores an old stored snapshot without a boundaryLayer group in place on a default run, and takes a start message\'s boundaryLayer over the record, each ready message carrying the order the model it built runs', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'worker-order-'));
   const messages = [], fetched = globalThis.fetch;
   globalThis.self = { postMessage: (message) => messages.push(message) };
@@ -31,7 +31,8 @@ test('the page worker starts a state whose options record diagnoseFirst false in
   const snapshot = () => send({ type: 'snapshot' }, 'snapshotData');
   const restore = ({ type, ...taken }) => send({ type: 'restore', snapshot: taken }, 'ready');
 
-  assert.deepEqual((await start()).options.boundaryLayer, { diagnoseFirst: DIAGNOSE_FIRST });
+  const first = await start();
+  assert.deepEqual([first.options.boundaryLayer, first.diagnoseFirst], [{ diagnoseFirst: DIAGNOSE_FIRST }, DIAGNOSE_FIRST]);
   const fresh = await snapshot();
   const saved = { N: fresh.N, K: fresh.K, day: fresh.day, time: fresh.time, terrain: fresh.terrain, ...(fresh.grid ? { grid: fresh.grid } : {}), options: { boundaryLayer: { diagnoseFirst: false } } };
   for (const [key, buffer] of Object.entries(fresh.arrays)) saved[key] = new Float64Array(buffer.slice(0));
@@ -40,15 +41,16 @@ test('the page worker starts a state whose options record diagnoseFirst false in
   const file = join(dir, 'plain_day0000.bin');
   writeFileSync(file, encodeState(saved, { f64: f64Names(saved) }));
 
-  assert.deepEqual((await start(file)).options.boundaryLayer, { diagnoseFirst: false });
+  const plain = await start(file);
+  assert.deepEqual([plain.options.boundaryLayer, plain.diagnoseFirst], [{ diagnoseFirst: false }, false]);
   const taken = await snapshot();
   assert.deepEqual(taken.options.boundaryLayer, { diagnoseFirst: false });
-  await restore(taken);
-  assert.ok(inPlace(), 'the unchanged run restores in place');
+  const again = await restore(taken);
+  assert.deepEqual([inPlace(), again.diagnoseFirst], [true, false], 'the unchanged run restores in place');
   const back = await restore(fresh);
-  assert.deepEqual([inPlace(), back.options.boundaryLayer], [false, { diagnoseFirst: DIAGNOSE_FIRST }]);
-  await restore({ ...fresh, options: {} });
-  assert.ok(inPlace(), 'an old stored snapshot whose options hold no boundaryLayer group restores in place on a run at the default');
-  assert.equal((await start(file, { boundaryLayer: false })).options.boundaryLayer, false);
-  assert.deepEqual((await start(file, { boundaryLayer: { diagnoseFirst: true } })).options.boundaryLayer, { diagnoseFirst: true });
+  assert.deepEqual([inPlace(), back.options.boundaryLayer, back.diagnoseFirst], [false, { diagnoseFirst: DIAGNOSE_FIRST }, DIAGNOSE_FIRST]);
+  const old = await restore({ ...fresh, options: {} });
+  assert.deepEqual([inPlace(), old.diagnoseFirst], [true, DIAGNOSE_FIRST], 'an old stored snapshot whose options hold no boundaryLayer group restores in place on a run at the default');
+  const off = await start(file, { boundaryLayer: false }), on = await start(file, { boundaryLayer: { diagnoseFirst: true } });
+  assert.deepEqual([off.options.boundaryLayer, off.diagnoseFirst, on.options.boundaryLayer, on.diagnoseFirst], [false, null, { diagnoseFirst: true }, true]);
 });

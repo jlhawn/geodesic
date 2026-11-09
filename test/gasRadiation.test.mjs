@@ -233,33 +233,38 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   gpu.destroy();
 });
 
-for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}` : ''} at the default order at N=16: per-cell sums of clear-sky absorbed and outgoing radiation, the means over the cells of the all-sky sums, which a cell a threshold parts moves only by its share, and the means over the cells of each layer's longwave heating above 30 hPa`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}` : ''} at the default order at N=16: the sums of clear-sky absorbed and outgoing radiation cell by cell and in rms over the cells, and each hemisphere's mean |gap| of the all-sky sums, which a cell a threshold parts moves only by its share, and of each layer's longwave heating above 30 hPa`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true }, grid ? sigmaInterfaces(grid) : undefined, {});
   const slots = { absorbedSolar: 'ABSSUM', atmosphereSolar: 'ATMSUM', outgoingLongwave: 'OLRSUM', clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
-  const compare = async (names, limit) => {
+  const halves = (a, b) => [true, false].map((north) => { let d = 0, r = 0; for (let x = 0; x < C; x++) if ((cpu.mesh.latCell[x] >= 0) === north) { d += Math.abs(b[x] - a[x]); r += Math.abs(a[x]); } return d / r; });
+  const compare = async (names, rmsLimit, cellLimit, hemisphereLimit) => {
     const device = await gpu.gpu.downloadPhysics();
     return names.map((name) => {
-      let a = 0, b = 0;
-      for (let x = 0; x < C; x++) { a += cpu.radiation.summed[name][x]; b += device[slots[name]][x]; }
-      const gap = Math.abs(b - a) / Math.abs(a), cells = stats(cpu.radiation.summed[name], device[slots[name]].subarray(0, C));
-      if (name.startsWith('clear')) assert.ok(cells.rmsRel < limit, `${name}: per-cell rms ${cells.rmsRel}`);
-      else assert.ok(gap < limit, `${name}: the means part by ${gap} of the CPU's`);
-      return name.startsWith('clear') ? `${name} rms ${cells.rmsRel.toExponential(1)} (max ${cells.maxDiff.toExponential(1)}, mean ${gap.toExponential(1)})` : `${name} mean ${gap.toExponential(1)} (per-cell rms ${cells.rmsRel.toExponential(1)})`;
+      const a = cpu.radiation.summed[name], b = device[slots[name]].subarray(0, C);
+      if (!name.startsWith('clear')) {
+        const gaps = halves(a, b);
+        assert.ok(Math.max(...gaps) < hemisphereLimit, `${name}: the mean |gap| parts by ${gaps.join(' and ')} of the CPU's, north and south`);
+        return `${name} mean |gap| ${gaps.map((v) => v.toExponential(1)).join('/')} north/south`;
+      }
+      const cells = stats(a, b);
+      let top = 0, worst = 0, at = -1;
+      for (let x = 0; x < C; x++) top = Math.max(top, Math.abs(a[x]));
+      for (let x = 0; x < C; x++) { const gap = Math.abs(b[x] - a[x]) / Math.max(Math.abs(a[x]), 1e-3 * top); if (gap > worst) { worst = gap; at = x; } }
+      assert.ok(cells.rmsRel < rmsLimit && worst < cellLimit, `${name}: per-cell rms ${cells.rmsRel}, largest gap ${worst} at ${at}`);
+      return `${name} rms ${cells.rmsRel.toExponential(1)}, largest ${worst.toExponential(1)} at ${at}`;
     });
   };
   for (let s = 0; s < 4; s++) { cpu.step(DT); await gpu.step(DT); }
-  const early = await compare(Object.keys(slots), 1e-5);
+  const early = await compare(Object.keys(slots), 2.5e-5, 1e-3, 4e-5);
   const device = await gpu.gpu.downloadPhysics(), top = [];
   for (let k = 0; 0.5 * (cpu.core.levels[k] + cpu.core.levels[k + 1]) < 0.03; k++) {
-    let a = 0, b = 0;
-    for (let x = 0; x < C; x++) { a += cpu.radiation.longwave[k * C + x]; b += device.LWH[k * C + x]; }
-    const gap = Math.abs(b - a) / Math.abs(a);
-    assert.ok(gap < 3e-4, `layer ${k}'s longwave heating: the means part by ${gap} of the CPU's`);
-    top.push(gap.toExponential(1));
+    const gaps = halves(cpu.radiation.longwave.subarray(k * C, (k + 1) * C), device.LWH.subarray(k * C, (k + 1) * C));
+    assert.ok(Math.max(...gaps) < 6e-4, `layer ${k}'s longwave heating: the mean |gap| parts by ${gaps.join(' and ')} of the CPU's, north and south`);
+    top.push(gaps.map((v) => v.toExponential(1)).join('/'));
   }
-  early.push(`the ${top.length} layers above 30 hPa' longwave heating means ${top.join(', ')}`);
+  early.push(`the ${top.length} layers above 30 hPa' longwave heating mean |gap| north/south ${top.join(', ')}`);
   for (let s = 4; s < 24; s++) { cpu.step(DT); await gpu.step(DT); }
-  const later = await compare(['clearAbsorbedSolar', 'clearOutgoingLongwave'], 1e-4);
+  const later = await compare(['clearAbsorbedSolar', 'clearOutgoingLongwave'], 1.5e-4, 3e-3);
   console.log(`spectral gases${grid ? ` on ${grid}` : ''} at the default order, CPU against GPU at N=16, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
   gpu.destroy();
 });

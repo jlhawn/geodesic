@@ -149,8 +149,7 @@ test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a 
   assert.deepEqual(resumeNotes(plainGiven, control, 'ctl'), []);
   assert.deepEqual(resumeNotes(fresh.given, await save(fresh), 'c'), []);
   const early = await save({ options: strip(fresh.options) });
-  assert.deepEqual(resumeNotes(fresh.given, early, 'seventeen64'), ['seventeen64 records no boundary-layer order (a spin-up save from before Nov 7): the boundary layer now runs diagnoseFirst over a state made in the plain order']);
-  assert.deepEqual(resumeNotes(plainGiven, early, 'seventeen64'), []);
+  assert.deepEqual([resumeNotes(fresh.given, early, 'seventeen64'), resumeNotes(plainGiven, early, 'seventeen64'), resumeNotes({ ...fresh.given, boundaryLayer: false }, early, 'seventeen64')], [["seventeen64 records no boundary-layer order, so the order it was made in cannot be told: this run's boundary layer runs diagnoseFirst"], ["seventeen64 records no boundary-layer order, so the order it was made in cannot be told: this run's boundary layer runs in the plain order"], []]);
   const exported = await save({ options: fresh.options }), exportedPlain = await save({ options: headerOptions({ boundaryLayer: { diagnoseFirst: false } }).options });
   assert.deepEqual([resumeNotes(fresh.given, exported, 'page'), resumeNotes(plainGiven, exported, 'page')], [[], ["options other than page's header records in its options: boundaryLayer"]]);
   assert.deepEqual([resumeNotes(fresh.given, exportedPlain, 'page'), resumeNotes(plainGiven, exportedPlain, 'page')], [["options other than page's header records in its options: boundaryLayer"], []]);

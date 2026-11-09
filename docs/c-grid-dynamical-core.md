@@ -12456,12 +12456,16 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
   (`scripts/stateOptions.mjs`). The page starts a state whose options
   record a boundaryLayer group as it was made, and runs today's default on
   a state whose options record none, as on the page's default states. A
-  `given` without diagnoseFirst predates the default and reads as false.
+  `given` without diagnoseFirst reads as false, the plain order: every run
+  before 27faa11 made diagnoseFirst the default ran in it, and from 9394aa2
+  a `given` records the order. A spin-up at the defaults between the two
+  would read wrongly; none is known.
   A resume of a state that records no `given` compares the boundary
   layer with the group its `options` record, as a page export's do, and
-  where neither records one, as on a spin-up save from before Nov 7,
-  2026, logs that the boundary layer now runs diagnoseFirst over a state
-  made in the plain order. splitState records the group only where the
+  where neither records one logs that the state's order cannot be told,
+  with the order the run's boundary layer runs. Spin-up saves from before
+  Nov 7, 2026 record neither, and so do the pairs' diagnoseFirst arm's
+  year-1 saves (code-c at 6db21d9, before `given` at 535894ef). splitState records the group only where the
   header's `given` or `options` holds it, and oceanSpinup's states carry
   the loaded state's `options` and `given`.
 - The default rests on N=64 coupled pairs from two starts. Each save's

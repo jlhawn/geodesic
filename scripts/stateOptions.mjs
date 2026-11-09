@@ -72,15 +72,15 @@ export function asMade(given) {
  * groups whose options differ from those base's `given` records as made;
  * for a base without `given`, the boundary layer against the group its
  * `options` record, as a page export's do, or, where neither records it,
- * as on a spin-up save from before Nov 7, 2026, that the boundary layer
- * runs diagnoseFirst over a state made in the plain order.
+ * that the state's order cannot be told, with the order this run's
+ * boundary layer runs.
  */
 export function resumeNotes(given, base, name) {
   if (!base) return [];
   if (base.given === undefined) {
     const recorded = base.options?.boundaryLayer;
     if (recorded !== undefined) return differingGroups({ boundaryLayer: given.boundaryLayer }, { boundaryLayer: recorded }).length ? [`options other than ${name}'s header records in its options: boundaryLayer`] : [];
-    return given.boundaryLayer?.diagnoseFirst === true ? [`${name} records no boundary-layer order (a spin-up save from before Nov 7): the boundary layer now runs diagnoseFirst over a state made in the plain order`] : [];
+    return isGroup(given.boundaryLayer) ? [`${name} records no boundary-layer order, so the order it was made in cannot be told: this run's boundary layer runs ${(given.boundaryLayer.diagnoseFirst ?? DIAGNOSE_FIRST) ? 'diagnoseFirst' : 'in the plain order'}`] : [];
   }
   const other = differingGroups(given, asMade(base.given));
   return other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : [];

@@ -86,3 +86,21 @@ test('fixedSst.mjs refuses a state whose header records no given options, and an
   assert.match(differing.stderr, /this header records them, and GIVEN differs from them in radiation, moist, land, boundaryLayer: unset GIVEN/);
   assert.doesNotMatch(differing.stdout, /options:/);
 });
+
+test('spinup.mjs and fixedSst.mjs refuse BOUNDARY_LAYER false before they build anything, and createGpuModel, which runs no model without the boundary layer, refuses a boundaryLayer false that reaches it from fixedSst\'s GIVEN before it opens the GPU', () => {
+  const mesh = new Grid(16), file = join(dir, 'unlayered_day0000.bin');
+  writeFileSync(file, encodeState({ N: 16, ...gridHeader(mesh), ...FRESH_GEOGRAPHY, terrain: true, K: 48, day: 0, time: 0, options: { radiation: {}, moist: {}, land: {} } }));
+  const environment = (groups) => { const env = { ...withoutOptionGroups(), ...groups }; delete env.GPU_QUEUE_HELD; return env; };
+  const fixed = (groups) => spawnSync(process.execPath, [join(scripts, 'fixedSst.mjs'), file, dir, 'arm'], { env: environment(groups), encoding: 'utf8' });
+  const spinup = spawnSync(process.execPath, [join(scripts, 'spinup.mjs'), '/nonexistent/state.bin'], { env: environment({ BOUNDARY_LAYER: 'false' }), encoding: 'utf8' });
+  const [named, given, control] = [fixed({ GIVEN: '{}', BOUNDARY_LAYER: 'false' }), fixed({ GIVEN: '{"boundaryLayer":false}' }), fixed({ GIVEN: '{}' })];
+  for (const result of [spinup, named]) {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /BOUNDARY_LAYER is false, and createGpuModel runs no model without the boundary layer/);
+  }
+  assert.notEqual(given.status, 0);
+  assert.match(given.stdout, /^options: GIVEN, the header recording none: \{"boundaryLayer":false\}$/m);
+  assert.match(given.stderr, /createGpuModel runs no model without the boundary layer: boundaryLayer is false/);
+  assert.notEqual(control.status, 0);
+  assert.doesNotMatch(control.stderr, /without the boundary layer/);
+});
