@@ -101,7 +101,7 @@ function turtonNicholls(state, i, kE, lowest, h, buoyant, sheared) {
 test('a stratocumulus-topped column over a 26 °C sea is mixed from its cloud top to the surface, entrains at the Turton–Nicholls rate, conserves c_p T − L q_c, q_t and momentum, and keeps a cloud of 100–300 m at its top that the variance cover makes overcast', () => {
   const state = column(stratocumulus, 299.15), [pi, theta, u, , q, qc] = state, i = 0;
   const longwave = cooled(state, 60), top = cloudTop(qc, i);
-  const layer = createBoundaryLayer(mesh, core, { longwave }), clear = createBoundaryLayer(mesh, core, {});
+  const layer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, longwave }), clear = createBoundaryLayer(mesh, core, { diagnoseFirst: false });
   layer.diagnose(state); clear.diagnose(state);
   const hc = interfaceZ(top - 1, i), zb = geopotential[(K - 1) * C + i] / g;
   assert.ok(hc > 1200 && hc < 1400, `cloud top at ${hc} m above the lowest layer`);
@@ -169,8 +169,8 @@ test('a clear convective column gets the surface-driven K-profile and the M21 en
   const state = column((z) => [300 - 1e-3 * Math.min(z, 1000) + 5e-3 * Math.max(0, z - 1000), 0.008 * Math.exp(-z / 2000)], 302);
   const [pi, theta, , , q, qc] = state;
   for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) if (height(k, i) < 3000) assert.equal(qc[k * C + i], 0, 'clear');
-  const moistLayer = createBoundaryLayer(mesh, core, { longwave: new Float64Array(K * C), entrainment: { jumpLayers: 1 } }), dryLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
-  const twoLayer = createBoundaryLayer(mesh, core, { longwave: new Float64Array(K * C) });
+  const moistLayer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, longwave: new Float64Array(K * C), entrainment: { jumpLayers: 1 } }), dryLayer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry' });
+  const twoLayer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, longwave: new Float64Array(K * C) });
   moistLayer.diagnose(state); dryLayer.diagnose(state); twoLayer.diagnose(state);
   let worst = 0, entraining = 0, deeper = 0;
   for (let i = 0; i < C; i++) {
@@ -197,7 +197,7 @@ test('a clear convective column gets the surface-driven K-profile and the M21 en
 
 test('a cloud layer over a stable subcloud layer is decoupled: the cloud-top profile stops at the decoupling height above the surface-driven layer', () => {
   const state = column(decoupled, 299.15), [, , , , , qc] = state, i = 0;
-  const longwave = cooled(state, 60), layer = createBoundaryLayer(mesh, core, { longwave });
+  const longwave = cooled(state, 60), layer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, longwave });
   layer.diagnose(state);
   const zb = geopotential[(K - 1) * C + i] / g, top = cloudTop(qc, i);
   const hs = layer.depth[i] - zb, base = layer.decoupling[i] - zb, hc = interfaceZ(top - 1, i);
@@ -211,7 +211,7 @@ test('a cloud layer over a stable subcloud layer is decoupled: the cloud-top pro
     if (z > hs && z <= base) { assert.ok(!(layer.mixing[x] > 0) || k === [...Array(K).keys()].findLast((m) => m < K - 1 && interfaceZ(m, i) >= hs), `interface ${k} at ${z.toFixed(0)} m between the two layers mixes only by the surface layer's entrainment`); between++; }
     if (z > base && z < hc) assert.ok(layer.mixing[x] > 0, `the cloud top mixes interface ${k} at ${z.toFixed(0)} m`);
   }
-  const flat = createBoundaryLayer(mesh, core, { longwave: new Float64Array(K * C) });
+  const flat = createBoundaryLayer(mesh, core, { diagnoseFirst: false, longwave: new Float64Array(K * C) });
   flat.diagnose(state);
   assert.notEqual(flat.regime[i], REGIME.DECOUPLED, 'without cooling there is no cloud-top layer');
   console.log(`decoupled column: surface-driven to ${hs.toFixed(0)} m, the cloud-top layer from ${base.toFixed(0)} to ${hc.toFixed(0)} m (V ${layer.radiativeVelocity[i].toFixed(2)} m/s), ${between} interfaces between them; w_e at the cloud top ${(1000 * layer.entrainment[i]).toFixed(2)} mm/s`);
@@ -309,7 +309,7 @@ async function moistEngines(options = {}, moist = {}) {
   gpu.uploadPhysics({ mlmGate: r.mlmGate });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(r.stratiform));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LWH, Float32Array.from(longwave));
-  if (options.diagnoseFirst) {
+  if (options.diagnoseFirst !== false) {
     for (let i = 0; i < nC; i++) { r.sensibleHeat[i] = Math.fround(60 * Math.sin(0.7 * i)); r.evaporation[i] = Math.fround(4e-5 * (1 + Math.cos(1.3 * i))); }
     device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(r.sensibleHeat));
     device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(r.evaporation));
@@ -324,22 +324,36 @@ async function moistEngines(options = {}, moist = {}) {
   pass.end();
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
+  const lowestInterface = withheldInterface(c, state, r, dt);
   layer.diagnose(state, 0, nC, dt);
   const cpu = Object.fromEntries(['entrainment', 'mixing', 'regime', 'radiativeVelocity', 'mixingTop', 'depth', 'cloudTopCooling'].map((name) => [name, Float64Array.from(layer[name])]));
   pair.phases.adjust(0, nC, dt);
   pair.phases.mixMomentum(0, nE, dt);
-  return { K: nK, C: nC, E: nE, kTop: layer.kTop, cpu, state, after, ph, mesh: m };
+  return { K: nK, C: nC, E: nE, kTop: layer.kTop, cpu, state, after, ph, mesh: m, lowestInterface };
+}
+
+function withheldInterface(core, state, radiation, dt) {
+  const { K, C, dSigma, cp, g, exnerLayer, geopotential } = core.diagnostics, [pi, theta, , , q, qc] = state, base = (K - 1) * C;
+  const heldTheta = Float64Array.from(theta), heldQ = Float64Array.from(q);
+  for (let i = 0; i < C; i++) {
+    heldTheta[base + i] -= dt * radiation.sensibleHeat[i] / (cp * (pi[i] * dSigma[K - 1] / g)) / exnerLayer[base + i];
+    heldQ[base + i] -= dt * radiation.evaporation[i] * g / (pi[i] * dSigma[K - 1]);
+  }
+  core.diagnose(pi, heldTheta, heldQ, qc);
+  const lowest = Float64Array.from({ length: C }, (_, i) => (geopotential[base - C + i] + geopotential[base + i]) / (2 * g));
+  core.diagnose(pi, theta, q, qc);
+  return lowest;
 }
 
 test('the moist boundary layer matches between the engines on a random set of columns in every regime: the regime, V, w_e, the coefficients, the depths and θ, q, qc and the wind after the step, with convection vetoed under coupled stratocumulus as well', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }], ['the subsidence share', { entrainment: { subsidence: true } }], ['the surface excess', { surfaceExcess: 8.5 }], ['diagnosed before the deposit', { diagnoseFirst: true }], ['both', { diagnoseFirst: true, surfaceExcess: 8.5 }], ['the K-profile from the ground with the stable φ and a Prandtl a of 0', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 0 }]]) {
+  for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }], ['the subsidence share', { entrainment: { subsidence: true } }], ['the surface excess', { surfaceExcess: 8.5 }], ['diagnosed after the deposit', { diagnoseFirst: false }], ['the surface excess, diagnosed after the deposit', { diagnoseFirst: false, surfaceExcess: 8.5 }], ['the K-profile from the ground with the stable φ and a Prandtl a of 0', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 0 }]]) {
     const run = await moistEngines(options, moist), { K: nK, C: nC, E: nE, kTop, cpu, ph } = run;
     let coupledPlumes = 0;
     for (let i = 0; i < nC; i++) if (ph.REGIME[i] === REGIME.COUPLED && ph.CUMF[i] > 0) coupledPlumes++;
     if (moist) assert.equal(coupledPlumes, 0, 'no plume rises from a coupled stratocumulus-topped layer');
     else if (label === 'defaults') assert.ok(coupledPlumes > 0, `${coupledPlumes} plumes rise from coupled layers without the veto`);
     const counts = [0, 0, 0, 0];
-    let flips = 0, worstV = 0, worstW = 0, worstMix = 0, worstDepth = 0;
+    let flips = 0, worstV = 0, worstW = 0, worstMix = 0, worstDepth = 0, atTop = 0;
     const parted = new Uint8Array(nC);
     for (let i = 0; i < nC; i++) {
       counts[cpu.regime[i]]++;
@@ -347,9 +361,12 @@ test('the moist boundary layer matches between the engines on a random set of co
       worstV = Math.max(worstV, Math.abs(cpu.radiativeVelocity[i] - ph.VRAD[i]) / Math.max(0.1, cpu.radiativeVelocity[i]));
       worstW = Math.max(worstW, Math.abs(cpu.entrainment[i] - ph.ENTRAIN[i]) / Math.max(1e-4, cpu.entrainment[i]));
       worstDepth = Math.max(worstDepth, Math.abs(cpu.depth[i] - ph.DEPTH[i]), Math.abs(cpu.mixingTop[i] - ph.MIXTOP[i]));
-      let largest = 0;
+      let largest = 0, gap = 0;
       for (let k = kTop; k < nK - 1; k++) largest = Math.max(largest, cpu.mixing[k * nC + i]);
-      for (let k = kTop; k < nK - 1; k++) if (largest > 0) worstMix = Math.max(worstMix, Math.abs(cpu.mixing[k * nC + i] - ph.MIX[k * nC + i]) / largest);
+      for (let k = kTop; k < nK - 1; k++) if (largest > 0) gap = Math.max(gap, Math.abs(cpu.mixing[k * nC + i] - ph.MIX[k * nC + i]) / largest);
+      const room = Math.abs(cpu.depth[i] - run.lowestInterface[i]), apart = Math.abs(cpu.depth[i] - ph.DEPTH[i]);
+      if (gap >= 2e-3 && room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) atTop++;
+      else worstMix = Math.max(worstMix, gap);
     }
     let theta = 0, q = 0, qc = 0, wind = 0, adjusted = 0;
     for (let i = 0; i < nC; i++) {
@@ -363,10 +380,11 @@ test('the moist boundary layer matches between the engines on a random set of co
       if (parted[run.mesh.cellsOnEdge[2 * e]] || parted[run.mesh.cellsOnEdge[2 * e + 1]]) { besideParted++; continue; }
       for (let k = 0; k < nK; k++) wind = Math.max(wind, Math.abs(run.state[2][k * nE + e] - run.after[2][k * nE + e]));
     }
-    console.log(`${label}: ${nC} columns, stable/surface/decoupled/coupled ${counts.join('/')}; the regime differs on ${flips}; V by ${worstV.toExponential(1)} relative, w_e by ${worstW.toExponential(1)}, the coefficients by ${worstMix.toExponential(1)} of each column's largest, the depths by ${worstDepth.toExponential(1)} m; after the step (but for ${adjusted} columns whose near-neutral lowest layers the dry adjustment merges in one engine only) θ by ${theta.toExponential(1)} K, q by ${q.toExponential(1)}, qc by ${qc.toExponential(1)}, the wind by ${wind.toExponential(1)} m/s off the ${besideParted} edges beside a column that differs in regime or parts`);
+    console.log(`${label}: ${nC} columns, stable/surface/decoupled/coupled ${counts.join('/')}; the regime differs on ${flips}; V by ${worstV.toExponential(1)} relative, w_e by ${worstW.toExponential(1)}, the coefficients by ${worstMix.toExponential(1)} of each column's largest (but for ${atTop} whose top clears the lowest interface by under 1 m, where they part by the tops' own gap over that clearance), the depths by ${worstDepth.toExponential(1)} m; after the step (but for ${adjusted} columns whose near-neutral lowest layers the dry adjustment merges in one engine only) θ by ${theta.toExponential(1)} K, q by ${q.toExponential(1)}, qc by ${qc.toExponential(1)}, the wind by ${wind.toExponential(1)} m/s off the ${besideParted} edges beside a column that differs in regime or parts`);
     assert.ok(counts[REGIME.SURFACE] > nC / 20 && counts[REGIME.DECOUPLED] > nC / 20 && counts[REGIME.COUPLED] > nC / 10 && counts[REGIME.STABLE] > nC / 20, `regimes ${counts}`);
     assert.ok(flips <= nC / 100, `${flips} columns differ in regime`);
-    const withheld = options.diagnoseFirst ? 5 : 1;
+    assert.ok(atTop <= nC / 200, `${atTop} columns whose top clears the lowest interface by under 1 m part in their coefficients`);
+    const withheld = options.diagnoseFirst !== false ? 5 : 1;
     assert.ok(worstV < 1e-4 && worstW < 2e-3 * withheld && worstMix < 2e-3 && worstDepth < 0.05 * withheld, `V ${worstV}, w_e ${worstW}, coefficients ${worstMix}, depths ${worstDepth}`);
     assert.ok(adjusted <= nC / 50, `${adjusted} columns part`);
     assert.ok(theta < 5e-3 && q < 4e-6 && qc < 2e-6 && wind < 2e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);

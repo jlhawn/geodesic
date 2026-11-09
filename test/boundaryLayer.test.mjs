@@ -15,7 +15,7 @@ import { PREVIOUS_LEVELS, PREVIOUS_SURFACE } from './helpers/previousDefaults.mj
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 
-const model = createModel(new Grid(16), { levels: PREVIOUS_LEVELS, boundaryLayer: { turbulence: 'dry' } });
+const model = createModel(new Grid(16), { levels: PREVIOUS_LEVELS, boundaryLayer: { turbulence: 'dry', diagnoseFirst: false } });
 const reference = equilibriumProfile(model);
 const { core, mesh, boundaryLayer } = model;
 const { K, C, E, dSigma, g, geopotential } = core.diagnostics;
@@ -62,7 +62,7 @@ test('an unstable, sheared column gets a kilometer-deep boundary layer that mixe
 });
 
 function heatedColumns(boundaryLayerOptions) {
-  const pair = createModel(new Grid(16), { ocean: false, boundaryLayer: boundaryLayerOptions });
+  const pair = createModel(new Grid(16), { ocean: false, boundaryLayer: { diagnoseFirst: false, ...boundaryLayerOptions } });
   const { core: c, mesh: m, radiation, state } = pair, { K: nK, C: nC, E: nE, g: grav, geopotential: phi, exnerLayer, sigmaMid, R, cp } = c.diagnostics;
   const init = initializeState(pair, { profile: equilibriumProfile(pair) });
   for (let a = 0; a < init.length; a++) state[a].set(init[a]);
@@ -171,7 +171,7 @@ test('a strongly stable column stays unmixed', () => {
 test('with diagnoseFirst the diagnosis is the plain one of the lowest layer without the step\'s surface heat and evaporation, and the state and diagnostics are left as deposited; withhold false diagnoses the state as it stands', () => {
   const { exnerLayer, sigmaMid, kappa, cp } = core.diagnostics, { thetaV } = core.arrays;
   const heat = Float64Array.from({ length: C }, (_, i) => 150 * Math.sin(0.9 * i)), water = Float64Array.from({ length: C }, (_, i) => 6e-5 * (1 + Math.cos(1.7 * i))), dt = 900, base = (K - 1) * C;
-  const first = createBoundaryLayer(mesh, core, { turbulence: 'dry', diagnoseFirst: true, depositedHeat: heat, depositedWater: water }), plain = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
+  const first = createBoundaryLayer(mesh, core, { turbulence: 'dry', diagnoseFirst: true, depositedHeat: heat, depositedWater: water }), plain = createBoundaryLayer(mesh, core, { turbulence: 'dry', diagnoseFirst: false });
   const state = column(300, -1e-3, 8, 1000);
   for (let i = 0; i < C; i++) state[3][i] = state[1][base + i] * exnerLayer[base + i] * Math.pow(sigmaMid[K - 1], -kappa) + 2;
   const deposited = state.map((a) => Float64Array.from(a));
@@ -201,7 +201,7 @@ test('with diagnoseFirst the diagnosis is the plain one of the lowest layer with
 
 test('surfaceExcess 8.5 deepens the Richardson depth of a column over a warm surface by searching from θ_v plus Troen and Mahrt\'s excess, and leaves a column over a cool one alone', () => {
   const { exnerLayer, sigmaMid, kappa } = core.diagnostics;
-  const base = (K - 1) * C, plain = createBoundaryLayer(mesh, core, { turbulence: 'dry' }), excessive = createBoundaryLayer(mesh, core, { turbulence: 'dry', surfaceExcess: 8.5 });
+  const base = (K - 1) * C, plain = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry' }), excessive = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', surfaceExcess: 8.5 });
   for (const [offset, deepens] of [[3, true], [-3, false]]) {
     const state = column(300, -1e-3, 8, 1000);
     for (let i = 0; i < C; i++) state[3][i] = state[1][base + i] * exnerLayer[base + i] * Math.pow(sigmaMid[K - 1], -kappa) + offset;
@@ -217,7 +217,7 @@ test('surfaceExcess 8.5 deepens the Richardson depth of a column over a warm sur
 });
 
 function profileColumns(extra) {
-  const pair = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl34'), boundaryLayer: { turbulence: 'dry', ...extra }, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
+  const pair = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl34'), boundaryLayer: { diagnoseFirst: false, turbulence: 'dry', ...extra }, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
   const { core: c, state, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -317,7 +317,7 @@ test('momentum mixing brings wind down to the surface layer and changes each edg
 
 test('a warm or moist sea surface deepens the momentum mixing; a cool one keeps the neutral profile', () => {
   const { exnerLayer, sigmaMid, kappa } = core.diagnostics;
-  const neutralLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry', stability: false }), bulkLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry', velocityScale: 'capped' });
+  const neutralLayer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', stability: false }), bulkLayer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', velocityScale: 'capped' });
   const sum = (layer) => { let s = 0; for (let k = layer.kTop; k < K - 1; k++) s += layer.mixing[k * C]; return s; };
   const compare = (offset, humidity) => {
     const state = column(300, -1e-3, 8, 1000);
@@ -337,7 +337,7 @@ test('a warm or moist sea surface deepens the momentum mixing; a cool one keeps 
 
 test('where a mixed-layer deck runs the K-profile spans its inversion when that lies above the Richardson depth, depth itself stays the Richardson depth, and a zero deckTop changes nothing', () => {
   const state = column(290, 3e-3, 4);
-  const deckTop = new Float64Array(C), still = { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 } }, plain = createBoundaryLayer(mesh, core, still), decked = createBoundaryLayer(mesh, core, { turbulence: 'dry', deckTop, ...still });
+  const deckTop = new Float64Array(C), still = { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 } }, plain = createBoundaryLayer(mesh, core, { diagnoseFirst: false, ...still }), decked = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', deckTop, ...still });
   plain.diagnose(state); decked.diagnose(state);
   assert.deepEqual(decked.mixing, plain.mixing);
   assert.deepEqual(decked.depth, plain.depth);
@@ -399,7 +399,7 @@ test('a dry stable layer over a convective boundary layer is entrained at the cl
   const state = entrainingColumn();
   const [pi, theta, u, , q, qc] = state;
   const i = 0;
-  const layer = createBoundaryLayer(mesh, core, { turbulence: 'dry' }), still = createBoundaryLayer(mesh, core, { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 } });
+  const layer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry' }), still = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 } });
   layer.diagnose(state); still.diagnose(state);
   const { above, buoyancy, jump, velocity } = expectedEntrainment(state, layer, i);
   assert.ok(buoyancy > 0 && jump > 0 && above >= layer.kTop, `B0 ${buoyancy}, Δb ${jump}, layer ${above}`);
@@ -441,7 +441,7 @@ test('a mass flux sinking through the interface above h shares the entrainment: 
   const state = entrainingColumn();
   const [pi, theta] = state;
   const i = 0, { piSigmaDot, exnerLayer, exnerLower, sigmaMid, R } = core.diagnostics;
-  const layer = createBoundaryLayer(mesh, core, { turbulence: 'dry', entrainment: { subsidence: true } }), plain = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
+  const layer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', entrainment: { subsidence: true } }), plain = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry' });
   layer.diagnose(state);
   const { above, velocity } = expectedEntrainment(state, layer, i), idx = above * C + i;
   const rho = 0.5 * (pi[i] * sigmaMid[above] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[above + 1] / (R * theta[idx + C] * exnerLayer[idx + C]));
@@ -463,7 +463,7 @@ test('a mass flux sinking through the interface above h shares the entrainment: 
 
 test('the deck\'s opening and the stratiform share taper w_e: a half-open gate or a share of one half halves it, a closed gate or an EIS of 12 K stops it; a stable surface, zero coefficients, the cap and the jump floor bound it', () => {
   const deckGate = new Float64Array(C).fill(0.3), stratiform = new Float64Array(C);
-  const layer = createBoundaryLayer(mesh, core, { turbulence: 'dry', deckGate, stratiform });
+  const layer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', deckGate, stratiform });
   const warm = entrainingColumn(2);
   layer.diagnose(warm);
   const full = expectedEntrainment(warm, layer, 0).velocity;
@@ -488,8 +488,8 @@ test('the deck\'s opening and the stratiform share taper w_e: a half-open gate o
     assert.ok(expectedEntrainment(cool, layer, i).buoyancy < 0, `cell ${i} is stable at its surface`);
     assert.equal(layer.entrainment[i], 0, `stable surface, cell ${i}`);
   }
-  const capped = createBoundaryLayer(mesh, core, { turbulence: 'dry', entrainment: { cap: 1e-4 } }), floored = createBoundaryLayer(mesh, core, { turbulence: 'dry', entrainment: { jumpFloor: 10 } });
-  const again = entrainingColumn(2), off = createBoundaryLayer(mesh, core, { turbulence: 'dry', deckGate, entrainment: { efficiency: 0, shear: 0 } });
+  const capped = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', entrainment: { cap: 1e-4 } }), floored = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', entrainment: { jumpFloor: 10 } });
+  const again = entrainingColumn(2), off = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', deckGate, entrainment: { efficiency: 0, shear: 0 } });
   capped.diagnose(again); floored.diagnose(again); off.diagnose(again);
   assert.ok(off.entrainment.every((x) => x === 0));
   const { buoyancy } = expectedEntrainment(again, floored, 1);
@@ -499,7 +499,7 @@ test('the deck\'s opening and the stratiform share taper w_e: a half-open gate o
 });
 
 test('the shear term comes in continuously with the surface buoyancy flux: w_e falls to zero as B0 falls to zero, linearly below the onset; without the onset it jumps', () => {
-  const layer = createBoundaryLayer(mesh, core, { turbulence: 'dry' }), switched = createBoundaryLayer(mesh, core, { turbulence: 'dry', entrainment: { shearOnset: 0 } });
+  const layer = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry' }), switched = createBoundaryLayer(mesh, core, { diagnoseFirst: false, turbulence: 'dry', entrainment: { shearOnset: 0 } });
   const state = entrainingColumn(0), surfaceT = state[3], neutral = surfaceT[0];
   const flux = (warmth) => { surfaceT[0] = neutral + warmth; layer.diagnose(state, 0, 1); return layer.buoyancyFlux[0]; };
   let cold = -8, warm = 2;
@@ -526,7 +526,7 @@ test('the shear term comes in continuously with the surface buoyancy flux: w_e f
 async function engines(entrainment, extra = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry', ...extra }, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: { diagnoseFirst: false, entrainment, turbulence: 'dry', ...extra }, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
   const { core: c, mesh: m, state, radiation, moist, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -557,7 +557,7 @@ async function engines(entrainment, extra = {}) {
   c.diagnose(pi, theta, q, qc);
   const { piSigmaDot, exnerLower } = c.diagnostics;
   for (let k = 1; k < nK; k++) for (let i = 0; i < nC; i++) piSigmaDot[k * nC + i] = Math.fround(0.6 * (random() - 0.4));
-  const gpu = await createGpuCore(m, { levels, physics: { entrainment, turbulence: 'dry', surfaceExchange: 'fixed', exchangeOptions: PREVIOUS_SURFACE, ...extra } });
+  const gpu = await createGpuCore(m, { levels, physics: { diagnoseFirst: false, entrainment, turbulence: 'dry', surfaceExchange: 'fixed', exchangeOptions: PREVIOUS_SURFACE, ...extra } });
   const { device, buffers, kernels } = gpu, dt = 900;
   gpu.upload(state);
   device.queue.writeBuffer(buffers.D, 4 * gpu.layout.D.PSD, Float32Array.from(piSigmaDot));
@@ -652,7 +652,7 @@ test('the subsidence share matches between the engines on the random columns: wi
 test('a surface parcel that tops out at the base of a stratocumulus whose descending parcel stops there is coupled to it in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(16), { ocean: false, levels, surface: { exchange: 'fixed' } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: { diagnoseFirst: false }, surface: { exchange: 'fixed' } });
   const { core: c, mesh: m, state, radiation, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -682,7 +682,7 @@ test('a surface parcel that tops out at the base of a stratocumulus whose descen
   u.fill(0);
   for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
-  const gpu = await createGpuCore(m, { levels, physics: { surfaceExchange: 'fixed' } });
+  const gpu = await createGpuCore(m, { levels, physics: { diagnoseFirst: false, surfaceExchange: 'fixed' } });
   const { device, buffers, kernels } = gpu;
   gpu.upload(state);
   gpu.uploadPhysics();
@@ -738,7 +738,7 @@ function cumulusColumns(pair) {
 
 test('a cumulus-capped column keeps its cloud-top layer decoupled: with cloudTop.cumulusCapped the descending parcel stops at the cumulus base, the surface-driven depth stays the Richardson depth and no mixing crosses the layer between', () => {
   const levels = sigmaInterfaces('bl42');
-  const build = (cloudTop) => createModel(new Grid(16), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop } });
+  const build = (cloudTop) => createModel(new Grid(16), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { diagnoseFirst: false, cloudTop } });
   const plain = build({ cumulusCapped: false }), capped = build({});
   const { topLayer, nC, nK } = cumulusColumns(plain);
   cumulusColumns(capped);
@@ -772,13 +772,13 @@ test('a cumulus-capped column keeps its cloud-top layer decoupled: with cloudTop
 test('the cumulus-capped rule matches between the engines: the cumulus columns come out decoupled at the same surface-driven depth on both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl42');
-  const pair = createModel(new Grid(16), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop: { cumulusCapped: true } } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { diagnoseFirst: false, cloudTop: { cumulusCapped: true } } });
   const { core: c, mesh: m, state, radiation, boundaryLayer: layer } = pair;
   const { K: nK, C: nC } = c.diagnostics;
   cumulusColumns(pair);
   for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(state[0], state[1], state[4], state[5]);
-  const gpu = await createGpuCore(m, { levels, physics: { surfaceExchange: 'fixed', cloudTop: { cumulusCapped: true } } });
+  const gpu = await createGpuCore(m, { levels, physics: { diagnoseFirst: false, surfaceExchange: 'fixed', cloudTop: { cumulusCapped: true } } });
   const { device, buffers, kernels } = gpu;
   gpu.upload(state);
   gpu.uploadPhysics();

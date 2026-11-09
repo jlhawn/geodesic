@@ -4,7 +4,7 @@ import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.mod
 import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, TRACE_CHAIN_FLOOR, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, MID_LEVEL, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
-import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
+import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS, DIAGNOSE_FIRST } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, longwaveCores, LONGWAVE_CORES, CORE_EDGES, CORE_FACTOR_POINTS, coreFactors } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
 import { SUMMER_DAY } from '../physics/ozone.module.js';
@@ -2816,7 +2816,7 @@ fn blProfile(z: f32, h: f32, scale: f32, buoyancy: f32, friction: f32) -> f32 {
   return [...K_PROFILE_ANCHORS, ['fn blPrandtl(', `${helpers}fn blPrandtl(`], ['+ 7.2 * KARMAN * 0.1 * pow(buoyancy * h, 1.0 / 3.0) / mixed;', `+ ${Number(prandtlCoefficient).toExponential(9)} * KARMAN * 0.1 * pow(buoyancy * h, 1.0 / 3.0) / mixed;`]]
     .reduce((text, [from, to]) => replacedOnce(text, from, to), calls.join('blNonlocal(i, pi, zb, h, scale / prandtl, buoyancy, friction, lift); }'));
 }
-export function boundaryLayerDiagnosis(body, { diagnoseFirst = false, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2 } = {}) {
+export function boundaryLayerDiagnosis(body, { diagnoseFirst = DIAGNOSE_FIRST, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2 } = {}) {
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
   if (profileHeight !== 'midpoint' && profileHeight !== 'ground') throw new Error(`profileHeight must be 'midpoint' or 'ground', not ${profileHeight}`);
   if (stableProfile !== 'flat' && stableProfile !== 'holtslagBoville') throw new Error(`stableProfile must be 'flat' or 'holtslagBoville', not ${stableProfile}`);

@@ -7,7 +7,7 @@ import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { SKIN_DEFAULTS, SEA_RHO_CP, surfaceShare } from '../js/physics/skin.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL, PREVIOUS_BERGERON } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL, PREVIOUS_BERGERON, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 
 /*
  * The sea's skin on both engines at N = 16. A GPU file: run it alone,
@@ -24,7 +24,7 @@ const OPTIONS = { ocean: false, levels: sigmaInterfaces('bl36'), radiation: { lo
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const LAYERED = { levels: OPTIONS.levels, topography, radiation: { ...PREVIOUS_SHORTWAVE, ...PREVIOUS_AEROSOL }, moist: PREVIOUS_BERGERON };
 const CASES = [
-  ['over the slab from no skin', OPTIONS, 0],
+  ['with the boundary layer diagnosed after the deposit, over the slab from no skin', { ...OPTIONS, boundaryLayer: { ...OPTIONS.boundaryLayer, ...PREVIOUS_BOUNDARY_LAYER } }, 0],
   ['over the slab from a 1 K warm layer', OPTIONS, 1],
   ['over a layered ocean with 2 m top layers under IB light, from a 1 K warm layer', { ...LAYERED, ocean: { layerTable: hybridLayerTable({ top: 2 }) } }, 1],
   ['over a layered ocean under type III light, from a 1 K warm layer', { ...LAYERED, ocean: { penetration: 'III' } }, 1],

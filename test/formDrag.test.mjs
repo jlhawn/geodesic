@@ -57,7 +57,7 @@ function uniformWind(model, speed) {
 test('a column of the edge solve against the hand profile: σ_flt 100 m on every cell, 10 m/s, no mixing and no surface drag; none over the sea', () => {
   const N = 16, mesh = buildMesh(new Grid(N)), C = mesh.nCells;
   const sigma = 100, fields = { deviation: new Float64Array(C), anisotropy: new Float64Array(C), orientation: new Float64Array(C), slope: new Float64Array(C), filtered: new Float64Array(C).fill(sigma) };
-  const model = prepare(createModel(mesh, { topography, levels: sigmaInterfaces('bl34'), subgrid: fields }));
+  const model = prepare(createModel(mesh, { topography, levels: sigmaInterfaces('bl34'), subgrid: fields, boundaryLayer: { diagnoseFirst: false } }));
   const { core, boundaryLayer: bl, geography } = model, { K, E, dSigma, g, geopotential } = core.diagnostics, dt = 1350 * 16 / N;
   uniformWind(model, 10);
   bl.diagnose(model.state);
@@ -92,7 +92,7 @@ test('a column of the edge solve against the hand profile: σ_flt 100 m on every
 });
 
 test('on a real state the form drag conserves each edge column’s momentum against its stresses, heats by what it removes and stays off the sea', () => {
-  const model = prepare(createModel(new Grid(16), { topography, levels: sigmaInterfaces('bl34') })), dt = 1350;
+  const model = prepare(createModel(new Grid(16), { topography, levels: sigmaInterfaces('bl34'), boundaryLayer: { diagnoseFirst: false } })), dt = 1350;
   assert.ok(model.boundaryLayer.formDrag, 'the bundled N=16 fields switch the form drag on');
   for (let n = 0; n < 3; n++) model.step(dt);
   const { mesh, core, boundaryLayer: bl, state, geography } = model, { K, C, E, dSigma, g } = core.diagnostics;

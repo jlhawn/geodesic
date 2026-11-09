@@ -8,7 +8,7 @@ const LEVELS = ['bl60', ...(SIGMA_GRIDS.includes('bl48') ? ['bl48'] : [])];
 import { deckProfile } from './helpers/deckProfile.mjs';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, radiationTraces } from './helpers/decisions.mjs';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
-import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -41,11 +41,11 @@ function columnEnergy(after, C, K, held) {
   return worst;
 }
 
-async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', surface = {}, ...options } = {}) {
+async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', surface = {}, boundaryLayer = {}, ...options } = {}) {
   const physics = { ...PREVIOUS_RADIATION, mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options }, sigma = sigmaInterfaces(levels);
-  const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence, velocityScale: 'capped' }, surface: { exchange: 'roughness', ...PREVIOUS_SURFACE, ...surface } });
+  const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence, velocityScale: 'capped', ...boundaryLayer }, surface: { exchange: 'roughness', ...PREVIOUS_SURFACE, ...surface } });
   const { ambiguous } = deckProfile(model), traces = radiationTraces(model);
-  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, ...surface, turbulence, velocityScale: 'capped', surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
+  const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, ...surface, turbulence, velocityScale: 'capped', ...boundaryLayer, surfaceExchange: 'roughness', exchangeOptions: PREVIOUS_SURFACE } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   const C = model.mesh.nCells, K = model.core.K, decisions = decisionTracker(K, C), runs = new Set();
@@ -98,29 +98,29 @@ function agree(label, run) {
   assert.ok(run.olr.rmsRel < 3e-5 && run.sw.rmsRel < 3e-5 && (!run.longwave || run.longwave.rmsRel < 1e-4), `${label}: OLR ${run.olr.rmsRel}, surface shortwave ${run.sw.rmsRel}, longwave heating ${run.longwave?.rmsRel}`);
 }
 
-test('on bl60, and bl48 where it is built, the sub-grid inversion, the deck on it and the boundary layer it seals match between the engines, under the moist and the dry boundary layer', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('on bl60, and bl48 where it is built, the sub-grid inversion, the deck on it and the boundary layer it seals match between the engines, under the moist and the dry boundary layer, the dry one diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   for (const [levels, turbulence] of [...LEVELS.map((levels) => [levels, 'moist']), ['bl60', 'dry']]) {
-    const run = await deckPair(3, { levels, deckInversion: 'subgrid', turbulence });
-    show(`${levels} subgrid, ${turbulence}`, run);
-    agree(`${levels} subgrid, ${turbulence}`, run);
+    const held = turbulence === 'dry', name = `${levels} subgrid, ${turbulence}${held ? ', with the boundary layer diagnosed after the deposit' : ''}`, run = await deckPair(3, { levels, deckInversion: 'subgrid', turbulence, boundaryLayer: held ? PREVIOUS_BOUNDARY_LAYER : {} });
+    show(name, run);
+    agree(name, run);
     assert.ok(run.sealed > 0.5 * run.decked, `${turbulence}: ${run.sealed} of ${run.decked} sealed alike`);
   }
 });
 
-test('on bl60, and bl48 where it is built, the deck\'s cloud at its own top, on the grid ceiling and on the sub-grid inversion, with the radiation every step and held, matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('on bl60, and bl48 where it is built, the deck\'s cloud at its own top, on the grid ceiling and on the sub-grid inversion, with the radiation every step and held, matches between the engines, bl48\'s on the sub-grid inversion with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   for (const options of [{ deckCloud: 'top' }, ...LEVELS.map((levels) => ({ levels, deckCloud: 'top', deckInversion: 'subgrid' })), { deckCloud: 'top', deckInversion: 'subgrid', radiationEvery: 2 }]) {
-    const label = Object.entries(options).map(([key, value]) => `${key} ${value}`).join(', '), run = await deckPair(3, options);
+    const plain = options.levels === 'bl48' && !options.radiationEvery, label = Object.entries(options).map(([key, value]) => `${key} ${value}`).join(', ') + (plain ? ', with the boundary layer diagnosed after the deposit' : ''), run = await deckPair(3, plain ? { ...options, boundaryLayer: PREVIOUS_BOUNDARY_LAYER } : options);
     show(label, run);
     agree(label, run);
     assert.ok(run.moved > 0.5 * run.decked, `${label}: ${run.moved} of ${run.decked} decks off σ 0.92`);
   }
 });
 
-test('on bl48 the deck that replaces the resolved cloud at and below its top inside its fraction matches between the engines, on the grid ceiling and the sub-grid inversion, with the radiation every step and held', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('on bl48 the deck that replaces the resolved cloud at and below its top inside its fraction matches between the engines, on the grid ceiling and the sub-grid inversion, with the radiation every step and held, the grid ceiling\'s with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const subgrid = { deckCloud: 'top', deckInversion: 'subgrid' };
   for (const options of [{ deckResolved: 'above' }, { deckResolved: 'above', ...subgrid }, { deckResolved: 'above', ...subgrid, radiationEvery: 2 }]) {
-    const label = Object.entries(options).map(([key, value]) => `${key} ${value}`).join(', ');
-    const run = await deckPair(3, { levels: 'bl48', cloudColumns: true, cloudSpread: 0.75, ...options });
+    const held = Object.keys(options).length === 1, label = Object.entries(options).map(([key, value]) => `${key} ${value}`).join(', ') + (held ? ', with the boundary layer diagnosed after the deposit' : '');
+    const run = await deckPair(3, { levels: 'bl48', cloudColumns: true, cloudSpread: 0.75, boundaryLayer: held ? PREVIOUS_BOUNDARY_LAYER : {}, ...options });
     show(label, run);
     agree(label, run);
     console.log(`${label}: the replaced layers start apart on ${run.fromMiss} columns; worst GPU column off its boundary fluxes by ${run.gpuEnergy.toExponential(2)} W/m²`);
@@ -136,8 +136,8 @@ test('on the GPU too the inversion\'s layer hands its heating down inside its co
   }
 });
 
-test('with surface.virtualDensity the deck\'s surface fluxes take the moist density on both engines: the engines agree as closely as without it, and the option moves the deck\'s water alike', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const on = await deckPair(3, { surface: { virtualDensity: true } }), off = await deckPair(3);
+test('with surface.virtualDensity the deck\'s surface fluxes take the moist density on both engines: the engines agree as closely as without it, and the option moves the deck\'s water alike, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const on = await deckPair(3, { surface: { virtualDensity: true }, boundaryLayer: PREVIOUS_BOUNDARY_LAYER }), off = await deckPair(3, { boundaryLayer: PREVIOUS_BOUNDARY_LAYER });
   show('virtualDensity', on);
   agree('virtualDensity', on);
   const both = new Set(off.kept);

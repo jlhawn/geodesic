@@ -217,6 +217,7 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * Holtslag and Boville (1993) and CAM's pblintd take with b = 8.5, w_m =
  * (u*³ + 0.6 B0 h)^⅓ at the first search's depth h.
  */
+export const DIAGNOSE_FIRST = true;
 export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2, subsidence: false };
 export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400, cumulusCapped: true };
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
@@ -229,11 +230,11 @@ export function createBoundaryLayer(mesh, core, {
   dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, seaFlow = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, openSea = null, seaHumidity = 1, deckTop = null, deckGate = null, deckLayer = null, deckShare = null, deckEntrainment = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
   countergradient = 0, surfaceHeat = null, surfaceEvaporation = null, velocityScale = 'holtslagBoville',
-  diagnoseFirst = false, depositedHeat = null, depositedWater = null, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2, virtualDensity = false,
+  diagnoseFirst = DIAGNOSE_FIRST, depositedHeat = null, depositedWater = null, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2, virtualDensity = false,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
-  if (diagnoseFirst && !depositedHeat) throw new Error('diagnoseFirst needs the depositedHeat (and with moisture the depositedWater) of the step\'s surface fluxes');
+  if (diagnoseFirst && !depositedHeat) throw new Error('diagnoseFirst, the default, needs the depositedHeat (and with moisture the depositedWater) of the step\'s surface fluxes: a layer diagnosed without a step takes diagnoseFirst false');
   if (velocityScale !== 'capped' && velocityScale !== 'holtslagBoville') throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${velocityScale}`);
   const holtslag = velocityScale === 'holtslagBoville';
   if (profileHeight !== 'midpoint' && profileHeight !== 'ground') throw new Error(`profileHeight must be 'midpoint' or 'ground', not ${profileHeight}`);

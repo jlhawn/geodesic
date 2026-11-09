@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { sunDirection, sunDistance, orbitOf, YEAR } from '../js/physics/radiation.module.js';
 import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, DECISION_KINDS } from './helpers/decisions.mjs';
-import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 const CAPPED = { velocityScale: 'capped' };
 
 let gpuAvailable = true;
@@ -72,9 +72,9 @@ async function pair(steps, dt, inversion = 0, stratus = inversion > 0, options =
   return { model, gpu, state: await gpu.download(), physics: await gpu.downloadPhysics(), penetrated };
 }
 
-test('one full GPU step with physics matches the CPU model outside the odd column where a discrete decision parted', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('one full GPU step with physics matches the CPU model outside the odd column where a discrete decision parted, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   let decisions = null;
-  const { model, state, physics: after } = await pair(1, 900, 10, true, { previous: false }, {}, {}, async (cpu, device, gpu) => {
+  const { model, state, physics: after } = await pair(1, 900, 10, true, { previous: false }, {}, PREVIOUS_BOUNDARY_LAYER, async (cpu, device, gpu) => {
     decisions ??= decisionTracker(cpu.core.K, cpu.mesh.nCells);
     decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.download(), device));
   });
@@ -122,12 +122,12 @@ test('the stratiform share of the estimated inversion strength and the boundary-
   }
 });
 
-test('with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (divergenceDamping) => {
-    const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping, radiation: PREVIOUS_AEROSOL, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: CAPPED });
+    const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping, radiation: PREVIOUS_AEROSOL, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...PREVIOUS_BOUNDARY_LAYER, ...CAPPED } });
     const init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model), physics: { ...PREVIOUS_AEROSOL, ...CAPPED, ...PREVIOUS_PCAPE_MINIMUM } });
+    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model), physics: { ...PREVIOUS_AEROSOL, ...PREVIOUS_BOUNDARY_LAYER, ...CAPPED, ...PREVIOUS_PCAPE_MINIMUM } });
     gpu.upload(model.state);
     gpu.uploadPhysics();
     const decisions = decisionTracker(model.core.K, model.mesh.nCells);
@@ -656,10 +656,10 @@ test('the variance cover that holds each layer\'s cloud water, and the turbulenc
   console.log(report.join('; '));
 });
 
-test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines, the gates of both engines answering deckReference interpolate alike', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines, the gates of both engines answering deckReference interpolate alike, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const gates = new Map(), gpuGates = new Map();
   for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}, { deckReference: 'interpolate' }, { height: 1436 }, { deckReference: 'interpolate', height: 1436 }]) {
-    const run = await mixedLayerPair(4, { turbulence: 'moist', ...options });
+    const run = await mixedLayerPair(4, { turbulence: 'moist', boundaryLayer: PREVIOUS_BOUNDARY_LAYER, ...options });
     const { K: nK } = run.model.core, keep = [];
     let coupled = 0, open = 0, parted = 0;
     for (let i = 0; i < run.C; i++) {
@@ -699,8 +699,8 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
   assert.ok(gpuMoved > layered.length / 50 && oneEngine + unequal <= layered.length / 100, `the GPU's gate moves on ${gpuMoved} columns, ${oneEngine} on one engine only, ${unequal} by shifts more than 10 percent apart`);
 });
 
-for (const [label, transmission] of [['', null], [', with open water passing a share of its sunlight to the ocean below', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, state, physics, penetrated } = await pair(12, 900, 0, false, {}, {}, CAPPED, null, { transmission });
+for (const [label, transmission] of [['', null], [', with open water passing a share of its sunlight to the ocean below and the boundary layer diagnosed after the deposit', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { model, state, physics, penetrated } = await pair(12, 900, 0, false, {}, {}, transmission ? { ...PREVIOUS_BOUNDARY_LAYER, ...CAPPED } : CAPPED, null, { transmission });
   const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
   const C = model.mesh.nCells;
   let area = 0, ts = 0, abs = 0, atmosphere = 0, olr = 0, rain = 0;
@@ -741,9 +741,9 @@ test('with the radiation held between full calls every fourth step, twelve GPU s
   assert.ok(theta.rmsRel < 1e-4 && ts.maxDiff < 0.02, `θ rms ${theta.rmsRel}, Ts max ${ts.maxDiff} K at ${ts.at}`);
 });
 
-test('with the gravity-wave drag laid every fourth step, twelve GPU steps track the CPU model and its energy budget, both engines holding the accelerations between', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('with the gravity-wave drag laid every fourth step, twelve GPU steps track the CPU model and its energy budget, both engines holding the accelerations between, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const laid = [];
-  const { model, state, physics } = await pair(12, 900, 0, false, { dragEvery: 4, longwaveLines: 'scaled' }, {}, {}, (cpu, device) => { laid.push([Float64Array.from(cpu.gravityWaves.east), Float32Array.from(device.GWE.subarray(0, cpu.core.K * cpu.mesh.nCells))]); });
+  const { model, state, physics } = await pair(12, 900, 0, false, { dragEvery: 4, longwaveLines: 'scaled' }, {}, PREVIOUS_BOUNDARY_LAYER, (cpu, device) => { laid.push([Float64Array.from(cpu.gravityWaves.east), Float32Array.from(device.GWE.subarray(0, cpu.core.K * cpu.mesh.nCells))]); });
   const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
   const C = model.mesh.nCells, K = model.core.K;
   for (let n = 1; n < laid.length; n++) {
@@ -771,10 +771,10 @@ test('with the gravity-wave drag laid every fourth step, twelve GPU steps track 
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
 });
 
-test('on bl60 twelve full GPU steps track the CPU model and its energy budget, cool each layer above 30 hPa alike with bl60\'s longwave table outside the columns whose cloud decided apart, and lay the same gravity-wave drag in each of its layers outside the columns where the regime or the plume decided apart', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('on bl60 twelve full GPU steps track the CPU model and its energy budget, cool each layer above 30 hPa alike with bl60\'s longwave table outside the columns whose cloud decided apart, and lay the same gravity-wave drag in each of its layers outside the columns where the regime or the plume decided apart, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   let decisions = null, plumes = null;
-  const { model, state, physics } = await pair(12, 900, 0, false, { levels: sigmaInterfaces('bl60'), clearSkyPass: true }, {}, CAPPED, async (cpu, device, core) => {
+  const { model, state, physics } = await pair(12, 900, 0, false, { levels: sigmaInterfaces('bl60'), clearSkyPass: true }, {}, { ...PREVIOUS_BOUNDARY_LAYER, ...CAPPED }, async (cpu, device, core) => {
     decisions ??= cloudDecisions(cpu.mesh.nCells);
     decisions.check(cpu, device);
     plumes ??= decisionTracker(cpu.core.K, cpu.mesh.nCells);
@@ -968,10 +968,10 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * column's own inversion: the second step, the first with a diagnosed
  * boundary layer, carries the deck.
  */
-async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloudLifetime: 3 * 3600, plumeCape: 70 }, step = null, turbulence = 'dry', exchange = 'roughness', surfaceLayer = {}, ...options } = {}) {
+async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloudLifetime: 3 * 3600, plumeCape: 70 }, step = null, turbulence = 'dry', exchange = 'roughness', surfaceLayer = {}, boundaryLayer = {}, ...options } = {}) {
   const physics = { ...PREVIOUS_RADIATION, mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options };
   moist = { ...PREVIOUS_MOIST, ...moist };
-  const model = createModel(new Grid(N), { ocean: false, levels: PREVIOUS_LEVELS, radiation: physics, moist, boundaryLayer: { turbulence }, surface: { exchange, ...PREVIOUS_SURFACE, ...surfaceLayer } });
+  const model = createModel(new Grid(N), { ocean: false, levels: PREVIOUS_LEVELS, radiation: physics, moist, boundaryLayer: { turbulence, ...boundaryLayer }, surface: { exchange, ...PREVIOUS_SURFACE, ...surfaceLayer } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells, theta = model.state[1], q = model.state[4];
@@ -981,7 +981,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloud
   }
   model.radiation.mlmSubsidence.fill(seed);
   model.radiation.mlmHeight.fill(height);
-  const gpu = await createGpuCore(model.mesh, { levels: PREVIOUS_LEVELS, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence, surfaceExchange: exchange, exchangeOptions: { ...PREVIOUS_SURFACE, ...surfaceLayer } } });
+  const gpu = await createGpuCore(model.mesh, { levels: PREVIOUS_LEVELS, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence, ...boundaryLayer, surfaceExchange: exchange, exchangeOptions: { ...PREVIOUS_SURFACE, ...surfaceLayer } } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   const parted = new Set();
@@ -1015,21 +1015,21 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloud
   };
 }
 
-test('the mixed-layer deck matches between the engines: cover, water path, entrainment and the radiation they drive', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const on = await mixedLayerPair(2);
+test('the mixed-layer deck matches between the engines: cover, water path, entrainment and the radiation they drive, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const on = await mixedLayerPair(2, { boundaryLayer: PREVIOUS_BOUNDARY_LAYER });
   console.log(`mixed-layer deck at N=${N} under a 10 K inversion on a layer mixed to σ 0.85: on ${on.decked} of ${on.C} sea cells (GPU ${on.gpuDecked}), ${(1000 * on.water).toFixed(1)} g/m² where it forms; engines differ in cover by at most ${on.cover.maxDiff.toExponential(1)}, in water by ${on.mlmWater.maxDiff.toExponential(1)} kg/m² (rms ${on.mlmWater.rmsRel.toExponential(1)}), in entrainment by rms ${on.entrainment.rmsRel.toExponential(1)}; per-cell OLR rms ${on.olr.rmsRel.toExponential(1)}, surface shortwave rms ${on.sw.rmsRel.toExponential(1)}`);
   assert.ok(on.decked > 0.5 * on.C && on.gpuDecked === on.decked, `deck on ${on.decked} cells, ${on.gpuDecked} on the GPU`);
   assert.ok(on.cover.maxDiff < 1e-3 && on.fraction.maxDiff < 1e-3, `cover ${on.cover.maxDiff} at ${on.cover.at}`);
   assert.ok(on.mlmWater.rmsRel < 1e-4 && on.mlmWater.maxDiff < 5e-5 && on.deck.maxDiff < 5e-5, `water rms ${on.mlmWater.rmsRel}, max ${on.mlmWater.maxDiff} at ${on.mlmWater.at}`);
   assert.ok(on.entrainment.rmsRel < 1e-4, `entrainment rms ${on.entrainment.rmsRel}`);
   assert.ok(on.olr.rmsRel < 1e-5 && on.sw.rmsRel < 2e-5, `per-cell OLR rms ${on.olr.rmsRel}, surface shortwave rms ${on.sw.rmsRel}`);
-  const dark = await mixedLayerPair(2, { stratusSolar: false });
+  const dark = await mixedLayerPair(2, { boundaryLayer: PREVIOUS_BOUNDARY_LAYER, stratusSolar: false });
   let thinned = 0;
   for (const i of on.sunlit) thinned += (dark.waterPath[i] - on.waterPath[i]) / dark.waterPath[i];
   console.log(`under the sun (${on.sunlit.length} decked cells lit by more than 200 W/m²) the cloud's absorption thins the step's water by ${(100 * thinned / on.sunlit.length).toFixed(1)} % on average; there the engines' water differs by rms ${on.sunlitWater.rmsRel.toExponential(1)}, at most ${on.sunlitWater.maxDiff.toExponential(1)} kg/m², the deck's by at most ${on.sunlitDeck.maxDiff.toExponential(1)} kg/m²`);
   assert.ok(on.sunlit.length > on.C / 4 && thinned > 0.005 * on.sunlit.length, `${on.sunlit.length} lit decks thinned by ${thinned / on.sunlit.length}`);
   assert.ok(on.sunlitWater.rmsRel < 1e-4 && on.sunlitWater.maxDiff < 5e-5 && on.sunlitDeck.maxDiff < 5e-5, `lit water rms ${on.sunlitWater.rmsRel}, max ${on.sunlitWater.maxDiff}; deck ${on.sunlitDeck.maxDiff}`);
-  const split = await mixedLayerPair(2, { mixedLayer: { closure: 'buoyancy', decouplingOnset: 0, decoupledRatio: 0.02 } });
+  const split = await mixedLayerPair(2, { boundaryLayer: PREVIOUS_BOUNDARY_LAYER, mixedLayer: { closure: 'buoyancy', decouplingOnset: 0, decoupledRatio: 0.02 } });
   console.log(`the buoyancy closure with decoupling from a buoyancy integral ratio of 0 to 0.02: ${split.partial} of ${split.decked} decks decoupled; cover differs by at most ${split.cover.maxDiff.toExponential(1)}, water by rms ${split.mlmWater.rmsRel.toExponential(1)}; OLR rms ${split.olr.rmsRel.toExponential(1)}, surface shortwave rms ${split.sw.rmsRel.toExponential(1)}`);
   assert.ok(split.partial > 0.2 * split.decked && split.gpuDecked === split.decked, `${split.partial} of ${split.decked} decoupled`);
   assert.ok(split.cover.maxDiff < 1e-3 && split.mlmWater.rmsRel < 1e-4, `cover ${split.cover.maxDiff}, water rms ${split.mlmWater.rmsRel}`);
@@ -1169,9 +1169,9 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   assert.ok(moved > C / 2, `the mean moved on ${moved} cells`);
 });
 
-test('the convective and large-scale rain accumulate alike in both engines, cell by cell outside the columns where a discrete decision of the boundary layer, the plume or the condensation parted at some step and their neighbours within three cells, and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the convective and large-scale rain accumulate alike in both engines, cell by cell outside the columns where a discrete decision of the boundary layer, the plume or the condensation parted at some step and their neighbours within three cells, and add up to the precipitation, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   let decisions = null;
-  const { model, physics } = await pair(24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0, excessVelocity: 'convective', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' }, {}, async (cpu, device, gpu) => {
+  const { model, physics } = await pair(24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0, excessVelocity: 'convective', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' }, PREVIOUS_BOUNDARY_LAYER, async (cpu, device, gpu) => {
     decisions ??= decisionTracker(cpu.core.K, cpu.mesh.nCells);
     decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.download(), device));
   });
@@ -1262,11 +1262,11 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   assert.ok(convective.rmsRel < 1e-3 && largeScaleOfRain < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScaleOfRain} of the rain`);
 });
 
-test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux and the lowest layers, but for the columns where a discrete decision parted (the dry adjustment merging one layer more on one engine, a layer\'s cloud water switching a cover or the boundary layer\'s regime on one engine only) and, outside the ice, their neighbours within two cells', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux and the lowest layers, but for the columns where a discrete decision parted (the dry adjustment merging one layer more on one engine, a layer\'s cloud water switching a cover or the boundary layer\'s regime on one engine only) and, outside the ice, their neighbours within two cells, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
-  const dt = 1350 * 16 / N, steps = Math.ceil(8 * 3600 / dt), options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' }, boundaryLayer: CAPPED };
+  const dt = 1350 * 16 / N, steps = Math.ceil(8 * 3600 / dt), options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' }, boundaryLayer: { ...PREVIOUS_BOUNDARY_LAYER, ...CAPPED } };
   const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
   const C = cpu.mesh.nCells, K = cpu.core.K, init = initializeState(cpu, {});
   const iced = [];

@@ -8,7 +8,7 @@ import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN, heatProfile, profileTemperature } from '../js/physics/exchange.module.js';
-import { PREVIOUS_LEVELS, PREVIOUS_SURFACE } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_SURFACE, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 import { cpuFrameFields } from '../js/cpuFrame.module.js';
 
 let gpuAvailable = true;
@@ -318,11 +318,11 @@ test('both engines take seaHumidity alike: from one state the first step\'s evap
   }
 });
 
-test('surface.virtualDensity lowers the evaporation alike on both engines: the first step, and with the sea skin the second', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const [label, skin, steps] of [['first step', {}, 1], ['sea skin, second step', { warmLayer: true, coolSkin: true }, 2]]) {
+test('surface.virtualDensity lowers the evaporation alike on both engines: the first step, and with the sea skin and the boundary layer diagnosed after the deposit the second', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const [label, skin, steps, boundaryLayer] of [['first step', {}, 1, {}], ['sea skin, second step, with the boundary layer diagnosed after the deposit', { warmLayer: true, coolSkin: true }, 2, PREVIOUS_BOUNDARY_LAYER]]) {
     const runs = [];
     for (const surface of [{ virtualDensity: true, ...skin }, skin]) {
-      const cpu = prepare(createModel(new Grid(16), { topography, surface })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface }));
+      const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer }));
       for (let n = 0; n < steps; n++) { cpu.step(900); await gpu.step(900); }
       await gpu.settle(); await gpu.sync();
       const C = cpu.mesh.nCells, lowest = (cpu.core.K - 1) * C;
@@ -387,12 +387,12 @@ test('surface.gustiness moves the first step alike on both engines: the evaporat
   }
 });
 
-test('surface.virtualDensity takes the moist density alike on both engines in the implicit drag, the explicit drag, the fog deposition\'s cap and the boundary layer\'s kinematic surface fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('surface.virtualDensity takes the moist density alike on both engines in the implicit drag, the explicit drag, the fog deposition\'s cap and the boundary layer\'s kinematic surface fluxes, both exchanges with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const boundaryLayer = { countergradient: 7.2 }, moist = { fogDroplets: null, fogDepositionLimit: 1e-3 };
   for (const [label, exchange] of [['roughness', {}], ['fixed', { exchange: 'fixed' }]]) {
     const names = label === 'roughness' ? ['SDRAG', 'CGH', 'CGW', 'FOG'] : ['CGH', 'CGW'], runs = [];
     for (const surface of [{ ...exchange, virtualDensity: true }, exchange]) {
-      const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer, moist })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer, moist }));
+      const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer: { ...boundaryLayer, ...PREVIOUS_BOUNDARY_LAYER }, moist })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer: { ...boundaryLayer, ...PREVIOUS_BOUNDARY_LAYER }, moist }));
       cpu.step(900); await gpu.step(900); await gpu.settle(); await gpu.sync();
       const { nCells: C, nEdges: E } = cpu.mesh, PH = gpu.gpu.layout.PH, lowest = (cpu.core.K - 1) * E, bl = cpu.boundaryLayer;
       const read = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, names.map((name) => ({ offset: PH[name], length: C })));
@@ -447,14 +447,14 @@ test('both engines refuse under boundaryLayer the options they take from the sur
   }
 });
 
-test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange, a column the engines part counting as a knife edge where an f32-rounded CPU twin parts it too', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cases = [
     ['defaults', {}, []],
     ['ground, stable profile, Prandtl coefficient 3.6, countergradient', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6, countergradient: 7.2 }, ['mixing stable', 'mixing convective', 'scalarMixing stable', 'scalarMixing convective']],
     ['ground, capped scale, countergradient', { profileHeight: 'ground', velocityScale: 'capped', countergradient: 7.2 }, ['mixing stable', 'mixing convective']],
     ['stable profile, Prandtl coefficient 3.6', { stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6 }, ['mixing stable', 'scalarMixing stable', 'scalarMixing convective']],
     ['capped scale, countergradient', { velocityScale: 'capped', countergradient: 7.2 }, ['mixing convective']],
-    ['diagnoseFirst, surfaceExcess 8.5', { diagnoseFirst: true, surfaceExcess: 8.5 }, ['mixing stable', 'mixing convective', 'scalarMixing convective']],
+    ['diagnosed after the deposit, surfaceExcess 8.5', { diagnoseFirst: false, surfaceExcess: 8.5 }, ['mixing stable', 'mixing convective', 'scalarMixing convective']],
     ['the subsidence share', { entrainment: { subsidence: true } }, []],
     ['the search ceiling raised to sigma 0.3', { searchTop: 0.3 }, []],
     ['the search ceiling lowered to sigma 0.9', { searchTop: 0.9 }, ['mixing convective']],
@@ -490,6 +490,17 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
     const clearance = (run, i) => Math.abs(run.depth[i] - (run.geopotential[(K - 2) * C + i] + run.geopotential[(K - 1) * C + i]) / (2 * g));
     const topsApart = (run, i) => Math.abs(run.depth[i] - run.gpuDepth[i] - ground[i]);
     const flipped = (run, i) => topsApart(run, i) > Math.max(2.5e-3 * (run.depth[i] - run.geopotential[(K - 1) * C + i] / g), 1e-2);
+    const twins = {};
+    const twinOf = (name) => {
+      if (!twins[name]) {
+        const twin = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer: cases.find(([n]) => n === name)[1] }));
+        const round = () => { for (const s of twin.state) if (s) for (let x = 0; x < s.length; x++) s[x] = Math.fround(s[x]); };
+        round();
+        for (let s = 0; s < 2; s++) { twin.step(900); round(); }
+        twins[name] = Object.fromEntries(Object.keys(runs[name].cpu).map((field) => [field, Float64Array.from(twin.boundaryLayer[field])]));
+      }
+      return twins[name];
+    };
     for (const [name, , acting] of cases) {
       const run = runs[name], where = `${label}, ${name}`, report = [];
       if (run.bad) failures.push(`${where}: ${run.bad} coefficients, depths or lowest-layer humidities are not finite on one engine or the other`);
@@ -499,7 +510,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
       for (const field of Object.keys(run.cpu)) {
         const mine = run.cpu[field], theirs = run.gpu[field], base = name !== 'defaults' && control.cpu[field] ? [control.cpu[field], control.gpu[field]] : null;
         const kept = new Uint8Array(C);
-        let parted = 0, tops = 0, flips = 0, topRatio = 0, topRoom = 0, topApart = 0, worst = 0, worstAt = -1;
+        let parted = 0, tops = 0, flips = 0, knives = 0, topRatio = 0, topRoom = 0, topApart = 0, worst = 0, worstAt = -1;
         const loose = [];
         for (let i = 0; i < C; i++) {
           if (out[i]) continue;
@@ -511,10 +522,12 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
               const apart = topsApart(r, i), room = clearance(r, i);
               if (room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) { atTop.push([gap * room / (2 * apart), room, apart]); return 'top'; }
               if (flipped(r, i)) return 'flip';
+              if (columnGap(r.cpu[field], twinOf(r === control ? 'defaults' : name)[field], i) > 1e-2) return 'twin';
               unexplained.push(`column ${i}${r === control ? ' in the defaults' : ''} ${gap.toExponential(1)} apart, its top ${room.toFixed(2)} m from the lowest interface and ${(1e3 * apart).toFixed(1)} mm from the GPU's`);
               return 'loose';
             });
             if (why.includes('loose')) loose.push(unexplained.join(', '));
+            else if (why.includes('twin')) knives++;
             else if (why.includes('flip')) flips++;
             else { tops++; for (const [ratio, room, apart] of atTop) { topRatio = Math.max(topRatio, ratio); topRoom = Math.max(topRoom, room); topApart = Math.max(topApart, apart); } }
             continue;
@@ -522,7 +535,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
           kept[i] = 1;
           if (own > worst) { worst = own; worstAt = i; }
         }
-        if (!(loose.length <= 2 && flips <= 0.005 * C && tops <= 0.005 * C)) failures.push(`${where}, ${field}: of ${parted} columns parted by over 1 % of their largest coefficient, ${tops} where the top meets the lowest interface, ${flips} where the engines' tops lie apart and ${loose.length} that neither explains (${loose.join('; ')})`);
+        if (!(loose.length <= 2 && flips <= 0.005 * C && tops <= 0.005 * C && knives <= 0.005 * C)) failures.push(`${where}, ${field}: of ${parted} columns parted by over 1 % of their largest coefficient, ${tops} where the top meets the lowest interface, ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin parts as well and ${loose.length} that none explains (${loose.join('; ')})`);
         const classes = [];
         for (const [kind, member] of Object.entries(run.classes)) {
           let apart = 0, scale = 0, lowApart = 0, lowScale = 0, move = 0, gap = 0, before = 0, columns = 0;
@@ -551,7 +564,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
           const z = (run.geopotential[at * C + worstAt] + run.geopotential[(at + 1) * C + worstAt]) / (2 * g);
           seat = ` (${run.classes.stable[worstAt] ? 'stable' : 'convective'}${run.classes.entraining[worstAt] ? ', entraining' : ''}: its largest gap at ${z.toFixed(0)} m with the top at ${run.depth[worstAt].toFixed(0)} m, where the coefficient is ${(Math.abs(mine[at * C + worstAt]) / largest).toExponential(1)} of the column's largest)`;
         }
-        report.push(`${field}: ${parted} columns parted, ${tops} where the top meets the lowest interface (within ${topRoom.toFixed(2)} m of it, their tops up to ${(topApart * 1e3).toFixed(1)} mm apart and their gaps up to ${topRatio.toFixed(2)} of 2|Δh|/(h − z)), ${flips} where the engines' tops lie apart, ${loose.length} unexplained${loose.length ? ` (${loose.join('; ')})` : ''}; ${classes.join('; ')}; the worst kept column ${worst.toExponential(1)} of its largest${seat}`);
+        report.push(`${field}: ${parted} columns parted, ${tops} where the top meets the lowest interface (within ${topRoom.toFixed(2)} m of it, their tops up to ${(topApart * 1e3).toFixed(1)} mm apart and their gaps up to ${topRatio.toFixed(2)} of 2|Δh|/(h − z)), ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin parts as well, ${loose.length} unexplained${loose.length ? ` (${loose.join('; ')})` : ''}; ${classes.join('; ')}; the worst kept column ${worst.toExponential(1)} of its largest${seat}`);
         if (name !== 'the subsidence share' || field !== 'mixing') continue;
         let columns = 0, off = 0, worstShare = 0;
         for (let i = 0; i < C; i++) {
@@ -575,7 +588,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
 
 test('the offline surface exchange diagnoses the state as it stands and takes no step: a diagnoseFirst layer holding deposits as the plain layer does, and after a step', async () => {
   const { diagnoseExchange } = await import('../scripts/surfaceExchange.mjs');
-  const [first, plain] = [{ diagnoseFirst: true }, {}].map((boundaryLayer) => prepare(createModel(new Grid(16), { topography, boundaryLayer })));
+  const [first, plain] = [{ diagnoseFirst: true }, { diagnoseFirst: false }].map((boundaryLayer) => prepare(createModel(new Grid(16), { topography, boundaryLayer })));
   first.radiation.sensibleHeat.fill(150); first.radiation.evaporation.fill(6e-5);
   diagnoseExchange(first); diagnoseExchange(plain);
   for (const name of ['depth', 'regime', 'friction', 'buoyancyFlux']) assert.deepEqual(first.boundaryLayer[name], plain.boundaryLayer[name], name);
@@ -587,7 +600,7 @@ test('the offline surface exchange diagnoses the state as it stands and takes no
 test('the GPU\'s boundary-layer diagnosis refuses a D_EXL read, which would take the last RK stage\'s exner, and its options leave none', async () => {
   const { PHYSICS_KERNELS, boundaryLayerDiagnosis } = await import('../js/gpu/physics.gpu.js');
   const body = PHYSICS_KERNELS.pblDiagnose;
-  assert.equal(boundaryLayerDiagnosis(body, {}), body);
+  assert.equal(boundaryLayerDiagnosis(body, { diagnoseFirst: false }), body);
   for (const options of [{ profileHeight: 'ground' }, { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6, diagnoseFirst: true, surfaceExcess: 8.5 }]) assert.ok(boundaryLayerDiagnosis(body, options).includes('blLift'));
   assert.throws(() => boundaryLayerDiagnosis(body.replace('fn blExchange(', 'fn blStale(i: i32) -> f32 { return D[D_EXL + i]; }\nfn blExchange('), {}), /reads D_EXL/);
 });
@@ -604,17 +617,17 @@ test('the CPU model refuses ocean.gustiness: its ocean and ice drift take the gu
   assert.throws(() => createModel(new Grid(16), { topography, ocean: { gustiness: 5 } }), /ocean\.gustiness is not an option/);
 });
 
-test('both coupled engines hand the air the same sea velocity under surface.relativeWind, with the ice drift and without it, and surface.gustiness and surface.virtualDensity move the ocean and the ice drift alike through their stress under the fixed exchange, and both refuse ocean.gustiness', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both coupled engines hand the air the same sea velocity under surface.relativeWind, with the ice drift and without it and the boundary layer diagnosed after the deposit, and surface.gustiness and surface.virtualDensity move the ocean and the ice drift alike through their stress under the fixed exchange, and both refuse ocean.gustiness', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const configs = [
-    ['drift', { surface: { relativeWind: true } }],
-    ['no drift', { surface: { relativeWind: true }, ocean: { iceDrift: false } }],
+    ['drift', { surface: { relativeWind: true }, boundaryLayer: PREVIOUS_BOUNDARY_LAYER }],
+    ['no drift', { surface: { relativeWind: true }, ocean: { iceDrift: false }, boundaryLayer: PREVIOUS_BOUNDARY_LAYER }],
     ['fixed exchange', { surface: { exchange: 'fixed' } }],
     ['fixed exchange, gustiness 6', { surface: { exchange: 'fixed', gustiness: 6 } }],
     ['fixed exchange, virtualDensity', { surface: { exchange: 'fixed', virtualDensity: true } }],
   ];
   const flows = {}, drifts = {}, failures = [], report = [];
-  for (const [name, { surface, ocean = {} }] of configs) {
-    const options = { topography, surface, ocean: { everySteps: 2, ...ocean } };
+  for (const [name, { surface, ocean = {}, boundaryLayer = {} }] of configs) {
+    const options = { topography, surface, boundaryLayer, ocean: { everySteps: 2, ...ocean } };
     const cpu = prepare(createModel(new Grid(16), options)), gpu = prepare(await createGpuModel(new Grid(16), options));
     for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
     await gpu.settle(); await gpu.sync();

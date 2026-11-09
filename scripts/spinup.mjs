@@ -65,7 +65,9 @@
 // The header records the radiation's shortwave scheme and aerosol, the moist
 // physics' bergeronAutoconversion and pcapeMinimum and the land's soil, with
 // the RADIATION, MOIST and LAND given, as the options the page starts the
-// state with (scripts/stateOptions.mjs).
+// state with (scripts/stateOptions.mjs). Its given holds the boundary
+// layer's diagnoseFirst, given or not, so that a run resumed under the other
+// order names boundaryLayer among the options other than the header records.
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}';
@@ -225,6 +227,7 @@ import { seaCells, seaIceExtent, polarIcedCells } from '../js/seaIceExtent.modul
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { withCadence } from '../js/cadence.module.js';
 import { headerOptions, differingGroups, runTerrain, moveOntoTerrain, requireOwnSubgrid } from './stateOptions.mjs';
+import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
@@ -290,7 +293,7 @@ if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (G
 const TERRAIN = runTerrain(GIVEN_TERRAIN, base);
 if (GIVEN_TERRAIN === undefined && TERRAIN !== undefined) log(`terrain ${JSON.stringify(TERRAIN)}, as ${saved ? file : process.env.FROM} records`);
 const GIVEN_GROUPS = [['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['ocean', 'OCEAN'], ['lake', 'LAKE'], ['ice', 'ICE'], ['dynamics', 'DYNAMICS'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY']].filter(([, name]) => process.env[name] !== undefined);
-const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
+const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(BOUNDARY_LAYER === false ? {} : { boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST, ...BOUNDARY_LAYER } }), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
 const otherGroups = base?.given ? differingGroups(GIVEN, base.given) : [];
 if (otherGroups.length) log(`options other than ${saved ? file : process.env.FROM}'s header records: ${otherGroups.join(', ')}`);
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);

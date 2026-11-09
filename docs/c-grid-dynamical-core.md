@@ -12392,10 +12392,36 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
   (`scripts/stateOptions.mjs`), so the page opens such a state without
   the option.
 
-`boundaryLayer.diagnoseFirst` (false) and `surfaceExcess` (0).
+`boundaryLayer.diagnoseFirst` (true) and `surfaceExcess` (0).
 - With diagnoseFirst, the diagnosis (top, K, regime) sees the lowest
   layer before the step's surface sensible heat and evaporation enter
-  it, as CAM's does. The implicit solve still takes them.
+  it, as CAM's does. The implicit solve still takes them. With it false
+  the diagnosis sees the layer as deposited.
+- The default rests on N=64 coupled pairs from seventeen64, scored on the
+  corrected references in day means (scorer ef3656c,
+  `~/.cache/webgcm-scratch/pairs/scorecard2.md`).
+  - Each arm ran a year from two starts: days 365 and 548 for year 1,
+    days 730 and 913 for year 2.
+  - A row moves past 3.04σ, where σ is the twin control's RMS over the
+    two starts.
+  - Year 1: 7 rows toward the observations and 5 away. The fixed-scale
+    score is 0.744 against the plain order's 0.908.
+  - Year 2: 9 toward, 3 away and 10 unresolved, with a fixed-scale score
+    of 0.688 against 0.860. The guards move toward (SST 30S–30N, the cold
+    tongue, Ts, the 160–100W stress and ASR), except the SLP contrast,
+    which is unresolved.
+  - Its costs in year 2:
+    - 40–60N JJA land 2 m air: +2.0 K (a bias of +1.99 K against +0.02).
+    - LWCRE: −1.0 W/m².
+    - Net TOA: +3.3 W/m². That is a bias of +3.1 over CERES, against +2.8
+      in year 1.
+  - relativeWind with coolSkin on this base moves no row toward and one
+    away, so both stay off.
+- The engines part more under diagnoseFirst at seventeen64 day 365 than
+  under the plain order:
+  - MIX shares: 2.1× at step 2 and 1.3× at step 8.
+  - The CPU against its own copy, perturbed by one f32 ulp: 1.4× and
+    1.2×.
 - The offline tools (`diagnoseExchange` in `scripts/surfaceExchange.mjs`,
   and `scripts/adjustStages.mjs`) diagnose a saved state as it stands,
   through the plain entry `{ withhold: false }`.

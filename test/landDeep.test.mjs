@@ -8,6 +8,7 @@ import { createLandSurface } from '../js/physics/land.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { options, digest, landArrays } from './helpers/savedLand.mjs';
+import { PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 
 const N = 16, mesh = buildMesh(new Grid(N)), C = mesh.nCells;
 const flat = createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
@@ -162,7 +163,7 @@ test('a save keeps land.deep through the land and the state file, a save without
 
 test('with deepCapacity 0, coverGoal \'water\' and velocityScale \'capped\' four steps of the CPU model give the plain land\'s digests, for the land and for the atmosphere with it', () => {
   for (const extra of [{ deepCapacity: 0, coverGoal: 'water' }]) {
-    const model = createModel(new Grid(N), { ...options, boundaryLayer: { velocityScale: 'capped' }, land: { soil: 'layers', ...extra } });
+    const model = createModel(new Grid(N), { ...options, boundaryLayer: { ...PREVIOUS_BOUNDARY_LAYER, velocityScale: 'capped' }, land: { soil: 'layers', ...extra } });
     initializeState(model, {}).forEach((a, k) => model.state[k].set(a));
     for (let i = 0; i < C; i++) if (model.geography.land[i]) model.state[6][i] = 0;
     if (model.load) model.load();
