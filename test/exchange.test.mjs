@@ -447,7 +447,7 @@ test('both engines refuse under boundaryLayer the options they take from the sur
   }
 });
 
-test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange, a column the engines part counting as a knife edge where an f32-rounded CPU twin parts it too', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange, a column the engines part counting as a knife edge where an f32-rounded CPU twin comes within a quarter of that gap of the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cases = [
     ['defaults', {}, []],
     ['ground, stable profile, Prandtl coefficient 3.6, countergradient', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6, countergradient: 7.2 }, ['mixing stable', 'mixing convective', 'scalarMixing stable', 'scalarMixing convective']],
@@ -522,7 +522,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
               const apart = topsApart(r, i), room = clearance(r, i);
               if (room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) { atTop.push([gap * room / (2 * apart), room, apart]); return 'top'; }
               if (flipped(r, i)) return 'flip';
-              if (columnGap(r.cpu[field], twinOf(r === control ? 'defaults' : name)[field], i) > 1e-2) return 'twin';
+              if (columnGap(r.gpu[field], twinOf(r === control ? 'defaults' : name)[field], i) < 0.25 * gap) return 'twin';
               unexplained.push(`column ${i}${r === control ? ' in the defaults' : ''} ${gap.toExponential(1)} apart, its top ${room.toFixed(2)} m from the lowest interface and ${(1e3 * apart).toFixed(1)} mm from the GPU's`);
               return 'loose';
             });
@@ -535,7 +535,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
           kept[i] = 1;
           if (own > worst) { worst = own; worstAt = i; }
         }
-        if (!(loose.length <= 2 && flips <= 0.005 * C && tops <= 0.005 * C && knives <= 0.005 * C)) failures.push(`${where}, ${field}: of ${parted} columns parted by over 1 % of their largest coefficient, ${tops} where the top meets the lowest interface, ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin parts as well and ${loose.length} that none explains (${loose.join('; ')})`);
+        if (!(loose.length <= 2 && flips <= 0.005 * C && tops <= 0.005 * C && knives <= 0.005 * C)) failures.push(`${where}, ${field}: of ${parted} columns parted by over 1 % of their largest coefficient, ${tops} where the top meets the lowest interface, ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin comes within a quarter of the gap of the GPU and ${loose.length} that none explains (${loose.join('; ')})`);
         const classes = [];
         for (const [kind, member] of Object.entries(run.classes)) {
           let apart = 0, scale = 0, lowApart = 0, lowScale = 0, move = 0, gap = 0, before = 0, columns = 0;
@@ -564,7 +564,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
           const z = (run.geopotential[at * C + worstAt] + run.geopotential[(at + 1) * C + worstAt]) / (2 * g);
           seat = ` (${run.classes.stable[worstAt] ? 'stable' : 'convective'}${run.classes.entraining[worstAt] ? ', entraining' : ''}: its largest gap at ${z.toFixed(0)} m with the top at ${run.depth[worstAt].toFixed(0)} m, where the coefficient is ${(Math.abs(mine[at * C + worstAt]) / largest).toExponential(1)} of the column's largest)`;
         }
-        report.push(`${field}: ${parted} columns parted, ${tops} where the top meets the lowest interface (within ${topRoom.toFixed(2)} m of it, their tops up to ${(topApart * 1e3).toFixed(1)} mm apart and their gaps up to ${topRatio.toFixed(2)} of 2|Δh|/(h − z)), ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin parts as well, ${loose.length} unexplained${loose.length ? ` (${loose.join('; ')})` : ''}; ${classes.join('; ')}; the worst kept column ${worst.toExponential(1)} of its largest${seat}`);
+        report.push(`${field}: ${parted} columns parted, ${tops} where the top meets the lowest interface (within ${topRoom.toFixed(2)} m of it, their tops up to ${(topApart * 1e3).toFixed(1)} mm apart and their gaps up to ${topRatio.toFixed(2)} of 2|Δh|/(h − z)), ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin comes within a quarter of the gap of the GPU, ${loose.length} unexplained${loose.length ? ` (${loose.join('; ')})` : ''}; ${classes.join('; ')}; the worst kept column ${worst.toExponential(1)} of its largest${seat}`);
         if (name !== 'the subsidence share' || field !== 'mixing') continue;
         let columns = 0, off = 0, worstShare = 0;
         for (let i = 0; i < C; i++) {
