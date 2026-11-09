@@ -12457,14 +12457,19 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
   record a boundaryLayer group as it was made, and runs today's default on
   a state whose options record none, as on the page's default states. A
   `given` without diagnoseFirst predates the default and reads as false.
-  A resume of a state that records no `given` (saved before Nov 7, 2026)
-  logs that the boundary layer now runs diagnoseFirst over a state made
-  in the plain order.
-- The default rests on N=64 coupled pairs from seventeen64. Each save's
+  A resume of a state that records no `given` compares the boundary
+  layer with the group its `options` record, as a page export's do, and
+  where neither records one, as on a spin-up save from before Nov 7,
+  2026, logs that the boundary layer now runs diagnoseFirst over a state
+  made in the plain order. splitState records the group only where the
+  header's `given` or `options` holds it, and oceanSpinup's states carry
+  the loaded state's `options` and `given`.
+- The default rests on N=64 coupled pairs from two starts. Each save's
   30-day window of day means is reduced by `reduceState` in
-  `scripts/scorecard64.mjs` and scored on its corrected references (the
-  scorer and the saves are in this machine's scratch, not in the
-  repository).
+  `scripts/scorecard64.mjs` as of ef3656c, the reducer the pairs' numbers
+  were made with, and scored on its corrected references (the scorer's
+  tree, pairs/code-score, is at ef3656c; it and the saves are in this
+  machine's scratch, not in the repository).
   - The diagnoseFirst arm, the plain-order control and the control's twin
     each ran two years from two starts. S1 is seventeen64 day 365. S2 is
     `amazon/arms/pmin/amz64_day0548.bin`, day 548 of the Amazon A/B's
@@ -12553,7 +12558,7 @@ on day 2), the deposit falls from 48.3 to 42.8 and the difference from
   boundary layer's mixing takes up what the adjustment took. It is a
   transient, and nothing is attributed from it.
 - diagnoseFirst, the default, moves the difference by −0.006 ± 0.002
-  g/kg from that, and the plume's term on the lowest layer (−1.1 ± 0.1)
+  g/kg from the plain order's 0.080, and the plume's term on the lowest layer (−1.1 ± 0.1)
   is 2.5 % of the deposit.
 - Exempting the lowest interface in the surface and coupled regimes, or
   keeping the adjustment above the boundary layer, would be a design

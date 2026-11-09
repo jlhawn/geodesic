@@ -126,7 +126,7 @@ const blank = () => {
   return (records) => decodeState(encodeState({ N: 16, K: model.core.K, day: 0, time: 0, terrain: true, ...records, pi, theta }));
 };
 
-test('a header records the boundary layer\'s order its run was given in `options` and `given`, for both values, through the file, and the default where the run is given none', async () => {
+test('a header records the boundary layer\'s order its run was given in `options` and `given`, for both values, through the file, the default where the run is given none, and false in both for a run given no boundary layer', async () => {
   const save = blank();
   for (const diagnoseFirst of [true, false]) {
     const kept = await save(headerOptions({ boundaryLayer: { diagnoseFirst } }));
@@ -134,9 +134,11 @@ test('a header records the boundary layer\'s order its run was given in `options
   }
   const unset = await save(headerOptions({}));
   assert.deepEqual([unset.options.boundaryLayer, unset.given.boundaryLayer], [{ diagnoseFirst: DIAGNOSE_FIRST }, { diagnoseFirst: DIAGNOSE_FIRST }]);
+  const off = await save(headerOptions({ boundaryLayer: false }));
+  assert.deepEqual([off.options.boundaryLayer, off.given.boundaryLayer], [false, false]);
 });
 
-test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a year-2 control\'s header rebuilds and records so, as in fixedSst, a resume at the default names boundaryLayer, and a resume of a state that records no `given` says the boundary layer now runs diagnoseFirst over a plain-order state', async () => {
+test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a year-2 control\'s header rebuilds and records so, as in fixedSst, a resume at the default names boundaryLayer, a GIVEN equal to the record as made stands in, a resume of a state that records the order in its options alone, as a page export does, names boundaryLayer where the run differs from it, and one that records it nowhere says the boundary layer now runs diagnoseFirst over a plain-order state', async () => {
   const save = blank(), strip = ({ boundaryLayer, ...rest }) => rest;
   const fresh = headerOptions({ land: { coverGoal: 'observed' } }), plainGiven = headerOptions({ land: { coverGoal: 'observed' }, boundaryLayer: { diagnoseFirst: false } }).given;
   const control = await save({ options: strip(fresh.options), given: strip(fresh.given) });
@@ -147,15 +149,20 @@ test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a 
   assert.deepEqual(resumeNotes(plainGiven, control, 'ctl'), []);
   assert.deepEqual(resumeNotes(fresh.given, await save(fresh), 'c'), []);
   const early = await save({ options: strip(fresh.options) });
-  assert.deepEqual(resumeNotes(fresh.given, early, 'seventeen64'), ['seventeen64 records no given options (saved before Nov 7, 2026): the boundary layer now runs diagnoseFirst over a state made in the plain order']);
+  assert.deepEqual(resumeNotes(fresh.given, early, 'seventeen64'), ['seventeen64 records no boundary-layer order (a spin-up save from before Nov 7): the boundary layer now runs diagnoseFirst over a state made in the plain order']);
   assert.deepEqual(resumeNotes(plainGiven, early, 'seventeen64'), []);
+  const exported = await save({ options: fresh.options }), exportedPlain = await save({ options: headerOptions({ boundaryLayer: { diagnoseFirst: false } }).options });
+  assert.deepEqual([resumeNotes(fresh.given, exported, 'page'), resumeNotes(plainGiven, exported, 'page')], [[], ["options other than page's header records in its options: boundaryLayer"]]);
+  assert.deepEqual([resumeNotes(fresh.given, exportedPlain, 'page'), resumeNotes(plainGiven, exportedPlain, 'page')], [["options other than page's header records in its options: boundaryLayer"], []]);
+  assert.deepEqual(rebuiltOptions(control, {}, run), run);
   assert.deepEqual(resumeNotes(fresh.given, null, 'none'), []);
 });
 
-test('the page starts a state whose options record diagnoseFirst false in the plain order, one whose options record no boundaryLayer group at today\'s default, and records the order it starts', async () => {
+test('the page starts a state whose options record diagnoseFirst false in the plain order, one whose options record no boundaryLayer group at today\'s default, records the order it starts, and takes a start message\'s boundaryLayer false over the record', async () => {
   const save = blank();
   const plain = startOptions((await save(headerOptions({ boundaryLayer: { diagnoseFirst: false } }))).options, {}), bare = startOptions((await save({})).options, {});
   assert.deepEqual([plain.boundaryLayer, bare.boundaryLayer], [{ diagnoseFirst: false }, { diagnoseFirst: DIAGNOSE_FIRST }]);
+  assert.equal(startOptions((await save(headerOptions({ boundaryLayer: { diagnoseFirst: false } }))).options, { boundaryLayer: false }).boundaryLayer, false);
   assert.equal(createModel(new Grid(16), { topography, ...plain }).boundaryLayer.diagnoseFirst, false);
   assert.equal(createModel(new Grid(16), { topography, ...bare }).boundaryLayer.diagnoseFirst, DIAGNOSE_FIRST);
 });

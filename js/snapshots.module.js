@@ -58,13 +58,14 @@ export const messageState = (message) => ({ N: message.N, K: message.K, day: mes
 
 /*
  * The model options a run starts with: those its saved state records
- * (stateFile.module.js), each group overridden by the start message's, and
+ * (stateFile.module.js), each group overridden by the start message's key
+ * by key, or replaced where the message gives it as false, and
  * the boundary layer's diagnoseFirst at its default where neither records
  * it, so that what the run saves records the order it ran.
  */
 export const startOptions = (saved, given) => {
   const options = { ...(given ?? {}) };
-  for (const [group, values] of Object.entries(saved ?? {})) options[group] = { ...values, ...(options[group] ?? {}) };
+  for (const [group, values] of Object.entries(saved ?? {})) if (options[group] !== false) options[group] = { ...values, ...(options[group] ?? {}) };
   if (options.boundaryLayer !== false) options.boundaryLayer = { diagnoseFirst: DIAGNOSE_FIRST, ...(options.boundaryLayer ?? {}) };
   return options;
 };

@@ -69,14 +69,19 @@ export function asMade(given) {
 
 /*
  * The lines a run that resumes `base` under the record `given` logs: the
- * groups whose options differ from those base's `given` records as made,
- * or, for a base that records no `given` (saved before Nov 7, 2026), that
- * the boundary layer runs diagnoseFirst over a state made in the plain
- * order.
+ * groups whose options differ from those base's `given` records as made;
+ * for a base without `given`, the boundary layer against the group its
+ * `options` record, as a page export's do, or, where neither records it,
+ * as on a spin-up save from before Nov 7, 2026, that the boundary layer
+ * runs diagnoseFirst over a state made in the plain order.
  */
 export function resumeNotes(given, base, name) {
   if (!base) return [];
-  if (base.given === undefined) return given.boundaryLayer?.diagnoseFirst === true ? [`${name} records no given options (saved before Nov 7, 2026): the boundary layer now runs diagnoseFirst over a state made in the plain order`] : [];
+  if (base.given === undefined) {
+    const recorded = base.options?.boundaryLayer;
+    if (recorded !== undefined) return differingGroups({ boundaryLayer: given.boundaryLayer }, { boundaryLayer: recorded }).length ? [`options other than ${name}'s header records in its options: boundaryLayer`] : [];
+    return given.boundaryLayer?.diagnoseFirst === true ? [`${name} records no boundary-layer order (a spin-up save from before Nov 7): the boundary layer now runs diagnoseFirst over a state made in the plain order`] : [];
+  }
   const other = differingGroups(given, asMade(base.given));
   return other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : [];
 }
@@ -92,7 +97,7 @@ export function resumeNotes(given, base, name) {
  */
 export function rebuiltOptions(header, groups = {}, standIn) {
   if (header.given !== undefined && standIn !== undefined) {
-    const differing = differingGroups(header.given, standIn);
+    const differing = differingGroups(asMade(header.given), standIn);
     if (differing.length) throw new Error(`GIVEN stands in for the given options only where the state's header records none; this header records them, and GIVEN differs from them in ${differing.join(', ')}: unset GIVEN, and give the groups to change in their own variables`);
   }
   const recorded = header.given === undefined ? standIn : asMade(header.given);

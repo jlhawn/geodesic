@@ -53,6 +53,7 @@ const DAYS = Number(process.env.DAYS ?? 12), SAVE_DAYS = Number(process.env.SAVE
 const TEM_HOURS = Number(process.env.TEM_HOURS ?? 0), TEM_FROM = Number(process.env.TEM_FROM ?? 0), WINDS = process.env.WINDS === '1';
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ENV_GROUPS = [['radiation', 'RADIATION'], ['moist', 'MOIST'], ['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY'], ['dynamics', 'DYNAMICS'], ['land', 'LAND'], ['lake', 'LAKE']].filter(([, name]) => process.env[name] !== undefined);
+if (process.env.BOUNDARY_LAYER !== undefined && JSON.parse(process.env.BOUNDARY_LAYER) === false) throw new Error('BOUNDARY_LAYER is false, and createGpuModel runs no model without the boundary layer: give its options as JSON or leave it unset');
 const rebuilt = rebuiltOptions(saved, Object.fromEntries(ENV_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), process.env.GIVEN === undefined ? undefined : JSON.parse(process.env.GIVEN));
 const RUN = Object.fromEntries(Object.entries(rebuilt).filter(([group]) => group !== 'ocean' && group !== 'terrain'));
 console.log(`options: ${saved.given ? 'the header\'s given' : 'GIVEN, the header recording none'}${ENV_GROUPS.length ? `, ${ENV_GROUPS.map(([, name]) => name).join(', ')} over it` : ''}: ${JSON.stringify(RUN)}`);

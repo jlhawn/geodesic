@@ -300,6 +300,7 @@ if (base) for (const [key, value] of Object.entries(savedGeography(base))) if (G
 const TERRAIN = runTerrain(GIVEN_TERRAIN, base);
 if (GIVEN_TERRAIN === undefined && TERRAIN !== undefined) log(`terrain ${JSON.stringify(TERRAIN)}, as ${saved ? file : process.env.FROM} records`);
 const GIVEN_GROUPS = [['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['ocean', 'OCEAN'], ['lake', 'LAKE'], ['ice', 'ICE'], ['dynamics', 'DYNAMICS'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY']].filter(([, name]) => process.env[name] !== undefined);
+if (process.env.BOUNDARY_LAYER !== undefined && JSON.parse(process.env.BOUNDARY_LAYER) === false) throw new Error('BOUNDARY_LAYER is false, and createGpuModel runs no model without the boundary layer: give its options as JSON or leave it unset');
 const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
 for (const note of resumeNotes(GIVEN, base, saved ? file : process.env.FROM)) log(note);
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);

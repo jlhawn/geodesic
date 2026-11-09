@@ -182,7 +182,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     if (earlier.steps !== digest.steps) throw new Error(`${given('compare')} ran ${earlier.steps} steps, this digest ${digest.steps}`);
     const { moved, added, removed, sameState } = compareDigests(earlier, digest);
     console.log(`against ${given('compare')} (state ${earlier.stateHash}): ${sameState ? 'the same state' : 'the state differs'}, ${moved.length} of ${digest.rows.length} rows moved`);
-    for (const m of moved) console.log(`  ${m.name.padEnd(width)}  ${formatValue(m.before).padStart(10)} → ${formatValue(m.after).padStart(10)}  ${m.units} (${m.delta >= 0 ? '+' : ''}${formatValue(m.delta)}, ${(100 * m.relative).toFixed(3)} %)`);
+    for (const m of moved) console.log(`  ${m.name.padEnd(width)}  ${formatValue(m.before).padStart(10)} → ${formatValue(m.after).padStart(10)}  ${m.units} (${m.delta >= 0 ? '+' : ''}${formatValue(m.delta)}, ${(100 * m.relative).toFixed(3)} % of the larger magnitude)`);
     if (added.length) console.log(`  new rows: ${added.join(', ')}`);
     if (removed.length) console.log(`  rows no longer made: ${removed.join(', ')}`);
   }

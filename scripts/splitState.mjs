@@ -40,7 +40,9 @@ if (file.endsWith('.parts.json')) {
   if (stamped && !saved) throw new Error('RADIATION and MOIST are recorded in binary states only');
   const ringed = !!saved && SST_FIELDS.some((name) => name in saved), meaned = !!saved && 'means' in saved;
   const bare = saved ? withoutMeans(withoutSstRing(saved)) : null;
-  const kept = stamped ? { ...bare, options: { ...saved.options, ...recordedOptions(saved.given ? { boundaryLayer: asMade(saved.given).boundaryLayer } : {}, saved.options, given) } } : ringed || meaned ? bare : null;
+  const recorded = stamped ? recordedOptions(saved.given ? { boundaryLayer: asMade(saved.given).boundaryLayer } : {}, saved.options, given) : null;
+  if (recorded && saved.given === undefined && saved.options?.boundaryLayer === undefined) delete recorded.boundaryLayer;
+  const kept = stamped ? { ...bare, options: { ...saved.options, ...recorded } } : ringed || meaned ? bare : null;
   const gz = kept ? gzipSync(encodeState(kept, { f64: f64Names(saved) }), { level: 9 }) : file.endsWith('.gz') ? raw : gzipSync(raw, { level: 9 });
   const parts = [];
   for (let at = 0; at < gz.length; at += chunk) {
