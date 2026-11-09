@@ -233,7 +233,7 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   gpu.destroy();
 });
 
-for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}` : ''} at the default order: the means over the cells of the per-cell sums of absorbed and outgoing radiation, clear and all-sky, at N=16, which a cell a threshold parts moves by its share and a shift across many cells moves whole`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}` : ''} at the default order at N=16: per-cell sums of clear-sky absorbed and outgoing radiation, the means over the cells of the all-sky sums, which a cell a threshold parts moves only by its share, and the means over the cells of each layer's longwave heating above 30 hPa`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true }, grid ? sigmaInterfaces(grid) : undefined, {});
   const slots = { absorbedSolar: 'ABSSUM', atmosphereSolar: 'ATMSUM', outgoingLongwave: 'OLRSUM', clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
   const compare = async (names, limit) => {
@@ -242,14 +242,24 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
       let a = 0, b = 0;
       for (let x = 0; x < C; x++) { a += cpu.radiation.summed[name][x]; b += device[slots[name]][x]; }
       const gap = Math.abs(b - a) / Math.abs(a), cells = stats(cpu.radiation.summed[name], device[slots[name]].subarray(0, C));
-      assert.ok(gap < limit, `${name}: the means part by ${gap} of the CPU's`);
-      return `${name} ${gap.toExponential(1)} (per-cell rms ${cells.rmsRel.toExponential(1)})`;
+      if (name.startsWith('clear')) assert.ok(cells.rmsRel < limit, `${name}: per-cell rms ${cells.rmsRel}`);
+      else assert.ok(gap < limit, `${name}: the means part by ${gap} of the CPU's`);
+      return name.startsWith('clear') ? `${name} rms ${cells.rmsRel.toExponential(1)} (max ${cells.maxDiff.toExponential(1)}, mean ${gap.toExponential(1)})` : `${name} mean ${gap.toExponential(1)} (per-cell rms ${cells.rmsRel.toExponential(1)})`;
     });
   };
   for (let s = 0; s < 4; s++) { cpu.step(DT); await gpu.step(DT); }
   const early = await compare(Object.keys(slots), 1e-5);
+  const device = await gpu.gpu.downloadPhysics(), top = [];
+  for (let k = 0; 0.5 * (cpu.core.levels[k] + cpu.core.levels[k + 1]) < 0.03; k++) {
+    let a = 0, b = 0;
+    for (let x = 0; x < C; x++) { a += cpu.radiation.longwave[k * C + x]; b += device.LWH[k * C + x]; }
+    const gap = Math.abs(b - a) / Math.abs(a);
+    assert.ok(gap < 3e-4, `layer ${k}'s longwave heating: the means part by ${gap} of the CPU's`);
+    top.push(gap.toExponential(1));
+  }
+  early.push(`the ${top.length} layers above 30 hPa' longwave heating means ${top.join(', ')}`);
   for (let s = 4; s < 24; s++) { cpu.step(DT); await gpu.step(DT); }
   const later = await compare(['clearAbsorbedSolar', 'clearOutgoingLongwave'], 1e-4);
-  console.log(`spectral gases${grid ? ` on ${grid}` : ''} at the default order, the engines' means of the per-cell sums apart at N=16, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
+  console.log(`spectral gases${grid ? ` on ${grid}` : ''} at the default order, CPU against GPU at N=16, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
   gpu.destroy();
 });

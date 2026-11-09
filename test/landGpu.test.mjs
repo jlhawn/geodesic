@@ -49,7 +49,7 @@ function prepare(model, fog = false) {
   return model;
 }
 
-for (const held of [true, false]) test(held ? 'eight GPU steps over a continent track the CPU model: surface, soil, snow, vegetation, and the coast-bound ocean, with the boundary layer diagnosed after the deposit' : 'eight GPU steps over a continent at the default order track the CPU model: the land means of the surface temperature, soil and snow to a tenth of the per-cell bounds, the surface layer, vegetation and fog cell by cell, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const held of [true, false]) test(held ? 'eight GPU steps over a continent track the CPU model: surface, soil, snow, vegetation, and the coast-bound ocean, with the boundary layer diagnosed after the deposit' : 'eight GPU steps over a continent at the default order track the CPU model: the surface temperature outside the decisions\' neighborhoods but for one cell, soil, snow, the surface layer, vegetation and fog cell by cell, the land means of the surface temperature and soil and the snowy cells\' mean of snow to a tenth of the per-cell bounds, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
   const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
   const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
@@ -76,15 +76,19 @@ for (const held of [true, false]) test(held ? 'eight GPU steps over a continent 
   assert.ok(moved > 0.2, `the vegetation moved at most ${moved} from its start`);
   assert.ok(vegetation.maxDiff < 1e-3, `vegetation max ${vegetation.maxDiff} at ${vegetation.at}`);
   console.log(`eight steps over a continent at N=16: Ts max ${ts.maxDiff.toExponential(1)} K outside the ${near.size} cells within one of the ${decisions.parted.size} where the engines took a discrete decision apart, θ rms ${theta.rmsRel.toExponential(1)}, soil max ${soil.maxDiff.toExponential(1)} kg/m², snow max ${snow.maxDiff.toExponential(1)} kg/m²; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
-  const C = cpu.mesh.nCells, landMean = (a, b) => { let sum = 0, n = 0; for (let x = 0; x < a.length; x++) if (cpu.geography.land[x % C]) { sum += b[x] - a[x]; n++; } return Math.abs(sum / n); };
-  const means = { Ts: landMean(cpu.state[3], gpu.state[3]), soil: landMean(cpu.land.soil, saved.soil), snow: landMean(cpu.land.snow, saved.snow) };
-  console.log(`land means apart: Ts ${means.Ts.toExponential(1)} K, soil ${means.soil.toExponential(1)}, snow ${means.snow.toExponential(1)}; per cell, soil ${soil.maxDiff.toExponential(1)} at ${soil.at}, snow ${snow.maxDiff.toExponential(1)} at ${snow.at}`);
+  const C = cpu.mesh.nCells, landMean = (a, b, counted = (i) => cpu.geography.land[i]) => { let sum = 0, n = 0; for (let x = 0; x < a.length; x++) if (counted(x % C)) { sum += b[x] - a[x]; n++; } return Math.abs(sum / n); };
+  const snowy = (i) => cpu.geography.land[i] && (cpu.land.snow[i] > 0 || saved.snow[i] > 0);
+  const means = { Ts: landMean(cpu.state[3], gpu.state[3]), soil: landMean(cpu.land.soil, saved.soil), snow: landMean(cpu.land.snow, saved.snow, snowy) }, rest = stats(cpu.state[3], gpu.state[3], new Set([...near, ts.at]));
+  console.log(`land means apart: Ts ${means.Ts.toExponential(1)} K, soil ${means.soil.toExponential(1)}, snow ${means.snow.toExponential(1)} over the ${Array.from({ length: C }, (_, i) => i).filter(snowy).length} snowy cells; per cell, soil ${soil.maxDiff.toExponential(1)} at ${soil.at}, snow ${snow.maxDiff.toExponential(1)} at ${snow.at}, Ts outside the decisions' neighborhoods ${ts.maxDiff.toExponential(1)} K at ${ts.at} and ${rest.maxDiff.toExponential(1)} K at ${rest.at} beside it`);
   assert.ok(near.size <= 0.5 * C, `${near.size} cells left out`);
   if (held) assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${ts.at}, ${near.size} cells left out`);
-  else assert.ok(means.Ts < 2e-3 && means.soil < 1e-3 && means.snow < 1e-3, `the land means part by Ts ${means.Ts} K, soil ${means.soil}, snow ${means.snow}`);
+  else {
+    assert.ok(rest.maxDiff < 0.02, `Ts max ${rest.maxDiff} at ${rest.at} beside cell ${ts.at}'s ${ts.maxDiff}, ${near.size} cells left out`);
+    assert.ok(means.Ts < 2e-3 && means.soil < 1e-3 && means.snow < 1e-3, `the land means part by Ts ${means.Ts} K and soil ${means.soil}, and the snowy cells' by snow ${means.snow}`);
+  }
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
-  if (held) assert.ok(soil.maxDiff < 1e-2, `soil max ${soil.maxDiff} at ${soil.at}`);
-  if (held) assert.ok(snow.maxDiff < 1e-2, `snow max ${snow.maxDiff} at ${snow.at}`);
+  assert.ok(soil.maxDiff < 1e-2, `soil max ${soil.maxDiff} at ${soil.at}`);
+  assert.ok(snow.maxDiff < 1e-2, `snow max ${snow.maxDiff} at ${snow.at}`);
   assert.ok(Math.abs(dc.landMeanT - d.landMeanT) < 0.01 && Math.abs(dc.soilWater - d.soilWater) < 0.01 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 0.2);
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) assert.equal(gpu.state[6][i], 0);
 });
