@@ -1650,6 +1650,9 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
   let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, residues = 0, worstTheta = 0, thetaOver = -Infinity, thetaAllowed = 0, worstQ = 0, worstQc = 0, worstRain = 0, rainScale = 0;
   let plumes = 0, plumeFlips = 0, topsDiffer = 0, worstFlux = 0, fluxScale = 0, worstCover = 0, worstWater = 0, waterScale = 0, forcedOver = -Infinity, qOver = -Infinity;
   const K0 = K - (layout.PH.CUWATER - layout.PH.CUCOVER) / C;
+  const compared = { theta: after[1], q: after[4], qc: after[5], ...(momentum ? { u: after[2] } : {}), CUMF: ph.CUMF.subarray(0, C), CUTOP: ph.CUTOP.subarray(0, C), CONV: ph.CONV.subarray(0, C), COND: ph.COND.subarray(0, C), FOG: ph.FOG.subarray(0, C), CUCOVER: ph.CUCOVER.subarray(0, (K - K0) * C), CUWATER: ph.CUWATER.subarray(0, (K - K0) * C), ...(nocturnal && options.plumeMomentum !== false ? { MOMS: ph.MOMS.subarray(0, C) } : {}) };
+  const unfinite = Object.keys(compared).filter((name) => !compared[name].every(Number.isFinite));
+  assert.deepEqual(unfinite, [], `the GPU's ${unfinite.join(', ')} hold a value that is not finite`);
   const beside = new Set(), switching = new Set();
   for (let i = 0; i < C; i++) {
     const cpu = moist.cumulusBaseFlux[i], gpuFlux = ph.CUMF[i];
