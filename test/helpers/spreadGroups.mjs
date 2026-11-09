@@ -4,9 +4,12 @@
  * field split by its layers' reference pressure, σ·1000 hPa, at 700 and
  * 100 hPa. A group's gap at a cell is the signed gap of largest magnitude
  * over the group's layers, and its reference is the CPU field over the same
- * cells and layers. groupChecks requires every tier of S9 in each group's
- * bounds. The tests' bounds were built from CPU twins grouped by these same
- * functions, so a change here needs the bounds rebuilt.
+ * cells and layers. bandLayers puts every layer in one band and throws on a
+ * sigma that is not finite; spreadGroups throws on bands that miss or repeat
+ * a layer and on a field that is not their layers times the cells or edges.
+ * groupChecks requires every tier of S9 in each group's bounds. The tests'
+ * bounds were built from CPU twins grouped by these same functions, so a
+ * change here needs the bounds rebuilt.
  */
 import { hemispheres, columnLargest, magnitude, distributionCheck, S9_TIERS } from './distribution.mjs';
 
@@ -23,11 +26,17 @@ export function groupLayout(mesh, { land = null, edges = false } = {}) {
 
 export function bandLayers(sigmaMid, layers) {
   if (layers === 1) return { all: [0] };
-  return Object.fromEntries(BANDS.map(([name, inBand]) => [name, Array.from({ length: layers }, (_, k) => k).filter((k) => inBand(sigmaMid[k]))]).filter(([, ks]) => ks.length));
+  if (!Number.isInteger(layers) || layers < 1) throw new Error(`${layers} layers`);
+  const sigma = Array.from({ length: layers }, (_, k) => sigmaMid?.[k]), bad = sigma.findIndex((s) => !Number.isFinite(s));
+  if (bad >= 0) throw new Error(`layer ${bad} of ${layers} has a sigma of ${sigma[bad]}`);
+  return Object.fromEntries(BANDS.map(([name, inBand]) => [name, sigma.flatMap((s, k) => (inBand(s) ? [k] : []))]).filter(([, ks]) => ks.length));
 }
 
 export function spreadGroups(cpu, gpu, layout, bands) {
-  const { n, sides, members } = layout, layers = Math.max(...Object.values(bands).flat()) + 1, gaps = Float64Array.from({ length: layers * n }, (_, x) => gpu[x] - cpu[x]), groups = {};
+  const { n, sides, members } = layout, held = Object.values(bands).flat().sort((a, b) => a - b), layers = held.length;
+  if (!layers || held.some((k, j) => k !== j)) throw new Error(`the bands hold layers ${held.join(', ')}, not each of 0 to ${layers - 1} once`);
+  if (cpu.length !== layers * n || gpu.length !== layers * n) throw new Error(`fields of ${cpu.length} and ${gpu.length} values for ${layers} layers of ${n}`);
+  const gaps = Float64Array.from({ length: layers * n }, (_, x) => gpu[x] - cpu[x]), groups = {};
   for (const [band, ks] of Object.entries(bands)) {
     const largest = columnLargest(gaps, n, ks);
     for (const [surface, cells] of Object.entries(members)) {

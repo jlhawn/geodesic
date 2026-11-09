@@ -331,11 +331,11 @@ test('surface.virtualDensity lowers the evaporation alike on both engines: the f
       const C = cpu.mesh.nCells, lowest = (cpu.core.K - 1) * C;
       const [evaporation] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.EVAP, length: C }]);
       const split = Array.from({ length: C }, (_, i) => !(Math.abs(gpu.state[4][lowest + i] - cpu.state[4][lowest + i]) <= 1e-2 * cpu.state[4][lowest + i]));
-      runs.push({ cpu: Float64Array.from(cpu.radiation.evaporation), gpu: Float64Array.from(evaporation), split, unfinished: nonFinite(gpu.state[4].subarray(lowest, lowest + C)) + nonFinite(cpu.state[4].subarray(lowest, lowest + C)) });
+      runs.push({ cpu: Float64Array.from(cpu.radiation.evaporation), gpu: Float64Array.from(evaporation), split, unfinished: nonFinite(gpu.state[4].subarray(lowest, lowest + C)) + nonFinite(cpu.state[4].subarray(lowest, lowest + C)) + nonFinite(evaporation) + nonFinite(cpu.radiation.evaporation) });
       gpu.destroy();
     }
     const [on, off] = runs, split = on.split.map((s, i) => s || off.split[i]), parted = split.filter(Boolean).length;
-    assert.equal(on.unfinished + off.unfinished, 0, `${label}: the lowest layer's humidity is not finite on one engine or the other`);
+    assert.equal(on.unfinished + off.unfinished, 0, `${label}: the lowest layer's humidity or the evaporation is not finite on one engine or the other`);
     assert.ok(parted <= 0.005 * split.length, `${label}: the lowest layer's humidity parts between the engines on ${parted} of ${split.length} cells`);
     let apart = 0, moveApart = 0, largest = 0, mean = 0;
     for (let i = 0; i < on.cpu.length; i++) {
@@ -403,7 +403,7 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
       const mine = { SDRAG: bl.surfaceDrag, CGH: bl.kinematicHeat, CGW: bl.kinematicWater, FOG: cpu.moist.fogPrecipitation }, low = (cpu.core.K - 1) * C;
       runs.push({
         split: Array.from({ length: C }, (_, i) => !(Math.abs(gpu.state[4][low + i] - cpu.state[4][low + i]) <= 1e-2 * cpu.state[4][low + i])), cellsOnEdge: cpu.mesh.cellsOnEdge,
-        unfinished: nonFinite(gpu.state[4].subarray(low, low + C)) + nonFinite(cpu.state[4].subarray(low, low + C)),
+        unfinished: nonFinite(gpu.state[4].subarray(low, low + C)) + nonFinite(cpu.state[4].subarray(low, low + C)) + names.reduce((sum, name, n) => sum + nonFinite(read[n]) + nonFinite(mine[name]), 0) + nonFinite(cpu.state[2].subarray(lowest, lowest + E)) + nonFinite(gpu.state[2].subarray(lowest, lowest + E)) + nonFinite(cpu.radiation.sensibleHeat) + nonFinite(cpu.radiation.evaporation),
         flux: { CGH: Float64Array.from(cpu.radiation.sensibleHeat), CGW: Float64Array.from(cpu.radiation.evaporation) },
         cpu: { ...Object.fromEntries(names.map((name) => [name, Float64Array.from(mine[name])])), u: Float64Array.from(cpu.state[2].subarray(lowest, lowest + E)) },
         gpu: { ...Object.fromEntries(names.map((name, n) => [name, Float64Array.from(read[n])])), u: Float64Array.from(gpu.state[2].subarray(lowest, lowest + E)) },
@@ -412,7 +412,7 @@ test('surface.virtualDensity takes the moist density alike on both engines in th
     }
     const [on, off] = runs, report = [], { cellsOnEdge } = on;
     const split = on.split.map((s, i) => s || off.split[i]), parted = split.filter(Boolean).length;
-    assert.equal(on.unfinished + off.unfinished, 0, `${label}: the lowest layer's humidity is not finite on one engine or the other`);
+    assert.equal(on.unfinished + off.unfinished, 0, `${label}: the lowest layer's humidity, a compared field or the lowest wind is not finite on one engine or the other`);
     assert.ok(parted <= 0.005 * split.length, `${label}: the lowest layer's humidity parts between the engines on ${parted} of ${split.length} cells`);
     const left = (name, i) => (name === 'u' ? split[cellsOnEdge[2 * i]] || split[cellsOnEdge[2 * i + 1]] : split[i]);
     report.push(`${parted} cells left out where a moist decision parts the engines`);
@@ -455,7 +455,7 @@ test('surface.virtualDensity takes the moist density alike on both engines at th
     runs.push({
       humid: Array.from({ length: C }, (_, i) => !(Math.abs(gpu.state[4][low + i] - cpu.state[4][low + i]) <= 1e-2 * cpu.state[4][low + i])),
       rained: Array.from({ length: C }, (_, i) => !(Math.abs(gpuRain[i] - rain[i]) <= 1e-2 * Math.max(Math.abs(rain[i]), Math.abs(gpuRain[i])) + 1e-9)),
-      unfinished: nonFinite(gpu.state[4].subarray(low, low + C)) + nonFinite(cpu.state[4].subarray(low, low + C)) + nonFinite(gpuRain) + nonFinite(rain.subarray(0, C)),
+      unfinished: nonFinite(gpu.state[4].subarray(low, low + C)) + nonFinite(cpu.state[4].subarray(low, low + C)) + nonFinite(gpuRain) + nonFinite(rain.subarray(0, C)) + nonFinite(heat) + nonFinite(water) + nonFinite(bl.kinematicHeat) + nonFinite(bl.kinematicWater) + nonFinite(cpu.state[2].subarray(lowest, lowest + E)) + nonFinite(gpu.state[2].subarray(lowest, lowest + E)),
       cpu: { CGH: Float64Array.from(bl.kinematicHeat), CGW: Float64Array.from(bl.kinematicWater), u: Float64Array.from(cpu.state[2].subarray(lowest, lowest + E)) },
       gpu: { CGH: Float64Array.from(heat), CGW: Float64Array.from(water), u: Float64Array.from(gpu.state[2].subarray(lowest, lowest + E)) },
       cellsOnEdge: cpu.mesh.cellsOnEdge, raining: rain.filter((r) => r > 0).length,
@@ -463,7 +463,7 @@ test('surface.virtualDensity takes the moist density alike on both engines at th
     gpu.destroy();
   }
   const [on, off] = runs, { cellsOnEdge } = on, report = [];
-  assert.equal(on.unfinished + off.unfinished, 0, 'the lowest layer\'s humidity or the convective rain is not finite on one engine or the other');
+  assert.equal(on.unfinished + off.unfinished, 0, 'the lowest layer\'s humidity, the convective rain, a kinematic flux or the lowest wind is not finite on one engine or the other');
   const split = on.humid.map((s, i) => s || off.humid[i] || on.rained[i] || off.rained[i]), parted = split.filter(Boolean).length;
   const rainOnly = split.map((s, i) => s && !on.humid[i] && !off.humid[i] ? i : -1).filter((i) => i >= 0);
   report.push(`${parted} cells left out, ${rainOnly.length} for the convective rain alone (${rainOnly.join(', ')}) of ${on.raining} and ${off.raining} raining`);
@@ -535,7 +535,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
     const columnGap = (a, b, i) => {
       let largest = 0, gap = 0;
       for (let k = kTop; k < K - 1; k++) { largest = Math.max(largest, Math.abs(a[k * C + i]), Math.abs(b[k * C + i])); gap = Math.max(gap, Math.abs(b[k * C + i] - a[k * C + i])); }
-      return largest > 0 ? gap / largest : 0;
+      return largest > 0 || Number.isNaN(largest) ? gap / largest : 0;
     };
     const clearance = (run, i) => Math.abs(run.depth[i] - (run.laid[(K - 2) * C + i] + run.laid[(K - 1) * C + i]) / (2 * g));
     const topsApart = (run, i) => Math.abs(run.depth[i] - run.gpuDepth[i] - ground[i]);
@@ -562,7 +562,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
       if (field !== 'nonlocal') return null;
       const a = r.cpu[field], b = r.gpu[field];
       let largest = 0, top = 0, at = -1;
-      for (let k = kTop; k < K - 1; k++) { const x = k * C + i, d = Math.abs(b[x] - a[x]); largest = Math.max(largest, Math.abs(a[x]), Math.abs(b[x])); if (d > top || Number.isNaN(d)) { top = d; at = k; } }
+      for (let k = kTop; k < K - 1; k++) { const x = k * C + i, d = Math.abs(b[x] - a[x]); largest = Math.max(largest, Math.abs(a[x]), Math.abs(b[x])); if (d > top || (Number.isNaN(d) && !Number.isNaN(top))) { top = d; at = k; } }
       if (at < 0 || (a[at * C + i] === 0) === (b[at * C + i] === 0)) return null;
       for (let k = kTop; k < K - 1; k++) if (k > at ? a[k * C + i] !== 0 || b[k * C + i] !== 0 : k < at && Math.abs(b[k * C + i] - a[k * C + i]) > 1e-2 * largest) return null;
       const geo = r.laid, zb = geo[(K - 1) * C + i] / g, lift = cases.find(([n]) => n === which)[1].profileHeight === 'ground' ? zb - ground[i] : 0;
@@ -606,7 +606,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
             continue;
           }
           kept[i] = 1;
-          if (own > worst || Number.isNaN(own)) { worst = own; worstAt = i; }
+          if (own > worst || (Number.isNaN(own) && !Number.isNaN(worst))) { worst = own; worstAt = i; }
         }
         if (!(loose.length === 0 && flips <= 0.005 * C && tops <= 0.005 * C && knives <= 0.005 * C && cutColumns <= 0.005 * C)) failures.push(`${where}, ${field}: of ${parted} columns parted by over 1 % of their largest coefficient, ${tops} where the top meets the lowest interface, ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin comes within ${KNIFE_CUT} of the gap of the GPU and every other interface parts by under 1 %, ${cutColumns} where the countergradient's lowest interface lies between a tenth of each engine's depth in the geometry the CPU laid it on and ${loose.length} that none explains (${loose.join('; ')})`);
         const classes = [];
@@ -633,7 +633,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
         let seat = '';
         if (worstAt >= 0) {
           let at = kTop, top = 0, largest = 0;
-          for (let k = kTop; k < K - 1; k++) { const x = k * C + worstAt, d = Math.abs(theirs[x] - mine[x]); largest = Math.max(largest, Math.abs(mine[x])); if (d > top || Number.isNaN(d)) { top = d; at = k; } }
+          for (let k = kTop; k < K - 1; k++) { const x = k * C + worstAt, d = Math.abs(theirs[x] - mine[x]); largest = Math.max(largest, Math.abs(mine[x])); if (d > top || (Number.isNaN(d) && !Number.isNaN(top))) { top = d; at = k; } }
           const z = (run.geopotential[at * C + worstAt] + run.geopotential[(at + 1) * C + worstAt]) / (2 * g);
           seat = ` (${run.classes.stable[worstAt] ? 'stable' : 'convective'}${run.classes.entraining[worstAt] ? ', entraining' : ''}: its largest gap at ${z.toFixed(0)} m with the top at ${run.depth[worstAt].toFixed(0)} m, where the coefficient is ${(Math.abs(mine[at * C + worstAt]) / largest).toExponential(1)} of the column's largest)`;
         }
@@ -643,7 +643,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
         for (let i = 0; i < C; i++) {
           if (!kept[i] || !run.classes.entraining[i]) continue;
           let at = -1, largest = 0, top = 0;
-          for (let k = kTop; k < K - 1; k++) { const x = k * C + i, m = Math.abs(mine[x] - base[0][x]); top = Math.max(top, Math.abs(base[0][x])); if (m > largest || Number.isNaN(m)) { largest = m; at = x; } }
+          for (let k = kTop; k < K - 1; k++) { const x = k * C + i, m = Math.abs(mine[x] - base[0][x]); top = Math.max(top, Math.abs(base[0][x])); if (m > largest || (Number.isNaN(m) && !Number.isNaN(largest))) { largest = m; at = x; } }
           if (!Number.isFinite(largest + top)) { unfinished++; continue; }
           if (!(largest > 1e-3 * top)) continue;
           columns++;

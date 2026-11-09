@@ -26,7 +26,7 @@ function stats(cpu, gpu, apart = null, C = 0) {
   for (let x = 0; x < cpu.length; x++) {
     if (apart && apart.has(x % C)) continue;
     const d = Math.abs(cpu[x] - gpu[x]);
-    if (d > maxDiff || Number.isNaN(d)) { maxDiff = d; at = x; }
+    if (d > maxDiff || (Number.isNaN(d) && !Number.isNaN(maxDiff))) { maxDiff = d; at = x; }
     sumSq += d * d; sumRef += cpu[x] * cpu[x]; count++;
   }
   return { maxDiff, at, rms: Math.sqrt(sumSq / count), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
@@ -125,8 +125,8 @@ test('the stratiform share of the estimated inversion strength and the boundary-
 });
 
 const DAMPING_S9 = {
-  theta: { 'sea low': {"largest":0.573,"counts":[[0.286,4],[0.143,4],[0.0715,10],[0.0357,10],[0.0178,24],[0.00894,26],[0.00447,32],[0.00223,48],[0.00111,70]],"hemisphere":{"north":0.00113,"south":0.000884},"bulk":{"north":{"trimmed":0.000363,"signed":0.000268},"south":{"trimmed":0.000365,"signed":0.000268}}}, 'sea mid': {"largest":0.255,"counts":[[0.127,4],[0.0636,6],[0.0318,8],[0.0159,8],[0.00795,14],[0.00397,22],[0.00198,50]],"hemisphere":{"north":0.000694,"south":0.00086},"bulk":{"north":{"trimmed":0.00048,"signed":0.000307},"south":{"trimmed":0.000481,"signed":0.000307}}}, 'sea high': {"largest":0.0128,"counts":[],"hemisphere":{"north":0.00308,"south":0.00308},"bulk":{"north":{"trimmed":0.00294,"signed":0.00129},"south":{"trimmed":0.00294,"signed":0.00129}}} },
-  wind: { 'sea low': {"largest":0.248,"counts":[[0.123,4],[0.0619,10],[0.0309,24],[0.0154,42],[0.00773,58],[0.00386,74],[0.00193,188],[0.000967,310],[0.000483,444],[0.000241,708],[0.00012,1254]],"hemisphere":{"north":0.000628,"south":0.000338},"bulk":{"north":{"trimmed":9.32e-05,"signed":3.07e-06},"south":{"trimmed":7.89e-05,"signed":3.07e-06}}}, 'sea mid': {"largest":0.0402,"counts":[[0.02,4],[0.01,14],[0.00501,36],[0.0025,84],[0.00125,156],[0.000627,282],[0.000313,484],[0.000156,960],[7.83e-05,2622]],"hemisphere":{"north":0.000252,"south":0.000196},"bulk":{"north":{"trimmed":0.000108,"signed":3.88e-06},"south":{"trimmed":0.000102,"signed":4.38e-06}}}, 'sea high': {"largest":0.0173,"counts":[[0.0086,4],[0.0043,12],[0.00215,42],[0.00107,68],[0.000537,140],[0.000268,416]],"hemisphere":{"north":0.000261,"south":0.000243},"bulk":{"north":{"trimmed":0.000211,"signed":6.28e-06},"south":{"trimmed":0.000207,"signed":7.8e-06}}} },
+  theta: { 'sea low': {"largest":0.573,"counts":[[0.286,4],[0.143,4],[0.0715,10],[0.0357,10],[0.0178,24],[0.00894,26],[0.00447,32],[0.00223,48],[0.00111,70]],"hemisphere":{"north":0.00113,"south":0.000884},"bulk":{"north":{"trimmed":0.000363,"signed":0.000268},"south":{"trimmed":0.000365,"signed":0.000268}}}, 'sea mid': {"largest":0.255,"counts":[[0.127,4],[0.0636,6],[0.0318,8],[0.0159,8],[0.00795,14],[0.00397,22],[0.00198,50]],"hemisphere":{"north":0.000694,"south":0.00086},"bulk":{"north":{"trimmed":0.00048,"signed":0.000307},"south":{"trimmed":0.000481,"signed":0.000307}}}, 'sea high': {"largest":0.0128,"counts":[],"emptyLadder":{"why":"floor","threshold":0.00438},"hemisphere":{"north":0.00308,"south":0.00308},"bulk":{"north":{"trimmed":0.00294,"signed":0.00129},"south":{"trimmed":0.00294,"signed":0.00129}}} },
+  wind: { 'sea low': {"largest":0.253,"counts":[[0.126,4],[0.0631,12],[0.0315,40],[0.0157,72],[0.00789,130],[0.00394,172],[0.00197,296],[0.000987,526],[0.000493,722],[0.000246,1018],[0.000123,1630]],"hemisphere":{"north":0.000859,"south":0.000511},"bulk":{"north":{"trimmed":0.000116,"signed":4.01e-06},"south":{"trimmed":8.52e-05,"signed":4.37e-06}}}, 'sea mid': {"largest":0.0402,"counts":[[0.02,4],[0.01,14],[0.00501,36],[0.0025,84],[0.00125,156],[0.000627,282],[0.000313,484],[0.000156,960],[7.83e-05,2622]],"hemisphere":{"north":0.000252,"south":0.000196},"bulk":{"north":{"trimmed":0.000108,"signed":3.88e-06},"south":{"trimmed":0.000102,"signed":4.38e-06}}}, 'sea high': {"largest":0.0173,"counts":[[0.0086,4],[0.0043,12],[0.00215,42],[0.00107,68],[0.000537,140],[0.000268,416]],"hemisphere":{"north":0.000261,"south":0.000243},"bulk":{"north":{"trimmed":0.000211,"signed":6.28e-06},"south":{"trimmed":0.000207,"signed":7.8e-06}}} },
 };
 
 for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines, with the boundary layer diagnosed after the deposit' : 'with the ∇⁴ closures off at the default order, the divergence damping alone parts the engines no further than the CPU twins part themselves: in each band of reference pressure, each column\'s largest θ gap and each edge\'s largest wind gap, in the largest, a ladder of counts, and each hemisphere\'s mean, trimmed mean and trimmed signed mean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -241,7 +241,7 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
     for (let k = 0; k < K; k++) {
       const x = k * C + i, d = Math.abs(lit.cpu[x] - lit.gpu[x]);
       if (k === K - 1) surface = Math.max(surface, d / Math.abs(lit.cpu[x]));
-      else if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k, lit.cpu[x]]; }
+      else if (d > worst || (Number.isNaN(d) && !Number.isNaN(worst))) { worst = d; at = [i, k, lit.cpu[x]]; }
       worstCloud = Math.max(worstCloud, Math.abs((lit.cpu[x] - scattering.cpu[x]) - (lit.gpu[x] - scattering.gpu[x])));
     }
   }
@@ -270,7 +270,7 @@ test('the change the Rayleigh and aerosol scattering makes to the heating of eac
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i, change = on.cpu[x] - off.cpu[x], d = Math.abs(change - (on.gpu[x] - off.gpu[x]));
       largest = Math.max(largest, Math.abs(change));
-      if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k, change]; }
+      if (d > worst || (Number.isNaN(d) && !Number.isNaN(worst))) { worst = d; at = [i, k, change]; }
     }
   }
   console.log(`physics alone at N=${N} on ${lit} sunlit columns: the scattering changes a layer's heating by up to ${largest.toFixed(3)} K/day, and the engines' change differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day)`);
@@ -343,7 +343,7 @@ test('shallow cumulus of partial cover beside and without resolved cloud heats t
     if (!(base.radiation.insolation(i) > 0)) continue;
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i, d = Math.max(Math.abs(cumulus.cpu[x] - cumulus.gpu[x]), Math.abs(sparse.cpu[x] - sparse.gpu[x]));
-      if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k]; }
+      if (d > worst || (Number.isNaN(d) && !Number.isNaN(worst))) { worst = d; at = [i, k]; }
       moved = Math.max(moved, Math.abs(cumulus.cpu[x] - plain.cpu[x]));
     }
   }
