@@ -487,7 +487,7 @@ test('both engines refuse under boundaryLayer the options they take from the sur
   }
 });
 
-test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange, a column the engines part counting as a knife edge where an f32-rounded CPU twin comes within a quarter of that gap of the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and the subsidence share, and its search ceiling raised and lowered, move both engines\' mixing alike through two model steps, in stable, convective and entraining columns apart and at their lowest interface, under the roughness and the fixed exchange, a column the engines part counting as a knife edge where an f32-rounded CPU twin comes within a hundredth of that gap of the GPU and every other interface parts by under 1 %, or where the countergradient\'s lowest interface lies between a tenth of each engine\'s depth in the geometry the CPU laid it on', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cases = [
     ['defaults', {}, []],
     ['ground, stable profile, Prandtl coefficient 3.6, countergradient', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 3.6, countergradient: 7.2 }, ['mixing stable', 'mixing convective', 'scalarMixing stable', 'scalarMixing convective']],
@@ -499,12 +499,15 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
     ['the search ceiling raised to sigma 0.3', { searchTop: 0.3 }, []],
     ['the search ceiling lowered to sigma 0.9', { searchTop: 0.9 }, ['mixing convective']],
   ];
-  const apartBound = { stable: 1e-3, convective: 5e-4, entraining: 1e-3 }, failures = [];
+  const apartBound = { stable: 1e-3, convective: 5e-4, entraining: 1e-3 }, failures = [], KNIFE_CUT = 1e-2, CUT_SLACK = 1e-4;
   for (const [label, surface] of [['roughness', {}], ['fixed', { exchange: 'fixed' }]]) {
     const runs = {};
     let C = 0, K = 0, kTop = Infinity, g = 0, ground = null;
     for (const [name, boundaryLayer] of cases) {
       const cpu = prepare(createModel(new Grid(16), { topography, surface, boundaryLayer })), gpu = prepare(await createGpuModel(new Grid(16), { topography, surface, boundaryLayer }));
+      const { core } = cpu, geo = core.diagnostics.geopotential, laid = new Float64Array(geo.length), seen = new Uint8Array(cpu.mesh.nCells), column = core.diagnoseColumn, diagnose = cpu.boundaryLayer.diagnose;
+      core.diagnoseColumn = (i, ...rest) => { const out = column.call(core, i, ...rest); if (seen[i] === 1) { seen[i] = 2; for (let k = 0; k < core.K; k++) laid[k * seen.length + i] = geo[k * seen.length + i]; } return out; };
+      cpu.boundaryLayer.diagnose = (...args) => { seen.fill(1); try { return diagnose.apply(cpu.boundaryLayer, args); } finally { seen.fill(0); } };
       for (let s = 0; s < 2; s++) { cpu.step(900); await gpu.step(900); }
       await gpu.settle(); await gpu.sync();
       const bl = cpu.boundaryLayer, PH = gpu.gpu.layout.PH, key = { mixing: 'MIX', scalarMixing: 'MIXH', nonlocal: 'CG' };
@@ -516,7 +519,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
         classes: { stable: Array.from(bl.buoyancyFlux, (b) => !(b > 0)), convective: Array.from(bl.buoyancyFlux, (b) => b > 0), entraining: Array.from(bl.entrainment, (w) => w > 0) },
         cpu: Object.fromEntries(fields.map((field) => [field, Float64Array.from(bl[field])])),
         gpu: Object.fromEntries(fields.map((field, n) => [field, Float64Array.from(read[n])])),
-        depth: Float64Array.from(bl.depth), gpuDepth: Float64Array.from(read[fields.length]), geopotential: Float64Array.from(cpu.core.diagnostics.geopotential),
+        depth: Float64Array.from(bl.depth), gpuDepth: Float64Array.from(read[fields.length]), geopotential: Float64Array.from(cpu.core.diagnostics.geopotential), laid,
         bad: [...fields.flatMap((field, n) => [bl[field], read[n]].map((a) => a.subarray(kTop * C, (K - 1) * C))), bl.depth, read[fields.length], cpu.state[4].subarray(low, low + C), gpu.state[4].subarray(low, low + C)].reduce((n, a) => n + a.filter((v) => !Number.isFinite(v)).length, 0),
       };
       gpu.destroy();
@@ -541,6 +544,25 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
       }
       return twins[name];
     };
+    const besideKnife = (r, twin, field, i) => {
+      const a = r.cpu[field], b = r.gpu[field];
+      let largest = 0, worst = 0;
+      for (let k = kTop; k < K - 1; k++) largest = Math.max(largest, Math.abs(a[k * C + i]), Math.abs(b[k * C + i]));
+      for (let k = kTop; k < K - 1; k++) { const x = k * C + i; if (Math.abs(twin[x] - a[x]) <= 1e-2 * largest) worst = Math.max(worst, Math.abs(b[x] - a[x])); }
+      return largest > 0 ? worst / largest : 0;
+    };
+    const cutOf = (r, which, field, i) => {
+      if (field !== 'nonlocal') return null;
+      const a = r.cpu[field], b = r.gpu[field];
+      let largest = 0, top = 0, at = -1;
+      for (let k = kTop; k < K - 1; k++) { const x = k * C + i, d = Math.abs(b[x] - a[x]); largest = Math.max(largest, Math.abs(a[x]), Math.abs(b[x])); if (d > top) { top = d; at = k; } }
+      if (at < 0 || (a[at * C + i] === 0) === (b[at * C + i] === 0)) return null;
+      for (let k = kTop; k < K - 1; k++) if (k > at ? a[k * C + i] !== 0 || b[k * C + i] !== 0 : k < at && Math.abs(b[k * C + i] - a[k * C + i]) > 1e-2 * largest) return null;
+      const geo = r.laid, zb = geo[(K - 1) * C + i] / g, lift = cases.find(([n]) => n === which)[1].profileHeight === 'ground' ? zb - ground[i] : 0;
+      const z = 0.5 * (geo[at * C + i] + geo[(at + 1) * C + i]) / g - zb + lift, cpuOver = z - 0.1 * (r.depth[i] - zb + lift), gpuOver = z - 0.1 * (r.gpuDepth[i] + ground[i] - zb + lift);
+      const ok = (a[at * C + i] !== 0) === (cpuOver > 0) && (b[at * C + i] !== 0 ? gpuOver > -CUT_SLACK : gpuOver < CUT_SLACK);
+      return { ok, text: `column ${i}${r === control ? ' in the defaults' : ''} at interface ${at}, ${(1e3 * cpuOver).toFixed(2)} mm over a tenth of the CPU's depth and ${(1e3 * gpuOver).toFixed(2)} mm over the GPU's` };
+    };
     for (const [name, , acting] of cases) {
       const run = runs[name], where = `${label}, ${name}`, report = [];
       if (run.bad) failures.push(`${where}: ${run.bad} coefficients, depths or lowest-layer humidities are not finite on one engine or the other`);
@@ -550,8 +572,8 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
       for (const field of Object.keys(run.cpu)) {
         const mine = run.cpu[field], theirs = run.gpu[field], base = name !== 'defaults' && control.cpu[field] ? [control.cpu[field], control.gpu[field]] : null;
         const kept = new Uint8Array(C);
-        let parted = 0, tops = 0, flips = 0, knives = 0, topRatio = 0, topRoom = 0, topApart = 0, worst = 0, worstAt = -1;
-        const loose = [];
+        let parted = 0, tops = 0, flips = 0, knives = 0, cutColumns = 0, topRatio = 0, topRoom = 0, topApart = 0, worst = 0, worstAt = -1;
+        const loose = [], cuts = [], ratios = [];
         for (let i = 0; i < C; i++) {
           if (out[i]) continue;
           const own = columnGap(mine, theirs, i), controlGap = base ? columnGap(base[0], base[1], i) : 0;
@@ -562,12 +584,16 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
               const apart = topsApart(r, i), room = clearance(r, i);
               if (room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) { atTop.push([gap * room / (2 * apart), room, apart]); return 'top'; }
               if (flipped(r, i)) return 'flip';
-              if (columnGap(r.gpu[field], twinOf(r === control ? 'defaults' : name)[field], i) < 0.25 * gap) return 'twin';
-              unexplained.push(`column ${i}${r === control ? ' in the defaults' : ''} ${gap.toExponential(1)} apart, its top ${room.toFixed(2)} m from the lowest interface and ${(1e3 * apart).toFixed(1)} mm from the GPU's`);
+              const which = r === control ? 'defaults' : name, cut = cutOf(r, which, field, i);
+              if (cut?.ok) { cuts.push(cut.text); return 'cut'; }
+              const twin = twinOf(which)[field], ratio = columnGap(r.gpu[field], twin, i) / gap;
+              if (ratio < KNIFE_CUT && besideKnife(r, twin, field, i) <= 1e-2) { ratios.push(`column ${i}${r === control ? ' in the defaults' : ''} ${ratio.toExponential(1)}`); return 'twin'; }
+              unexplained.push(`column ${i}${r === control ? ' in the defaults' : ''} ${gap.toExponential(1)} apart, its top ${room.toFixed(2)} m from the lowest interface and ${(1e3 * apart).toFixed(1)} mm from the GPU's${cut ? `, ${cut.text}` : ''}`);
               return 'loose';
             });
             if (why.includes('loose')) loose.push(unexplained.join(', '));
             else if (why.includes('twin')) knives++;
+            else if (why.includes('cut')) cutColumns++;
             else if (why.includes('flip')) flips++;
             else { tops++; for (const [ratio, room, apart] of atTop) { topRatio = Math.max(topRatio, ratio); topRoom = Math.max(topRoom, room); topApart = Math.max(topApart, apart); } }
             continue;
@@ -575,7 +601,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
           kept[i] = 1;
           if (own > worst) { worst = own; worstAt = i; }
         }
-        if (!(loose.length <= 2 && flips <= 0.005 * C && tops <= 0.005 * C && knives <= 0.005 * C)) failures.push(`${where}, ${field}: of ${parted} columns parted by over 1 % of their largest coefficient, ${tops} where the top meets the lowest interface, ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin comes within a quarter of the gap of the GPU and ${loose.length} that none explains (${loose.join('; ')})`);
+        if (!(loose.length === 0 && flips <= 0.005 * C && tops <= 0.005 * C && knives <= 0.005 * C && cutColumns <= 0.005 * C)) failures.push(`${where}, ${field}: of ${parted} columns parted by over 1 % of their largest coefficient, ${tops} where the top meets the lowest interface, ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin comes within ${KNIFE_CUT} of the gap of the GPU and every other interface parts by under 1 %, ${cutColumns} where the countergradient's lowest interface lies between a tenth of each engine's depth in the geometry the CPU laid it on and ${loose.length} that none explains (${loose.join('; ')})`);
         const classes = [];
         for (const [kind, member] of Object.entries(run.classes)) {
           let apart = 0, scale = 0, lowApart = 0, lowScale = 0, move = 0, gap = 0, before = 0, columns = 0;
@@ -604,7 +630,7 @@ test('the boundary layer\'s K-profile options, diagnoseFirst, surfaceExcess and 
           const z = (run.geopotential[at * C + worstAt] + run.geopotential[(at + 1) * C + worstAt]) / (2 * g);
           seat = ` (${run.classes.stable[worstAt] ? 'stable' : 'convective'}${run.classes.entraining[worstAt] ? ', entraining' : ''}: its largest gap at ${z.toFixed(0)} m with the top at ${run.depth[worstAt].toFixed(0)} m, where the coefficient is ${(Math.abs(mine[at * C + worstAt]) / largest).toExponential(1)} of the column's largest)`;
         }
-        report.push(`${field}: ${parted} columns parted, ${tops} where the top meets the lowest interface (within ${topRoom.toFixed(2)} m of it, their tops up to ${(topApart * 1e3).toFixed(1)} mm apart and their gaps up to ${topRatio.toFixed(2)} of 2|Δh|/(h − z)), ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin comes within a quarter of the gap of the GPU, ${loose.length} unexplained${loose.length ? ` (${loose.join('; ')})` : ''}; ${classes.join('; ')}; the worst kept column ${worst.toExponential(1)} of its largest${seat}`);
+        report.push(`${field}: ${parted} columns parted, ${tops} where the top meets the lowest interface (within ${topRoom.toFixed(2)} m of it, their tops up to ${(topApart * 1e3).toFixed(1)} mm apart and their gaps up to ${topRatio.toFixed(2)} of 2|Δh|/(h − z)), ${flips} where the engines' tops lie apart, ${knives} where an f32-rounded CPU twin comes within ${KNIFE_CUT} of the gap of the GPU and every other interface parts by under 1 %${ratios.length ? ` (${ratios.join(', ')} of the gap)` : ''}, ${cutColumns} where the countergradient's lowest interface lies between a tenth of each engine's depth in the geometry the CPU laid it on${cuts.length ? ` (${cuts.join('; ')})` : ''}, ${loose.length} unexplained${loose.length ? ` (${loose.join('; ')})` : ''}; ${classes.join('; ')}; the worst kept column ${worst.toExponential(1)} of its largest${seat}`);
         if (name !== 'the subsidence share' || field !== 'mixing') continue;
         let columns = 0, off = 0, worstShare = 0;
         for (let i = 0; i < C; i++) {
