@@ -27,7 +27,7 @@ const books = heatBooks(header), split = transportSplit(header), water = waterCy
 const lat = (b) => -87.5 + 5 * b, bin = (l) => (l + 87.5) / 5;
 const month = (name, part = 'zonalBudget') => header[part].months.find((m) => m.name === name);
 const capMean = (values, from, to) => { let sum = 0, a = 0; for (let b = from; b < to; b++) { sum += values[b] * area[b]; a += area[b]; } return sum / a; };
-const lastDay = (name, over = 0) => { let n = -1; header.daily[name].forEach((v, d) => { if (v > over) n = d; }); return n + 1; };
+const lastDay = (name, over = 0) => { assert.ok(header.daily[name].every(Number.isFinite), `a non-finite day in ${name}`); let n = -1; header.daily[name].forEach((v, d) => { if (v > over) n = d; }); return n + 1; };
 
 test('the run is Part 7’s wet planet with the hybrid sea let go: ten years of spin-up and a recorded year from the March equinox', () => {
   assert.equal(new URL(DATA_URL).pathname.endsWith('/explain/data/ocean_N16.bin'), true);

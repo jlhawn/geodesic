@@ -15,7 +15,7 @@ test('tropical easterlies drive equatorial upwelling and a poleward surface drif
     else if (lat > 60 * DEG) { mixedPole += f.h1[i]; nPole++; }
   }
   console.log(`after five days of easterlies: equatorial upwelling ${(equator / nEq * 86400).toFixed(2)} m/day, 6–12° ${(side / nSide * 86400).toFixed(2)} m/day; mixed layer at the equator ${(mixedEq / nEq).toFixed(1)} m, poleward of 60° ${(mixedPole / nPole).toFixed(1)} m`);
-  assert.ok(equator / nEq > 0, 'upwelling at the equator');
-  assert.ok(side / nSide < equator / nEq, 'less off the equator');
-  assert.ok(mixedEq / nEq > mixedPole / nPole, 'the wind mixes deeper');
+  assert.ok(Number.isFinite(equator) && equator / nEq > 0, 'upwelling at the equator');
+  assert.ok(Number.isFinite(side) && side / nSide < equator / nEq, 'less off the equator');
+  assert.ok(Number.isFinite(mixedEq) && Number.isFinite(mixedPole) && mixedEq / nEq > mixedPole / nPole, 'the wind mixes deeper');
 });

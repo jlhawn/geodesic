@@ -38,30 +38,32 @@ async function prepared(topography, geography, ocean) {
   return model;
 }
 
-function differing(label, a, b) {
+function differing(label, a, b, expectedNaN = null) {
   assert.equal(a.length, b.length, `${label}: length`);
   const x = new Uint32Array(Float32Array.from(a).buffer), y = new Uint32Array(Float32Array.from(b).buffer);
   let count = 0, first = -1;
-  for (let n = 0; n < x.length; n++) if (x[n] !== y[n] && !(Number.isNaN(a[n]) && Number.isNaN(b[n]))) { count++; if (first < 0) first = n; }
+  for (let n = 0; n < x.length; n++) if ((x[n] !== y[n] || !Number.isFinite(a[n])) && !(expectedNaN && expectedNaN[n] && Number.isNaN(a[n]) && Number.isNaN(b[n]))) { count++; if (first < 0) first = n; }
   assert.equal(count, 0, `${label}: ${count} of ${x.length} differ, the first at ${first} (${a[first]} against ${b[first]})`);
 }
 
-async function compare(whole, packed) {
+async function compare(whole, packed, unset = []) {
   await Promise.all([whole.settle(), packed.settle()]);
-  const [w, p] = [whole.oceanEngine, packed.oceanEngine];
+  const [w, p] = [whole.oceanEngine, packed.oceanEngine], land = Uint8Array.from(w.cellOcean, (ocean) => !ocean);
   assert.ok(p.packing.packed && !w.packing.packed);
   const stores = await Promise.all([w.readStores(), p.readStores()]);
   for (const name of ['h', 'u', 'q', 'w']) differing(`store ${name}`, stores[0][name], stores[1][name]);
   const downloads = await Promise.all([w.download(), p.download()]);
-  for (const name of ['h', 'u', 'T', 'S', 'eta', 'h1', 'thermoclineDepth']) differing(`download ${name}`, downloads[0][name], downloads[1][name]);
+  for (const name of ['h', 'u', 'T', 'S', 'eta', 'h1', 'thermoclineDepth']) differing(`download ${name}`, downloads[0][name], downloads[1][name], name === 'thermoclineDepth' ? land : null);
   const restarts = await Promise.all([w.restartArrays(), p.restartArrays()]);
   for (const name of Object.keys(restarts[0])) differing(`restart ${name}`, restarts[0][name], restarts[1][name]);
   const fields = ['sst', 'sss', 'layerDepth', 'thermocline', 'ssh', 'currents', 'current', 'upwelling'];
   const frames = await Promise.all([w, p].map((o, n) => o.frame({ fields, diagnostics: true, depth: 0, upwellingDepth: 100, time: [whole, packed][n].time })));
-  for (const name of fields) differing(`frame ${name}`, frames[0].fields[name], frames[1].fields[name]);
+  for (const name of fields) differing(`frame ${name}`, frames[0].fields[name], frames[1].fields[name], name === 'currents' ? null : land);
   for (const name of ['S', 'PH']) {
     const views = await Promise.all([whole, packed].map((m) => readRanges(m.gpu.device, m.gpu.buffers[name], [{ offset: 0, length: m.gpu.layout[name].total }])));
-    differing(`atmosphere ${name}`, views[0][0], views[1][0]);
+    const expectedNaN = new Uint8Array(views[0][0].length);
+    if (name === 'PH') for (const row of unset) expectedNaN.fill(1, whole.gpu.layout.PH[row], whole.gpu.layout.PH[row] + whole.mesh.nCells);
+    differing(`atmosphere ${name}`, views[0][0], views[1][0], expectedNaN);
   }
   for (const name of ['UPWM', 'STRESS', 'T0', 'ETA', 'MELT', 'DRAW']) {
     const sections = await Promise.all([w.readSection(name), p.readSection(name)]);
@@ -76,7 +78,7 @@ for (const [label, topography, geography, ocean] of [
   test(`the packed GPU ocean keeps every field of the unpacked one to the bit, ${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const whole = await prepared(topography, geography, { ...ocean, packed: false }), packed = await prepared(topography, geography, ocean);
     assert.ok(packed.oceanEngine.packing.C < whole.oceanEngine.packing.C, 'the packed ocean keeps fewer cells');
-    await compare(whole, packed);
+    await compare(whole, packed, ['T2M']);
     for (let n = 0; n < STEPS; n++) {
       await whole.step(DT); await packed.step(DT);
       if (n % 48 === 47) await compare(whole, packed);

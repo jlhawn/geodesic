@@ -31,7 +31,7 @@ function apart(whole, split, except = []) {
     const theirs = other[name];
     if (!theirs || theirs.length !== values.length) { out.push(`${name} missing`); continue; }
     let count = 0, largest = 0;
-    for (let i = 0; i < values.length; i++) if (values[i] !== theirs[i] && !(Number.isNaN(values[i]) && Number.isNaN(theirs[i]))) { count++; largest = Math.max(largest, Math.abs(values[i] - theirs[i])); }
+    for (let i = 0; i < values.length; i++) if ((values[i] !== theirs[i] || !Number.isFinite(values[i])) && !(name === 'energyRecord' && Number.isNaN(values[i]) && Number.isNaN(theirs[i]))) { count++; largest = Math.max(largest, Math.abs(values[i] - theirs[i])); }
     if (count) out.push(`${name} ${largest.toExponential(1)} (${count})`);
   }
   return out;
