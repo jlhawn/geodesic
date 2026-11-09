@@ -32,7 +32,7 @@ export function unheldCells(C, L, h, cellOcean, depth) {
   return Uint8Array.from({ length: C }, (_, i) => {
     if (!cellOcean[i]) return 1;
     let top = 0;
-    for (let k = 0; k < L; k++) { if (depth < top + h[k * C + i]) return 0; top += h[k * C + i]; }
+    for (let k = 0; k < L; k++) { if (!Number.isFinite(h[k * C + i]) || depth < top + h[k * C + i]) return 0; top += h[k * C + i]; }
     return 1;
   });
 }

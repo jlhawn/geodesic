@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeState } from '../js/stateFile.module.js';
+import { createEnergyRecord, FIELDS } from '../js/physics/energyRecord.module.js';
 import { withoutMeans } from '../js/intervalMeans.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
 import { loadSeaIceStart, SEA_ICE_START_FILE } from '../js/physics/seaIceStart.module.js';
@@ -24,14 +25,16 @@ const arms = {
 
 const decoded = (file) => decodeState(new Uint8Array(readFileSync(file)));
 const fields = (state, prefix = '') => Object.entries(state).flatMap(([name, value]) => (ArrayBuffer.isView(value) ? [[prefix + name, value]] : value && typeof value === 'object' && !Array.isArray(value) ? fields(value, `${prefix}${name}.`) : []));
-function apart(whole, split, except = []) {
+const gapRows = (length, days) => { const record = createEnergyRecord((length - 2) / FIELDS.length); for (const day of days) record.add(day, null); return record.values.map(Number.isNaN); };
+function apart(whole, split, except = [], gapDays = []) {
   const other = Object.fromEntries(fields(withoutMeans(split))), out = [];
   for (const [name, values] of fields(withoutMeans(whole))) {
     if (except.includes(name)) continue;
     const theirs = other[name];
     if (!theirs || theirs.length !== values.length) { out.push(`${name} missing`); continue; }
+    const gaps = name === 'energyRecord' ? gapRows(values.length, gapDays) : null;
     let count = 0, largest = 0;
-    for (let i = 0; i < values.length; i++) if ((values[i] !== theirs[i] || !Number.isFinite(values[i])) && !(name === 'energyRecord' && Number.isNaN(values[i]) && Number.isNaN(theirs[i]))) { count++; largest = Math.max(largest, Math.abs(values[i] - theirs[i])); }
+    for (let i = 0; i < values.length; i++) if ((values[i] !== theirs[i] || !Number.isFinite(values[i])) && !(gaps && gaps[i] && Number.isNaN(values[i]) && Number.isNaN(theirs[i]))) { count++; largest = Math.max(largest, Math.abs(values[i] - theirs[i])); }
     if (count) out.push(`${name} ${largest.toExponential(1)} (${count})`);
   }
   return out;
@@ -70,7 +73,7 @@ test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed insi
     run({ TAG: 'fresh' });
     const [fresh, whole, split] = await Promise.all(['fresh', 'whole', 'split'].map((tag) => decoded(join(out, `${tag}_day0001.bin`))));
     const means = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect'];
-    const parted = apart(whole, split, means);
+    const parted = apart(whole, split, means, [1]);
     assert.deepEqual(parted, [], `day 1, whole against split: ${parted.join(', ')}`);
     const start = await loadSeaIceStart(fileURLToPath(new URL(`../${SEA_ICE_START_FILE}`, import.meta.url))), { mesh } = stateGrid(whole);
     const snowed = [...whole.lakeMean.keys()].filter((i) => whole.lakeMean[i] !== 0 && start.at(mesh.latCell[i], mesh.lonCell[i]).snow > 0);
