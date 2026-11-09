@@ -7,7 +7,10 @@ import { CLOUD_TOP_DEFAULTS } from '../../js/physics/boundaryLayer.module.js';
  * flux by `flux` of itself (near its onset), its top by a pascal, a layer's
  * cloud water against the cloud-top threshold, and a merge of the dry
  * adjustment (two adjacent layers' θ and q each equal to 1e-6 of
- * themselves: the adjustment writes both, and only θ changes after it). The same
+ * themselves: the adjustment writes both, and only θ changes after it), and,
+ * for a tracker built with `mix`, a complete mix of two adjacent layers' q
+ * and q_c (each equal to 1e-6 of themselves, one of them cloudy past the
+ * threshold). The same
  * rule serves the CPU against the GPU in the parity tests and the CPU
  * against itself under θ noise in scripts/perturbedRain.mjs. A run watched
  * by radiationTraces also notes the plume layers whose cloud water, as the
@@ -18,7 +21,7 @@ import { CLOUD_TOP_DEFAULTS } from '../../js/physics/boundaryLayer.module.js';
 export const cpuDecisions = (model, traces = null) => ({ regime: model.boundaryLayer.regime, flux: model.moist.cumulusBaseFlux, top: model.moist.cumulusTop, theta: model.state[1], q: model.state[4], qc: model.state[5], traces });
 export const gpuDecisions = (state, physics) => ({ regime: physics.REGIME, flux: physics.CUMF, top: physics.CUTOP, theta: state[1], q: state[4], qc: state[5] });
 
-export const DECISION_KINDS = ['regime', 'fires', 'flux', 'top', 'cloud', 'merge', 'trace'];
+export const DECISION_KINDS = ['regime', 'fires', 'flux', 'top', 'cloud', 'merge', 'mix', 'trace'];
 
 export function radiationTraces(model, share = 1e-5) {
   const { mesh: { cellsOnCell, nEdgesOnCell, maxEdges, nCells: C }, core: { K }, radiation, moist: { cumulusCover, cumulusWater } } = model, apply = radiation.apply, traces = new Map();
@@ -36,11 +39,13 @@ export function radiationTraces(model, share = 1e-5) {
   return traces;
 }
 
-export function decisionTracker(K, C, { flux: fluxShare = 1e-2, threshold = CLOUD_TOP_DEFAULTS.threshold } = {}) {
+export function decisionTracker(K, C, { flux: fluxShare = 1e-2, threshold = CLOUD_TOP_DEFAULTS.threshold, mix = false } = {}) {
   const kinds = Object.fromEntries(DECISION_KINDS.map((kind) => [kind, new Set()])), parted = new Set(), first = new Map();
   let step = 0;
   const note = (kind, i, what) => { kinds[kind].add(i); parted.add(i); if (!first.has(i)) first.set(i, `step ${step}: ${what}`); };
   const merges = (theta, q, x) => Math.abs(theta[x] - theta[x + C]) <= 1e-6 * theta[x + C] && (!q || Math.abs(q[x] - q[x + C]) <= 1e-6 * Math.max(Math.abs(q[x]), Math.abs(q[x + C])));
+  const same = (v, x) => Math.abs(v[x] - v[x + C]) <= 1e-6 * Math.max(Math.abs(v[x]), Math.abs(v[x + C]));
+  const mixes = (q, qc, x) => !!(q && qc) && Math.max(qc[x], qc[x + C]) > threshold && same(q, x) && same(qc, x);
   return {
     kinds, parted, first,
     check(a, b) {
@@ -54,6 +59,7 @@ export function decisionTracker(K, C, { flux: fluxShare = 1e-2, threshold = CLOU
         else if (fa > 0 && Math.abs(a.top[i] - b.top[i]) > 1) note('top', i, `plume top ${(a.top[i] / 100).toFixed(0)}/${(b.top[i] / 100).toFixed(0)} hPa`);
         for (let k = 0; k < K; k++) { const x = k * C + i; if ((a.qc[x] > threshold) !== (b.qc[x] > threshold)) { note('cloud', i, `cloud in layer ${k} ${a.qc[x].toExponential(2)}/${b.qc[x].toExponential(2)}`); break; } }
         for (let k = 0; k < K - 1; k++) { const x = k * C + i; if (merges(a.theta, a.q, x) !== merges(b.theta, b.q, x)) { note('merge', i, `dry adjustment merges layer ${k}`); break; } }
+        if (mix) for (let k = 0; k < K - 1; k++) { const x = k * C + i; if (mixes(a.q, a.qc, x) !== mixes(b.q, b.qc, x)) { note('mix', i, `layers ${k} and ${k + 1} mixed completely ${mixes(a.q, a.qc, x)}/${mixes(b.q, b.qc, x)}`); break; } }
       }
     },
   };
