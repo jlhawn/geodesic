@@ -104,6 +104,14 @@ export function readAcross(device, encoder, ranges) {
   });
 }
 
+const bufferIds = new WeakMap();
+let nextBufferId = 0;
+const bufferId = (buffer) => {
+  let id = bufferIds.get(buffer);
+  if (id === undefined) bufferIds.set(buffer, (id = nextBufferId++));
+  return id;
+};
+
 /*
  * A compute pipeline with bind groups cached per buffer set: `run`
  * records one dispatch of `count` invocations at workgroup size 64.
@@ -113,7 +121,7 @@ export function createKernel(device, code, label = 'kernel') {
   const pipeline = device.createComputePipeline({ label, layout: 'auto', compute: { module, entryPoint: 'main' } });
   const groups = new Map();
   function bindGroup(buffers) {
-    const key = buffers.map((b) => b.label ?? b.__id ?? (b.__id = Math.random())).join('|');
+    const key = buffers.map(bufferId).join('|');
     let group = groups.get(key);
     if (!group) {
       group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })) });
