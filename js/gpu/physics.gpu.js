@@ -3502,19 +3502,22 @@ fn blSeal(i: i32, pi: f32) {
   // dry convective adjustment
   var blockTop: array<i32, K>; var blockHeat: array<f32, K>; var blockWeight: array<f32, K>; var blockMass: array<f32, K>; var blockQ: array<f32, K>; var blockQc: array<f32, K>;
   var nb = 0; var merges = 0;
+  var topLevel = 0; var topHeat = 0.0; var topWeight = 0.0; var topMass = 0.0; var topQ = 0.0; var topQc = 0.0;
   for (var k = K - 1; k >= 0; k--) {
     let idx = k * C + i; let w = D[D_EXM + idx] * LV[L_DS + k];
-    blockTop[nb] = k; blockHeat[nb] = IN[S_TH + idx] * w; blockWeight[nb] = w; blockMass[nb] = LV[L_DS + k];
-    blockQ[nb] = IN[S_Q + idx] * LV[L_DS + k]; blockQc[nb] = IN[S_QC + idx] * LV[L_DS + k];
+    if (nb > 0) { blockTop[nb - 1] = topLevel; blockHeat[nb - 1] = topHeat; blockWeight[nb - 1] = topWeight; blockMass[nb - 1] = topMass; blockQ[nb - 1] = topQ; blockQc[nb - 1] = topQc; }
+    topLevel = k; topHeat = IN[S_TH + idx] * w; topWeight = w; topMass = LV[L_DS + k];
+    topQ = IN[S_Q + idx] * LV[L_DS + k]; topQc = IN[S_QC + idx] * LV[L_DS + k];
     nb++;
     loop {
       if (nb < 2) { break; }
-      if (!(blockHeat[nb - 2] / blockWeight[nb - 2] > (blockHeat[nb - 1] / blockWeight[nb - 1]) * (1.0 + 1e-6))) { break; }
-      blockHeat[nb - 2] += blockHeat[nb - 1]; blockWeight[nb - 2] += blockWeight[nb - 1]; blockMass[nb - 2] += blockMass[nb - 1];
-      blockQ[nb - 2] += blockQ[nb - 1]; blockQc[nb - 2] += blockQc[nb - 1]; blockTop[nb - 2] = blockTop[nb - 1];
+      if (!(blockHeat[nb - 2] / blockWeight[nb - 2] > (topHeat / topWeight) * (1.0 + 1e-6))) { break; }
+      topHeat = blockHeat[nb - 2] + topHeat; topWeight = blockWeight[nb - 2] + topWeight; topMass = blockMass[nb - 2] + topMass;
+      topQ = blockQ[nb - 2] + topQ; topQc = blockQc[nb - 2] + topQc;
       nb--; merges++;
     }
   }
+  if (nb > 0) { blockTop[nb - 1] = topLevel; blockHeat[nb - 1] = topHeat; blockWeight[nb - 1] = topWeight; blockMass[nb - 1] = topMass; blockQ[nb - 1] = topQ; blockQc[nb - 1] = topQc; }
   if (merges > 0) {
     var lowest = K - 1;
     for (var b = 0; b < nb; b++) {
