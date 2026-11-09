@@ -33,10 +33,10 @@ function prepare(model) {
 
 const apart = (a, b, keep) => { let worst = 0; for (let i = 0; i < a.length; i++) if (keep(i)) worst = Math.max(worst, Math.abs(a[i] - b[i])); return worst; };
 
-for (const [coverGoal, snowHold] of [['water', false], ['observed', false], ['observed', true]]) {
-  test(`from an observed start both engines relax the cover and the trees alike under coverGoal '${coverGoal}'${snowHold ? ' with snowHold' : ''}, hold the carbon at the placeholder, and a jump leaves the trees${coverGoal === 'observed' ? ', with the boundary layer diagnosed after the deposit' : ''}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const [coverGoal, snowHold, plain] of [['water', false, false], ['observed', false, true], ['observed', true, true], ['observed', false, false], ['observed', true, false]]) {
+  test(`from an observed start both engines relax the cover and the trees alike under coverGoal '${coverGoal}'${snowHold ? ' with snowHold' : ''}, hold the carbon at the placeholder, and a jump leaves the trees${plain ? ', with the boundary layer diagnosed after the deposit' : coverGoal === 'observed' ? ' at the default order, the cover, the trees and the snow-free cover on their means over the vegetated cells' : ''}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const land = { ...FAST, coverGoal, snowHold };
-    const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(coverGoal === 'observed' ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } })), gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(coverGoal === 'observed' ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }));
+    const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } })), gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }));
     const C = cpu.mesh.nCells, grown = (i) => cpu.geography.land[i] && !cpu.geography.iceSheet[i], count = Array.from({ length: C }, (_, i) => i).filter(grown).length;
     assert.deepEqual([...cpu.land.record], [0, 4, 4]);
     for (let n = 0; n < 16; n++) { cpu.step(900); await gpu.step(900); }
@@ -47,7 +47,12 @@ for (const [coverGoal, snowHold] of [['water', false], ['observed', false], ['ob
     const carbon = apart(cpu.land.soilCarbon, saved.soilCarbon, grown), held = apart(saved.soilCarbon, new Float64Array(C).fill(neutral), grown);
     console.log(`coverGoal '${coverGoal}', ${count} vegetated cells at N=16 after 16 steps: cover differs by ${vegetation.toExponential(1)}, trees ${trees.toExponential(1)}, snow-free cover ${free.toExponential(1)}, carbon ${carbon.toExponential(1)} (held to ${held.toExponential(1)} of the placeholder); the cover moved in ${moved} cells and the trees in ${grew}`);
     assert.ok(moved > 0.2 * count && grew > 0.2 * count, `${moved} cells with moving cover and ${grew} with moving trees of ${count}`);
-    assert.ok(vegetation < 1e-4 && trees < 1e-4 && free < 1e-4, `cover ${vegetation}, trees ${trees}, snow-free cover ${free}`);
+    const meanApart = (a, b) => { let sum = 0; for (let i = 0; i < C; i++) if (grown(i)) sum += b[i] - a[i]; return Math.abs(sum / count); };
+    const means = { cover: meanApart(cpu.land.vegetation, saved.vegetation), trees: meanApart(cpu.land.canopy, saved.canopy), free: meanApart(cpu.land.snowFreeCover, saved.snowFreeCover) };
+    if (coverGoal === 'observed' && !plain) {
+      console.log(`at the default order the means over the vegetated cells part by: cover ${means.cover.toExponential(1)}, trees ${means.trees.toExponential(1)}, snow-free cover ${means.free.toExponential(1)}`);
+      assert.ok(means.cover < 1e-5 && means.trees < 1e-5 && means.free < 1e-5, `means apart: cover ${means.cover}, trees ${means.trees}, snow-free cover ${means.free}`);
+    } else assert.ok(vegetation < 1e-4 && trees < 1e-4 && free < 1e-4, `cover ${vegetation}, trees ${trees}, snow-free cover ${free}`);
     assert.ok(carbon < 1e-6 && held < 1e-6, `carbon ${carbon}, held to ${held}`);
     const snowy = Array.from({ length: C }, (_, i) => i).filter((i) => grown(i) && cpu.land.snow[i] > 0 && saved.snow[i] > 0);
     const kept = snowy.filter((i) => Math.abs(cpu.land.vegetation[i] - 0.5) < 1e-6 && Math.abs(saved.vegetation[i] - 0.5) < 1e-6).length;

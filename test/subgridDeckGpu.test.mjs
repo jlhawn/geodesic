@@ -66,6 +66,7 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', surface 
   const cells = (cpu, name) => stats(Float64Array.from(kept, (i) => cpu[i]), Float64Array.from(kept, (i) => after[name][i]));
   const keptColumns = (cpu, gpu) => stats(Float64Array.from({ length: K * kept.length }, (_, x) => cpu[Math.floor(x / kept.length) * C + kept[x % kept.length]]), Float64Array.from({ length: K * kept.length }, (_, x) => gpu[Math.floor(x / kept.length) * C + kept[x % kept.length]]));
   const columns = (cpu, name) => keptColumns(cpu, after[name]);
+  const meanGap = (cpu, gpu, layers = 1) => { let a = 0, b = 0; for (let k = 0; k < layers; k++) for (const i of kept) { a += Math.abs(cpu[k * C + i]); b += gpu[k * C + i] - cpu[k * C + i]; } return Math.abs(b) / a; };
   let decked = 0, gpuDecked = 0, layerMiss = 0, homeMiss = 0, fromMiss = 0, sealed = 0, moved = 0;
   for (let i = 0; i < C; i++) {
     if (r.mlmTop[i] > 0) decked++;
@@ -81,6 +82,7 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', surface 
     share: cells(r.mlmShare, 'MLMM'), top: cells(r.mlmTop, 'MLMTOP'), height: cells(r.mlmHeight, 'MLMH'), water: cells(r.mlmWater, 'MLMWATER'), entrainment: cells(r.mlmEntrainment, 'MLMENT'),
     deck: cells(r.stratus, 'DECK'), fraction: cells(r.stratusFraction, 'DECKF'), olr: cells(r.outgoing, 'OLR'), sw: cells(r.surfaceShortwave, 'SWDN'), blEntrainment: cells(bl.entrainment, 'ENTRAIN'),
     gpuSealed: Array.from({ length: C }, (_, i) => after.MLMK[i]).filter((k) => k > 0.5).length, gpuEnergy: columnEnergy(after, C, K, (physics.radiationEvery ?? 1) > 1),
+    means: { q: meanGap(model.state[4], state[4], K), mixing: meanGap(bl.mixing, after.MIX, K), entrainment: meanGap(r.mlmEntrainment, after.MLMENT), blEntrainment: meanGap(bl.entrainment, after.ENTRAIN), sw: meanGap(r.surfaceShortwave, after.SWDN), longwave: turbulence === 'moist' ? meanGap(r.longwave, after.LWH, K) : null },
     kept, cpuWater: Float64Array.from(r.mlmWater), gpuWater: Float64Array.from(after.MLMWATER),
     mixing: columns(bl.mixing, 'MIX'), longwave: turbulence === 'moist' ? columns(r.longwave, 'LWH') : null, theta: keptColumns(model.state[1], state[1]), q: keptColumns(model.state[4], state[4]),
   };
@@ -88,14 +90,15 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', surface 
 
 const show = (label, run) => console.log(`${label}: deck on ${run.decked} of ${run.C} cells (GPU ${run.gpuDecked}), ${run.parted} cells with moist decisions or the boundary layer's cloud-top run apart (${run.runs} the run; ${run.near} cells left out with their two rings); inversion layer differs on ${run.layerMiss}, deck layer on ${run.homeMiss}; ${run.sealed} sealed alike, ${run.moved} decks off σ 0.92; rms relative differences: share ${run.share.rmsRel.toExponential(1)} (max ${run.share.maxDiff.toExponential(1)}), top ${run.top.rmsRel.toExponential(1)}, height ${run.height.rmsRel.toExponential(1)}, water ${run.water.rmsRel.toExponential(1)}, w_e ${run.entrainment.rmsRel.toExponential(1)}, mixing ${run.mixing.rmsRel.toExponential(1)}, boundary-layer w_e ${run.blEntrainment.rmsRel.toExponential(1)}, θ ${run.theta.rmsRel.toExponential(1)}, q ${run.q.rmsRel.toExponential(1)}, OLR ${run.olr.rmsRel.toExponential(1)}, surface shortwave ${run.sw.rmsRel.toExponential(1)}, longwave heating ${run.longwave ? run.longwave.rmsRel.toExponential(1) : "not stored by the GPU under the dry boundary layer"}`);
 
-function agree(label, run) {
+function agree(label, run, onMeans = []) {
+  const pick = (name) => (onMeans.includes(name) ? run.means[name] : run[name].rmsRel);
   assert.ok(run.decked > 0.5 * run.C && run.gpuDecked === run.decked, `${label}: deck on ${run.decked} cells, ${run.gpuDecked} on the GPU`);
   assert.ok(run.layerMiss === 0 && run.homeMiss === 0, `${label}: inversion layer apart on ${run.layerMiss}, deck layer on ${run.homeMiss}`);
   assert.ok(run.share.maxDiff < 1e-3 && run.top.rmsRel < 1e-5 && run.height.rmsRel < 1e-5, `${label}: share ${run.share.maxDiff}, top ${run.top.rmsRel}, height ${run.height.rmsRel}`);
-  assert.ok(run.water.rmsRel < 1e-4 && run.entrainment.rmsRel < 1e-4 && run.deck.maxDiff < 5e-5 && run.fraction.maxDiff < 1e-3, `${label}: water ${run.water.rmsRel}, w_e ${run.entrainment.rmsRel}, deck ${run.deck.maxDiff}, fraction ${run.fraction.maxDiff}`);
-  assert.ok(run.mixing.rmsRel < 1e-4 && run.blEntrainment.rmsRel < 1e-4, `${label}: mixing ${run.mixing.rmsRel}, boundary-layer w_e ${run.blEntrainment.rmsRel}`);
-  assert.ok(run.theta.rmsRel < 1e-6 && run.q.rmsRel < 1e-5, `${label}: θ ${run.theta.rmsRel}, q ${run.q.rmsRel}`);
-  assert.ok(run.olr.rmsRel < 3e-5 && run.sw.rmsRel < 3e-5 && (!run.longwave || run.longwave.rmsRel < 1e-4), `${label}: OLR ${run.olr.rmsRel}, surface shortwave ${run.sw.rmsRel}, longwave heating ${run.longwave?.rmsRel}`);
+  assert.ok(run.water.rmsRel < 1e-4 && pick('entrainment') < 1e-4 && run.deck.maxDiff < 5e-5 && run.fraction.maxDiff < 1e-3, `${label}: water ${run.water.rmsRel}, w_e ${pick('entrainment')}, deck ${run.deck.maxDiff}, fraction ${run.fraction.maxDiff}`);
+  assert.ok(pick('mixing') < 1e-4 && pick('blEntrainment') < 1e-4, `${label}: mixing ${pick('mixing')}, boundary-layer w_e ${pick('blEntrainment')}`);
+  assert.ok(run.theta.rmsRel < 1e-6 && pick('q') < 1e-5, `${label}: θ ${run.theta.rmsRel}, q ${pick('q')}`);
+  assert.ok(run.olr.rmsRel < 3e-5 && pick('sw') < 3e-5 && (!run.longwave || pick('longwave') < 1e-4), `${label}: OLR ${run.olr.rmsRel}, surface shortwave ${pick('sw')}, longwave heating ${run.longwave && pick('longwave')}`);
 }
 
 test('on bl60, and bl48 where it is built, the sub-grid inversion, the deck on it and the boundary layer it seals match between the engines, under the moist and the dry boundary layer, the dry one diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -149,5 +152,34 @@ test('with surface.virtualDensity the deck\'s surface fluxes take the moist dens
   }
   const rms = (x) => Math.sqrt(x / Math.max(cells, 1)), scale = Math.sqrt(on.cpuWater.reduce((sum, w) => sum + w * w, 0) / on.C);
   console.log(`over ${cells} cells the option moves the deck's water by ${rms(move).toExponential(2)} rms (the water ${scale.toExponential(2)}); the engines' moves differ by ${rms(gap).toExponential(2)}`);
+  assert.ok(rms(move) > 1e-4 * scale && gap < 0.01 * move, `the deck water's move ${rms(move)}, its gap between the engines ${rms(gap)}`);
+});
+
+test('at the default order the deck matches between the engines on bl60 under the dry boundary layer, on bl48 with its cloud at the top on the sub-grid inversion and on the grid ceiling with the resolved cloud replaced, and with surface.virtualDensity: cell by cell outside two rings of the parted decisions, and by their means over those cells each of the humidity, the mixing, the entrainment, the surface shortwave and the longwave heating whose per-cell bound a single cell breaks at the default order, which a cell a threshold parts moves by its share and a shift across the decks moves whole', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const means = (label, run) => console.log(`${label} at the default order, means over the ${run.kept.length} kept cells apart by: q ${run.means.q.toExponential(1)} (rms ${run.q.rmsRel.toExponential(1)}), mixing ${run.means.mixing.toExponential(1)} (rms ${run.mixing.rmsRel.toExponential(1)}), w_e ${run.means.entrainment.toExponential(1)} (rms ${run.entrainment.rmsRel.toExponential(1)}), boundary-layer w_e ${run.means.blEntrainment.toExponential(1)} (rms ${run.blEntrainment.rmsRel.toExponential(1)}), surface shortwave ${run.means.sw.toExponential(1)} (rms ${run.sw.rmsRel.toExponential(1)})${run.longwave ? `, longwave heating ${run.means.longwave.toExponential(1)} (rms ${run.longwave.rmsRel.toExponential(1)})` : ''}`);
+  for (const [label, options, onMeans, extra] of [
+    ['bl60 subgrid, dry', { levels: 'bl60', deckInversion: 'subgrid', turbulence: 'dry' }, ['q'], (run) => assert.ok(run.sealed > 0.5 * run.decked, `${run.sealed} of ${run.decked} sealed alike`)],
+    ['bl48 deckCloud top, deckInversion subgrid', { levels: 'bl48', deckCloud: 'top', deckInversion: 'subgrid' }, ['q'], (run) => assert.ok(run.moved > 0.5 * run.decked, `${run.moved} of ${run.decked} decks off σ 0.92`)],
+    ['bl48 deckResolved above', { levels: 'bl48', cloudColumns: true, cloudSpread: 0.75, deckResolved: 'above' }, ['q', 'mixing', 'entrainment', 'blEntrainment'], (run) => assert.ok(run.fromMiss === 0 && run.gpuEnergy < 1e-2, `replaced layers apart on ${run.fromMiss}, ${run.gpuEnergy} W/m² off`)],
+  ]) {
+    const run = await deckPair(3, options);
+    show(label, run);
+    means(label, run);
+    agree(label, run, onMeans);
+    extra(run);
+  }
+  const on = await deckPair(3, { surface: { virtualDensity: true } }), off = await deckPair(3);
+  show('virtualDensity', on);
+  means('virtualDensity', on);
+  agree('virtualDensity', on, ['q', 'blEntrainment', 'sw', 'longwave']);
+  const both = new Set(off.kept);
+  let gap = 0, move = 0, cells = 0;
+  for (const i of on.kept) {
+    if (!both.has(i)) continue;
+    const cpuMove = on.cpuWater[i] - off.cpuWater[i], gpuMove = on.gpuWater[i] - off.gpuWater[i];
+    gap += (gpuMove - cpuMove) ** 2; move += cpuMove ** 2; cells++;
+  }
+  const rms = (x) => Math.sqrt(x / Math.max(cells, 1)), scale = Math.sqrt(on.cpuWater.reduce((sum, w) => sum + w * w, 0) / on.C);
+  console.log(`at the default order over ${cells} cells the option moves the deck's water by ${rms(move).toExponential(2)} rms (the water ${scale.toExponential(2)}); the engines' moves differ by ${rms(gap).toExponential(2)}`);
   assert.ok(rms(move) > 1e-4 * scale && gap < 0.01 * move, `the deck water's move ${rms(move)}, its gap between the engines ${rms(gap)}`);
 });

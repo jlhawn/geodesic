@@ -26,6 +26,7 @@ const LAYERED = { levels: OPTIONS.levels, topography, radiation: { ...PREVIOUS_S
 const CASES = [
   ['with the boundary layer diagnosed after the deposit, over the slab from no skin', { ...OPTIONS, boundaryLayer: { ...OPTIONS.boundaryLayer, ...PREVIOUS_BOUNDARY_LAYER } }, 0],
   ['over the slab from a 1 K warm layer', OPTIONS, 1],
+  ['over the slab from no skin at the default order, the warm layer, the cool skin and the surface held to their means over the open cells,', OPTIONS, 0, true],
   ['over a layered ocean with 2 m top layers under IB light, from a 1 K warm layer', { ...LAYERED, ocean: { layerTable: hybridLayerTable({ top: 2 }) } }, 1],
   ['over a layered ocean under type III light, from a 1 K warm layer', { ...LAYERED, ocean: { penetration: 'III' } }, 1],
 ];
@@ -37,7 +38,7 @@ function start(model) {
   return model;
 }
 
-for (const [label, options, warmStart] of CASES) test(`${label} over the open sea, both engines step the warm layer and the cool skin alike, and the air sees the same skin${warmStart ? ' on the first step' : ''}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const [label, options, warmStart, onMeans] of CASES) test(`${label} over the open sea, both engines step the warm layer and the cool skin alike, and the air sees the same skin${warmStart ? ' on the first step' : ''}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cpu = start(createModel(new Grid(N), { ...options, surface: ON })), gpu = start(await createGpuModel(new Grid(N), { ...options, surface: ON }));
   if (cpu.ocean) cpu.ocean.initialize(cpu.state[3], cpu.state[6]);
   const warm = Float64Array.from(cpu.state[6], (ice, i) => ((cpu.geography && cpu.geography.land[i]) || ice > 0 ? 0 : warmStart));
@@ -48,9 +49,10 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
   const C = cpu.mesh.nCells, PH = gpu.gpu.layout.PH, first = { warm: 0, cool: 0, ts: 0, net: 0, sensible: 0, bulk: 0 }, worst = { ...first };
   const capacityOf = (i) => (cpu.ocean ? cpu.ocean.capacity[i] : cpu.seaIce.slabHeatCapacity);
   let thin = 0, kept = 0, overNet = 0, gapSquare = 0;
-  const decided = new Uint8Array(C);
+  const decided = new Uint8Array(C), meanWorst = { warm: 0, cool: 0, ts: 0 };
   for (let n = 0; n < STEPS; n++) {
     cpu.step(DT); await gpu.step(DT); await gpu.settle();
+    const sums = { warm: 0, cool: 0, ts: 0, n: 0 };
     const [warm, cool, net, sensible, capacity] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['WARM', 'COOL', 'SFLUX', 'SH', 'CAP'].map((name) => ({ offset: PH[name], length: C })));
     await gpu.sync();
     for (let i = 0; i < C; i++) {
@@ -61,23 +63,26 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
       if (!decided[i]) worst.warm = Math.max(worst.warm, Math.abs(warm[i] - cpu.skin.warm[i]));
       if (!decided[i]) worst.cool = Math.max(worst.cool, Math.abs(cool[i] - cpu.skin.cool[i]));
       if (!decided[i]) worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
+      if (!decided[i]) { sums.warm += warm[i] - cpu.skin.warm[i]; sums.cool += cool[i] - cpu.skin.cool[i]; sums.ts += gpuSurface - cpuSurface; sums.n++; }
       worst.bulk = Math.max(worst.bulk, Math.abs(gpu.state[3][i] - cpu.state[3][i]));
       if (!decided[i]) { const gap = net[i] - cpu.radiation.surfaceFlux[i]; kept++; gapSquare += gap * gap; if (Math.abs(gap) > 0.1 * Math.max(FLIP, Math.abs(cpu.radiation.surfaceFlux[i]))) overNet++; }
       if (!decided[i]) worst.sensible = Math.max(worst.sensible, Math.abs(sensible[i] - cpu.radiation.sensibleHeat[i]) / Math.max(1, Math.abs(cpu.radiation.sensibleHeat[i])));
       if (n === 0) first.net = Math.max(first.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
     }
+    for (const key of ['warm', 'cool', 'ts']) meanWorst[key] = Math.max(meanWorst[key], Math.abs(sums[key] / sums.n));
     if (n === 0) Object.assign(first, { warm: worst.warm, cool: worst.cool, ts: worst.ts, sensible: worst.sensible });
   }
   console.log(`${label}: skin parity after one step: ΔT_w ${first.warm.toExponential(1)} K, ΔT_c ${first.cool.toExponential(1)} K, T_s ${first.ts.toExponential(1)} K, net ${first.net.toExponential(1)} W/m² beyond 1e-5 relative, sensible ${first.sensible.toExponential(1)} relative`);
   const flipped = decided.reduce((sum, x) => sum + x, 0);
   console.log(`${label}: ${thin} open cells under 3 m; skin parity over ${STEPS} steps, where the bulk temperatures drift ${worst.bulk.toExponential(1)} K apart: ΔT_w ${worst.warm.toExponential(1)} K (${flipped} cells whose flux the engines decided apart left out), ΔT_c ${worst.cool.toExponential(1)} K, T_s ${worst.ts.toExponential(1)} K, net ${overNet} of ${kept} cell-steps over 0.1 relative, rms ${Math.sqrt(gapSquare / kept).toExponential(1)} W/m², and sensible ${worst.sensible.toExponential(1)} relative`);
+  if (onMeans) console.log(`${label} the means over the open cells part by at most: ΔT_w ${meanWorst.warm.toExponential(1)} K, ΔT_c ${meanWorst.cool.toExponential(1)} K, T_s ${meanWorst.ts.toExponential(1)} K, against per-cell ${worst.warm.toExponential(1)}, ${worst.cool.toExponential(1)} and ${worst.ts.toExponential(1)}`);
   assert.ok(cpu.skin.warm.some((x) => x > 1e-3), 'a warm layer grows');
   assert.ok(first.warm < 1e-4 && first.cool < 1e-4 && first.ts < 1e-4, 'the first step\'s skin to 1e-4 K');
   assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
   assert.ok(flipped <= Math.min(46, 0.02 * C), `${flipped} of ${C} cells have a flux the engines decided apart`);
-  assert.ok(worst.warm < WARM_BOUND, `the warm layer to ${WARM_BOUND} K over every step`);
+  assert.ok(onMeans ? meanWorst.warm < WARM_BOUND / 10 : worst.warm < WARM_BOUND, onMeans ? `the warm layer's mean to ${WARM_BOUND / 10} K over every step` : `the warm layer to ${WARM_BOUND} K over every step`);
   if (warmStart) return;
-  assert.ok(worst.cool < 1e-2 && worst.ts < 1e-2, 'the surface to 1e-2 K over every step');
+  assert.ok(onMeans ? meanWorst.cool < 1e-3 && meanWorst.ts < 1e-3 : worst.cool < 1e-2 && worst.ts < 1e-2, onMeans ? 'the means of the cool skin and the surface to 1e-3 K over every step' : 'the surface to 1e-2 K over every step');
   assert.ok(worst.sensible < 0.1, 'the sensible heat to 0.1 relative over every step');
   assert.ok(overNet <= 1e-3 * kept, `${overNet} of ${kept} cell-steps whose net flux parted by over 0.1 relative`);
   assert.ok(Math.sqrt(gapSquare / kept) < 0.25, `the net flux ${Math.sqrt(gapSquare / kept)} W/m² rms apart, over the 0.25 W/m² that 25 W/m² per K of latent heat gives across the 1e-2 K the surface may part`);
