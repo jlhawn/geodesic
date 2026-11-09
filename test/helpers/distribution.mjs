@@ -13,8 +13,9 @@
  * floored at the f32 floors: F32_CELL of the reference's largest value for
  * a cell, F32_RMS of its rms for a mean. Its ladder halves the threshold
  * from the twins' largest gap M down to the cell floor, M/1024, or the last
- * rung whose limit stays under half the group's cells. A non-finite gap or
- * reference fails every check.
+ * rung whose limit stays under half the group's cells. Thresholds round
+ * down to three figures, so the top rung counts the twin that set M. A
+ * non-finite gap or reference fails every check.
  *
  * Hemispheres: a cell whose center lies within EQUATOR of the equatorial
  * plane (|z| of the unit center) counts in both; a latitude array in place
@@ -34,7 +35,7 @@ export function hemispheres(mesh, cells = null) {
 }
 
 export function columnLargest(gaps, C, layers) {
-  return Float64Array.from({ length: C }, (_, i) => { let worst = 0; for (const k of layers) { const g = gaps[k * C + i]; if (!(Math.abs(g) <= Math.abs(worst))) worst = g; } return worst; });
+  return Float64Array.from({ length: C }, (_, i) => { let worst = 0; for (const k of layers) { const g = gaps[k * C + i]; if (Number.isNaN(worst)) break; if (!(Math.abs(g) <= Math.abs(worst))) worst = g; } return worst; });
 }
 
 export const roundUp = (x) => { if (!(x > 0) || !Number.isFinite(x)) return x; const unit = 10 ** (Math.floor(Math.log10(x)) - 2), up = +(Math.ceil(x / unit) * unit).toPrecision(3); return up >= x ? up : +(up + unit).toPrecision(3); };
@@ -66,7 +67,7 @@ export function buildSpread(runs, where, reference, { k = 2, trim = TRIM } = {})
   if (first.some((s) => !s.finite)) throw new Error('a twin gap is not finite');
   const M = Math.max(...first.map((s) => s.largest)), counts = [];
   for (let j = 0; j <= LADDER_DEPTH; j++) {
-    const threshold = +(M * 2 ** -j).toPrecision(3);
+    const exact = M * 2 ** -j, unit = 10 ** (Math.floor(Math.log10(exact)) - 2), threshold = +(Math.floor(exact / unit) * unit).toPrecision(3);
     if (!(threshold >= cellFloor) || threshold <= 0) break;
     const worst = Math.max(...runs.map((gaps) => spreadStatistics(gaps, where, [threshold], trim).over[0])), limit = Math.ceil(k * worst) + 2;
     if (limit >= n / 2) break;

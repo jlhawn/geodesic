@@ -7,6 +7,7 @@ import { sunDirection, sunDistance, orbitOf, YEAR } from '../js/physics/radiatio
 import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, DECISION_KINDS } from './helpers/decisions.mjs';
 import { distributionCheck, magnitude } from './helpers/distribution.mjs';
+import { groupLayout, bandLayers, spreadGroups, groupChecks } from './helpers/spreadGroups.mjs';
 import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 const CAPPED = { velocityScale: 'capped' };
 
@@ -25,7 +26,7 @@ function stats(cpu, gpu, apart = null, C = 0) {
   for (let x = 0; x < cpu.length; x++) {
     if (apart && apart.has(x % C)) continue;
     const d = Math.abs(cpu[x] - gpu[x]);
-    if (d > maxDiff) { maxDiff = d; at = x; }
+    if (d > maxDiff || Number.isNaN(d)) { maxDiff = d; at = x; }
     sumSq += d * d; sumRef += cpu[x] * cpu[x]; count++;
   }
   return { maxDiff, at, rms: Math.sqrt(sumSq / count), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
@@ -123,9 +124,12 @@ test('the stratiform share of the estimated inversion strength and the boundary-
   }
 });
 
-const DAMPING_S7 = { theta: { largest: 0.572, counts: [[0.286, 4], [0.0286, 18], [0.00286, 58]], hemisphere: 3.17e-3 }, wind: { largest: 0.25, counts: [[0.125, 4], [0.0125, 68], [0.00125, 382]], hemisphere: 7.83e-4 } };
+const DAMPING_S9 = {
+  theta: { 'sea low': {"largest":0.573,"counts":[[0.286,4],[0.143,4],[0.0715,10],[0.0357,10],[0.0178,24],[0.00894,26],[0.00447,32],[0.00223,48],[0.00111,70]],"hemisphere":{"north":0.00113,"south":0.000884},"bulk":{"north":{"trimmed":0.000363,"signed":0.000268},"south":{"trimmed":0.000365,"signed":0.000268}}}, 'sea mid': {"largest":0.255,"counts":[[0.127,4],[0.0636,6],[0.0318,8],[0.0159,8],[0.00795,14],[0.00397,22],[0.00198,50]],"hemisphere":{"north":0.000694,"south":0.00086},"bulk":{"north":{"trimmed":0.00048,"signed":0.000307},"south":{"trimmed":0.000481,"signed":0.000307}}}, 'sea high': {"largest":0.0128,"counts":[],"hemisphere":{"north":0.00308,"south":0.00308},"bulk":{"north":{"trimmed":0.00294,"signed":0.00129},"south":{"trimmed":0.00294,"signed":0.00129}}} },
+  wind: { 'sea low': {"largest":0.248,"counts":[[0.123,4],[0.0619,10],[0.0309,24],[0.0154,42],[0.00773,58],[0.00386,74],[0.00193,188],[0.000967,310],[0.000483,444],[0.000241,708],[0.00012,1254]],"hemisphere":{"north":0.000628,"south":0.000338},"bulk":{"north":{"trimmed":9.32e-05,"signed":3.07e-06},"south":{"trimmed":7.89e-05,"signed":3.07e-06}}}, 'sea mid': {"largest":0.0402,"counts":[[0.02,4],[0.01,14],[0.00501,36],[0.0025,84],[0.00125,156],[0.000627,282],[0.000313,484],[0.000156,960],[7.83e-05,2622]],"hemisphere":{"north":0.000252,"south":0.000196},"bulk":{"north":{"trimmed":0.000108,"signed":3.88e-06},"south":{"trimmed":0.000102,"signed":4.38e-06}}}, 'sea high': {"largest":0.0173,"counts":[[0.0086,4],[0.0043,12],[0.00215,42],[0.00107,68],[0.000537,140],[0.000268,416]],"hemisphere":{"north":0.000261,"south":0.000243},"bulk":{"north":{"trimmed":0.000211,"signed":6.28e-06},"south":{"trimmed":0.000207,"signed":7.8e-06}}} },
+};
 
-for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines, with the boundary layer diagnosed after the deposit' : 'with the ∇⁴ closures off at the default order, the divergence damping alone parts the engines no further than thirty CPU twins part themselves: each column\'s largest θ gap and each edge\'s largest wind gap, in the largest, the count at or over three thresholds and each hemisphere\'s mean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines, with the boundary layer diagnosed after the deposit' : 'with the ∇⁴ closures off at the default order, the divergence damping alone parts the engines no further than the CPU twins part themselves: in each band of reference pressure, each column\'s largest θ gap and each edge\'s largest wind gap, in the largest, a ladder of counts, and each hemisphere\'s mean, trimmed mean and trimmed signed mean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (divergenceDamping) => {
     const model = createModel(new Grid(N), { ocean: false, nu4Hours: Infinity, divergenceDamping, radiation: PREVIOUS_AEROSOL, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), ...CAPPED } });
     const init = initializeState(model, {});
@@ -145,14 +149,13 @@ for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, t
   const moved = stats(free.model.state[2], damped.model.state[2]), heated = stats(free.model.state[1], damped.model.state[1]);
   console.log(`four steps at N=${N}, c = 0.1 and no ∇⁴: over the ${kept.length} of ${C} columns where no discrete decision parted (${parted.size} did: ${Object.entries(kinds).map(([kind, cells]) => `${kind} ${cells.size}`).join(', ')}) the engines differ in θ by rms ${theta.rmsRel.toExponential(1)}, max ${theta.maxDiff.toExponential(1)} K, in wind by at most ${u.maxDiff.toExponential(1)} m/s; the damping moves the wind by up to ${moved.maxDiff.toFixed(3)} m/s and θ by rms ${heated.rmsRel.toExponential(1)}, up to ${heated.maxDiff.toExponential(1)} K`);
   if (!plain) {
-    const { nEdges: E, latCell, latEdge } = damped.model.mesh, { dSigma } = damped.model.core.diagnostics;
+    const { dSigma } = damped.model.core.diagnostics, land = damped.model.geography?.land ?? null, bands = bandLayers(damped.model.core.sigmaMid, K);
     const content = (theta) => { let sum = 0; for (let x = 0; x < K * C; x++) sum += theta[x] * damped.model.state[0][x % C] * dSigma[Math.floor(x / C)]; return sum; };
     const heat = Math.abs(content(damped.state[1]) - content(damped.model.state[1])) / Math.abs(content(damped.model.state[1]) - content(free.model.state[1]));
-    const deepest = (field, n, x) => { let gap = 0; for (let k = 0; k < K; k++) gap = Math.max(gap, Math.abs(damped.state[field][k * n + x] - damped.model.state[field][k * n + x])); return gap; };
-    const thetaGaps = Array.from({ length: C }, (_, i) => deepest(1, C, i)), windGaps = Array.from({ length: E }, (_, e) => deepest(2, E, e));
-    const columns = distributionCheck(thetaGaps, latCell, DAMPING_S7.theta, magnitude(damped.model.state[1])), edges = distributionCheck(windGaps, latEdge, DAMPING_S7.wind, magnitude(damped.model.state[2]));
-    console.log(`at the default order, four steps at N=${N}, c = 0.1 and no ∇⁴: each column's largest θ gap over its layers, ${columns.text} K; each edge's largest wind gap, ${edges.text} m/s, where the damping moved the wind by up to ${moved.maxDiff.toExponential(1)}; the engines' πdσ-weighted θ parts by ${heat.toExponential(1)} of the change the damping makes to it`);
-    assert.deepEqual([...columns.failed, ...edges.failed], [], 'the distribution of the engines\' gaps past the bounds thirty twins set');
+    const columns = groupChecks(spreadGroups(damped.model.state[1], damped.state[1], groupLayout(damped.model.mesh, { land }), bands), DAMPING_S9.theta);
+    const edges = groupChecks(spreadGroups(damped.model.state[2], damped.state[2], groupLayout(damped.model.mesh, { land, edges: true }), bands), DAMPING_S9.wind);
+    console.log(`at the default order, four steps at N=${N}, c = 0.1 and no ∇⁴: each column's largest θ gap over a band's layers, ${columns.rows.join('; ')} K; each edge's largest wind gap, ${edges.rows.join('; ')} m/s, where the damping moved the wind by up to ${moved.maxDiff.toExponential(1)}; the engines' πdσ-weighted θ parts by ${heat.toExponential(1)} of the change the damping makes to it`);
+    assert.deepEqual([...columns.failed, ...edges.failed], [], 'the distribution of the engines\' gaps past the bounds the CPU twins set');
     return;
   }
   assert.ok(parted.size <= C / 20, `a decision parted in ${parted.size} of ${C} columns`);
@@ -238,7 +241,7 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
     for (let k = 0; k < K; k++) {
       const x = k * C + i, d = Math.abs(lit.cpu[x] - lit.gpu[x]);
       if (k === K - 1) surface = Math.max(surface, d / Math.abs(lit.cpu[x]));
-      else if (d > worst) { worst = d; at = [i, k, lit.cpu[x]]; }
+      else if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k, lit.cpu[x]]; }
       worstCloud = Math.max(worstCloud, Math.abs((lit.cpu[x] - scattering.cpu[x]) - (lit.gpu[x] - scattering.gpu[x])));
     }
   }
@@ -267,7 +270,7 @@ test('the change the Rayleigh and aerosol scattering makes to the heating of eac
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i, change = on.cpu[x] - off.cpu[x], d = Math.abs(change - (on.gpu[x] - off.gpu[x]));
       largest = Math.max(largest, Math.abs(change));
-      if (d > worst) { worst = d; at = [i, k, change]; }
+      if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k, change]; }
     }
   }
   console.log(`physics alone at N=${N} on ${lit} sunlit columns: the scattering changes a layer's heating by up to ${largest.toFixed(3)} K/day, and the engines' change differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day)`);
@@ -340,7 +343,7 @@ test('shallow cumulus of partial cover beside and without resolved cloud heats t
     if (!(base.radiation.insolation(i) > 0)) continue;
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i, d = Math.max(Math.abs(cumulus.cpu[x] - cumulus.gpu[x]), Math.abs(sparse.cpu[x] - sparse.gpu[x]));
-      if (d > worst) { worst = d; at = [i, k]; }
+      if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k]; }
       moved = Math.max(moved, Math.abs(cumulus.cpu[x] - plain.cpu[x]));
     }
   }
@@ -688,8 +691,9 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
     console.log(`${JSON.stringify(options)}: four steps, ${coupled} of ${run.C} columns coupled stratocumulus, the gate open on ${open}, the deck on ${run.decked} (GPU ${run.gpuDecked}); engines differ in the gate by ${run.gate.maxDiff.toExponential(1)}, in cover by ${run.cover.maxDiff.toExponential(1)}, in deck water by rms ${run.mlmWater.rmsRel.toExponential(1)}; ${parted} columns part by more than 2·10⁻⁵ in q, where a cloud top or a parcel crosses its threshold in one engine only; elsewhere θ rms ${theta.rmsRel.toExponential(1)}, q rms ${q.rmsRel.toExponential(1)}; OLR rms ${run.olr.rmsRel.toExponential(1)}`);
     if (options.deckBypass) assert.ok(run.decked === 0 && run.gpuDecked === 0 && open > 0, `bypassed: ${run.decked} decks, gate open on ${open}`);
     else assert.ok(Math.abs(run.decked - run.gpuDecked) <= run.C / 100, `deck on ${run.decked}, GPU ${run.gpuDecked}`);
-    let gateFlips = 0;
-    for (let i = 0; i < run.C; i++) if (Math.abs(run.model.radiation.mlmGate[i] - run.gpuGate[i]) > 1e-3) gateFlips++;
+    let gateFlips = 0, unfinished = 0;
+    for (let i = 0; i < run.C; i++) { if (!Number.isFinite(run.model.radiation.mlmGate[i] + run.gpuGate[i])) unfinished++; if (!(Math.abs(run.model.radiation.mlmGate[i] - run.gpuGate[i]) <= 1e-3)) gateFlips++; }
+    assert.equal(unfinished, 0, `${unfinished} gates are not finite on one engine or the other`);
     assert.ok(gateFlips <= run.C / 50, `${gateFlips} gates part`);
     assert.ok(parted <= run.C / 20, `${parted} columns part`);
     assert.ok(theta.rmsRel < 1e-5 && q.rmsRel < 1e-3 && run.olr.rmsRel < 1e-2, `θ ${theta.rmsRel}, q ${q.rmsRel}, OLR ${run.olr.rmsRel}`);
@@ -713,9 +717,10 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
   assert.ok(gpuMoved > layered.length / 50 && oneEngine + unequal <= layered.length / 100, `the GPU's gate moves on ${gpuMoved} columns, ${oneEngine} on one engine only, ${unequal} by shifts more than 10 percent apart`);
 });
 
-const PEN_S7 = { largest: 9.67e4, counts: [[4.83e4, 4], [4830, 8], [483, 20]], hemisphere: 146 }, WATER_S7 = { largest: 7.73e-4, counts: [[3.86e-4, 4], [3.86e-5, 28]], hemisphere: 2.24e-5 };
+const PEN_S9 = { 'sea': {"largest":96700,"counts":[[48300,4],[24100,6],[12000,6],[6030,8],[3010,8],[1500,10],[754,14],[377,26],[188,36],[94.3,46],[47.1,62]],"hemisphere":{"north":145,"south":21.9},"bulk":{"north":{"trimmed":1.24,"signed":0.622},"south":{"trimmed":1.37,"signed":0.622}}} };
+const WATER_S7 = { largest: 7.73e-4, counts: [[3.86e-4, 4], [3.86e-5, 28]], hemisphere: 2.24e-5 };
 
-for (const [label, transmission, plain] of [['', null, false], [', with open water passing a share of its sunlight to the ocean below and the boundary layer diagnosed after the deposit', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2, true], [', with open water passing a share of its sunlight to the ocean below at the default order, the light passed parting the engines cell by cell no further than thirty CPU twins part themselves, in the largest gap, the count at or over three thresholds and each hemisphere\'s mean', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2, false]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const [label, transmission, plain] of [['', null, false], [', with open water passing a share of its sunlight to the ocean below and the boundary layer diagnosed after the deposit', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2, true], [', with open water passing a share of its sunlight to the ocean below at the default order, the light passed parting the engines cell by cell no further than the CPU twins part themselves, in the largest gap, a ladder of counts, and each hemisphere\'s mean, trimmed mean and trimmed signed mean', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2, false]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { model, state, physics, penetrated } = await pair(12, 900, 0, false, {}, {}, plain ? { ...PREVIOUS_BOUNDARY_LAYER, ...CAPPED } : CAPPED, null, { transmission });
   const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
   const C = model.mesh.nCells;
@@ -740,12 +745,12 @@ for (const [label, transmission, plain] of [['', null, false], [', with open wat
   assert.ok(ice.maxDiff < 1e-3 && concentration.maxDiff < 1e-3, `ice ${ice.maxDiff} m at ${ice.at}, concentration ${concentration.maxDiff} at ${concentration.at}`);
   if (!penetrated) return;
   const passed = penetrated.subarray(0, C), gpuPassed = Float64Array.from({ length: C }, (_, i) => physics.PEN[i]), held = stats(passed, gpuPassed);
-  const spread = plain ? null : distributionCheck(Array.from({ length: C }, (_, i) => Math.abs(gpuPassed[i] - passed[i])), model.mesh.latCell, PEN_S7, magnitude(passed));
+  const spread = plain ? null : groupChecks(spreadGroups(passed, gpuPassed, groupLayout(model.mesh, { land: model.geography?.land ?? null }), bandLayers(null, 1)), PEN_S9);
   let lit = 0, cpuMean = 0, gpuMean = 0;
   for (let i = 0; i < C; i++) { const a = model.mesh.areaCell[i] / area; cpuMean += a * passed[i]; gpuMean += a * gpuPassed[i]; if (passed[i] > 0) lit++; }
-  console.log(`${lit} open-water cells passed ${cpuMean.toFixed(1)} J/m² of sunlight to the ocean below on the CPU and ${gpuMean.toFixed(1)} on the GPU; per cell rms relative ${held.rmsRel.toExponential(1)}, at most ${held.maxDiff.toExponential(1)} J/m² at ${held.at}${spread ? `; the gaps' ${spread.text} J/m²` : ''}`);
+  console.log(`${lit} open-water cells passed ${cpuMean.toFixed(1)} J/m² of sunlight to the ocean below on the CPU and ${gpuMean.toFixed(1)} on the GPU; per cell rms relative ${held.rmsRel.toExponential(1)}, at most ${held.maxDiff.toExponential(1)} J/m² at ${held.at}${spread ? `; the gaps' ${spread.rows.join('; ')} J/m²` : ''}`);
   assert.ok(lit > 0 && Math.abs(gpuMean - cpuMean) < 1e-4 * cpuMean, `the light passed: ${gpuMean} against ${cpuMean} J/m² in ${lit} cells`);
-  if (spread) assert.deepEqual(spread.failed, [], 'the distribution of the engines\' gaps in the light passed, past the bounds thirty twins set');
+  if (spread) assert.deepEqual(spread.failed, [], 'the distribution of the engines\' gaps in the light passed, past the bounds the CPU twins set');
   else assert.ok(held.rmsRel < 1e-4, `the light passed per cell: rms relative ${held.rmsRel}`);
 });
 
