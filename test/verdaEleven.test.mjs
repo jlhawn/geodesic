@@ -444,7 +444,7 @@ test('the push stages HEAD without runs/, copies it over ssh to the address verd
   r = run('scripts/verdaPush.sh', [], env);
   assert.equal(r.status, 0, r.stderr);
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-  assert.match(r.stdout, /staged [0-9a-f]{7,} .*: \d+ files, \d+ MB \(\d+ MB of data\/, \d+ MB of \.git; runs\/ left out\)/);
+  assert.match(r.stdout, new RegExp(`staged ${head.slice(0, 7)}[0-9a-f]* .*: \\d+ files, \\d+ MB \\(\\d+ MB of data/, \\d+ MB of \\.git; runs/ left out\\)`));
   assert.match(r.stdout, new RegExp(`pushed to root@10\\.0\\.0\\.1:.*: HEAD ${head.slice(0, 7)}[0-9a-f]* and \\d+ data files of the same size there`));
   assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: env.REMOTE_REPO, encoding: 'utf8' }).trim(), head);
   assert.ok(existsSync(join(env.REMOTE_REPO, 'data', 'woa_annual_1deg.bin')));

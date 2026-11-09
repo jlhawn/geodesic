@@ -233,6 +233,7 @@ export function createBoundaryLayer(mesh, core, {
   diagnoseFirst = DIAGNOSE_FIRST, depositedHeat = null, depositedWater = null, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2, virtualDensity = false,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
+  if (typeof diagnoseFirst !== 'boolean') throw new Error(`boundaryLayer.diagnoseFirst is true or false, not ${JSON.stringify(diagnoseFirst)}`);
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
   if (diagnoseFirst && !depositedHeat) throw new Error('diagnoseFirst, the default, needs the depositedHeat (and with moisture the depositedWater) of the step\'s surface fluxes: a layer diagnosed without a step takes diagnoseFirst false');
   if (velocityScale !== 'capped' && velocityScale !== 'holtslagBoville') throw new Error(`velocityScale must be 'capped' or 'holtslagBoville', not ${velocityScale}`);

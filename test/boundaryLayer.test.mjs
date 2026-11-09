@@ -1025,11 +1025,13 @@ test('with surface.relativeWind the coupled GPU model hands its atmosphere a fin
   assert.ok(largest > 1e-4 && largest < 2, `${largest} m/s`);
 });
 
-test('both engines refuse a surface.relativeWind that is not true or false', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
-  for (const relativeWind of [1, 'true', null]) {
-    const refusal = { message: `surface.relativeWind is true or false, not ${JSON.stringify(relativeWind)}` };
-    assert.throws(() => createModel(new Grid(16), { ocean: false, surface: { relativeWind } }), refusal);
-    await assert.rejects(createGpuModel(new Grid(16), { ocean: false, surface: { relativeWind } }), refusal);
+test('both engines refuse a surface.relativeWind or a boundaryLayer.diagnoseFirst that is not true or false: the CPU model and the GPU\'s diagnosis source always, the GPU model where webgpu is installed', async () => {
+  const { boundaryLayerDiagnosis } = await import('../js/gpu/physics.gpu.js');
+  const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
+  for (const [group, name] of [['surface', 'relativeWind'], ['boundaryLayer', 'diagnoseFirst']]) for (const value of [1, 'true', null]) {
+    const refusal = { message: `${group}.${name} is true or false, not ${JSON.stringify(value)}` }, options = { ocean: false, [group]: { [name]: value } };
+    assert.throws(() => createModel(new Grid(16), options), refusal);
+    if (name === 'diagnoseFirst') assert.throws(() => boundaryLayerDiagnosis('', { diagnoseFirst: value }), refusal);
+    if (createGpuModel) await assert.rejects(createGpuModel(new Grid(16), options), refusal);
   }
 });

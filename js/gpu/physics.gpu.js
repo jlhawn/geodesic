@@ -2817,6 +2817,7 @@ fn blProfile(z: f32, h: f32, scale: f32, buoyancy: f32, friction: f32) -> f32 {
     .reduce((text, [from, to]) => replacedOnce(text, from, to), calls.join('blNonlocal(i, pi, zb, h, scale / prandtl, buoyancy, friction, lift); }'));
 }
 export function boundaryLayerDiagnosis(body, { diagnoseFirst = DIAGNOSE_FIRST, surfaceExcess = 0, profileHeight = 'midpoint', stableProfile = 'flat', prandtlCoefficient = 7.2 } = {}) {
+  if (typeof diagnoseFirst !== 'boolean') throw new Error(`boundaryLayer.diagnoseFirst is true or false, not ${JSON.stringify(diagnoseFirst)}`);
   if (!(surfaceExcess >= 0)) throw new Error(`surfaceExcess must be 0 or more, not ${surfaceExcess}`);
   if (profileHeight !== 'midpoint' && profileHeight !== 'ground') throw new Error(`profileHeight must be 'midpoint' or 'ground', not ${profileHeight}`);
   if (stableProfile !== 'flat' && stableProfile !== 'holtslagBoville') throw new Error(`stableProfile must be 'flat' or 'holtslagBoville', not ${stableProfile}`);

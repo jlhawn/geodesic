@@ -71,7 +71,7 @@ const mixed = (k, i) => startGeo[k * C + i] / g < bl.mixingTop[i];
 const landCode = Float32Array.from(model.geography.land, (l, i) => (l ? (model.geography.iceSheet && model.geography.iceSheet[i] ? 2 : 1) : 0));
 
 async function gpuCore() {
-  const gpu = await createGpuCore(mesh, { levels, surfaceGeopotential: model.surfaceGeopotential, physics: { ...moistOptions, landed: true } });
+  const gpu = await createGpuCore(mesh, { levels, surfaceGeopotential: model.surfaceGeopotential, physics: { ...moistOptions, landed: true, diagnoseFirst: false } });
   const put = (name, values) => device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH[name], Float32Array.from(values));
   const run = (...kernels) => {
     device.queue.writeBuffer(gpu.buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
