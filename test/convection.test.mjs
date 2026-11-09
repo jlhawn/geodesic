@@ -1180,8 +1180,8 @@ test('under the test parcel a column whose test cloud is deeper than 200 hPa run
     core.diagnoseColumn(i, pi, theta, q, qc);
     const before = budget(model, i), rain = moist.plumeColumn(i, pi, theta, q, qc, dt), after = budget(model, i), d = moist.deep;
     worst = Math.max(worst, Math.abs(after.enthalpy - before.enthalpy) / before.enthalpy, Math.abs(after.water + rain - before.water) / before.water);
-    if (d.parcelDeep) { typed++; assert.ok(d.parcelBase - d.parcelTop > DEEP_CLOUD_DEPTH, `column ${i}: deep with a test cloud of ${d.parcelBase - d.parcelTop} Pa`); }
-    else if (d.parcelBase > 0) { shallowTyped++; assert.ok(!(d.parcelBase - d.parcelTop > DEEP_CLOUD_DEPTH), `column ${i}`); }
+    if (d.parcelDeep) { typed++; assert.ok(d.parcelBase - d.parcelTop > DEEP_CLOUD_DEPTH && Number.isFinite(d.parcelBase - d.parcelTop), `column ${i}: deep with a test cloud of ${d.parcelBase - d.parcelTop} Pa`); }
+    else if (!(d.parcelBase <= 0)) { shallowTyped++; assert.ok(d.parcelBase - d.parcelTop <= DEEP_CLOUD_DEPTH && Number.isFinite(d.parcelBase - d.parcelTop), `column ${i}`); }
     if (d.deep) {
       fired++;
       assert.ok(d.parcelDeep, `column ${i}: the deep plume runs only where the test parcel is deep`);
@@ -1671,8 +1671,8 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     else deep++;
     const cpu = moist.cumulusBaseFlux[i], gpuFlux = ph.CUMF[i];
     if (cpu > 0) plumes++;
-    if ((cpu > 0) !== (gpuFlux > 0)) plumeFlips++;
-    if (moist.cumulusTop[i] > 0 && Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) > 1) topsDiffer++;
+    if ((cpu > 0) !== (gpuFlux > 0) || !Number.isFinite(cpu) || !Number.isFinite(gpuFlux)) plumeFlips++;
+    if ((moist.cumulusTop[i] > 0 && !(Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) <= 1)) || !Number.isFinite(moist.cumulusTop[i]) || !Number.isFinite(ph.CUTOP[i])) topsDiffer++;
     if (beside.has(i) || merged.has(i) || threshold.has(i) || typedAtEdge.has(i) || downdraftAtEdge.has(i)) continue;
     fluxScale = Math.max(fluxScale, cpu);
     if (!switching.has(i)) worstFlux = Math.max(worstFlux, Math.abs(cpu - gpuFlux));
@@ -1712,7 +1712,7 @@ async function parity(options, { momentum = false, nocturnal = false, land = fal
     if (beside.has(i) || merged.has(i) || threshold.has(i) || typedAtEdge.has(i) || downdraftAtEdge.has(i)) { continuedLeftOut++; continue; }
     let over = -Infinity;
     for (let k = 0; k < K; k++) over = Math.max(over, Math.abs(model.state[1][k * C + i] - after[1][k * C + i]) - (1e-3 + 2 * thetaResponse[k * C + i]));
-    if ((moist.cumulusBaseFlux[i] > 0) !== (ph.CUMF[i] > 0) || Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) > 1 || Math.abs(moist.cumulusBaseFlux[i] - ph.CUMF[i]) > 2e-3 * fluxScale || over > 0) continuedApart++;
+    if ((moist.cumulusBaseFlux[i] > 0) !== (ph.CUMF[i] > 0) || !(Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) <= 1) || !(Math.abs(moist.cumulusBaseFlux[i] - ph.CUMF[i]) <= 2e-3 * fluxScale) || !(over <= 0)) continuedApart++;
   }
   console.log(`${JSON.stringify(options)}: ${C} random columns: ${ascent ? `${midLevel} of them convect at mid-level, ` : ""}${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips} (beyond the rain's allowance below; within it by at most ${residues.toExponential(1)} kg/m²); engines differ in θ by ${worstTheta.toExponential(1)} K (twice the CPU's response to one f32 ulp of θ at most ${thetaAllowed.toExponential(1)} K), q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)}; twice its response to one f32 ulp of the saved subcloud T_v or of θ at most ${allowed.toExponential(1)})`);
   console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top, ${beside.size} deep in the base flux by more than 1 % (the shallow plume beside it ran on one engine only), ${merged.size} whose dry adjustment merged other layers on the two engines, ${switching.size} whose base flux on the CPU moves by over 1e-3 under one ulp of θ (the ${forcedSwitching} of them whose PCAPE closure carries the subcloud forcing held to twice that response in base flux and q, the rest left out of the flux), ${threshold.size} whose deep plume's condensate at an interface lies within 1e-3 of the conversion threshold, ${typedAtEdge.size} whose test parcel's cloud lies within 1e-3 of 200 hPa or whose w² falls within 1e-3 times the closure velocity squared of zero and ${downdraftAtEdge.size} whose downdraft source layer has a moist static energy within 1e-5 of the next lowest (left out); base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
@@ -1818,6 +1818,7 @@ test('the stratiform lifetime matches between the engines on random columns of e
     if (long.gpuCloud[x] > short.gpuCloud[x] * (1 + 1e-6)) gpuKept++;
     if (long.shared[x]) { shared++; if (keeps) keptShared++; }
   }
+  assert.ok([long.cloud, long.gpuCloud, short.cloud, short.gpuCloud].every((a) => a.every(Number.isFinite)), 'the cloud water is finite on both engines');
   console.log(`after one step the 3 h stratiform lifetime keeps more cloud than the 1 h lifetime alone in ${kept} of ${cloudy} cloudy layers (GPU ${gpuKept}), ${keptShared} of the ${shared} whose long share is positive (outside a plume's layers, below the mixing top of a coupled or ice-covered column or above it under an EIS share)`);
   assert.ok(keptShared > shared / 5 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}, ${keptShared} of the ${shared} with a long share`);
 });

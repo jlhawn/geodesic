@@ -11,7 +11,7 @@ const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: $
 const hPa = (p) => p / 100;
 const peak = (r) => {
   let k = 0;
-  for (let j = 0; j < r.pressure.length; j++) if (r.heating.convection[j] > r.heating.convection[k]) k = j;
+  for (let j = 0; j < r.pressure.length; j++) if (Number.isFinite(r.heating.convection[k]) && (!Number.isFinite(r.heating.convection[j]) || r.heating.convection[j] > r.heating.convection[k])) k = j;
   return { rate: r.heating.convection[k], at: r.pressure[k] };
 };
 const describe = (r) => `${r.type}, top ${r.top === null ? '-' : hPa(r.top).toFixed(0)} hPa, CAPE ${r.cape === null ? '-' : r.cape.toFixed(0)} J/kg, τ ${r.tau === null ? '-' : r.tau.toFixed(0)} s, base flux ${r.baseFlux.toFixed(4)} kg/m²/s, rain ${r.rain.toFixed(2)} mm/d, heating peak ${peak(r).rate.toFixed(1)} K/d at ${hPa(peak(r).at).toFixed(0)} hPa`;

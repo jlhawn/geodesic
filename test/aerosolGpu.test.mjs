@@ -92,8 +92,9 @@ function cloudier(model, thickness = 1) {
 function stats(cpu, gpu) {
   let maxDiff = 0, sumSq = 0, sumRef = 0;
   const errors = new Float64Array(cpu.length);
-  for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); errors[x] = d; if (d > maxDiff) maxDiff = d; sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
+  for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); errors[x] = d; maxDiff = Math.max(maxDiff, d); sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
   const scale = Math.sqrt(sumRef / cpu.length);
+  if (!Number.isFinite(sumSq) || !Number.isFinite(scale)) return { maxDiff: Infinity, rmsRel: Infinity, p99Rel: Infinity };
   return { maxDiff, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)), p99Rel: errors.sort()[Math.floor(0.99 * (cpu.length - 1))] / Math.max(scale, 1e-300) };
 }
 
@@ -127,7 +128,7 @@ function measure(label, { model, state, physics }) {
   return m;
 }
 
-const agrees = (mac, flat) => { for (const key of ['absorbed', 'atmosphere', 'reflected', 'clear', 'olr', 'theta']) assert.ok(mac[key].p99Rel < 3 * flat[key].p99Rel + 2e-4, `${key} 99th percentile ${mac[key].p99Rel} against ${flat[key].p99Rel} without the climatology`); };
+const agrees = (mac, flat) => { for (const key of ['absorbed', 'atmosphere', 'reflected', 'clear', 'olr', 'theta']) assert.ok(Number.isFinite(flat[key].p99Rel) && mac[key].p99Rel < 3 * flat[key].p99Rel + 2e-4, `${key} 99th percentile ${mac[key].p99Rel} against ${flat[key].p99Rel} without the climatology`); };
 const areaMean = (values) => { let area = 0, sum = 0; for (let i = 0; i < C; i++) { area += mesh.areaCell[i]; sum += mesh.areaCell[i] * values[i]; } return sum / area; };
 
 for (const [label, radiation, options] of [['layered', { shortwave: 'layered' }, {}], ['sequential', { shortwave: 'sequential' }, {}], ['layered with the radiation held between calls', { shortwave: 'layered', radiationEvery: 4 }, { steps: 6 }],
