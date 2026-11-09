@@ -7,7 +7,7 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
 import { PREVIOUS_LEVELS, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
-import { distributionCheck, magnitude, hemispheres } from './helpers/distribution.mjs';
+import { distributionCheck, magnitude, hemispheres, S9_TIERS } from './helpers/distribution.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -63,18 +63,18 @@ function prepare(model, fog = false) {
  */
 const LAND_S9 = {
   default: {
-    tsLand: {largest: 0.541, counts: [[0.271, 2], [0.135, 6], [0.0676, 6], [0.0338, 6], [0.0169, 14], [0.00845, 18], [0.00423, 28], [0.00211, 50]], hemisphere: {north: 0.00106, south: 0.00164}, bulk: {north: {trimmed: 0.000267, signed: 0.000267}, south: {trimmed: 0.000267, signed: 0.000267}}},
-    tsSea: {largest: 0.0189, counts: [[0.00945, 2], [0.00472, 10], [0.00236, 18], [0.00118, 22]], hemisphere: {north: 0.000332, south: 0.000327}, bulk: {north: {trimmed: 0.000278, signed: 0.000278}, south: {trimmed: 0.000278, signed: 0.000278}}},
-    soil: {largest: 0.0548, counts: [[0.0274, 2], [0.0137, 4], [0.00684, 4], [0.00342, 8], [0.00171, 12], [0.000855, 14], [0.000428, 28], [0.000214, 44]], hemisphere: {north: 0.000121, south: 0.000147}, bulk: {north: {trimmed: 5.61e-5, signed: 3.82e-5}, south: {trimmed: 5.66e-5, signed: 3.82e-5}}},
-    snow: {largest: 9.87e-5, counts: [[4.93e-5, 4], [2.47e-5, 4]], hemisphere: {north: 1.19e-6, south: 9.53e-7}, bulk: {north: {trimmed: 9.53e-7, signed: 9.53e-7}, south: {trimmed: 9.53e-7, signed: 9.53e-7}}},
-    surface: {largest: 0.076, counts: [[0.038, 2], [0.019, 6], [0.0095, 6], [0.00475, 6], [0.00237, 8], [0.00119, 10], [0.000594, 20], [0.000297, 28], [0.000148, 42], [7.42e-5, 56], [3.71e-5, 82]], hemisphere: {north: 1.99e-5, south: 0.000224}, bulk: {north: {trimmed: 2.93e-7, signed: 4.73e-8}, south: {trimmed: 1.95e-7, signed: 2.45e-8}}},
+    tsLand: {largest: 0.541, counts: [[0.27, 4], [0.135, 6], [0.0676, 6], [0.0338, 6], [0.0169, 14], [0.00845, 18], [0.00422, 28], [0.00211, 50]], hemisphere: {north: 0.00106, south: 0.00164}, bulk: {north: {trimmed: 0.000267, signed: 0.000267}, south: {trimmed: 0.000267, signed: 0.000267}}},
+    tsSea: {largest: 0.0189, counts: [[0.00944, 4], [0.00472, 10], [0.00236, 18], [0.00118, 22]], hemisphere: {north: 0.000332, south: 0.000327}, bulk: {north: {trimmed: 0.000278, signed: 0.000278}, south: {trimmed: 0.000278, signed: 0.000278}}},
+    soil: {largest: 0.0548, counts: [[0.0273, 4], [0.0136, 4], [0.00684, 4], [0.00342, 8], [0.00171, 12], [0.000855, 14], [0.000427, 28], [0.000213, 44]], hemisphere: {north: 0.000121, south: 0.000147}, bulk: {north: {trimmed: 5.61e-5, signed: 3.82e-5}, south: {trimmed: 5.66e-5, signed: 3.82e-5}}},
+    snow: {largest: 9.87e-5, counts: [[4.93e-5, 4], [2.46e-5, 4]], hemisphere: {north: 1.19e-6, south: 9.53e-7}, bulk: {north: {trimmed: 9.53e-7, signed: 9.53e-7}, south: {trimmed: 9.53e-7, signed: 9.53e-7}}},
+    surface: {largest: 0.076, counts: [[0.0379, 4], [0.0189, 6], [0.00949, 6], [0.00474, 6], [0.00237, 8], [0.00118, 10], [0.000593, 20], [0.000296, 28], [0.000148, 42], [7.42e-5, 56], [3.71e-5, 82]], hemisphere: {north: 1.99e-5, south: 0.000224}, bulk: {north: {trimmed: 2.93e-7, signed: 4.73e-8}, south: {trimmed: 1.95e-7, signed: 2.45e-8}}},
   },
   held: {
-    tsLand: {largest: 0.697, counts: [[0.348, 4], [0.174, 4], [0.0871, 4], [0.0435, 8], [0.0218, 10], [0.0109, 10], [0.00544, 16], [0.00272, 20], [0.00136, 40]], hemisphere: {north: 0.00173, south: 0.000489}, bulk: {north: {trimmed: 0.000267, signed: 0.000267}, south: {trimmed: 0.000267, signed: 0.000267}}},
-    tsSea: {largest: 0.016, counts: [[0.00799, 4], [0.004, 6], [0.002, 6]], hemisphere: {north: 0.000313, south: 0.000301}, bulk: {north: {trimmed: 0.000277, signed: 0.000277}, south: {trimmed: 0.000277, signed: 0.000277}}},
-    soil: {largest: 0.0563, counts: [[0.0281, 4], [0.0141, 4], [0.00703, 4], [0.00352, 6], [0.00176, 6], [0.000879, 8], [0.00044, 18], [0.00022, 48]], hemisphere: {north: 0.000108, south: 0.000103}, bulk: {north: {trimmed: 5.77e-5, signed: 3.82e-5}, south: {trimmed: 5.62e-5, signed: 3.82e-5}}},
+    tsLand: {largest: 0.697, counts: [[0.348, 4], [0.174, 4], [0.087, 4], [0.0435, 8], [0.0217, 10], [0.0108, 10], [0.00544, 16], [0.00272, 20], [0.00136, 40]], hemisphere: {north: 0.00173, south: 0.000489}, bulk: {north: {trimmed: 0.000267, signed: 0.000267}, south: {trimmed: 0.000267, signed: 0.000267}}},
+    tsSea: {largest: 0.016, counts: [[0.00799, 4], [0.00399, 6], [0.00199, 6]], hemisphere: {north: 0.000313, south: 0.000301}, bulk: {north: {trimmed: 0.000277, signed: 0.000277}, south: {trimmed: 0.000277, signed: 0.000277}}},
+    soil: {largest: 0.0563, counts: [[0.0281, 4], [0.014, 4], [0.00703, 4], [0.00351, 6], [0.00175, 6], [0.000879, 8], [0.000439, 18], [0.000219, 48]], hemisphere: {north: 0.000108, south: 0.000103}, bulk: {north: {trimmed: 5.77e-5, signed: 3.82e-5}, south: {trimmed: 5.62e-5, signed: 3.82e-5}}},
     snow: {largest: 9.29e-5, counts: [[4.64e-5, 4], [2.32e-5, 6]], hemisphere: {north: 1.1e-6, south: 9.52e-7}, bulk: {north: {trimmed: 9.52e-7, signed: 9.52e-7}, south: {trimmed: 9.52e-7, signed: 9.52e-7}}},
-    surface: {largest: 0.0289, counts: [[0.0144, 4], [0.0072, 4], [0.0036, 6], [0.0018, 6], [0.0009, 8], [0.00045, 14], [0.000225, 20], [0.000113, 34], [5.63e-5, 52], [2.81e-5, 74], [1.41e-5, 90]], hemisphere: {north: 5.8e-5, south: 3.06e-5}, bulk: {north: {trimmed: 2.62e-7, signed: 5.15e-8}, south: {trimmed: 1.81e-7, signed: 2.49e-8}}},
+    surface: {largest: 0.0289, counts: [[0.0144, 4], [0.0072, 4], [0.0036, 6], [0.0018, 6], [0.0009, 8], [0.00045, 14], [0.000225, 20], [0.000112, 34], [5.62e-5, 52], [2.81e-5, 74], [1.4e-5, 90]], hemisphere: {north: 5.8e-5, south: 3.06e-5}, bulk: {north: {trimmed: 2.62e-7, signed: 5.15e-8}, south: {trimmed: 1.81e-7, signed: 2.49e-8}}},
   },
 };
 
@@ -107,7 +107,7 @@ for (const held of [true, false]) test(`eight GPU steps over a continent${held ?
   const landCells = [...cpu.geography.land.keys()].filter((i) => cpu.geography.land[i]);
   const seaCells = [...cpu.geography.land.keys()].filter((i) => !cpu.geography.land[i]);
   const groups = { tsLand: [cpu.state[3], gpu.state[3], landCells], tsSea: [cpu.state[3], gpu.state[3], seaCells], soil: [cpu.land.soil, saved.soil, landCells], snow: [cpu.land.snow, saved.snow, landCells], surface: [cpu.land.surface, saved.surface, landCells] };
-  const checks = Object.entries(groups).map(([name, [a, b, cells]]) => [name, distributionCheck(cells.map((i) => b[i] - a[i]), hemispheres(cpu.mesh, cells), LAND_S9[held ? 'held' : 'default'][name], magnitude(cells.map((i) => a[i])), { cells })]);
+  const checks = Object.entries(groups).map(([name, [a, b, cells]]) => [name, distributionCheck(cells.map((i) => b[i] - a[i]), hemispheres(cpu.mesh, cells), LAND_S9[held ? 'held' : 'default'][name], magnitude(cells.map((i) => a[i])), { cells, require: S9_TIERS })]);
   console.log(`${held ? 'held' : 'default'} order:\n${checks.map(([name, check]) => `  ${name}: ${check.text}`).join('\n')}\n  complete mixes parted at ${[...decisions.kinds.mix].join(', ') || 'none'}; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
   const seaWater = ['soil', 'snow', 'surface'].flatMap((name) => seaCells.filter((i) => !(cpu.land[name][i] === 0 && saved[name][i] === 0)).map((i) => `${name} at sea cell ${i}: ${cpu.land[name][i]}/${saved[name][i]}`));
   assert.deepEqual([...checks.flatMap(([name, check]) => check.failed.map((failure) => `${name}: ${failure}`)), ...seaWater], [], 'groups past the twins\x27 spread, or land water at sea');

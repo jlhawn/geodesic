@@ -111,6 +111,7 @@ const bufferId = (buffer) => {
   if (id === undefined) bufferIds.set(buffer, (id = nextBufferId++));
   return id;
 };
+export const bufferKey = (buffers) => buffers.map(bufferId).join('|');
 
 /*
  * A compute pipeline with bind groups cached per buffer set: `run`
@@ -121,7 +122,7 @@ export function createKernel(device, code, label = 'kernel') {
   const pipeline = device.createComputePipeline({ label, layout: 'auto', compute: { module, entryPoint: 'main' } });
   const groups = new Map();
   function bindGroup(buffers) {
-    const key = buffers.map(bufferId).join('|');
+    const key = bufferKey(buffers);
     let group = groups.get(key);
     if (!group) {
       group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })) });

@@ -1,4 +1,4 @@
-import { emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
+import { bufferKey, emptyBuffer, storageBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
@@ -1699,7 +1699,7 @@ ${core.fieldConstants}
   }
   const groups = new Map();
   function group(IN, OUT, ODbuf = ob.OD, PH = buffers.PH, Sbuf = buffers.S) {
-    const key = [IN.label, OUT.label, ODbuf.label, PH.label, Sbuf.label].join('|');
+    const key = bufferKey([IN, OUT, ODbuf, PH, Sbuf]);
     let g = groups.get(key);
     if (!g) {
       g = device.createBindGroup({ layout: bindLayout, entries: [ob.MI, ob.MF, buffers.LV, IN, OUT, ODbuf, buffers.P, PH, Sbuf, buffers.D].map((buffer, binding) => ({ binding, resource: { buffer } })) });
