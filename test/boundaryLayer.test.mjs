@@ -38,6 +38,7 @@ function column(surfaceTheta, lapseAloft, windAloft, stableAbove = Infinity) {
   return model.state;
 }
 
+const nonFinite = (a, from = 0, to = a.length) => a.subarray(from, to).filter((v) => !Number.isFinite(v)).length;
 const columnTotal = (field, pi, i) => { let s = 0; for (let k = 0; k < K; k++) s += pi[i] * dSigma[k] / g * field[k * C + i]; return s; };
 const enthalpy = (theta, pi, i) => { const { exnerLayer, cp } = core.diagnostics; let s = 0; for (let k = 0; k < K; k++) s += pi[i] * dSigma[k] / g * cp * theta[k * C + i] * exnerLayer[k * C + i]; return s; };
 
@@ -256,6 +257,7 @@ test('the K-profile options: profileHeight \'ground\' takes the profile\'s z and
   assert.deepEqual(cappedGround.boundaryLayer.depth, capped.boundaryLayer.depth);
   const columns = { stable: 0, unstable: 0 }, worst = { ground: 0, stable: 0, prandtl: 0, untouched: 0, groundScalar: 0, counter: 0, capped: 0 }, checked = { counter: 0, capped: 0 };
   let strongest = 1, lifted = 0;
+  assert.equal(nonFinite(layer.depth, 0, nC) + nonFinite(layer.buoyancyFlux, 0, nC) + nonFinite(layer.friction, 0, nC), 0, 'the depths, buoyancy fluxes and friction velocities are finite');
   for (let i = 0; i < nC; i++) {
     const b = (nK - 1) * nC + i, zb = phi[b] / grav, h = layer.depth[i] - zb, B0 = layer.buoyancyFlux[i], ustar = layer.friction[i];
     if (!(h > 0)) continue;
@@ -283,6 +285,10 @@ test('the K-profile options: profileHeight \'ground\' takes the profile\'s z and
   assert.ok(columns.stable > 20 && columns.unstable > 20 && lifted > 5 && strongest > 1.5, JSON.stringify({ columns, lifted, strongest }));
   assert.equal(worst.untouched, 0, 'stableProfile leaves unstable columns alone and prandtlCoefficient the momentum and the stable columns');
   assert.ok(worst.ground < 1e-9 && worst.stable < 1e-9 && worst.prandtl < 1e-9, JSON.stringify(worst));
+  for (const [run, field] of [[counter, 'nonlocal'], [capped, 'mixing']]) {
+    const { depth, buoyancyFlux, friction, kTop } = run.boundaryLayer;
+    assert.equal(nonFinite(depth, 0, nC) + nonFinite(buoyancyFlux, 0, nC) + nonFinite(friction, 0, nC) + nonFinite(run.boundaryLayer[field], kTop * nC, (nK - 1) * nC), 0, `the depths, buoyancy fluxes, friction velocities and ${field} are finite`);
+  }
   for (let i = 0; i < nC; i++) {
     const b = (nK - 1) * nC + i, zb = phi[b] / grav, lift = cp * thetaV[b] * (exnerLower[b] - exnerLayer[b]) / grav;
     for (const [run, framed, name] of [[counter, counterGround, 'counter'], [capped, cappedGround, 'capped']]) {
@@ -586,6 +592,7 @@ test('the dry boundary layer with entrainment matches between the engines on a r
   const on = await engines({}), off = await engines({ efficiency: 0, shear: 0 });
   const { K: nK, C: nC, E: nE, kTop, mesh: m } = on;
   let entraining = 0, gated = 0, stable = 0, worstW = 0, scaleW = 0, worstMix = 0, flips = 0, tapered = 0;
+  assert.equal(nonFinite(on.cpu.entrainment, 0, nC) + nonFinite(on.ph.ENTRAIN, 0, nC) + nonFinite(on.cpu.mixing, kTop * nC, (nK - 1) * nC) + nonFinite(on.ph.MIX, kTop * nC, (nK - 1) * nC), 0, 'w_e and the interface coefficients are finite on both engines');
   for (let i = 0; i < nC; i++) {
     const cpu = on.cpu.entrainment[i], gpu = on.ph.ENTRAIN[i];
     if (cpu > 0) entraining++; else if (on.gate[i] >= 0.6 || on.share[i] >= 1) gated++; else stable++;
@@ -634,6 +641,7 @@ test('the subsidence share matches between the engines on the random columns: wi
   const shared = await engines({ subsidence: true }), plain = await engines({});
   const { K: nK, C: nC, kTop } = shared;
   let worstMix = 0, flips = 0, differing = 0, compared = 0;
+  assert.equal(nonFinite(shared.cpu.entrainment, 0, nC) + nonFinite(shared.ph.ENTRAIN, 0, nC) + nonFinite(shared.cpu.mixing, kTop * nC, (nK - 1) * nC) + nonFinite(shared.ph.MIX, kTop * nC, (nK - 1) * nC), 0, 'w_e and the interface coefficients are finite on both engines');
   for (let i = 0; i < nC; i++) {
     const cpu = shared.cpu.entrainment[i], gpu = shared.ph.ENTRAIN[i];
     if ((cpu > 0) !== (gpu > 0)) { flips++; continue; }
@@ -697,6 +705,7 @@ test('a surface parcel that tops out at the base of a stratocumulus whose descen
   const ph = await gpu.downloadPhysics();
   layer.diagnose(state);
   let flips = 0, worstDepth = 0;
+  assert.equal(nonFinite(layer.depth, 0, nC) + nonFinite(ph.DEPTH, 0, nC), 0, 'the depths are finite on both engines');
   for (let i = 0; i < nC; i++) {
     if (layer.regime[i] !== ph.REGIME[i]) { flips++; continue; }
     worstDepth = Math.max(worstDepth, Math.abs(layer.depth[i] - ph.DEPTH[i]));
@@ -817,7 +826,9 @@ test('the countergradient, velocityScale \'holtslagBoville\' and the K-profile o
     const scaleOf = (a) => (a ? a.reduce((s, x) => Math.max(s, Math.abs(x)), 0) : 0);
     const heatScale = scaleOf(on.cpu.kinematicHeat), waterScale = scaleOf(on.cpu.kinematicWater), gradientScale = scaleOf(on.cpu.nonlocal);
     let carrying = 0, differing = 0, apart = 0, flips = 0, worstG = 0, worstHeat = 0, worstWater = 0, worstMix = 0, worstScalar = 0;
-    const parted = new Uint8Array(nC);
+    const parted = new Uint8Array(nC), interfaces = (a) => nonFinite(a, kTop * nC, (nK - 1) * nC);
+    const unfinished = nonFinite(on.cpu.depth, 0, nC) + nonFinite(on.ph.DEPTH, 0, nC) + interfaces(on.cpu.mixing) + interfaces(on.ph.MIX) + (carries ? interfaces(on.cpu.nonlocal) + interfaces(on.ph.CG) + nonFinite(on.cpu.kinematicHeat, 0, nC) + nonFinite(on.ph.CGH, 0, nC) + nonFinite(on.cpu.kinematicWater, 0, nC) + nonFinite(on.ph.CGW, 0, nC) : 0) + (scalars ? interfaces(on.cpu.scalarMixing) + interfaces(on.ph.MIXH) : 0);
+    assert.equal(unfinished, 0, `${label}: the depths, coefficients and countergradient fluxes are finite on both engines`);
     for (let i = 0; i < nC; i++) {
       for (const run of [on, base]) for (let k = 0; k < nK; k++) if (Math.abs(run.state[4][k * nC + i] - run.after[4][k * nC + i]) > 1e-5) parted[i] = 1;
       let largest = 0, flipped = false;
@@ -828,7 +839,7 @@ test('the countergradient, velocityScale \'holtslagBoville\' and the K-profile o
       }
       if (largest > 0) carrying++;
       if (scalars) for (let k = kTop; k < nK - 1; k++) if (Math.abs(on.cpu.scalarMixing[k * nC + i] - on.cpu.mixing[k * nC + i]) > 1e-6 * on.cpu.mixing[k * nC + i]) { differing++; break; }
-      if (Math.abs(on.cpu.depth[i] - on.ph.DEPTH[i]) > 1) { apart++; continue; }
+      if (!(Math.abs(on.cpu.depth[i] - on.ph.DEPTH[i]) <= 1)) { apart++; continue; }
       if (flipped) { flips++; continue; }
       let mixLargest = 0, scalarLargest = 0;
       for (let k = kTop; k < nK - 1; k++) { mixLargest = Math.max(mixLargest, on.cpu.mixing[k * nC + i]); if (scalars) scalarLargest = Math.max(scalarLargest, on.cpu.scalarMixing[k * nC + i]); }
