@@ -57,10 +57,10 @@ for (const [label, options, warmStart, onMeans] of CASES) test(`${label} over th
     await gpu.sync();
     for (let i = 0; i < C; i++) {
       if (cpu.state[6][i] > 0 || gpu.state[6][i] > 0) continue;
-      if (!Number.isFinite(warm[i] + cool[i] + net[i] + sensible[i] + capacity[i] + cpu.radiation.surfaceFlux[i] + cpu.radiation.sensibleHeat[i])) unfinished++;
+      const cpuSurface = cpu.state[3][i] + cpu.skin.offset(i, capacityOf(i)), gpuSurface = gpu.state[3][i] + surfaceShare(capacity[i], SKIN_DEFAULTS) * warm[i] - cool[i];
+      if (!Number.isFinite(warm[i] + cool[i] + net[i] + sensible[i] + capacity[i] + cpu.radiation.surfaceFlux[i] + cpu.radiation.sensibleHeat[i] + cpuSurface + gpuSurface)) unfinished++;
       if (n === 0 && capacityOf(i) < 3 * 1025 * 3985) thin++;
       if (Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) > FLIP) decided[i] = 1;
-      const cpuSurface = cpu.state[3][i] + cpu.skin.offset(i, capacityOf(i)), gpuSurface = gpu.state[3][i] + surfaceShare(capacity[i], SKIN_DEFAULTS) * warm[i] - cool[i];
       if (!decided[i]) worst.warm = Math.max(worst.warm, Math.abs(warm[i] - cpu.skin.warm[i]));
       if (!decided[i]) worst.cool = Math.max(worst.cool, Math.abs(cool[i] - cpu.skin.cool[i]));
       if (!decided[i]) worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
@@ -82,7 +82,7 @@ for (const [label, options, warmStart, onMeans] of CASES) test(`${label} over th
   assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
   assert.ok(flipped <= Math.min(46, 0.02 * C), `${flipped} of ${C} cells have a flux the engines decided apart`);
   assert.ok(onMeans ? meanWorst.warm < WARM_BOUND / 10 : worst.warm < WARM_BOUND, onMeans ? `the warm layer's mean to ${WARM_BOUND / 10} K over every step` : `the warm layer to ${WARM_BOUND} K over every step`);
-  assert.equal(unfinished, 0, `${unfinished} cell-steps whose skin, net flux, sensible heat or capacity is not finite on one engine or the other`);
+  assert.equal(unfinished, 0, `${unfinished} cell-steps whose skin, net flux, sensible heat, capacity or surface temperature is not finite on one engine or the other`);
   if (warmStart) return;
   assert.ok(onMeans ? meanWorst.cool < 1e-3 && meanWorst.ts < 1e-3 : worst.cool < 1e-2 && worst.ts < 1e-2, onMeans ? 'the means of the cool skin and the surface to 1e-3 K over every step' : 'the surface to 1e-2 K over every step');
   assert.ok(worst.sensible < 0.1, 'the sensible heat to 0.1 relative over every step');

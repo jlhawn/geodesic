@@ -213,7 +213,7 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
     const device = await gpu.gpu.downloadPhysics();
     const apart = (name, x) => !(Math.abs(cpu.radiation.summed[name][x] - device[slots[name]][x]) <= 1e-3 * Math.abs(cpu.radiation.summed[name][x]));
     const flipped = names.every((name) => name.startsWith('clear')) ? [] : Array.from({ length: C }, (_, x) => x).filter((x) => (apart('outgoingLongwave', x) || apart('absorbedSolar', x)) && !apart('clearOutgoingLongwave', x) && !apart('clearAbsorbedSolar', x));
-    const unfinished = flipped.filter((x) => Object.keys(slots).some((name) => !Number.isFinite(cpu.radiation.summed[name][x]) || !Number.isFinite(device[slots[name]][x])));
+    const unfinished = Array.from({ length: C }, (_, x) => x).filter((x) => Object.keys(slots).some((name) => !Number.isFinite(cpu.radiation.summed[name][x]) || !Number.isFinite(device[slots[name]][x])));
     assert.ok(flipped.length <= 2 && unfinished.length === 0, `${flipped.length} cells whose all-sky sums parted with their clear-sky sums alike: ${flipped}${unfinished.length ? `; sums not finite in ${unfinished}` : ''}`);
     if (flipped.length) kept = kept.filter((x) => !flipped.includes(x));
     return names.map((name) => {
@@ -226,6 +226,8 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   const early = await compare(Object.keys(slots), 1e-5);
   const K = cpu.core.diagnostics.K, device = await gpu.gpu.downloadPhysics(), top = [];
   for (let k = 0; 0.5 * (cpu.core.levels[k] + cpu.core.levels[k + 1]) < 0.03; k++) {
+    const unfinished = Array.from({ length: C }, (_, x) => x).filter((x) => !Number.isFinite(cpu.radiation.longwave[k * C + x]) || !Number.isFinite(device.LWH[k * C + x]));
+    assert.equal(unfinished.length, 0, `layer ${k}'s longwave heating is not finite in cells ${unfinished}`);
     const s = stats(kept.map((x) => cpu.radiation.longwave[k * C + x]), kept.map((x) => device.LWH[k * C + x]));
     assert.ok(s.rmsRel < 1e-4, `layer ${k}'s longwave heating: per-cell rms ${s.rmsRel}`);
     top.push(s.rmsRel.toExponential(1));
