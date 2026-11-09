@@ -86,7 +86,7 @@ test('buildSpread bounds the fresh twins of its own ensemble and catches what no
 
 test('twins that are all zero (M = 0) bound a group at the f32 floors', () => {
   const zeros = Array.from({ length: 20 }, () => new Float64Array(n)), floor = buildSpread(zeros, sides, REFERENCE), mean = roundUp(F32_RMS * REFERENCE.rms);
-  assert.deepEqual(floor.counts, []);
+  assert.deepEqual([floor.counts, floor.emptyLadder], [[], { why: 'floor', threshold: 0 }]);
   assert.equal(floor.largest, roundUp(F32_CELL * REFERENCE.max));
   for (const side of ['north', 'south']) assert.deepEqual([floor.hemisphere[side], floor.bulk[side]], [mean, { trimmed: mean, signed: mean }]);
   assert.deepEqual(failures(new Float64Array(n), floor), []);
@@ -154,4 +154,48 @@ test('groupChecks fails the band whose layers carry a bias and no other, and a g
   const noBulk = { ...spreads['sea low'] };
   delete noBulk.bulk;
   assert.ok(groupChecks(runs[20], { ...spreads, 'sea low': noBulk }).failed.includes('sea low: the spread has no bulk tier'));
+});
+
+test('buildSpread gives an empty ladder its reason, and a check fails a required empty ladder without one, with one the group contradicts, or beside rungs', () => {
+  const tiny = build.map((gaps) => Float64Array.from(gaps, (v) => 1e-5 * v)), low = buildSpread(tiny, sides, REFERENCE), cellFloor = F32_CELL * REFERENCE.max;
+  assert.ok(M * 1e-5 < cellFloor && low.counts.length === 0 && low.emptyLadder.why === 'floor' && low.emptyLadder.threshold === roundDown(1e-5 * M), JSON.stringify(low.emptyLadder));
+  const check = distributionCheck(tiny[0], sides, low, REFERENCE, { require: S9_TIERS });
+  assert.deepEqual(check.failed, []);
+  assert.match(check.text, /no ladder: the twins' largest gap rounds to .*, under the cell floor/);
+  const level = Array.from({ length: 20 }, () => new Float64Array(n).fill(1)), flat = buildSpread(level, sides, REFERENCE);
+  assert.deepEqual([flat.counts, flat.emptyLadder], [[], { why: 'half', threshold: 1, limit: 2 * n + 2 }]);
+  assert.deepEqual(failures(level[0], flat), []);
+  const { emptyLadder, ...bare } = low;
+  assert.ok(caughtBy(failures(tiny[0], bare), /an empty ladder with no reason given/));
+  assert.deepEqual(distributionCheck(tiny[0], sides, bare, REFERENCE).failed, []);
+  for (const reason of [{ why: 'floor', threshold: 2 * cellFloor }, { why: 'floor', threshold: NaN }, { why: 'half', threshold: 1, limit: 3 }, { why: 'unknown' }, null]) assert.ok(caughtBy(failures(tiny[0], { ...low, emptyLadder: reason }), /a reason the group contradicts/), JSON.stringify(reason));
+  assert.ok(caughtBy(failures(fresh[0], { ...spread, emptyLadder: { why: 'floor', threshold: 0 } }), /a ladder with rungs and a reason for having none/));
+});
+
+test('spreadGroups takes a group\'s reference over every layer of its band and an edge\'s side from its own midpoint', () => {
+  const layers = 5, bands = bandLayers([0.95, 0.8, 0.5, 0.2, 0.05], layers), layout = groupLayout(mesh), { uniform } = generator(7);
+  const cpu = Float64Array.from({ length: layers * n }, (_, x) => (1 + Math.floor(x / n)) * (2 * uniform() - 1)), groups = spreadGroups(cpu, cpu, layout, bands);
+  for (const [band, ks] of Object.entries(bands)) {
+    const values = ks.flatMap((k) => Array.from(cpu.subarray(k * n, (k + 1) * n))), max = Math.max(...values.map(Math.abs)), rms = Math.sqrt(values.reduce((sum, v) => sum + v * v, 0) / values.length);
+    const { reference, where, cells } = groups[`sea ${band}`];
+    assert.ok(reference.max === max && Math.abs(reference.rms - rms) <= 1e-12 * rms, `${band}: ${JSON.stringify(reference)} against the band's ${max} and ${rms}`);
+    assert.deepEqual([...where], cells.map((x) => layout.sides[x]));
+  }
+  const edges = groupLayout(mesh, { edges: true }), wind = Float64Array.from({ length: mesh.nEdges }, () => uniform()), { where, cells } = spreadGroups(wind, wind, edges, bandLayers(null, 1)).sea;
+  assert.equal(where.length, mesh.nEdges);
+  const north = cells.filter((e) => mesh.latEdge[e] > 1e-6), south = cells.filter((e) => mesh.latEdge[e] < -1e-6);
+  assert.ok(north.length > 0.45 * mesh.nEdges && south.length > 0.45 * mesh.nEdges, `${north.length} northern and ${south.length} southern edges`);
+  assert.deepEqual(cells.filter((e, j) => (mesh.latEdge[e] > 1e-6 && where[j] !== 1) || (mesh.latEdge[e] < -1e-6 && where[j] !== -1)), [], 'edges whose side is not their midpoint\'s hemisphere');
+});
+
+test('bandLayers puts every layer in one band and throws on a sigma that is not finite; spreadGroups throws on bands that miss or repeat a layer and on a field of another length', () => {
+  for (const [sigma, text] of [[[0.85, 0.3, NaN], 'NaN'], [[0.85, Infinity, 0.05], 'Infinity'], [[0.85, 0.3], 'undefined']]) assert.throws(() => bandLayers(sigma, 3), new RegExp(`has a sigma of ${text}`));
+  const sigma = Array.from({ length: 48 }, (_, k) => (k + 0.5) / 48), bands = bandLayers(sigma, 48);
+  assert.deepEqual(Object.values(bands).flat().sort((a, b) => a - b), sigma.map((_, k) => k));
+  const layout = groupLayout(mesh), field = new Float64Array(3 * n), three = bandLayers([0.85, 0.3, 0.05], 3);
+  assert.throws(() => spreadGroups(field, field, layout, bandLayers([0.85, 0.3], 2)), /fields of 7686 and 7686 values for 2 layers/);
+  assert.throws(() => spreadGroups(field, field.subarray(n), layout, three), /fields of 7686 and 5124 values for 3 layers/);
+  assert.throws(() => spreadGroups(field, field, layout, { low: [0], high: [2] }), /not each of 0 to 1 once/);
+  assert.throws(() => spreadGroups(field, field, layout, { low: [0, 1], mid: [1, 2] }), /not each of 0 to 3 once/);
+  assert.equal(Object.keys(spreadGroups(field, field, layout, three)).length, 3);
 });
