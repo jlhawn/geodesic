@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { F32_CELL, F32_RMS, S9_TIERS, buildSpread, columnLargest, distributionCheck, hemispheres, roundDown, roundUp, spreadStatistics } from './helpers/distribution.mjs';
+import { EVENT_SPREAD, F32_CELL, F32_RMS, S9_TIERS, buildSpread, columnLargest, distributionCheck, hemispheres, roundDown, roundUp, spreadStatistics } from './helpers/distribution.mjs';
 import { bandLayers, groupChecks, groupLayout, spreadGroups } from './helpers/spreadGroups.mjs';
 
 const mesh = buildMesh(new Grid(16)), n = mesh.nCells, sides = hemispheres(mesh), REFERENCE = { max: 20, rms: 5 };
@@ -156,7 +156,7 @@ test('groupChecks fails the band whose layers carry a bias and no other, and a g
   assert.ok(groupChecks(runs[20], { ...spreads, 'sea low': noBulk }).failed.includes('sea low: the spread has no bulk tier'));
 });
 
-test('buildSpread gives an empty ladder its reason, and a check fails a required empty ladder without one, with one the group contradicts, or beside rungs', () => {
+test('buildSpread gives an empty ladder its reason, a check fails a required empty ladder without one, beside rungs, or with one the group\'s floor, size or largest bound contradicts, and every reason buildSpread gives at k from 1 to 3 passes', () => {
   const tiny = build.map((gaps) => Float64Array.from(gaps, (v) => 1e-5 * v)), low = buildSpread(tiny, sides, REFERENCE), cellFloor = F32_CELL * REFERENCE.max;
   assert.ok(M * 1e-5 < cellFloor && low.counts.length === 0 && low.emptyLadder.why === 'floor' && low.emptyLadder.threshold === roundDown(1e-5 * M), JSON.stringify(low.emptyLadder));
   const check = distributionCheck(tiny[0], sides, low, REFERENCE, { require: S9_TIERS });
@@ -168,8 +168,20 @@ test('buildSpread gives an empty ladder its reason, and a check fails a required
   const { emptyLadder, ...bare } = low;
   assert.ok(caughtBy(failures(tiny[0], bare), /an empty ladder with no reason given/));
   assert.deepEqual(distributionCheck(tiny[0], sides, bare, REFERENCE).failed, []);
-  for (const reason of [{ why: 'floor', threshold: 2 * cellFloor }, { why: 'floor', threshold: NaN }, { why: 'half', threshold: 1, limit: 3 }, { why: 'unknown' }, null]) assert.ok(caughtBy(failures(tiny[0], { ...low, emptyLadder: reason }), /a reason the group contradicts/), JSON.stringify(reason));
+  for (const reason of [{ why: 'floor', threshold: 2 * cellFloor }, { why: 'floor', threshold: cellFloor }, { why: 'floor', threshold: -1e-12 }, { why: 'floor', threshold: NaN }, { why: 'half', threshold: 1, limit: 3 }, { why: 'half', threshold: 0, limit: n / 2 }, { why: 'unknown' }, null]) assert.ok(caughtBy(failures(tiny[0], { ...low, emptyLadder: reason }), /a reason the group contradicts/), JSON.stringify(reason));
   assert.ok(caughtBy(failures(fresh[0], { ...spread, emptyLadder: { why: 'floor', threshold: 0 } }), /a ladder with rungs and a reason for having none/));
+  const contradicted = (gaps, bounds) => caughtBy(failures(gaps, bounds), /a reason the group contradicts/);
+  assert.deepEqual(failures(tiny[0], { ...low, emptyLadder: { why: 'floor', threshold: 0 } }), []);
+  assert.ok(contradicted(fresh[0], { ...spread, counts: [], emptyLadder: { why: 'floor', threshold: 0 } }), 'a floor reason under a largest bound far past the floor');
+  for (const limit of [n / 2, 3 * n + 2]) assert.deepEqual(failures(level[0], { ...flat, emptyLadder: { why: 'half', threshold: 1, limit } }), [], `a half reason's limit of ${limit}`);
+  for (const reason of [{ why: 'half', threshold: 1, limit: n / 2 - 1 }, { why: 'half', threshold: 1, limit: 3 * n + 3 }, { why: 'half', threshold: 1, limit: 1e9 }, { why: 'half', threshold: 0.5, limit: 2 * n + 2 }, { why: 'half', threshold: 2.5, limit: 2 * n + 2 }]) assert.ok(contradicted(level[0], { ...flat, emptyLadder: reason }), JSON.stringify(reason));
+  const unit = buildSpread(level, sides, REFERENCE, { k: 1 }), edge = Array.from({ length: 20 }, () => new Float64Array(n));
+  assert.ok(unit.emptyLadder.why === 'half' && unit.emptyLadder.threshold === unit.largest, JSON.stringify([unit.largest, unit.emptyLadder]));
+  assert.deepEqual(failures(level[0], unit), []);
+  edge[0][5] = 7.6293e-5;
+  const atMost = buildSpread(edge, sides, REFERENCE, { k: 3 });
+  assert.ok(atMost.emptyLadder.why === 'floor' && atMost.largest > 3 * Math.max(atMost.emptyLadder.threshold, cellFloor), JSON.stringify([atMost.largest, atMost.emptyLadder]));
+  assert.deepEqual(failures(new Float64Array(n), atMost), []);
 });
 
 test('spreadGroups takes a group\'s reference over every layer of its band and an edge\'s side from its own midpoint', () => {
@@ -188,14 +200,39 @@ test('spreadGroups takes a group\'s reference over every layer of its band and a
   assert.deepEqual(cells.filter((e, j) => (mesh.latEdge[e] > 1e-6 && where[j] !== 1) || (mesh.latEdge[e] < -1e-6 && where[j] !== -1)), [], 'edges whose side is not their midpoint\'s hemisphere');
 });
 
-test('bandLayers puts every layer in one band and throws on a sigma that is not finite; spreadGroups throws on bands that miss or repeat a layer and on a field of another length', () => {
+test('bandLayers puts every layer in one band and throws on a sigma that is not finite; spreadGroups throws on bands that miss or repeat a layer and on a CPU or a GPU field of another length, over cells or edges', () => {
   for (const [sigma, text] of [[[0.85, 0.3, NaN], 'NaN'], [[0.85, Infinity, 0.05], 'Infinity'], [[0.85, 0.3], 'undefined']]) assert.throws(() => bandLayers(sigma, 3), new RegExp(`has a sigma of ${text}`));
   const sigma = Array.from({ length: 48 }, (_, k) => (k + 0.5) / 48), bands = bandLayers(sigma, 48);
   assert.deepEqual(Object.values(bands).flat().sort((a, b) => a - b), sigma.map((_, k) => k));
   const layout = groupLayout(mesh), field = new Float64Array(3 * n), three = bandLayers([0.85, 0.3, 0.05], 3);
   assert.throws(() => spreadGroups(field, field, layout, bandLayers([0.85, 0.3], 2)), /fields of 7686 and 7686 values for 2 layers/);
   assert.throws(() => spreadGroups(field, field.subarray(n), layout, three), /fields of 7686 and 5124 values for 3 layers/);
+  assert.throws(() => spreadGroups(field.subarray(n), field, layout, three), /fields of 5124 and 7686 values for 3 layers of 2562$/);
+  const edges = groupLayout(mesh, { edges: true }), wind = new Float64Array(3 * mesh.nEdges);
+  assert.throws(() => spreadGroups(field, wind, edges, three), new RegExp(`fields of 7686 and ${wind.length} values for 3 layers of ${mesh.nEdges}$`));
+  assert.equal(Object.keys(spreadGroups(wind, wind, edges, three)).length, 3);
   assert.throws(() => spreadGroups(field, field, layout, { low: [0], high: [2] }), /not each of 0 to 1 once/);
   assert.throws(() => spreadGroups(field, field, layout, { low: [0, 1], mid: [1, 2] }), /not each of 0 to 3 once/);
   assert.equal(Object.keys(spreadGroups(field, field, layout, three)).length, 3);
+});
+
+test('under dropEventHemispheres buildSpread leaves out the mean bound of a hemisphere where single columns\' events set the twins\' means, and a check fails such a side that has a bound too, a reason short of those events, or no cells', () => {
+  const south = Array.from({ length: n }, (_, x) => x).filter((x) => sides[x] < 0), event = build.map((gaps, t) => { const copy = Float64Array.from(gaps); if (t === 0) copy[south[0]] = 4; return copy; });
+  const kept = buildSpread(event, sides, REFERENCE), dropped = buildSpread(event, sides, REFERENCE, { dropEventHemispheres: true }), reason = dropped.hemisphereDropped?.south;
+  assert.ok(kept.hemisphere.south > 0 && kept.hemisphereDropped === undefined, JSON.stringify(kept.hemisphere));
+  assert.ok(reason && reason.largest > EVENT_SPREAD * reason.median && reason.loo > 1 && dropped.hemisphere.south === undefined && dropped.hemisphere.north === kept.hemisphere.north && dropped.hemisphereDropped.north === undefined, JSON.stringify(dropped.hemisphereDropped));
+  const three = Float64Array.from(fresh[0]);
+  for (const x of south.slice(0, 3)) three[x] = 3.9;
+  assert.ok(caughtBy(failures(three, kept), /southern mean/), failures(three, kept).join('; '));
+  const check = distributionCheck(three, sides, dropped, REFERENCE, { require: S9_TIERS });
+  assert.deepEqual(check.failed, []);
+  assert.match(check.text, /south: [^;]* unbounded \(the twins' means: largest /);
+  const level = (southern) => southern.map((c) => Float64Array.from(sides, (side) => (side < 0 ? c : 1e-3))), dropOf = (southern) => buildSpread(level(southern), sides, REFERENCE, { dropEventHemispheres: true }).hemisphereDropped;
+  const byMedian = dropOf([...Array(18).fill(1e-3), 4e-3, 4e-3])?.south, byLoo = dropOf([...Array(19).fill(1e-3), 2.5e-3])?.south;
+  assert.ok(byMedian && byMedian.largest > EVENT_SPREAD * byMedian.median && !(byMedian.loo > 1), JSON.stringify(byMedian));
+  assert.ok(byLoo && !(byLoo.largest > EVENT_SPREAD * byLoo.median) && byLoo.loo > 1, JSON.stringify(byLoo));
+  assert.equal(dropOf(Array(20).fill(1e-3)), undefined);
+  assert.ok(caughtBy(failures(three, { ...dropped, hemisphere: { ...dropped.hemisphere, south: kept.hemisphere.south } }), /a southern mean bound and a reason for having none/));
+  for (const short of [{ largest: 2e-3, median: 1e-3, loo: 0.9 }, { largest: NaN, median: 1e-3, loo: NaN }, {}, null]) assert.ok(caughtBy(failures(three, { ...dropped, hemisphereDropped: { south: short } }), /no southern mean bound, for a reason short of single columns' events/), JSON.stringify(short));
+  assert.ok(caughtBy(distributionCheck(fresh[0], new Int8Array(n).fill(1), { ...dropped, bulk: { north: dropped.bulk.north } }, REFERENCE, { require: S9_TIERS }).failed, /southern bounds for a group with no southern cells/));
 });

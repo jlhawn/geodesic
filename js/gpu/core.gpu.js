@@ -1,4 +1,4 @@
-import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, readAcross, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
+import { getDevice, bufferKey, storageBuffer, emptyBuffer, readBuffer, readRanges, readAcross, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, TEMPERATURE_CLOSURES, STANDARD_TEMPERATURE, VERTICAL_ADVECTION, THETA_FACES, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, sunDistance, DEFAULT_ORBIT, DEFAULT_SHORTWAVE, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
@@ -1079,7 +1079,7 @@ export async function createGpuCore(mesh, {
   }
   const groups = new Map();
   function group(IN, OUT, D = buffers.D, P = buffers.P, MF = buffers.MF, LV = buffers.LV) {
-    const key = [IN.label, OUT.label, D.label, P.label, MF.label, LV.label].join('|');
+    const key = bufferKey([IN, OUT, D, P, MF, LV]);
     let g = groups.get(key);
     if (!g) {
       g = device.createBindGroup({ layout, entries: [buffers.MI, MF, LV, IN, OUT, D, P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });

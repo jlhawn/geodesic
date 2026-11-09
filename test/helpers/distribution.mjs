@@ -8,6 +8,11 @@
  *   top rung would sit under the cell floor or at 0, or { why: 'half',
  *   threshold, limit } when its limit would reach half the group;
  * - hemisphere: the mean |gap| per hemisphere, one bound or { north, south };
+ * - hemisphereDropped: { north?, south? } of { largest, median, loo }, a side
+ *   whose mean bound buildSpread leaves out under dropEventHemispheres,
+ *   because single columns' events set the twins' means there: their largest
+ *   is over EVENT_SPREAD times their median, or a twin's mean passes the
+ *   bound the other twins set (loo, the largest share of that bound, over 1);
  * - bulk: { north, south } of { trimmed, signed }, the mean |gap| and the
  *   absolute mean signed gap over the cells left once a run drops its own
  *   largest TRIM share (rounded up) by |gap|.
@@ -22,15 +27,20 @@
  * twin that set M. A check fails an empty group, a non-finite gap, reference
  * or bound, a hemisphere's bound that is missing for cells the group has
  * there or given where it has none, an empty ladder that a required counts
- * tier gives no reason for, and a reason the group's floor or size
- * contradicts; buildSpread throws on an empty group or a non-finite gap.
+ * tier gives no reason for, a reason the group's floor or size contradicts
+ * or that the largest bound does not tie to (the bound at least the
+ * reason's threshold and at most K_MOST, S9(f)'s ceiling on k, times the
+ * larger of that threshold and the cell floor, past the two roundings; a
+ * half reason's limit at most K_MOST times the group plus 2),
+ * and a dropped hemisphere that has a bound too or whose reason falls short;
+ * buildSpread throws on an empty group or a non-finite gap.
  *
  * Hemispheres: `where` holds one value per gap, a side as hemispheres()
  * gives it or a latitude: positive is north, negative south, and 0 counts in
  * both. hemispheres() gives 0 to a cell whose center lies within EQUATOR of
  * the equatorial plane (|z| of the unit center).
  */
-export const F32_RMS = 16 * 2 ** -24, F32_CELL = 64 * 2 ** -24, TRIM = 0.05, LADDER_DEPTH = 10, EQUATOR = 1e-9;
+export const F32_RMS = 16 * 2 ** -24, F32_CELL = 64 * 2 ** -24, TRIM = 0.05, LADDER_DEPTH = 10, EQUATOR = 1e-9, EVENT_SPREAD = 3, K_MOST = 3;
 export const S9_TIERS = ['largest', 'counts', 'hemisphere', 'bulk'];
 
 export function magnitude(values) {
@@ -61,6 +71,13 @@ const sidesOf = (where, n) => {
   return Int8Array.from({ length: n }, (_, x) => { const v = where[x]; if (!Number.isFinite(v)) throw new Error(`where holds ${v} at ${x}`); return v > 0 ? 1 : v < 0 ? -1 : 0; });
 };
 const inHemisphere = (side, north) => side === 0 || (side > 0) === north;
+const middle = (values) => { const s = [...values].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const eventSet = ({ largest, median, loo } = {}) => largest > EVENT_SPREAD * median || loo > 1;
+const ROUNDING = 1.01 / 0.99;
+const reasonHolds = (reason, largest, cellFloor, n) => {
+  const { why, threshold, limit } = reason ?? {}, tied = threshold <= largest && largest <= K_MOST * ROUNDING * Math.max(threshold, cellFloor);
+  return why === 'floor' ? tied && (threshold === 0 || (threshold > 0 && threshold < cellFloor)) : why === 'half' && tied && threshold > 0 && limit >= n / 2 && limit <= K_MOST * n + 2;
+};
 
 export function spreadStatistics(gaps, where, thresholds = [], trim = TRIM) {
   const n = gaps.length, sides = sidesOf(where, n);
@@ -79,7 +96,7 @@ export function spreadStatistics(gaps, where, thresholds = [], trim = TRIM) {
   return { finite, largest, at, over, hemisphere };
 }
 
-export function buildSpread(runs, where, reference, { k = 2, trim = TRIM } = {}) {
+export function buildSpread(runs, where, reference, { k = 2, trim = TRIM, dropEventHemispheres = false } = {}) {
   if (!runs.length) throw new Error('no twins to build a spread from');
   const n = runs[0].length, cellFloor = F32_CELL * reference.max, meanFloor = F32_RMS * reference.rms;
   if (!n) throw new Error('an empty group');
@@ -98,17 +115,20 @@ export function buildSpread(runs, where, reference, { k = 2, trim = TRIM } = {})
     counts.push([threshold, limit]);
   }
   const bound = (values, floor) => roundUp(Math.max(k * Math.max(...values), floor));
-  const hemisphere = {}, bulk = {};
+  const hemisphere = {}, hemisphereDropped = {}, bulk = {};
   for (const side of ['north', 'south']) {
     if (!first[0].hemisphere[side]) continue;
-    hemisphere[side] = bound(first.map((s) => s.hemisphere[side].mean), meanFloor);
+    const means = first.map((s) => s.hemisphere[side].mean), loo = means.length > 1 ? Math.max(...means.map((v, t) => v / bound(means.filter((_, s) => s !== t), meanFloor))) : 0;
+    const reason = { largest: roundUp(Math.max(...means)), median: roundDown(middle(means)), loo: roundUp(loo) };
+    if (dropEventHemispheres && eventSet(reason)) hemisphereDropped[side] = reason;
+    else hemisphere[side] = bound(means, meanFloor);
     bulk[side] = { trimmed: bound(first.map((s) => s.hemisphere[side].trimmed), meanFloor), signed: bound(first.map((s) => s.hemisphere[side].trimmedSigned), meanFloor) };
   }
-  return { largest: bound([M], cellFloor), counts, ...(counts.length ? {} : { emptyLadder: stop }), hemisphere, bulk, twins: { largest: M, over: counts.map(([threshold]) => Math.max(...runs.map((gaps) => spreadStatistics(gaps, where, [threshold], trim).over[0]))) } };
+  return { largest: bound([M], cellFloor), counts, ...(counts.length ? {} : { emptyLadder: stop }), hemisphere, ...(Object.keys(hemisphereDropped).length ? { hemisphereDropped } : {}), bulk, twins: { largest: M, over: counts.map(([threshold]) => Math.max(...runs.map((gaps) => spreadStatistics(gaps, where, [threshold], trim).over[0]))) } };
 }
 
 export function distributionCheck(gaps, where, spread, { max, rms }, { cells = null, trim = TRIM, require = [] } = {}) {
-  const { largest, counts = [], emptyLadder, hemisphere, bulk } = spread, failed = [], id = (x) => (cells ? cells[x] : x);
+  const { largest, counts = [], emptyLadder, hemisphere, hemisphereDropped = {}, bulk } = spread, failed = [], id = (x) => (cells ? cells[x] : x);
   if (cells && cells.length !== gaps.length) throw new Error(`${cells.length} cell ids for ${gaps.length} gaps`);
   const s = spreadStatistics(gaps, where, counts.map(([threshold]) => threshold), trim);
   const finite = (name, bound) => Number.isFinite(bound) || (failed.push(`the ${name} bound is ${bound}`), false);
@@ -119,7 +139,7 @@ export function distributionCheck(gaps, where, spread, { max, rms }, { cells = n
   const cellFloor = F32_CELL * max, meanFloor = F32_RMS * rms;
   if (emptyLadder !== undefined) {
     if (counts.length) failed.push('a ladder with rungs and a reason for having none');
-    else if (!(emptyLadder?.why === 'floor' ? emptyLadder.threshold < cellFloor || emptyLadder.threshold <= 0 : emptyLadder?.why === 'half' && emptyLadder.limit >= gaps.length / 2)) failed.push(`no ladder, for a reason the group contradicts: ${JSON.stringify(emptyLadder)} against a cell floor of ${cellFloor} and ${gaps.length} entries`);
+    else if (!reasonHolds(emptyLadder, largest, cellFloor, gaps.length)) failed.push(`no ladder, for a reason the group contradicts: ${JSON.stringify(emptyLadder)} against a cell floor of ${cellFloor}, a largest bound of ${largest} and ${gaps.length} entries`);
   } else if (require.includes('counts') && spread.counts?.length === 0) failed.push('an empty ladder with no reason given');
   if (largest !== undefined && finite('largest', largest)) { const top = Math.max(largest, cellFloor); if (!(s.largest <= top)) failed.push(`largest ${s.largest} at ${id(s.at)}, past ${top}`); }
   counts.forEach(([threshold, limit], j) => {
@@ -128,11 +148,14 @@ export function distributionCheck(gaps, where, spread, { max, rms }, { cells = n
     else if (!(s.over[j] <= limit)) failed.push(`${s.over[j]} at or over ${threshold}, past ${limit}`);
   });
   const sidesBounded = (tier) => (tier === undefined || typeof tier === 'number' ? [] : Object.keys(tier));
-  for (const name of new Set([...sidesBounded(hemisphere), ...sidesBounded(bulk)])) if (!s.hemisphere[name]) failed.push(`${name}ern bounds for a group with no ${name}ern cells`);
+  for (const name of new Set([...sidesBounded(hemisphere), ...sidesBounded(hemisphereDropped ?? {}), ...sidesBounded(bulk)])) if (!s.hemisphere[name]) failed.push(`${name}ern bounds for a group with no ${name}ern cells`);
   for (const [name, h] of Object.entries(s.hemisphere)) {
     if (hemisphere !== undefined) {
-      const b = typeof hemisphere === 'number' ? hemisphere : hemisphere[name];
-      if (b === undefined) failed.push(`no ${name}ern mean bound`);
+      const b = typeof hemisphere === 'number' ? hemisphere : hemisphere[name], dropped = hemisphereDropped?.[name];
+      if (dropped !== undefined) {
+        if (b !== undefined) failed.push(`a ${name}ern mean bound and a reason for having none`);
+        else if (!eventSet(dropped ?? {})) failed.push(`no ${name}ern mean bound, for a reason short of single columns' events: ${JSON.stringify(dropped)}`);
+      } else if (b === undefined) failed.push(`no ${name}ern mean bound`);
       else if (finite(`${name}ern mean`, b)) { const top = Math.max(b, meanFloor); if (!(h.mean <= top)) failed.push(`${name}ern mean ${h.mean}, past ${top}`); }
     }
     if (bulk === undefined) continue;
@@ -142,6 +165,6 @@ export function distributionCheck(gaps, where, spread, { max, rms }, { cells = n
   }
   const e = (v) => (Number.isFinite(v) ? v.toExponential(2) : String(v));
   const text = [`largest ${e(s.largest)} at ${id(s.at)}${largest !== undefined ? ` of ${e(Math.max(largest, cellFloor))}` : ''}`, counts.length ? `ladder ${counts.map(([threshold, limit], j) => `${s.over[j]}/${limit} ≥ ${threshold.toExponential(2)}`).join(' ')}` : emptyLadder ? `no ladder: ${emptyLadder.why === 'floor' ? `the twins' largest gap rounds to ${e(emptyLadder.threshold)}, under the cell floor ${e(cellFloor)}` : `its top rung, ${e(emptyLadder.threshold)}, would allow ${emptyLadder.limit} of ${gaps.length}`}` : '',
-    ...Object.entries(s.hemisphere).map(([name, h]) => `${name}: signed ${e(h.signed)}, mean ${e(h.mean)}, trimmed ${e(h.trimmed)}, trimmed signed ${e(h.trimmedSigned)}, top ${h.top.map((x) => `${id(x)} ${e(gaps[x])}`).join(' ')}`)].filter(Boolean).join('; ');
+    ...Object.entries(s.hemisphere).map(([name, h]) => `${name}: signed ${e(h.signed)}, mean ${e(h.mean)}${hemisphereDropped?.[name] ? ` unbounded (the twins' means: largest ${e(hemisphereDropped[name].largest)}, median ${e(hemisphereDropped[name].median)}, a twin at ${hemisphereDropped[name].loo} of the others' bound)` : ''}, trimmed ${e(h.trimmed)}, trimmed signed ${e(h.trimmedSigned)}, top ${h.top.map((x) => `${id(x)} ${e(gaps[x])}`).join(' ')}`)].filter(Boolean).join('; ');
   return { failed, worst: s.largest, over: s.over, means: ['north', 'south'].map((name) => s.hemisphere[name]?.mean), statistics: s, text };
 }
