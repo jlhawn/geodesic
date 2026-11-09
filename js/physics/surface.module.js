@@ -118,12 +118,6 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
   }
 
   /*
-   * Mixes every statically unstable layer pair of column i to a common θ,
-   * weighted by Exner·Δσ so column enthalpy Σ cp θ Π Δσ is unchanged,
-   * sweeping until the column is stable. Refreshes the column's Exner
-   * ratios for the current π first.
-   */
-  /*
    * Dry convective adjustment in one pass up the column: each layer
    * starts a block, and a block cooler in θ than the block beneath it
    * (by more than one part in 10⁶) merges into it, θ averaged with the
