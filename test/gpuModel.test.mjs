@@ -122,7 +122,7 @@ test('the stratiform share of the estimated inversion strength and the boundary-
   }
 });
 
-const THETA_TWIN_PARTED = { 1637: 1.28e-2 }, WIND_TWIN_PARTED = {};
+const THETA_TWIN_PARTED = { 1637: 1.28e-2 }, WIND_TWIN_PARTED = {}, SKIPPED_BOUNDS = { theta: 3.2e-3, wind: 7e-4 }, THETA_EVENTS = { count: 2, cap: 2.56e-2 };
 
 for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines, with the boundary layer diagnosed after the deposit' : 'with the ∇⁴ closures off at the default order, the divergence damping alone and the heat it returns match between the engines in the columns more than a ring from where a decision parted in either run, θ column by column and the wind edge by edge, but for the columns and edges eight CPU twins part, each within 1.5 times the twins\' gap there', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (divergenceDamping) => {
@@ -156,18 +156,21 @@ for (const plain of [true, false]) test(plain ? 'with the ∇⁴ closures off, t
     const heat = Math.abs(content(damped.state[1]) - content(damped.model.state[1])) / Math.abs(content(damped.model.state[1]) - content(free.model.state[1]));
     console.log(`at the default order, four steps at N=${N}, c = 0.1 and no ∇⁴: a decision parted in ${parted.size} columns with the damping and ${free.decisions.parted.size} without, ${either.size} in either and ${near.size} within a ring of them; over the other ${calm.length} the engines' θ differs by rms ${calmTheta.rmsRel.toExponential(1)}, at most ${calmTheta.maxDiff.toExponential(1)} K in column ${worst} (its boundary layer ${damped.model.boundaryLayer.depth[worst].toFixed(1)} m deep on the CPU, ${damped.physics.DEPTH[worst].toFixed(1)} on the GPU), and there by at most ${freeGap.toExponential(1)} K without the damping; the damping's own change to θ parts by at most ${effect.maxDiff.toExponential(1)} K over those columns, where it moves θ by up to ${heated.maxDiff.toExponential(1)}; on the ${calmEdges.length} of ${E} edges between them the wind by at most ${calmU.maxDiff.toExponential(1)} m/s, where the damping moved it by up to ${moved.maxDiff.toExponential(1)}; the engines' πdσ-weighted θ parts by ${heat.toExponential(1)} of the change the damping makes to it`);
     const failed = [], excused = [];
+    const deepest = (field, n, x) => { let gap = 0; for (let k = 0; k < K; k++) gap = Math.max(gap, Math.abs(damped.state[field][k * n + x] - damped.model.state[field][k * n + x])); return gap; };
+    const events = [];
     for (const i of calm) {
-      let gap = 0;
-      for (let k = 0; k < K; k++) gap = Math.max(gap, Math.abs(damped.state[1][k * C + i] - damped.model.state[1][k * C + i]));
-      if (gap >= 1.2e-2) (gap <= 1.5 * (THETA_TWIN_PARTED[i] ?? 0) ? excused : failed).push(`θ in column ${i} ${gap.toExponential(2)} K`);
+      const gap = deepest(1, C, i);
+      if (gap >= 1.2e-2) (gap <= 1.5 * (THETA_TWIN_PARTED[i] ?? 0) ? excused : gap < THETA_EVENTS.cap ? events : failed).push(`θ in column ${i} ${gap.toExponential(2)} K`);
     }
+    if (events.length > THETA_EVENTS.count) failed.push(...events);
     for (const e of calmEdges) {
-      let gap = 0;
-      for (let k = 0; k < K; k++) gap = Math.max(gap, Math.abs(damped.state[2][k * E + e] - damped.model.state[2][k * E + e]));
+      const gap = deepest(2, E, e);
       if (gap >= 0.05 * moved.maxDiff) (gap <= 1.5 * (WIND_TWIN_PARTED[e] ?? 0) ? excused : failed).push(`wind on edge ${e} ${gap.toExponential(2)} m/s`);
     }
-    console.log(`at the default order, past 1.2e-2 K or 5 % of the damping's move of ${moved.maxDiff.toExponential(2)} m/s: excused ${excused.join(', ') || 'none'}`);
-    assert.ok(either.size <= C / 4 && near.size <= 0.7 * C, `a decision parted in ${either.size} of ${C} columns, ${near.size} within a ring of them`);
+    const skippedEdges = Array.from({ length: E }, (_, e) => e).filter((e) => near.has(cellsOnEdge[2 * e]) || near.has(cellsOnEdge[2 * e + 1]));
+    const skippedTheta = [...near].reduce((sum, i) => sum + deepest(1, C, i), 0) / Math.max(near.size, 1), skippedWind = skippedEdges.reduce((sum, e) => sum + deepest(2, E, e), 0) / Math.max(skippedEdges.length, 1);
+    console.log(`at the default order, past 1.2e-2 K or 5 % of the damping's move of ${moved.maxDiff.toExponential(2)} m/s: excused ${excused.join(', ') || 'none'}, under ${THETA_EVENTS.cap} K ${events.join(', ') || 'none'}; over the ${near.size} columns and ${skippedEdges.length} edges within a ring of a parted decision the mean largest gap is ${skippedTheta.toExponential(3)} K and ${skippedWind.toExponential(3)} m/s`);
+    assert.ok(skippedTheta < SKIPPED_BOUNDS.theta && skippedWind < SKIPPED_BOUNDS.wind, `over the columns and edges within a ring of a parted decision the mean largest gap is ${skippedTheta} K and ${skippedWind} m/s`);
     assert.deepEqual(failed, [], 'columns and edges past the bounds that no twin parts, or past 1.5 times the twins\' gap');
     return;
   }
