@@ -5,7 +5,7 @@ import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor }
 import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
 import { createAerosolSampler, loadAerosol, climatologyOn } from './aerosol.module.js';
-import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.module.js';
+import { createSurface, relativeWindOf, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
 import { createOcean, JERLOV } from './ocean/layered.module.js';
@@ -132,8 +132,9 @@ export function createModel(gridOrMesh, {
   const aerosol = physics && climatologyOn(radiationOptions) ? createAerosolSampler(mesh, loadAerosol(radiationOptions.aerosolData)) : null;
   const gustiness = surfaceOptions.gustiness ?? 3;
   const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, ...(aerosol ? { aerosolFields: aerosol.fields } : {}), gustiness: gusty ? 0 : gustiness, virtualDensity: surfaceOptions.virtualDensity === true, exchangeCoefficients: heatCoefficients, referenceCoefficients: rough ? exchange.reference : null, surfaceLayer: rough, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, seaHumidity, ...radiationOptions });
-  if (surfaceOptions.relativeWind && !implicitDrag) throw new Error('surface.relativeWind needs the implicit drag of the roughness exchange');
-  const seaFlow = surfaceOptions.relativeWind ? new Float64Array(buffers && buffers.seaFlow ? buffers.seaFlow : new SharedArrayBuffer(8 * mesh.nEdges)) : null;
+  const relativeWind = relativeWindOf(surfaceOptions);
+  if (relativeWind && !implicitDrag) throw new Error('surface.relativeWind needs the implicit drag of the roughness exchange');
+  const seaFlow = relativeWind ? new Float64Array(buffers && buffers.seaFlow ? buffers.seaFlow : new SharedArrayBuffer(8 * mesh.nEdges)) : null;
   const virtualBefore = surfaceOptions.virtualDensity === true ? new Float64Array(C).fill(1) : null;
   refuseBorrowedOptions(boundaryLayerOptions);
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, heatCoefficients: rough ? heatCoefficients : null, surfaceBuoyancy: rough ? radiation.surfaceBuoyancy : null, surfaceHeat: rough ? radiation.sensibleHeat : null, surfaceEvaporation: rough ? radiation.evaporation : null, implicitDrag, formDrag, ...(gusty ? { surfaceWind: exchange.wind, gustiness: 0 } : { gustiness }), land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, deckLayer: radiation.deckInversion === 'subgrid' ? radiation.mlmLayer : null, deckShare: radiation.mlmShare, deckEntrainment: radiation.mlmEntrainment, stratiform: radiation.stratiform, longwave: radiation.longwave, openSea, seaHumidity, depositedHeat: radiation.sensibleHeat, depositedWater: moist ? radiation.evaporation : null, seaFlow, virtualDensity: surfaceOptions.virtualDensity === true, ...boundaryLayerOptions }) : null;

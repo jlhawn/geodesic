@@ -1024,3 +1024,12 @@ test('with surface.relativeWind the coupled GPU model hands its atmosphere a fin
   console.log(`after 8 steps the sea's surface velocity under the air reaches ${largest.toExponential(2)} m/s`);
   assert.ok(largest > 1e-4 && largest < 2, `${largest} m/s`);
 });
+
+test('both engines refuse a surface.relativeWind that is not true or false', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  for (const relativeWind of [1, 'true', null]) {
+    const refusal = { message: `surface.relativeWind is true or false, not ${JSON.stringify(relativeWind)}` };
+    assert.throws(() => createModel(new Grid(16), { ocean: false, surface: { relativeWind } }), refusal);
+    await assert.rejects(createGpuModel(new Grid(16), { ocean: false, surface: { relativeWind } }), refusal);
+  }
+});
