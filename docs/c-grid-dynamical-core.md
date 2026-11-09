@@ -12466,11 +12466,14 @@ surface current, τ = ρ C_D |v − u_s| (v − u_s).
   scorer and the saves are in this machine's scratch, not in the
   repository).
   - The diagnoseFirst arm, the plain-order control and the control's twin
-    each ran two years from seventeen64's days 365 and 548. Year 2
-    continues each arm's year-1 run: each year-2 start is byte-identical
-    to the arm's own year-1 end. The arms with relativeWind and coolSkin
-    started from the diagnoseFirst arm's day-730 and day-913 states and
-    from the control's.
+    each ran two years from two starts. S1 is seventeen64 day 365. S2 is
+    `amazon/arms/pmin/amz64_day0548.bin`, day 548 of the Amazon A/B's
+    pcapeMinimum arm (pcapeMinimum 0.05), which ran from the observed-land
+    start iobs64 day 365: seventeen64 day 365 with observed cover, trees,
+    soil water and rain memory written in. Year 2 continues each arm's
+    year-1 run: each year-2 start is byte-identical to the arm's own
+    year-1 end. The arms with relativeWind and coolSkin started from the
+    diagnoseFirst arm's day-730 and day-913 states and from the control's.
   - A row's move is the arm's bias less the control's, averaged over the
     two starts. It is resolved past t(0.975, 2)·σ/√2 = 3.04σ, where σ is
     the RMS over the two starts of the twin's difference from the control
