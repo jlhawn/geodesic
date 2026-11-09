@@ -262,7 +262,7 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   at.heating.forEach(([inBound, outBound], k) => {
     const gaps = cellGaps(cpu.radiation.longwave.subarray(k * C, (k + 1) * C), device.LWH.subarray(k * C, (k + 1) * C));
     let ratio = 0;
-    gaps.forEach((gap, x) => { const bound = Math.max(inside(x) ? inBound : outBound, F32_CELL); ratio = Math.max(ratio, gap / bound); if (gap >= bound) failed.push(`layer ${k} cell ${x} ${gap.toExponential(2)}`); });
+    gaps.forEach((gap, x) => { const bound = Math.max(inside(x) ? inBound : outBound, F32_CELL); ratio = Math.max(ratio, gap / bound); if (!(gap < bound)) failed.push(`layer ${k} cell ${x} ${gap.toExponential(2)}`); });
     worst.push(ratio.toFixed(2));
   });
   const k = at.heating.length, lowest = hemisphere(cpu.radiation.longwave.subarray(k * C, (k + 1) * C), device.LWH.subarray(k * C, (k + 1) * C));

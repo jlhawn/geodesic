@@ -69,6 +69,7 @@ export async function createGpuModel(gridOrMesh, {
 } = {}) {
   if (oceanOptions !== false && oceanOptions.gustiness !== undefined) throw new Error('ocean.gustiness is not an option: the ocean and the ice drift take surface.gustiness');
   if (boundaryLayer === false) throw new Error('createGpuModel runs no model without the boundary layer: boundaryLayer is false');
+  if (moist === false) throw new Error('createGpuModel runs no model without moisture: moist is false');
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;

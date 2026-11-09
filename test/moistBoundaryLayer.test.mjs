@@ -266,7 +266,7 @@ test('with deckRegime \'boundaryLayer\' the deck runs where the boundary layer i
   for (let i = 1; i < gated.mesh.nCells; i += 2) assert.equal(bypassed.radiation.mlmCover[i], 0);
 });
 
-async function moistEngines(options = {}, moist = {}) {
+async function moistEngines(options = {}, moist = {}, { staleExner = 0, heat = 60 } = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
   const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: options, moist, surface: { exchange: 'fixed', ...PREVIOUS_SURFACE } });
@@ -299,6 +299,8 @@ async function moistEngines(options = {}, moist = {}) {
   for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 2 * (random() - 0.5) : 12 * (random() - 0.5);
   for (const a of [...state, longwave, r.mlmGate, r.stratiform]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
+  const stale = () => { if (staleExner) for (let x = 0; x < ex.length; x++) ex[x] = Math.fround(ex[x] * (1 + staleExner) ** kap); };
+  stale();
   const { piSigmaDot, exnerLower } = c.diagnostics;
   for (let k = 1; k < nK; k++) for (let i = 0; i < nC; i++) piSigmaDot[k * nC + i] = Math.fround(0.6 * (random() - 0.4));
   const gpu = await createGpuCore(m, { levels, physics: { ...options, ...moist, surfaceExchange: 'fixed', exchangeOptions: PREVIOUS_SURFACE } });
@@ -311,7 +313,7 @@ async function moistEngines(options = {}, moist = {}) {
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(r.stratiform));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LWH, Float32Array.from(longwave));
   if (options.diagnoseFirst !== false) {
-    for (let i = 0; i < nC; i++) { r.sensibleHeat[i] = Math.fround(60 * Math.sin(0.7 * i)); r.evaporation[i] = Math.fround(4e-5 * (1 + Math.cos(1.3 * i))); }
+    for (let i = 0; i < nC; i++) { r.sensibleHeat[i] = Math.fround(heat * Math.sin(0.7 * i)); r.evaporation[i] = Math.fround(4e-5 * (1 + Math.cos(1.3 * i))); }
     device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(r.sensibleHeat));
     device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(r.evaporation));
   }
@@ -326,6 +328,7 @@ async function moistEngines(options = {}, moist = {}) {
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
   const lowestInterface = withheldInterface(c, state, r, dt), before = state.map((a) => Float64Array.from(a));
+  stale();
   layer.diagnose(state, 0, nC, dt);
   const cpu = Object.fromEntries(['entrainment', 'mixing', 'regime', 'radiativeVelocity', 'mixingTop', 'depth', 'cloudTopCooling'].map((name) => [name, Float64Array.from(layer[name])]));
   pair.phases.adjust(0, nC, dt);
@@ -334,6 +337,7 @@ async function moistEngines(options = {}, moist = {}) {
   const twinSign = () => { twinSeed = (twinSeed * 1664525 + 1013904223) >>> 0; return twinSeed & 0x10000 ? 1 : -1; };
   for (const s of [0, 1, 4]) for (let x = 0; x < before[s].length; x++) before[s][x] += twinSign() * Math.abs(before[s][x]) * 2 ** -23;
   c.diagnose(before[0], before[1], before[4], before[5]);
+  stale();
   layer.diagnose(before, 0, nC, dt);
   const twin = Object.fromEntries(['entrainment', 'regime', 'depth', 'mixingTop'].map((name) => [name, Float64Array.from(layer[name])]));
   return { K: nK, C: nC, E: nE, kTop: layer.kTop, cpu, twin, state, after, ph, mesh: m, lowestInterface };
@@ -353,8 +357,8 @@ function withheldInterface(core, state, radiation, dt) {
 }
 
 test('the moist boundary layer matches between the engines on a random set of columns in every regime: the regime, V, w_e, the coefficients, the depths and θ, q, qc and the wind after the step, with convection vetoed under coupled stratocumulus as well', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }], ['the subsidence share', { entrainment: { subsidence: true } }], ['the surface excess', { surfaceExcess: 8.5 }], ['diagnosed after the deposit', { diagnoseFirst: false }], ['the surface excess, diagnosed after the deposit', { diagnoseFirst: false, surfaceExcess: 8.5 }], ['the K-profile from the ground with the stable φ and a Prandtl a of 0', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 0 }]]) {
-    const run = await moistEngines(options, moist), { K: nK, C: nC, E: nE, kTop, cpu, ph } = run;
+  for (const [label, options, moist, stage] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }], ['the subsidence share', { entrainment: { subsidence: true } }], ['the surface excess', { surfaceExcess: 8.5 }], ['diagnosed after the deposit', { diagnoseFirst: false }], ['the surface excess, diagnosed after the deposit', { diagnoseFirst: false, surfaceExcess: 8.5 }], ['the K-profile from the ground with the stable φ and a Prandtl a of 0', { profileHeight: 'ground', stableProfile: 'holtslagBoville', prandtlCoefficient: 0 }], ['the deposit withheld with the exner of a π 1 % off the state\'s, as the last Runge-Kutta stage leaves it, under 150 W/m² of sensible heat', {}, undefined, { staleExner: 0.01, heat: 150 }]]) {
+    const run = await moistEngines(options, moist, stage), { K: nK, C: nC, E: nE, kTop, cpu, ph } = run;
     let coupledPlumes = 0;
     for (let i = 0; i < nC; i++) if (ph.REGIME[i] === REGIME.COUPLED && ph.CUMF[i] > 0) coupledPlumes++;
     if (moist) assert.equal(coupledPlumes, 0, 'no plume rises from a coupled stratocumulus-topped layer');
