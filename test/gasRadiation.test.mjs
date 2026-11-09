@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { clearLongwave, longwaveTableFor, LONGWAVE_TABLE } from '../js/physics/longwave.module.js';
 import { sigmaInterfaces, GRAVITY, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, interfaceAt, layerHeating, referenceHeating, MOLAR } from '../scripts/standardAtmospheres.mjs';
-import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_SHORTWAVE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
 import { SOLAR_CONSTANT, GREENHOUSE_GASES, VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
 import { ozoneWeights, ozoneAbove } from '../js/physics/ozone.module.js';
@@ -187,9 +187,9 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
   console.log(`12 humid clear columns without scattering: the gases take their absorptivities down and up to ${worst.toExponential(1)}`);
 });
 
-async function engines(radiation, levels = undefined, order = PREVIOUS_BOUNDARY_LAYER) {
+async function engines(radiation, levels = undefined, order = PREVIOUS_BOUNDARY_LAYER, surface = {}) {
   const grid = levels ? { levels } : {};
-  const cpu = createModel(new Grid(16), { ocean: false, radiation, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...order, velocityScale: 'capped' }, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...order, velocityScale: 'capped' }, ...grid });
+  const cpu = createModel(new Grid(16), { ocean: false, radiation, surface, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...order, velocityScale: 'capped' }, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, surface, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...order, velocityScale: 'capped' }, ...grid });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();
@@ -240,7 +240,7 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
 });
 
 for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}` : ''} at the default order at N=16: the clear-sky sums cell by cell and in rms over the cells, each layer's longwave heating above 30 hPa cell by cell, inside and outside the twins' decision neighborhoods, and each hemisphere's mean |gap| of the all-sky sums and of the lowest of those layers, where honest twins part cells the build twins never part`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true }, grid ? sigmaInterfaces(grid) : undefined, {});
+  const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true }, grid ? sigmaInterfaces(grid) : undefined, {}, PREVIOUS_AIR_SEA);
   const at = GAS_BOUNDS[grid ?? 'default'], union = Buffer.from(at.union, 'base64'), inside = (x) => (union[x >> 3] >> (x & 7)) & 1;
   const slots = { absorbedSolar: 'ABSSUM', atmosphereSolar: 'ATMSUM', outgoingLongwave: 'OLRSUM', clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
   const hemisphere = (a, b) => Math.max(...[true, false].map((north) => { let d = 0, r = 0; for (let x = 0; x < C; x++) if ((cpu.mesh.latCell[x] >= 0) === north) { d += Math.abs(b[x] - a[x]); r += Math.abs(a[x]); } return d / r; }));

@@ -5,7 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { readTopography } from '../js/geography.module.js';
 import { startPlaceholders } from '../js/physics/land.module.js';
-import { PREVIOUS_LEVELS, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -50,7 +50,7 @@ const apart = (a, b, keep) => { let worst = 0; for (let i = 0; i < a.length; i++
 for (const [coverGoal, snowHold, plain] of [['water', false, false], ['observed', false, true], ['observed', true, true], ['observed', false, false], ['observed', true, false]]) {
   test(`from an observed start both engines relax the cover and the trees alike under coverGoal '${coverGoal}'${snowHold ? ' with snowHold' : ''}, hold the carbon at the placeholder, and a jump leaves the trees${plain ? ', with the boundary layer diagnosed after the deposit, the cover, the trees and the snow-free cover cell by cell within the spread of f32 twins' : coverGoal === 'observed' ? ' at the default order, the cover, the trees and the snow-free cover on their means over the vegetated cells' : ''}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const land = { ...FAST, coverGoal, snowHold };
-    const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } })), gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }));
+    const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } })), gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...(plain ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }));
     const C = cpu.mesh.nCells, grown = (i) => cpu.geography.land[i] && !cpu.geography.iceSheet[i], count = Array.from({ length: C }, (_, i) => i).filter(grown).length;
     assert.deepEqual([...cpu.land.record], [0, 4, 4]);
     for (let n = 0; n < 16; n++) { cpu.step(900); await gpu.step(900); }
