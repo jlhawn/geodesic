@@ -26,7 +26,7 @@ function stats(cpu, gpu, apart = null, C = 0) {
   for (let x = 0; x < cpu.length; x++) {
     if (apart && apart.has(x % C)) continue;
     const d = Math.abs(cpu[x] - gpu[x]);
-    if (d > maxDiff || Number.isNaN(d)) { maxDiff = d; at = x; }
+    if (d > maxDiff || (Number.isNaN(d) && !Number.isNaN(maxDiff))) { maxDiff = d; at = x; }
     sumSq += d * d; sumRef += cpu[x] * cpu[x]; count++;
   }
   return { maxDiff, at, rms: Math.sqrt(sumSq / count), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
@@ -241,7 +241,7 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
     for (let k = 0; k < K; k++) {
       const x = k * C + i, d = Math.abs(lit.cpu[x] - lit.gpu[x]);
       if (k === K - 1) surface = Math.max(surface, d / Math.abs(lit.cpu[x]));
-      else if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k, lit.cpu[x]]; }
+      else if (d > worst || (Number.isNaN(d) && !Number.isNaN(worst))) { worst = d; at = [i, k, lit.cpu[x]]; }
       worstCloud = Math.max(worstCloud, Math.abs((lit.cpu[x] - scattering.cpu[x]) - (lit.gpu[x] - scattering.gpu[x])));
     }
   }
@@ -270,7 +270,7 @@ test('the change the Rayleigh and aerosol scattering makes to the heating of eac
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i, change = on.cpu[x] - off.cpu[x], d = Math.abs(change - (on.gpu[x] - off.gpu[x]));
       largest = Math.max(largest, Math.abs(change));
-      if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k, change]; }
+      if (d > worst || (Number.isNaN(d) && !Number.isNaN(worst))) { worst = d; at = [i, k, change]; }
     }
   }
   console.log(`physics alone at N=${N} on ${lit} sunlit columns: the scattering changes a layer's heating by up to ${largest.toFixed(3)} K/day, and the engines' change differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day)`);
@@ -343,7 +343,7 @@ test('shallow cumulus of partial cover beside and without resolved cloud heats t
     if (!(base.radiation.insolation(i) > 0)) continue;
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i, d = Math.max(Math.abs(cumulus.cpu[x] - cumulus.gpu[x]), Math.abs(sparse.cpu[x] - sparse.gpu[x]));
-      if (d > worst || Number.isNaN(d)) { worst = d; at = [i, k]; }
+      if (d > worst || (Number.isNaN(d) && !Number.isNaN(worst))) { worst = d; at = [i, k]; }
       moved = Math.max(moved, Math.abs(cumulus.cpu[x] - plain.cpu[x]));
     }
   }
