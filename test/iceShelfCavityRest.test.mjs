@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createGeography, ICE_DENSITY } from '../js/geography.module.js';
 import { basalMelt, baseFreezing, SHELF_MELT } from '../js/ocean/iceShelfMelt.module.js';
-import { N, shelfBands, warmOcean, restingShelf } from './helpers/iceShelf.mjs';
+import { N, shelfBands, warmOcean, restingShelf, shelfModel, prepareShelfModel, shelfTops } from './helpers/iceShelf.mjs';
+import { seawaterDensity } from '../js/ocean/seawater.module.js';
 
 test(`on ISOMIP+'s warm profile the shelf melts, fastest near its grounding line, at meters of ice a year at N=${N}, and with no discharge to take it from the sheet's store pays for all of it`, () => {
   const { mesh, raster, options } = shelfBands(250), geography = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' }), C = mesh.nCells, E = mesh.nEdges, days = 2;
@@ -59,3 +60,17 @@ test('with a 20 m melt layer, as in Losch (2008), the melt reads T_w and S_w as 
 });
 
 test('with the melt off, a homogeneous ocean under a sloping shelf with a front stays as still for a month as it does with the shelves as land, on the CPU', () => restingShelf(['cpu']));
+
+test('a save without the shelves\' load gives the CPU each shelf\'s load from the first layer thicker than 1e-6 m under it, at that layer\'s own Q/h and W/h: a top layer of 5 mm or 2e-6 m, the layer below a top layer of 1e-7 m, 1e-6 m or none, and the rebuilt top layer of an emptied column', async () => {
+  const source = await prepareShelfModel(shelfModel());
+  const { C, thin, empty, dry, submicron, micron, twoMicron, Q, W, saved } = shelfTops(source.ocean, source.state[6]);
+  const model = await prepareShelfModel(shelfModel()), { iceDraft } = model.geography, { ocean } = model;
+  ocean.load(saved, Float64Array.from(model.state[3]), Float64Array.from(model.state[6]));
+  const { shelfLoad } = ocean.serialize();
+  assert.ok(ocean.h[dry] > 1e-6, `the load left the emptied column's top layer at ${ocean.h[dry]} m`);
+  for (const [i, n, [q, w, h]] of [[thin, thin, [Q, W, saved.h]], [twoMicron, twoMicron, [Q, W, saved.h]], [empty, C + empty, [Q, W, saved.h]], [submicron, C + submicron, [Q, W, saved.h]], [micron, C + micron, [Q, W, saved.h]], [dry, dry, [ocean.Q, ocean.W, ocean.h]]]) {
+    const weight = iceDraft[i] * seawaterDensity(q[n] / h[n], w[n] / h[n]), layer = (m) => iceDraft[i] * seawaterDensity(Q[m] / saved.h[m], W[m] / saved.h[m]);
+    if ([submicron, micron, twoMicron].includes(i)) assert.ok(Math.abs(layer(i) - layer(C + i)) > 1e-9 * weight, `under the ${saved.h[i]} m top layer at ${i}, layers 0 and 1 load the shelf within 1e-9 of each other: ${layer(i)} and ${layer(C + i)}`);
+    assert.ok(Math.abs(shelfLoad[i] - weight) <= 1e-12 * weight, `the shelf at ${i}, over a ${saved.h[i]} m top layer, loads at ${shelfLoad[i]}; the water under it gives ${weight}`);
+  }
+});

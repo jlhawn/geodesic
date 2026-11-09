@@ -35,12 +35,27 @@ import { cpuFrameFields } from './cpuFrame.module.js';
  * `means.<field>Ring` (float32, the daily means oldest first) and, when
  * the day under way has samples, `means.<field>Sum` (float64).
  */
-export const MEANS = ['mslp', 'ps', 'speed', 'temperature', 'humidity', 'sst', 'surfaceT', 'precipitation', 'cloud', 'albedo', 'shortwave', 'longwave', 'ice', 'concentration', 'zonalStress', 'meridionalStress', 'latentHeat', 'sensibleHeat', 't2m'];
+export const MEANS = ['mslp', 'ps', 'speed', 'temperature', 'humidity', 'sst', 'surfaceT', 'precipitation', 'cloud', 'albedo', 'shortwave', 'longwave', 'ice', 'concentration', 'zonalStress', 'meridionalStress', 'latentHeat', 'sensibleHeat', 'gridBoxSkin', 't2m'];
 export const MEANS_PER_DAY = 64, MEANS_WINDOW = 30;
+
+/*
+ * Means derived on the host from each sample's frame fields, so that both
+ * engines' recorders build them alike. gridBoxSkin is ERA5's skin
+ * temperature (skt) as a grid box holds it: over a sea cell with ice
+ * (concentration c > 0) the cover-weighted c·surfaceT + (1 − c)·sst, the
+ * ice skin and the open water of the leads; surfaceT everywhere else, K.
+ */
+export const DERIVED_MEANS = {
+  gridBoxSkin: {
+    from: ['surfaceT', 'sst', 'concentration'],
+    value: ({ surfaceT, sst, concentration }, x) => (concentration[x] > 0 && Number.isFinite(sst[x]) ? concentration[x] * surfaceT[x] + (1 - concentration[x]) * sst[x] : surfaceT[x]),
+  },
+};
+const sampledFields = (fields) => [...new Set(fields.flatMap((name) => (DERIVED_MEANS[name] ? DERIVED_MEANS[name].from : [name])))];
 export const MEMORY_FIELDS = ['rain', 'vertical', 'upwelling'];
 
 export const meansEvery = (dt) => Math.max(1, Math.round(86400 / dt / MEANS_PER_DAY));
-export const availableMeans = (model, fields) => (model.frameFields ? fields.filter((name) => model.frameFields.has(name)) : fields.slice());
+export const availableMeans = (model, fields) => (model.frameFields ? fields.filter((name) => sampledFields([name]).every((from) => model.frameFields.has(from))) : fields.slice());
 
 /*
  * The fields a MEANS setting names: the default list when unset, none for
@@ -50,7 +65,7 @@ export function meansFields(setting) {
   if (setting === undefined || setting === '') return MEANS.slice();
   if (setting === 'none') return [];
   const fields = JSON.parse(setting);
-  if (!Array.isArray(fields) || fields.some((name) => !(name in FIELDS) || MEMORY_FIELDS.includes(name))) throw new Error(`MEANS is 'none' or a JSON list of the fields of js/frames.module.js other than ${MEMORY_FIELDS.join(', ')}, not ${setting}`);
+  if (!Array.isArray(fields) || fields.some((name) => !(name in FIELDS || name in DERIVED_MEANS) || MEMORY_FIELDS.includes(name))) throw new Error(`MEANS is 'none' or a JSON list of the fields of js/frames.module.js other than ${MEMORY_FIELDS.join(', ')}, not ${setting}`);
   return [...new Set(fields)];
 }
 
@@ -60,10 +75,13 @@ export function createIntervalMeans(model, { fields = MEANS, every = 1, depth = 
   const missing = fields.filter((name) => !availableMeans(model, [name]).length);
   if (missing.length) throw new Error(`the model's frames give no ${missing.join(', ')}`);
   const sampled = !!model.sampleFrame;
-  let sums = {}, daySamples = 0, days = [], partial = offset > 0 && !from, counted = offset, landed = Promise.resolve();
+  let sums = {}, daySamples = 0, days = [], partial = offset > 0 && !from, counted = offset, landed = Promise.resolve(), closedOne = false;
+  const asked = sampledFields(fields);
   const add = (got) => {
     for (const name of fields) {
-      const values = got[name];
+      const derived = DERIVED_MEANS[name];
+      if (derived && derived.from.some((from) => !got[from])) throw new Error(`the frame has no ${derived.from.filter((from) => !got[from]).join(', ')} for ${name}`);
+      const values = derived ? Float64Array.from({ length: got[derived.from[0]].length }, (_, x) => derived.value(got, x)) : got[name];
       if (!values) throw new Error(`the frame has no ${name}`);
       const sum = sums[name] ??= new Float64Array(values.length);
       for (let x = 0; x < values.length; x++) sum[x] += values[x];
@@ -71,7 +89,8 @@ export function createIntervalMeans(model, { fields = MEANS, every = 1, depth = 
     daySamples++;
   };
   const close = () => {
-    if (daySamples && !partial) {
+    closedOne = !!daySamples && !partial;
+    if (closedOne) {
       days.push({ samples: daySamples, values: Object.fromEntries(fields.map((name) => [name, Float32Array.from(sums[name], (s) => s / daySamples)])) });
       if (days.length > depth) days.shift();
     }
@@ -86,8 +105,8 @@ export function createIntervalMeans(model, { fields = MEANS, every = 1, depth = 
     if (daySamples) sums = Object.fromEntries(fields.map((name) => [name, Float64Array.from(from.sums[name])]));
   }
   const sample = () => {
-    if (!sampled) { add(cpuFrameFields(model, { fields }, { step })); return; }
-    const read = model.sampleFrame({ fields });
+    if (!sampled) { add(cpuFrameFields(model, { fields: asked }, { step })); return; }
+    const read = model.sampleFrame({ fields: asked });
     landed = Promise.all([landed, read]).then(([, got]) => add(got.fields));
   };
   return {
@@ -100,6 +119,10 @@ export function createIntervalMeans(model, { fields = MEANS, every = 1, depth = 
     day() {
       if (sampled) landed = landed.then(close);
       else close();
+    },
+    async latest() {
+      await landed;
+      return closedOne ? days[days.length - 1] : null;
     },
     async checkpoint() {
       await landed;

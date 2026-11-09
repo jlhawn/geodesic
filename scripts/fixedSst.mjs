@@ -43,7 +43,7 @@ import { decodeMonthlySst, monthWeights, climatologyAt } from '../js/ocean/clima
 import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 import { pressureColumns, residualCirculation, temSums, tropicalTable, temJson, TEM_PRESSURES } from './residualCirculation.mjs';
 import { upperWindLine } from './upperAtmosphere.mjs';
-import { loadSavedLand } from './savedLand.mjs';
+import { loadSavedLand, loadSavedLake } from './savedLand.mjs';
 import { headerOptions, rebuiltOptions, savedTerrain, moveOntoTerrain, requireOwnSubgrid } from './stateOptions.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
@@ -52,7 +52,7 @@ const [FILE, OUT, TAG] = process.argv.slice(2);
 const DAYS = Number(process.env.DAYS ?? 12), SAVE_DAYS = Number(process.env.SAVE_DAYS ?? 3), SAVE_FROM = Number(process.env.SAVE_FROM ?? 0), SST = process.env.SST ?? 'own', CAP = Number(process.env.CAP ?? 1e12), BATCH = 8;
 const TEM_HOURS = Number(process.env.TEM_HOURS ?? 0), TEM_FROM = Number(process.env.TEM_FROM ?? 0), WINDS = process.env.WINDS === '1';
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const ENV_GROUPS = [['radiation', 'RADIATION'], ['moist', 'MOIST'], ['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY'], ['dynamics', 'DYNAMICS'], ['land', 'LAND']].filter(([, name]) => process.env[name] !== undefined);
+const ENV_GROUPS = [['radiation', 'RADIATION'], ['moist', 'MOIST'], ['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY'], ['dynamics', 'DYNAMICS'], ['land', 'LAND'], ['lake', 'LAKE']].filter(([, name]) => process.env[name] !== undefined);
 const rebuilt = rebuiltOptions(saved, Object.fromEntries(ENV_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), process.env.GIVEN === undefined ? undefined : JSON.parse(process.env.GIVEN));
 const RUN = Object.fromEntries(Object.entries(rebuilt).filter(([group]) => group !== 'ocean' && group !== 'terrain'));
 console.log(`options: ${saved.given ? 'the header\'s given' : 'GIVEN, the header recording none'}${ENV_GROUPS.length ? `, ${ENV_GROUPS.map(([, name]) => name).join(', ')} over it` : ''}: ${JSON.stringify(RUN)}`);
@@ -104,6 +104,7 @@ const [changed, shift] = sst ? setSst(saved.day) : [0, 0];
 console.log(`${TAG}: day ${saved.day}, SST ${SST}${changed ? ` set on ${changed} open-sea cells, mean shift ${(shift / changed).toFixed(2)} K` : ''}, slab ${CAP.toExponential(0)} J/m²/K, ${DAYS} days`);
 model.load({ ocean: false });
 loadSavedLand(model, saved);
+await loadSavedLake(model, saved);
 mkdirSync(OUT, { recursive: true });
 const every = TEM_HOURS ? Math.round(TEM_HOURS * 3600 / dt) : Infinity, pressures = TEM_PRESSURES.map((p) => 100 * p), tem = temSums();
 const temCore = TEM_HOURS ? createSigmaCore(mesh, { levels }) : null, K = levels.length - 1, BANDS = 72;
@@ -140,7 +141,7 @@ for (let day = 1; day <= DAYS; day++) {
   if (day >= SAVE_FROM && (day % SAVE_DAYS === 0 || day === DAYS)) {
     await model.sync();
     const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, r = model.radiation, b = model.boundaryLayer;
-    const header = { N: saved.N, ...gridHeader(mesh), K: core.K, day: saved.day + day, time: model.time, terrain: !!model.surfaceGeopotential, ...(TERRAIN && TERRAIN !== true ? { terrainOptions: TERRAIN } : {}), ...geographyHeader(record), levels: core.levels, options: OPTIONS, given: GIVEN };
+    const header = { N: saved.N, ...gridHeader(mesh), K: core.K, day: saved.day + day, time: model.time, terrain: !!model.surfaceGeopotential, ...(TERRAIN && TERRAIN !== true ? { terrainOptions: TERRAIN } : {}), ...geographyHeader(record), ...(saved.soilSeed ? { soilSeed: saved.soilSeed } : {}), levels: core.levels, options: OPTIONS, given: GIVEN };
     const name = `${OUT}/${TAG}_day${String(saved.day + day).padStart(4, '0')}.bin`;
     writeFileSync(name, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo, meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux, windSpeed: model.surface.windSpeed, evaporation: r.evaporation, ...(model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {}), cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, land: await model.land.serialize() }));
     console.log(`day +${day}: sea-mean surface ${(seaMean() - 273.15).toFixed(3)} °C, ${((performance.now() - t0) / 1000 / day).toFixed(1)} s/day, saved ${name.replace(/.*\//, '')}`);

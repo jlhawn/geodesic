@@ -6,9 +6,11 @@
 // the stepped state, cumulus, boundary layer and deck are copied into a second
 // model under OTHER (JSON, '{"longwaveScheme":"gray","solarGases":"lacisHansen","aerosol":"flat","shortwave":"sequential"}'
 // if unset); every box column's radiation then runs in both at TIMES (24)
-// instants of the day (dt 0, so the deck's carried state does not move). The
-// layer heating is the radiation's own: its longwave record, and the rest of
-// its layer flux less the lowest layer's sensible heat as the shortwave.
+// instants of the day (dt 0, so the deck's carried state does not move).
+// Both models build their lakes with LAKE (JSON) over the save's lake
+// options. The layer heating is the radiation's own: its longwave record,
+// and the rest of its layer flux less the lowest layer's sensible heat as the
+// shortwave.
 import { readFileSync } from 'node:fs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
@@ -19,6 +21,7 @@ import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
+import { loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
@@ -27,12 +30,13 @@ const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), OTHER = JSON.parse(
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
 const stateMesh = stateGrid(saved, topography).mesh;
-function make(radiation) {
-  const model = createModel(stateMesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation });
+function make(radiation, quiet = false) {
+  const model = createModel(stateMesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation });
   STATE_NAMES.forEach((name, a) => model.state[a].set(saved[name]));
   model.seaIce.load(model.state[6], saved.concentration ?? null);
   for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
   model.land.load(saved.land, model.state[6]);
+  loadSavedLake(model, saved, { quiet });
   model.time = saved.time;
   const { g } = model.core.diagnostics, zs = Float64Array.from({ length: model.mesh.nCells }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
   if (saved.boundaryDepth) model.boundaryLayer.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));
@@ -41,7 +45,7 @@ function make(radiation) {
   if (saved.boundaryBuoyancy) model.boundaryLayer.buoyancyFlux.set(saved.boundaryBuoyancy);
   return model;
 }
-const A = make(RADIATION), B = make({ ...RADIATION, ...OTHER });
+const A = make(RADIATION), B = make({ ...RADIATION, ...OTHER }, true);
 A.step(1350 * 16 / saved.N);
 STATE_NAMES.forEach((_, a) => B.state[a].set(A.state[a]));
 B.moist.cumulusCover.set(A.moist.cumulusCover); B.moist.cumulusWater.set(A.moist.cumulusWater);

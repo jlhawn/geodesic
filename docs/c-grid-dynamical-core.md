@@ -447,14 +447,16 @@ In dry air the two cancel only at
 face `'arakawaSuarez'`. Under `'exner'`, the default, θ's face is linear
 in Exner, `θ_k + t (θ_{k+1} − θ_k)` with `t = (Π_{k+½} − Π_k)/ΔΠ`: it
 swaps the two weights and differs from the balanced face by
-`(2t − 1)(θ_{k+1} − θ_k)`. Over the terrain at initializeState on bl48,
-`c_p θ̂ ΔΠ` misses the hydrostatic step between two dry layers by up to
-7.15 % at the `'exner'` face and by 2×10⁻¹⁴ at the `'arakawaSuarez'`
-face (`test/closureOptions.test.mjs`). The conservation test takes the
-N=16 aquaplanet 16 steps from initializeState, makes its air dry with
-θ_v as θ, and finds that one core tendency changes `c_p T` plus the
-kinetic energy by −6.25×10⁻³ W/m² on bl48 and +4.59×10⁻³ on bl36 at the
-`'exner'` face, where `|2t − 1|` reaches 0.443 and 0.208, and by less
+`(2t − 1)(θ_{k+1} − θ_k)`. At N=16 over the terrain at initializeState
+on bl48, `c_p θ̂ ΔΠ` misses the hydrostatic step between two dry layers
+by up to 7.15 % at the `'exner'` face and by 2×10⁻¹⁴ at the
+`'arakawaSuarez'` face (`test/closureOptions.test.mjs`). The
+conservation test takes the N=16 aquaplanet 16 steps from
+initializeState, gives its air ten times the state's water (`WETTER` =
+10), and builds a dry twin in single precision whose θ is that air's
+θ_v and whose q and q_c are zero. One core tendency of the twin changes
+`c_p T` plus the kinetic energy by −6.25×10⁻³ W/m² on bl48 and
++4.59×10⁻³ on bl36 at the `'exner'` face, where `|2t − 1|` reaches 0.443 and 0.208, and by less
 than 10⁻⁶ W/m² at the `'arakawaSuarez'` face
 (`test/atmosphereConservation.test.mjs`). The residual has no fixed
 sign. q and q_c, which do no pressure work,
@@ -465,12 +467,17 @@ exactly the `'exner'` ones.
 θ is never limited. A limited θ face adds
 `c_p F ΔΠ (θ_exner − θ_limited)` to the `'exner'` face's own mismatch
 at every interface, and a diffusive limiter makes that term one-signed,
-a source of `c_p T`: with θ limited, the whole dynamics of one RK4 step
-on the N=16 aquaplanet changed `c_p T` plus the kinetic energy by
-0.13 W/m², against 0.008 W/m² on average under the centered faces over
-the slab (the conservation test bounds that at 0.02). Balancing a
-limited face would need the geopotential and the pressure gradient to
-take a flow-dependent θ face.
+a source of `c_p T`. At f83c292 the conservation test's row over a slab
+with `verticalAdvection` `'vanLeer'`, which limited θ, q and q_c until
+23e8253 dropped it, measured the dynamics' energy rate over the N=16
+slab on bl36 with the option on, over 6 model steps of 1350 s after 16
+from initializeState: the mean of each step's RK4 dynamics, with the
+physics, the ∇⁴ closure, the adjustment and the momentum mixing running
+between them. It came to 0.13 W/m² (its bound was 0.2), against
+0.008 W/m² in the same window under the centered faces (the
+`'over a slab'` row, bounded at 0.02).
+Balancing a limited face would need the geopotential and the pressure
+gradient to take a flow-dependent θ face.
 
 **Temperature closure** (`dynamics.temperatureClosure`). The ∇⁴ closure
 of θ acts on T = θΠ with fluxes weighted by the edge's π. Under `'sigma'`,
@@ -1098,7 +1105,23 @@ the mixed layer. The surface energy — mixed-layer heat over the freezing
 point, skin heat, minus the ice's latent heat — changes by exactly the
 surface flux through every transition (`test/ice.test.mjs`).
 `surfaceT` is the skin temperature the atmosphere sees in both states.
-Albedo is 0.07 for open water, rising linearly to 0.6 at 0.5 m of ice.
+Bare ice reflects 0.62 (`iceAlbedo`) while its skin is colder than
+−1 °C, falling linearly to 0.48 (`meltingIceAlbedo`) at the melting
+point, and ice thinner than 0.5 m blends toward the water's albedo
+(the zenith-angle form of Briegleb et al. 1986, 0.06 diffuse). The 0.48
+has no source read for it: it was set (e7812042, Oct 1) "as CCSM3's ice
+does", and the snow and ice albedo review below places it inside
+SHEBA's ponded July ice, 0.45–0.55 as Perovich et al. (2002) were
+quoted, just under CCSM3's melting bare ice, about 0.50 from memory of
+Briegleb et al. (2004). The Arctic's summer turns on it. The Nov 7
+audit ran 60-year columns of this code. Under the GCM's own fluxes
+north of 80°N (the mean of the pmin and ctl runs), 0.48 melts the pack
+out by September (August volume 0.14 m), and 0.55 alone keeps a 1.72 m
+minimum. Under Maykut and Untersteiner's (1971) Table 1 as printed,
+0.55 alone and 0.60 alone both melt out, and 0.64 keeps 0.11 m. With
+light through the ice (i0 0.3) and a brine reservoir added, 0.55 keeps
+1.02 m on the table as the auditor recalled it (finding sea-ice-02)
+and 1.85 m on the printed one (its sea-ice verification).
 Snow lies on the ice: precipitation that falls on an iced cell from air
 below the melting point accumulates in water equivalent in the ocean
 cells of the land surface's snow array (one field of snow on the
@@ -5226,6 +5249,36 @@ The work, in order:
      0.675 and India (10–28°N, 70–90°E) 0.255. `test/soilWater.test.mjs`
      holds the file, the resampling and the start, and
      `test/landStart.test.mjs` the engines' agreement at N = 16.
+   - The soil seed on the model's scale. CPC's 760 mm column is not
+     the model's 300 kg/m² root zone: at its own March 20 the model's
+     fill matches soilw/760 in the tropics but runs about twice it at
+     40–60°N and three to four times poleward of 60°N, so an observed
+     start spends its first year refilling the land (global fill 0.335
+     against the model's 0.51–0.55 at N = 128). `scripts/soilWater.mjs
+     soilw.dods --reference=a.bin,b.bin --out=file.bin` scales soilw/760 by a factor
+     linear in latitude between 10° band centers, fitted so each band's
+     mean fill over open land matches the reference states' (March 20
+     saves of one grid, N, relax and recorded geography; bands under
+     0.5 % of the land take their neighbors' factors; factors held to
+     0.5–5). It refuses a state whose open land holds the observed
+     seed itself (fill within 2 % of soilw/760 in every band) and
+     refuses to write without `--out`, so
+     `data/soilwater_march.bin` stays the observed fill. Against
+     seventeen128 day 1095, pmin day 1825 and combined128 day 1460 as
+     the run saved it (open-land fill 0.519; the page's
+     `runs/combined128_day1460.parts.json` and the pcape128 copies
+     hold CPC's water, seeded in e661831) the
+     global fill goes from 0.335 to 0.527 (the states' 0.528), with
+     factors 0.7–1.3 in the tropics, 1.6–2.1 at 20–60°N and 4.4–5
+     poleward of 60°N. A fresh spin-up takes such a file as `SOIL_SEED`
+     (`startGeography` in `scripts/soilWater.mjs`), else the observed
+     fill; its log and saved headers name the file and its sha256
+     (`soilSeed`), which a start from `FROM` or `LAND_FROM` and
+     `scripts/reseedSoil.mjs` carry or rewrite. `SOIL_SEED` is refused
+     with `FROM`, with `LAND_FROM`, with the 'neutral', 'bare' and
+     'green' land starts (which put the soil at half its capacity) and
+     on a continuation of a state that does not record the same file. `test/soilSeed.test.mjs` holds the band fit, the
+     clamp, the refusals and the seed reaching the land at N = 16.
    - `coverGoal` ('water', the default, or 'observed'; `scripts/spinup.mjs`
      gives 'observed' unless `LAND` says otherwise, a goal for spin-ups
      that the page never runs: a published state's cover follows the

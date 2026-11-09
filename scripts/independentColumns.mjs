@@ -24,17 +24,22 @@ import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.j
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { CLOUD_OPTICS, cloudOptics, overlapped, sunDistance, SOLAR_CONSTANT, DECORRELATION_LENGTH, DECORRELATION_SLOPE, LOW_CLOUD_PRESSURE } from '../js/physics/radiation.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
+
+refuseUnreadOptions(import.meta.url);
 
 const FILE = process.argv[2], M = Number(process.env.M ?? 128), FSD = Number(process.env.FSD ?? 0);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true } });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true } });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, dSigma, g, exnerLayer, geopotential } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) });
+loadSavedLake(model, saved);
 model.time = saved.time;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
 if (saved.boundaryDepth) bl.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));

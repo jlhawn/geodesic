@@ -30,8 +30,8 @@
 // the radiation's shortwave uses (cloudScattering times the path when that
 // is set, else the sum of each layer's (1 - g) tau), in-cloud.
 // Regions: global, 30S-30N, 30-60N, 30-60S, 60-90N, 60-90S, land, sea
-// (sea ice included). RADIATION, MOIST, BOUNDARY_LAYER and SURFACE (JSON)
-// pass options as to scripts/verticalAudit.mjs.
+// (sea ice included). RADIATION, MOIST, BOUNDARY_LAYER, SURFACE and LAKE
+// (JSON) pass options as to scripts/verticalAudit.mjs.
 //
 // Earth (annual means): total cloud 0.65-0.68 (ISCCP, MODIS, CALIPSO);
 // high cloud 0.2-0.3 by passive sensors (ISCCP 0.20, MODIS ~0.27); liquid
@@ -47,6 +47,7 @@ import { DAY, VISIBLE_PATH, LOW_CLOUD_PRESSURE, CLOUD_OPTICS, cloudOptics, overl
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
+import { loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
@@ -59,13 +60,14 @@ const t0 = performance.now();
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const AT = Number(process.env.DAY ?? saved.day);
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, dSigma, g, exnerLayer } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) }, state[6]);
+loadSavedLake(model, saved);
 model.time = saved.time;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
 if (saved.boundaryDepth) bl.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));

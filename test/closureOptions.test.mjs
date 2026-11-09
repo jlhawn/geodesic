@@ -15,6 +15,10 @@ const start = initializeState(model, {});
 const nu4 = (model.core.spacing / Math.PI) ** 4 / (3 * 3600);
 const core = (options) => createSigmaCore(mesh, { levels, splitClosure: true, surfaceGeopotential: phis, ...options });
 const largest = (a) => a.reduce((m, x) => Math.max(m, Math.abs(x)), 0);
+const difference = (a, b) => {
+  assert.equal(a.length, b.length, `fields of ${a.length} and ${b.length} values`);
+  return largest(Float64Array.from(a, (x, n) => x - b[n]));
+};
 
 function closed(options, state, step = dt) {
   const c = core(options), s = state.map((a) => Float64Array.from(a));
@@ -94,7 +98,7 @@ test(`temperatureClosure 'standard' keeps c_p T on a disturbed state at N=${N} a
   assert.ok(Math.abs(total(standard) - total(state)) <= 1e-13 * total(state), 'c_p T is kept');
   const gap = largest(standard[1].map((x, n) => x - sigma[1][n])), moved = largest(sigma[1].map((x, n) => x - state[1][n]));
   assert.ok(gap > 0 && gap < moved, `the reference changes the step by ${gap} K of ${moved}`);
-  assert.deepEqual(Array.from(closed({ nu4, nu4Theta: nu4, temperatureClosure: 'standard' }, state)[4]), Array.from(sigma[4]), 'q takes the same closure');
+  assert.equal(difference(closed({ nu4, nu4Theta: nu4, temperatureClosure: 'standard' }, state)[4], sigma[4]), 0, 'q takes the same closure');
 });
 
 test('verticalAdvection takes \'centered\' or \'vanLeerWater\'; van Leer\'s face is the centered value on a profile straight in its spacing, even or not, the upwind value at an extremum or a step, finite on subnormal differences, and never past the downwind value', () => {
@@ -157,8 +161,8 @@ test(`over a sharp step in water at N=${N} over the terrain the centered faces d
     for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) { const w = mesh.areaCell[i] * state[0][i] * dSigma[k] * rates[v][s][k * C + i]; total += w; size += Math.abs(w); }
     assert.ok(Math.abs(total) < 1e-13 * size, `${v} field ${s}: ${total} against ${size}`);
   }
-  assert.deepEqual(Array.from(rates.vanLeerWater[2]), Array.from(rates.centered[2]), 'the wind does not see it');
-  assert.deepEqual(Array.from(rates.vanLeerWater[1]), Array.from(rates.centered[1]), 'vanLeerWater leaves θ centered');
+  assert.equal(difference(rates.vanLeerWater[2], rates.centered[2]), 0, 'the wind does not see it');
+  assert.equal(difference(rates.vanLeerWater[1], rates.centered[1]), 0, 'vanLeerWater leaves θ centered');
 });
 
 test(`thetaFace takes 'exner' or 'arakawaSuarez'; at N=${N} on bl48 over the terrain c_p θ ΔΠ at the 'arakawaSuarez' face is the hydrostatic step between two dry layers, which the 'exner' face misses, and in moist air only θ's tendency sees the face`, () => {
@@ -187,7 +191,7 @@ test(`thetaFace takes 'exner' or 'arakawaSuarez'; at N=${N} on bl48 over the ter
   console.log(`c_p θ ΔΠ against the hydrostatic step: 'exner' ${misses.exner.toExponential(2)} at most, 'arakawaSuarez' ${misses.arakawaSuarez.toExponential(2)}`);
   assert.ok(misses.arakawaSuarez < 1e-12, `'arakawaSuarez' ${misses.arakawaSuarez}`);
   assert.ok(misses.exner > 1e-2, `'exner' ${misses.exner}`);
-  for (const s of [4, 5]) assert.ok(largest(rates.exner[s]) > 0, `field ${s} moves`);
-  for (const s of [0, 2, 4, 5]) assert.deepEqual(Array.from(rates.arakawaSuarez[s]), Array.from(rates.exner[s]), `field ${s} does not see it`);
-  assert.ok(largest(rates.arakawaSuarez[1].map((x, n) => x - rates.exner[1][n])) > 0, 'θ does');
+  for (const [s, name] of [[4, 'q'], [5, 'q_c']]) assert.ok(largest(rates.exner[s]) > 0, `${name} does not move`);
+  for (const [s, name] of [[0, 'π'], [2, 'the wind'], [4, 'q'], [5, 'q_c']]) assert.equal(difference(rates.arakawaSuarez[s], rates.exner[s]), 0, `${name} sees the face`);
+  assert.ok(difference(rates.arakawaSuarez[1], rates.exner[1]) > 0, 'θ does not see the face');
 });

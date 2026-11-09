@@ -17,9 +17,15 @@ https://doi.org/10.25923/54bh-1613.
 
 Usage (standard library only):
 
-  python3 -I scripts/packWoaMonthlySst.py RAW_DIR [out.bin]
+  python3 -I scripts/packWoaMonthlySst.py RAW_DIR [out.bin [PERIOD]]
 
-RAW_DIR holds the twelve woa23_decav_tMMan01.csv.gz files. Only the 0 m
+RAW_DIR holds the twelve woa23_PERIOD_tMMan01.csv.gz files of PERIOD, "decav"
+by default; "decav91C0" is the atlas's 1991-2020 climate normal, in
+.../csv/decav91C0/1.00/, which data/references/woa23-sst-1991-2020.bin holds:
+
+  python3 -I scripts/packWoaMonthlySst.py RAW_DIR data/references/woa23-sst-1991-2020.bin decav91C0
+
+ Only the 0 m
 value of each row is kept; at the surface the in-situ temperature is the
 potential temperature, so no conversion is applied.
 
@@ -81,15 +87,15 @@ def read_month(path):
     return grid, count, low, high
 
 
-def main(raw_dir, out_path):
+def main(raw_dir, out_path, period='decav'):
     raw = Path(raw_dir)
     months = []
     for m in range(1, 13):
-        path = raw / f'woa23_decav_t{m:02d}an01.csv.gz'
+        path = raw / f'woa23_{period}_t{m:02d}an01.csv.gz'
         grid, count, low, high = read_month(path)
         print(f'{path.name}: {count} surface points, {low:.3f}..{high:.3f} degC')
         months.append(grid)
-    source = ('WOA23 decav monthly (t01-t12) 1.00 degree t_an at 0 m, csv form '
+    source = (f'WOA23 {period} monthly (t01-t12) 1.00 degree t_an at 0 m, csv form '
               '(NOAA NCEI, public domain); degC').encode('ascii')
     head = struct.pack('<4sIHHHh', b'WOAM', 0, N_LON, N_LAT, 12, MISSING)
     head += struct.pack('<8f', LON0, STEP, LAT0, STEP, T_OFFSET, T_SCALE, 0.0, 0.0)
@@ -109,4 +115,4 @@ def main(raw_dir, out_path):
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else str(Path(__file__).resolve().parent.parent / 'data' / 'woa_sst_monthly_1deg.bin'))
+    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else str(Path(__file__).resolve().parent.parent / 'data' / 'woa_sst_monthly_1deg.bin'), sys.argv[3] if len(sys.argv) > 3 else 'decav')

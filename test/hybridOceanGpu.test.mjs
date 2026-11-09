@@ -8,6 +8,8 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 import { HYBRID_LAYERS, labelBoundaries, H_MIN } from '../js/ocean/column.module.js';
 import { SEAWATER, seawaterDensity, salinityForDensity } from '../js/ocean/seawater.module.js';
+import { thinTopLayers } from './helpers/thinLayers.mjs';
+import { readRanges } from '../js/gpu/device.module.js';
 
 /*
  * The GPU hybrid ocean (vertical: 'hybrid' in js/gpu/layeredOcean.gpu.js)
@@ -742,5 +744,173 @@ test('the GPU hybrid ocean saved on its cadence as the page saves it, every arra
   for (const [name, values] of Object.entries(whole)) if (numeric(values)) {
     const at = Array.from(values).findIndex((x, i) => !Object.is(x, resumed[name][i]));
     assert.equal(at, -1, `${name}[${at}]: ${values[at]} whole against ${resumed[name][at]} resumed`);
+  }
+});
+
+test('the GPU hybrid ocean saved as the page saves it, every array as float64 and no Qref or Wref, loads into a CPU ocean on its restart branch with every restart array the CPU keeps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, mesh, cpu, surfaceT, ice, stress, sea } = scenario(N, RESTRAT), C = mesh.nCells, E = mesh.nEdges;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  for (let k = 0; k < cpu.layers; k++) for (let e = 0; e < E; e++) cpu.u[k * E + e] = sea[e] * 0.3 * Math.exp(-k / 4) * Math.cos(mesh.latEdge[e]) * Math.sin(3 * e);
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: RESTRAT }), gpu = gpuModel.oceanEngine;
+  await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
+  for (let n = 0; n < 3; n++) await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
+  const { Qref, Wref, ...kept } = { ...(await gpu.serialize()), ...(await gpu.restartArrays()) };
+  gpuModel.destroy();
+  const saved = Object.fromEntries(Object.entries(kept).map(([name, v]) => [name, (Array.isArray(v) || ArrayBuffer.isView(v)) && v.length > 0 && typeof v[0] === 'number' ? Float64Array.from(v) : v]));
+  const restored = createCpuOcean(mesh, { geography: cpuModel.geography, ...RESTRAT });
+  restored.useSeaIce(null, { oceanFlux: new Float64Array(C) });
+  restored.load(saved, Float64Array.from(surfaceT), ice);
+  const after = restored.restartArrays();
+  assert.ok(after.previousT0.some((x, i) => x !== restored.T0[i]), 'the load took its plain branch: previousT0 is the loaded top layer\'s temperature');
+  for (const name of ['previousT0', 'previousIceVolume', 'fresh', 'calved', 'capacity', 'penetrated', 'boundaryDepths', 'mleDepths', 'flux']) {
+    const at = Array.from(saved[name]).findIndex((x, i) => !Object.is(x, after[name][i]));
+    assert.equal(at, -1, `${name}[${at}]: saved ${saved[name][at]}, loaded ${after[name][at]}`);
+  }
+});
+
+function thinTopLayer() {
+  const { mesh, cpu, surfaceT, ice } = scenario(N), C = mesh.nCells;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  const { h, T } = cpu.serialize(), column = new Float64Array(C);
+  h.forEach((v, n) => { column[n % C] += v; });
+  const thin = column.indexOf(Math.max(...column)), sea = [...column.keys()].filter((i) => column[i] > 0 && i !== thin).sort((a, b) => column[b] - column[a]);
+  const warm = sea.reduce((a, b) => (T[b] > T[a] ? b : a)), [submicron, micron, empty] = sea.filter((i) => i !== warm);
+  return { C, surfaceT, ice, thin, warm, submicron, micron, empty, ...thinTopLayers(cpu, ice, [[thin, 0.005], [warm, 0.009], [submicron, 1e-7], [micron, 1e-6], [empty, 0]]) };
+}
+
+test('the GPU hybrid ocean takes a save with T and S and neither stores nor mixed-layer depths up its restart branch, and builds the stores and depths from T and S as from the CPU\'s Q and W, through top layers thinner than EPS, to 1e-6 m and below', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { C, surfaceT, ice, thin, warm, submicron, micron, empty, Q, W, state } = thinTopLayer(), { cpu } = scenario(N);
+  cpu.load(state, Float64Array.from(surfaceT), ice);
+  const uploaded = [];
+  for (const saved of [{ ...state, Q, W }, state]) {
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+    const marked = gpu.cellOcean.findIndex((x) => x > 0);
+    await gpu.upload({ ...saved, eta: Float64Array.from(saved.eta, (v, i) => (i === marked ? v + 0.5 : v)) }, Float64Array.from(surfaceT), ice);
+    const { h } = await gpu.download();
+    uploaded.push(await gpu.restartArrays());
+    gpuModel.destroy();
+    assert.equal(h[marked], Math.fround(saved.h[marked]), `the upload of the save ${saved.Q ? 'with' : 'without'} Q and W took its plain branch: it refitted a column whose sea surface the save left 0.5 m off`);
+  }
+  const [stored, rebuilt] = uploaded;
+  assert.ok(stored.mixedDepths.some((x) => x > 0), 'no mixed layer from Q and W');
+  const at = Array.from(stored.mixedDepths).findIndex((x, i) => !Object.is(x, rebuilt.mixedDepths[i]));
+  assert.equal(at, -1, `mixedDepths[${at}]: ${stored.mixedDepths[at]} from Q and W, ${rebuilt.mixedDepths[at]} from T and S`);
+  for (const name of ['Qref', 'Wref']) for (const n of [thin, C + thin]) assert.ok(Object.is(stored[name][n], rebuilt[name][n]), `${name}[${n}]: ${stored[name][n]} from Q and W, ${rebuilt[name][n]} from T and S`);
+  for (const i of [thin, warm, submicron, micron, empty]) assert.equal(rebuilt.mixedDepths[i], Math.fround(cpu.mixedDepths[i]), `the mixed layer under the ${state.h[i]} m top layer at ${i} on the GPU is not the CPU's`);
+});
+
+test('the GPU hybrid ocean\'s download gives every top layer, to 1e-7 m and empty, the temperature and salinity the surface exchange takes, Q/h and W/h, as the CPU\'s fields do, and takes each layer\'s density for the thermocline at its own water', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { C, surfaceT, ice, warm, state } = thinTopLayer(), { cpu } = scenario(N);
+  assert.ok(seawaterDensity(state.T[warm], state.S[warm]) > seawaterDensity(state.T[C + warm], state.S[C + warm]), 'the 9 mm top layer\'s T and S, as a save writes them, give no density above the layer below\'s');
+  cpu.load(state, Float64Array.from(surfaceT), ice);
+  const fields = cpu.fields();
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+  await gpu.upload(state, Float64Array.from(surfaceT), ice);
+  const downloaded = await gpu.download(), sea = [...gpu.cellOcean.keys()].filter((i) => gpu.cellOcean[i] > 0);
+  gpuModel.destroy();
+  for (const [name, bound] of [['T1', 1e-3], ['S1', 1e-4], ['thermoclineDepth', 1e-2]]) {
+    const at = sea.find((i) => !(Object.is(downloaded[name][i], fields[name][i]) || Math.abs(downloaded[name][i] - fields[name][i]) <= bound));
+    assert.equal(at, undefined, `${name}[${at}], under a ${state.h[at]} m top layer: ${downloaded[name][at]} on the GPU, ${fields[name][at]} on the CPU`);
+  }
+});
+
+test('the GPU hybrid ocean converts a save on other labels that carries Q and W with the heat and salt its layers hold, top layers thinner than EPS and empty included, as the CPU does, to within about ten times the residual of the device\'s float32 arithmetic', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { C, surfaceT, ice, thin, warm, Q, W, state } = thinTopLayer(), { cpu } = scenario(N);
+  for (const i of [thin, warm]) for (const [name, held, value, bound] of [['heat', Q, state.T, 0.02], ['salt', W, state.S, 0.002]]) assert.ok(held[i] - state.h[i] * value[i] > 10 * bound, `the ${state.h[i]} m top layer's own ${name} over h·T or h·S clears its bound by less than ten times`);
+  const saved = { ...state, densities: state.densities.slice(1), Q, W };
+  cpu.load(saved, Float64Array.from(surfaceT), ice);
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+  await gpu.upload(saved, Float64Array.from(surfaceT), ice);
+  const { Qref, Wref } = await gpu.restartArrays();
+  gpuModel.destroy();
+  const sea = [...Array(C).keys()].filter((i) => cpu.h[i] > 0);
+  for (const [name, stored, loaded, held, reference, bound] of [['heat', Qref, cpu.Q, Q, HEAT_REFERENCE, 0.02], ['salt', Wref, cpu.W, W, SALT_REFERENCE, 0.002]]) {
+    const miss = (i) => {
+      let before = 0, onGpu = 0, onCpu = 0;
+      for (let n = i; n < held.length; n += C) { before += held[n] - reference * state.h[n]; onGpu += stored[n]; onCpu += loaded[n] - reference * cpu.h[n]; }
+      return Math.abs(onGpu - before) < bound && Math.abs(onCpu - before) < bound ? null : `${onGpu} on the GPU, ${onCpu} on the CPU, ${before} saved`;
+    };
+    const at = sea.find((i) => miss(i) !== null);
+    assert.equal(at, undefined, `column ${at}, under a ${state.h[at]} m top layer, ${name} against its reference: ${at === undefined ? '' : miss(at)}`);
+  }
+});
+
+test('a GPU save, which carries Qref and Wref and no Q or W, converts on other labels with the heat and salt its layers hold on both engines, top layers thinner than EPS included', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { C, surfaceT, ice, state } = thinTopLayer(), { cpu } = scenario(N);
+  const source = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });
+  await source.oceanEngine.upload(state, Float64Array.from(surfaceT), ice);
+  const saved = { ...(await source.oceanEngine.serialize()), ...(await source.oceanEngine.restartArrays()) };
+  source.destroy();
+  assert.ok(!saved.Q && saved.Qref && saved.Wref, 'the GPU save carries Qref and Wref and no Q');
+  const other = { ...saved, densities: saved.densities.slice(1) };
+  cpu.load(other, Float64Array.from(surfaceT), ice);
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+  await gpu.upload(other, Float64Array.from(surfaceT), ice);
+  const { Qref, Wref } = await gpu.restartArrays();
+  gpuModel.destroy();
+  const sea = [...Array(C).keys()].filter((i) => cpu.h[i] > 0);
+  for (const [name, stored, loaded, held, reference, bound] of [['heat', Qref, cpu.Q, saved.Qref, HEAT_REFERENCE, 0.02], ['salt', Wref, cpu.W, saved.Wref, SALT_REFERENCE, 0.002]]) {
+    const miss = (i) => {
+      let before = 0, onGpu = 0, onCpu = 0;
+      for (let n = i; n < held.length; n += C) { before += held[n]; onGpu += stored[n]; onCpu += loaded[n] - reference * cpu.h[n]; }
+      return Math.abs(onGpu - before) < bound && Math.abs(onCpu - before) < bound ? null : `${onGpu} on the GPU, ${onCpu} on the CPU, ${before} saved`;
+    };
+    const at = sea.find((i) => miss(i) !== null);
+    assert.equal(at, undefined, `column ${at}, under a ${saved.h[at]} m top layer, ${name} against its reference: ${at === undefined ? '' : miss(at)}`);
+  }
+});
+
+test('the GPU hybrid ocean\'s mean surface salinity takes each column\'s first layer with water at its own W/h, over a top layer of 1e-7 m and below an empty one, as the CPU\'s does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpu, mesh, surfaceT, ice } = scenario(N), C = cpu.h.length / cpu.layers, bound = 1e-5;
+  for (const cut of [0.005, 1e-6, 1e-7, 0]) {
+    cpu.initialize(Float64Array.from(surfaceT), ice);
+    const sea = [...Array(C).keys()].filter((i) => cpu.h[i] > 0), { state } = thinTopLayers(cpu, ice, sea.map((i) => [i, cut]));
+    cpu.load(state, Float64Array.from(surfaceT), ice);
+    const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+    await gpu.upload(state, Float64Array.from(surfaceT), ice);
+    const onGpu = (await gpu.diagnostics()).oceanSalinity, onCpu = cpu.diagnostics().oceanSalinity;
+    gpuModel.destroy();
+    let sum = 0, area = 0;
+    for (const i of sea) { let n = i; while (!(cpu.h[n] > 1e-6)) n += C; sum += mesh.areaCell[i] * (cpu.W[n] / cpu.h[n]); area += mesh.areaCell[i]; }
+    const other = cut === 0 ? SALT_REFERENCE : sum / area;
+    if (cut < 1e-5) assert.ok(Math.abs(other - onCpu) > 10 * bound, `over top layers of ${cut} m, ${cut === 0 ? 'the reference salinity' : 'the 1e-6 m class rule'} gives a mean of ${other}, within ten bounds of the CPU's ${onCpu}`);
+    assert.ok(Math.abs(onGpu - onCpu) < bound, `mean surface salinity over top layers of ${cut} m: ${onGpu} on the GPU, ${onCpu} on the CPU`);
+  }
+});
+
+test('a GPU hybrid ocean column with no water, whatever heat and salt it still holds, gives the frame no SST or SSS and takes no weight in the mean surface salinity, as a CPU column does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpu, mesh, surfaceT, ice } = scenario(N), C = mesh.nCells, L = cpu.layers, bound = 1e-5;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  const sea = [...Array(C).keys()].filter((i) => cpu.h[i] > 0), emptied = new Set(sea.filter((_, n) => n % 2 === 0)), { state } = thinTopLayers(cpu, ice, []);
+  cpu.load(state, Float64Array.from(surfaceT), ice);
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu;
+  await gpu.upload(state, Float64Array.from(surfaceT), ice);
+  const { OS } = gpu.layout, { C: packed, cellAt } = gpu.packing, [h] = await readRanges(device, gpu.buffers.S, [{ offset: OS.OH, length: L * packed }]);
+  for (const i of emptied) for (let k = 0; k < L; k++) { h[k * packed + cellAt[i]] = 0; cpu.h[k * C + i] = 0; }
+  device.queue.writeBuffer(gpu.buffers.S, 4 * OS.OH, h);
+  const { fields, diagnostics } = await gpu.frame({ fields: ['sst', 'sss'], diagnostics: true });
+  gpuModel.destroy();
+  const surface = cpu.fields(0).surfaceSalinity, onCpu = cpu.diagnostics().oceanSalinity, onGpu = diagnostics.oceanSalinity;
+  for (const i of emptied) assert.ok(Number.isNaN(fields.sst[i]) && Number.isNaN(fields.sss[i]) && Number.isNaN(surface[i]), `the column at ${i}, with no water: SST ${fields.sst[i]} and SSS ${fields.sss[i]} in the GPU frame, SSS ${surface[i]} on the CPU`);
+  const at = sea.find((i) => !emptied.has(i) && !(Math.abs(fields.sss[i] - surface[i]) < 1e-4));
+  assert.equal(at, undefined, `the SSS at ${at}, which holds water: ${fields.sss[at]} in the GPU frame, ${surface[at]} on the CPU`);
+  let sum = 0, area = 0, dry = 0;
+  for (const i of sea) if (emptied.has(i)) dry += mesh.areaCell[i]; else { sum += mesh.areaCell[i] * surface[i]; area += mesh.areaCell[i]; }
+  const referenced = (sum + dry * SALT_REFERENCE) / (area + dry);
+  assert.ok(Math.abs(referenced - onCpu) > 10 * bound, `the reference salinity in the columns with no water gives a mean of ${referenced}, within ten bounds of the CPU's ${onCpu}`);
+  assert.ok(Math.abs(onGpu - onCpu) < bound, `the mean surface salinity with ${emptied.size} of ${sea.length} sea columns empty: ${onGpu} on the GPU, ${onCpu} on the CPU`);
+});
+
+test('the GPU hybrid ocean\'s plain upload of a save with T and S keeps the heat and salt of a top layer thinner than EPS', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { C, surfaceT, ice, thin, Q, W, state } = thinTopLayer();
+  const { previousT0, previousIceVolume, fresh, buoyancy, flux, capacity, ...plain } = state;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID }), gpu = gpuModel.oceanEngine;
+  await gpu.upload(plain, Float64Array.from(surfaceT), ice);
+  const { Qref, Wref } = await gpu.restartArrays();
+  gpuModel.destroy();
+  for (const [name, stored, saved, reference, bound] of [['heat', Qref, Q, HEAT_REFERENCE, 0.02], ['salt', Wref, W, SALT_REFERENCE, 0.002]]) {
+    let before = 0, after = 0;
+    for (let n = thin; n < saved.length; n += C) { before += saved[n] - reference * state.h[n]; after += stored[n]; }
+    assert.ok(Math.abs(after - before) < bound, `the thin column's ${name} against its reference: ${after} uploaded, ${before} saved`);
   }
 });

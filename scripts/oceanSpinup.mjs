@@ -38,8 +38,8 @@
 // ('recorded', or 'woa' to restore toward WOA23's monthly SST on the
 // forcing day's date, the recorded SST where WOA23 has none), TAG
 // (ocean<N>), OUT (runs/), KEEP (2), SNAPSHOT_DAYS (30; 0 saves at the
-// years' ends alone), OCEAN and RADIATION (JSON options as in spinup.mjs;
-// OCEAN's everySteps sets the ocean step, by default from
+// years' ends alone), OCEAN, RADIATION and LAKE (JSON options as in
+// spinup.mjs; OCEAN's everySteps sets the ocean step, by default from
 // js/cadence.module.js), SYNC_CMD and STOP_AFTER_STEPS
 // (as in spinup.mjs).
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync } from 'node:fs';
@@ -57,7 +57,7 @@ import { decodeForcing, forcingDay } from '../js/forcing.module.js';
 import { COUPLED_ICE_DRIFT } from '../js/ocean/iceDrift.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
-import { loadSavedLand } from './savedLand.mjs';
+import { loadSavedLand, loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
 refuseUnreadOptions(import.meta.url);
@@ -94,7 +94,7 @@ if (saved.N !== N) throw new Error(`${from} is N=${saved.N}`);
 const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const airStress = !!(await decodeForcing(new Uint8Array(readFileSync(`${FORCING}/${days[0]}`)))).fields.airStress;
 OCEAN.iceDrift = OCEAN.iceDrift !== false && airStress ? { ...(OCEAN.iceDrift || COUPLED_ICE_DRIFT), airStress: 'given' } : false;
-const model = await createGpuModel(stateGrid(saved, topography).mesh, { topography, geography, land: landOptions, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
+const model = await createGpuModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), topography, geography, land: landOptions, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
 const { mesh, core, state, gpu } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), everySteps = model.oceanEngine.everySteps, oceanDt = everySteps * dt;
 const doneBefore = existing.length ? saved.oceanDays ?? (saved.oceanYears ?? 0) * DAYS_PER_YEAR : 0;
@@ -108,6 +108,7 @@ model.time = saved.time;
 model.load();
 model.ocean.load(saved.ocean, state[3], state[6]);
 loadSavedLand(model, saved);
+await loadSavedLake(model, saved);
 const forced = createForcedOcean(model);
 
 const deg = 180 / Math.PI, land = model.geography.land;
@@ -151,7 +152,7 @@ async function save(done, step, read = null) {
   const { o, surfaceT, ice, concentration } = read ?? await readSurface();
   const name = nameAt(done, step), landState = await model.land.serialize();
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
-    N, ...gridHeader(mesh), K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: saved.terrain ?? !!model.surfaceGeopotential, ...(savedTerrain(saved) ? { terrainOptions: savedTerrain(saved) } : {}), ...geographyHeader(record), levels: core.levels,
+    N, ...gridHeader(mesh), K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: saved.terrain ?? !!model.surfaceGeopotential, ...(savedTerrain(saved) ? { terrainOptions: savedTerrain(saved) } : {}), ...geographyHeader(record), ...(saved.soilSeed ? { soilSeed: saved.soilSeed } : {}), levels: core.levels,
     oceanYears: Math.floor(done / DAYS_PER_YEAR), oceanDays: done, ...(step ? { oceanStep: step } : {}),
     pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
     ...Object.fromEntries([...Object.keys(MOIST_FIELDS), ...Object.keys(RADIATION_FIELDS)].filter((name) => saved[name]).map((name) => [name, saved[name]])),

@@ -1,7 +1,7 @@
 // The GPU model's time per step and where it goes, kernel by kernel, from a
 // saved state: loads the state as a continuing spin-up would (the options
-// as JSON in OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE and LAND, see
-// scripts/figures/figureState.mjs), steps WARM steps (8) to settle, then
+// as JSON in OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND and
+// LAKE, see scripts/figures/figureState.mjs), steps WARM steps (8) to settle, then
 // profiles STEPS steps (32: two ocean calls and eight full radiation
 // calls at N=128 under js/cadence.module.js) with
 // js/gpu/profile.module.js: each step submitted alone and awaited, its

@@ -40,6 +40,7 @@ import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiat
 import { placeCumulus } from '../js/physics/moist.module.js';
 import { PUBLISHED_RADIATION, PUBLISHED_MOIST } from '../explain/published.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
+import { loadSavedLake } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const FLOAT32_TOLERANCE = 2 ** -21, SECTION_MIN_THICKNESS = 0.1, NET_FRACTION = 0.1;
@@ -131,6 +132,7 @@ if (resumed) {
   model.time = resumed.time;
   model.load({ ocean: false });
   model.ocean.load(resumed.ocean, surfaceT, ice);
+  await loadSavedLake(model, resumed);
   if (eddyRecorded(resumed)) { ocean.putSection('EDDYVREC', resumed.eddyVolumeFlux); ocean.putSection('EDDYQREC', resumed.eddyHeatFlux); }
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOW, Float32Array.from(resumed.seaSnow));
   device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.SNOWALB, Float32Array.from(resumed.seaSnowAlbedo));

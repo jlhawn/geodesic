@@ -6,7 +6,8 @@
 // RADIATION (JSON) passes options to the model's radiation, e.g.
 // '{"subsidenceSmoothing":0}' for a deck that reads the flux unsmoothed,
 // MOIST (JSON) to its moist physics, BOUNDARY_LAYER (JSON) to its
-// boundary layer and SURFACE (JSON) to its surface.
+// boundary layer, SURFACE (JSON) to its surface and LAKE (JSON) to its
+// lakes, over the save's lake options.
 // Signs: omega (Pa/s) > 0 and sink (mm/s) > 0 are descent.
 //
 // From the state's own winds (stage 0 of the next step): omega at the
@@ -90,6 +91,7 @@ import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { clearSkyClasses } from './clearSkyClasses.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
+import { loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
@@ -100,7 +102,7 @@ const say = (s = '') => console.log(s);
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land } = model;
 const { K, C, E, levels, sigmaMid, sigmaLower, dSigma, R, g, cp, p0, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;
@@ -108,6 +110,7 @@ STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 land.load(saved.land, state[6]);
+loadSavedLake(model, saved);
 model.time = saved.time;
 const [pi, theta, u, , q, qc, ice] = state;
 const deg = 180 / Math.PI, area = mesh.areaCell, landMask = model.geography.land, dt = 1350 * 16 / saved.N, bottom = (K - 1) * C;

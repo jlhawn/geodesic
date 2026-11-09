@@ -589,6 +589,19 @@ export function displacedWeight(draft, sample, density = seawaterDensity, n = 64
   return sum * draft / n;
 }
 
+export function wettedLayer(h, L, C, i, thinnest = 1e-6) {
+  let n = i;
+  while (n + C < L * C && !(h[n] > thinnest)) n += C;
+  return n;
+}
+
+export function layerMeans(saved, layers, C) {
+  const whole = (name) => saved[name] && saved[name].length === layers * C;
+  const [Q, W, heatReference, saltReference] = whole('Q') && whole('W') ? [saved.Q, saved.W, 0, 0] : whole('Qref') && whole('Wref') ? [saved.Qref, saved.Wref, HEAT_REFERENCE, SALT_REFERENCE] : [];
+  const mean = (store, reference, value) => (n) => (store && saved.h[n] > 0 ? (store[n] + reference * saved.h[n]) / saved.h[n] : value[n]);
+  return [mean(Q, heatReference, saved.T), mean(W, saltReference, saved.S)];
+}
+
 export function createOcean(mesh, {
   minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
@@ -1795,20 +1808,9 @@ export function createOcean(mesh, {
     }
   }
 
-  /*
-   * As on the GPU (layeredOcean.gpu.js, restartable), a state that
-   * carries every array of the GPU's restartArrays, its columns within a
-   * meter of this bathymetry and dry on land, brings back the surface's
-   * last temperature, the ice volume it last saw, the freshwater not yet
-   * taken and the heat capacity, the sunlight not yet deposited when it
-   * carries `penetrated`, the ice not yet melted when it carries
-   * `calved`, the boundary-layer depths the column physics
-   * search from when it carries `boundaryDepths`, and the heat and salt
-   * stores as they were when it carries `Q` and `W`.
-   */
   const RESTART = ['previousT0', 'previousIceVolume', 'fresh', 'buoyancy', 'flux', 'capacity'];
   function restartable(saved) {
-    if (![saved.Qref ?? saved.Q, saved.Wref ?? saved.W].every((store) => store && store.length === L * C) || !RESTART.every((name) => saved[name] && saved[name].length === C)) return false;
+    if (![saved.Qref ?? saved.Q ?? saved.T, saved.Wref ?? saved.W ?? saved.S].every((store) => store && store.length === L * C) || !RESTART.every((name) => saved[name] && saved[name].length === C)) return false;
     for (let i = 0; i < C; i++) {
       let sum = 0;
       for (let k = 0; k < L; k++) sum += saved.h[at(k, i)];
@@ -1827,7 +1829,7 @@ export function createOcean(mesh, {
   function convertSlab(saved, classes) {
     const Ls = classes.length + 1;
     if (saved.h.length !== Ls * C) throw new Error(`a slab state on ${classes.length} classes holds ${Ls * C} thicknesses, not ${saved.h.length}`);
-    const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), { z: zCol, hNew, amount } = cols;
+    const scratch = columnScratch(Math.max(Ls, L)), hs = new Float64Array(Ls), qs = new Float64Array(Ls), { z: zCol, hNew, amount } = cols, [meanT, meanS] = layerMeans(saved, Ls, C);
     eta.set(saved.eta);
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } continue; }
@@ -1837,10 +1839,10 @@ export function createOcean(mesh, {
       if (!(sum > 0)) { for (let k = 0; k < L; k++) { const n = at(k, i), hk = zCol[k + 1] - zCol[k]; h[n] = hk; Q[n] = hk * surfaceTAt(i); W[n] = hk * referenceS; } continue; }
       for (let j = 0; j < Ls; j++) hs[j] *= H / sum;
       for (let k = 0; k < L; k++) hNew[k] = zCol[k + 1] - zCol[k];
-      for (let j = 0; j < Ls; j++) qs[j] = saved.T[j * C + i];
+      for (let j = 0; j < Ls; j++) qs[j] = meanT(j * C + i);
       remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
       for (let k = 0; k < L; k++) Q[at(k, i)] = amount[k];
-      for (let j = 0; j < Ls; j++) qs[j] = saved.S[j * C + i];
+      for (let j = 0; j < Ls; j++) qs[j] = meanS(j * C + i);
       remapColumn(hs, qs, Ls, hNew, amount, scratch, { layers: L });
       for (let k = 0; k < L; k++) { W[at(k, i)] = amount[k]; h[at(k, i)] = hNew[k]; }
     }
@@ -1862,7 +1864,7 @@ export function createOcean(mesh, {
     const classes = savedDensities(saved, C), own = classes && sameDensities(classes, labels) && saved.h.length === L * C;
     if (own) {
       h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
-      for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
+      for (let n = 0; n < L * C; n++) { Q[n] = Math.max(EPS, h[n]) * saved.T[n]; W[n] = Math.max(EPS, h[n]) * saved.S[n]; }
       if (saved.Q && saved.Q.length === L * C && saved.W && saved.W.length === L * C) { Q.set(saved.Q); W.set(saved.W); }
       else if (saved.Qref && saved.Qref.length === L * C && saved.Wref && saved.Wref.length === L * C) for (let n = 0; n < L * C; n++) { Q[n] = saved.Qref[n] + HEAT_REFERENCE * h[n]; W[n] = saved.Wref[n] + SALT_REFERENCE * h[n]; }
     } else convertSlab(saved, classes);
@@ -1875,7 +1877,7 @@ export function createOcean(mesh, {
       if (Math.abs(sum - H) > 1e-9) { const scale = H / sum; for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; } }
     }
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
-    if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * eos(saved.T[i], saved.S[i]);
+    if (hasShelves) for (let i = 0; i < C; i++) { const n = wettedLayer(h, L, C, i); shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * seawaterDensity(Q[n] / h[n], W[n] / h[n]); }
     for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     if (!own) regrid(Infinity);
     measureIce(ice, concentration, previousVolume);
@@ -1919,7 +1921,7 @@ export function createOcean(mesh, {
     return restart ? { ...fields, ...restartArrays() } : fields;
   }
 
-  const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;
+  const thermoclineDepth = new Float64Array(C), surfaceSalinity = new Float64Array(C), sst = T0, sss = S0;
   function thermocline(i) {
     let z = 0, previous = -Infinity, center = 0;
     for (let k = 0; k < L; k++) {
@@ -1980,18 +1982,19 @@ export function createOcean(mesh, {
   }
   function fields(depth = 0, upwellingDepth = depth) {
     layerDensitiesAll();
-    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN;
+    for (let i = 0; i < C; i++) { thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN; const n = wettedLayer(h, L, C, i, 0); surfaceSalinity[i] = h[n] > 0 ? W[n] / h[n] : NaN; }
     const layerT = (k, i) => (k === 0 ? T0[i] : Q[at(k, i)] / h[at(k, i)]);
-    return { h1: mixedDepths, T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0, upwellingDepth: null }), upwelling: upwellingAt(depth, upwellingDepth) };
+    return { h1: mixedDepths, T1: T0, S1: S0, surfaceSalinity, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: 0, upwellingDepth: null }), upwelling: upwellingAt(depth, upwellingDepth) };
   }
 
   function diagnostics() {
     layerDensitiesAll();
-    let area = 0, depth = 0, heat = 0, thermo = 0, salinity = 0, ssh = 0, speed = 0, transport = 0, interiorT = 0, interiorH = 0;
+    let area = 0, depth = 0, heat = 0, thermo = 0, salinity = 0, surfaceArea = 0, ssh = 0, speed = 0, transport = 0, interiorT = 0, interiorH = 0;
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
-      const a = areaCell[i];
-      area += a; depth += a * mixedDepths[i]; salinity += a * (W[i] / h[i]); ssh = Math.max(ssh, Math.abs(eta[i]));
+      const a = areaCell[i], top = wettedLayer(h, L, C, i, 0);
+      area += a; depth += a * mixedDepths[i]; ssh = Math.max(ssh, Math.abs(eta[i]));
+      if (h[top] > 0) { surfaceArea += a; salinity += a * (W[top] / h[top]); }
       thermo += a * thermocline(i);
       for (let k = 0; k < L; k++) heat += a * rhoCp * Q[at(k, i)];
       for (let k = 1; k < L; k++) { interiorT += Q[at(k, i)] * a; interiorH += h[at(k, i)] * a; }
@@ -2002,7 +2005,7 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) t += hEdge[ae(k, e)] * u[ae(k, e)];
       transport = Math.max(transport, Math.abs(t) * dvEdge[e]);
     }
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried, ...(drift ? drift.diagnostics() : {}) };
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / surfaceArea, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanDried: dried, ...(drift ? drift.diagnostics() : {}) };
   }
 
   if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);

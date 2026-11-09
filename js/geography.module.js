@@ -216,6 +216,13 @@ export function readSoilWater() {
   return (soilWaterFile ??= decodeSoilWater(fs.readFileSync(soilWaterUrl)));
 }
 
+export function seededGeography(geography, seed) {
+  if (!seed) return geography;
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+  if (!fs) throw new Error('a soil seed is read from its file');
+  return { ...geography, soilWater: decodeSoilWater(fs.readFileSync(seed)) };
+}
+
 const rasterSums = new WeakMap();
 function rasterSumsOn(raster, fields, none, mesh) {
   if (!rasterSums.has(raster)) rasterSums.set(raster, new WeakMap());

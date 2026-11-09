@@ -4,8 +4,9 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
-import { bathymetryFrom, createOcean, displacedWeight, inertialStepLimit } from '../js/ocean/layered.module.js';
-import { N, shelfBands, warmOcean, restingShelf, steppedDraft } from './helpers/iceShelf.mjs';
+import { bathymetryFrom, createOcean, displacedWeight, inertialStepLimit, HEAT_REFERENCE, SALT_REFERENCE } from '../js/ocean/layered.module.js';
+import { seawaterDensity } from '../js/ocean/seawater.module.js';
+import { N, shelfBands, warmOcean, restingShelf, steppedDraft, shelfModel, prepareShelfModel, shelfTops } from './helpers/iceShelf.mjs';
 import { basalMelt, baseFreezing, SHELF_MELT } from '../js/ocean/iceShelfMelt.module.js';
 import { decodeClimatology, encodeClimatology } from '../js/ocean/climatology.module.js';
 import { zonalWindOnEdges, totalHeatSalt } from './helpers/layered.mjs';
@@ -210,6 +211,22 @@ test(`a saved state keeps the shelves' load at f64, so on each engine a restart 
     const second = await prepare(await make());
     second.ocean.load(ocean, Float64Array.from(second.state[3]), Float64Array.from(second.state[6]));
     assert.deepEqual(await liquidus(second), await liquidus(first));
+  }
+});
+
+test('a save without the shelves\' load gives the GPU each shelf\'s load from the first layer thicker than 1e-6 m under it, on the host and in the device\'s split, as the CPU takes it', { skip: !gpuAvailable && 'webgpu not available' }, async () => {
+  const source = await prepareShelfModel(shelfModel());
+  const { thin, empty, dry, submicron, micron, twoMicron, saved } = shelfTops(source.ocean, source.state[6]);
+  const cpu = await prepareShelfModel(shelfModel());
+  cpu.ocean.load(saved, Float64Array.from(cpu.state[3]), Float64Array.from(cpu.state[6]));
+  const expected = cpu.ocean.serialize().shelfLoad;
+  const model = await prepareShelfModel(await shelfModel(createGpuModel)), { iceDraft } = model.geography;
+  await model.ocean.load(saved, Float64Array.from(model.state[3]), Float64Array.from(model.state[6]));
+  const host = (await model.ocean.serialize()).shelfLoad, { shelfLoadRest, shelfLoadT, shelfLoadS } = await model.oceanEngine.restartArrays();
+  model.destroy();
+  for (const i of [thin, empty, dry, submicron, micron, twoMicron]) {
+    const device = shelfLoadRest[i] + iceDraft[i] * seawaterDensity(shelfLoadT[i] + HEAT_REFERENCE, shelfLoadS[i] + SALT_REFERENCE);
+    assert.ok(Math.abs(host[i] - expected[i]) <= 1e-12 * expected[i] && Math.abs(device - expected[i]) <= 1e-6 * expected[i], `the shelf at ${i}, over a ${saved.h[i]} m top layer: ${host[i]} on the GPU's host, ${device} in its device's split, ${expected[i]} on the CPU`);
   }
 });
 
