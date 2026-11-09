@@ -211,9 +211,10 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   let kept = Array.from({ length: C }, (_, x) => x);
   const compare = async (names, limit) => {
     const device = await gpu.gpu.downloadPhysics();
-    const apart = (name, x) => Math.abs(cpu.radiation.summed[name][x] - device[slots[name]][x]) > 1e-3 * Math.abs(cpu.radiation.summed[name][x]);
+    const apart = (name, x) => !(Math.abs(cpu.radiation.summed[name][x] - device[slots[name]][x]) <= 1e-3 * Math.abs(cpu.radiation.summed[name][x]));
     const flipped = names.every((name) => name.startsWith('clear')) ? [] : Array.from({ length: C }, (_, x) => x).filter((x) => (apart('outgoingLongwave', x) || apart('absorbedSolar', x)) && !apart('clearOutgoingLongwave', x) && !apart('clearAbsorbedSolar', x));
-    assert.ok(flipped.length <= 2, `${flipped.length} cells whose all-sky sums parted with their clear-sky sums alike: ${flipped}`);
+    const unfinished = flipped.filter((x) => Object.keys(slots).some((name) => !Number.isFinite(cpu.radiation.summed[name][x]) || !Number.isFinite(device[slots[name]][x])));
+    assert.ok(flipped.length <= 2 && unfinished.length === 0, `${flipped.length} cells whose all-sky sums parted with their clear-sky sums alike: ${flipped}${unfinished.length ? `; sums not finite in ${unfinished}` : ''}`);
     if (flipped.length) kept = kept.filter((x) => !flipped.includes(x));
     return names.map((name) => {
       const s = stats(kept.map((x) => cpu.radiation.summed[name][x]), kept.map((x) => device[slots[name]][x]));
@@ -262,7 +263,7 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   at.heating.forEach(([inBound, outBound], k) => {
     const gaps = cellGaps(cpu.radiation.longwave.subarray(k * C, (k + 1) * C), device.LWH.subarray(k * C, (k + 1) * C));
     let ratio = 0;
-    gaps.forEach((gap, x) => { const bound = Math.max(inside(x) ? inBound : outBound, F32_CELL); ratio = Math.max(ratio, gap / bound); if (gap >= bound) failed.push(`layer ${k} cell ${x} ${gap.toExponential(2)}`); });
+    gaps.forEach((gap, x) => { const bound = Math.max(inside(x) ? inBound : outBound, F32_CELL); ratio = Math.max(ratio, gap / bound); if (!(gap < bound)) failed.push(`layer ${k} cell ${x} ${gap.toExponential(2)}`); });
     worst.push(ratio.toFixed(2));
   });
   const k = at.heating.length, lowest = hemisphere(cpu.radiation.longwave.subarray(k * C, (k + 1) * C), device.LWH.subarray(k * C, (k + 1) * C));

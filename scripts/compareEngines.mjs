@@ -130,9 +130,9 @@ const carriedLight = (reports, light, rhoCp) => {
 };
 const pastCarry = (g, c, bound) => {
   const n = Math.min(g.length, c.length, bound.length);
-  let ee = 0, cc = 0, past = 0;
-  for (let x = 0; x < n; x++) { const e = Math.abs(g[x] - c[x]) - bound[x]; if (e > 0) { ee += e * e; past++; } cc += c[x] * c[x]; }
-  return { rms: cc > 0 ? Math.sqrt(ee / cc) : ee > 0 ? Infinity : 0, past };
+  let ee = 0, cc = 0, past = 0, unbounded = 0;
+  for (let x = 0; x < n; x++) { if (!Number.isFinite(bound[x])) unbounded++; const e = Math.abs(g[x] - c[x]) - bound[x]; if (!(e <= 0)) { ee += e * e; past++; } cc += c[x] * c[x]; }
+  return { rms: cc > 0 ? Math.sqrt(ee / cc) : ee === 0 ? 0 : Infinity, past, unbounded };
 };
 let oceanStepped = false;
 // judged in kelvin, by the rms gap and the share of cells parting past `over`: about ten times the parity of seventeen64 day 365 and combined128 day 1460 through 2 steps
@@ -244,7 +244,7 @@ function stats(g, c, base = null, n = Math.min(g.length, c.length), gOffset = 0,
   return { own: base && gBase ? [Math.sqrt(bb / n), Math.sqrt(gg / n)] : null, share: over / n, rest: cc > 0 ? Math.sqrt(under / cc) : 0, rms: cc > 0 ? Math.sqrt(dd / cc) : dd > 0 ? Infinity : 0, max: mc > 0 ? md / mc : md > 0 ? Infinity : 0, step: base ? (bb > 0 ? Math.sqrt(dd / bb) : dd > 0 ? Infinity : 0) : null, gz: gz / n, cz: cz / n, scale: mc, nan, n };
 }
 const fmt = (v) => (v === null ? '-' : v === Infinity ? 'inf' : v === 0 ? '0' : v.toExponential(1));
-const row = (name, s) => `| ${name} | ${fmt(s.rms)} | ${fmt(s.max)} | ${s.step === null ? '-' : fmt(s.step)} | ${(100 * s.gz).toFixed(0)}/${(100 * s.cz).toFixed(0)} | ${s.own ? `${fmt(s.own[0])} / ${fmt(s.own[1])}` : '-'} | ${fmt(s.scale)}${s.nan ? ` (${s.nan} non-finite on one side)` : ''} |`;
+const row = (name, s) => (s.nan && failures++, `| ${name} | ${fmt(s.rms)} | ${fmt(s.max)} | ${s.step === null ? '-' : fmt(s.step)} | ${(100 * s.gz).toFixed(0)}/${(100 * s.cz).toFixed(0)} | ${s.own ? `${fmt(s.own[0])} / ${fmt(s.own[1])}` : '-'} | ${fmt(s.scale)}${s.nan ? ` (**${s.nan} non-finite on one side**)` : ''} |`);
 const HEAD = '| field | rel rms | rel max | rms / change since last report | zero % gpu/cpu | rms change cpu / gpu | max abs cpu |\n|---|---|---|---|---|---|---|';
 
 function nonFinite(region) {
@@ -276,7 +276,7 @@ function mappedReport(phNames, phArray, step, carry = null) {
     let verdict = 'ok', note = '';
     if (s.nan) verdict = `NON-FINITE (${s.nan} of ${Math.min(region.length, c.length)})`; else if (!gNonzero && cNonzero) verdict = 'GPU ALL ZERO'; else if (gNonzero && !cNonzero) verdict = 'CPU ALL ZERO'; else if (!gNonzero && !cNonzero) verdict = MAY_BE_ZERO.has(name) ? 'zero on both (listed)' : 'ZERO ON BOTH (not exercised)';
     else if (ABSOLUTE_BOUNDS[name]) { const b = ABSOLUTE_BOUNDS[name], a = absoluteGap(region, c, b.over); note = ` (rms ${fmt(a.rms)}, ${a.past} cells past ${b.over})`; verdict = a.rms > b.rms ? `OFF (rms > ${b.rms})` : a.share > b.share ? `OFF (share past ${b.over} > ${b.share})` : 'ok'; }
-    else if (carry && CARRIED.has(name)) { const p = pastCarry(region, c, carry); note = ` (rel rms ${fmt(p.rms)} past the GPU's carry, ${p.past} cells past it)`; verdict = p.rms > TOL ? `OFF (past the carry > ${TOL})` : 'ok'; }
+    else if (carry && CARRIED.has(name)) { const p = pastCarry(region, c, carry); note = ` (rel rms ${fmt(p.rms)} past the GPU's carry, ${p.past} cells past it)`; verdict = p.unbounded ? `NON-FINITE carry bound (${p.unbounded} cells)` : !(p.rms <= TOL) ? `OFF (past the carry > ${TOL})` : 'ok'; }
     else if (DECISION_ROWS.has(name)) verdict = s.share > decisionBound(name) ? `OFF (share > ${decisionBound(name)})` : s.rest > 3 * TOL ? `OFF (rms under the threshold > ${3 * TOL})` : 'ok';
     else if (!(s.rms <= TOL) && !(s.max * s.scale <= ABSOLUTE_FLOOR[name])) verdict = `OFF (> ${TOL})`;
     if (verdict !== 'ok' && verdict !== 'zero on both (listed)' && !((MAY_BE_ZERO.has(name) || landless) && verdict.startsWith('ZERO'))) failures++;

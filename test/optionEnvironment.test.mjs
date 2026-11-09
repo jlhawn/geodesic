@@ -104,3 +104,8 @@ test('spinup.mjs and fixedSst.mjs refuse BOUNDARY_LAYER false before they build 
   assert.notEqual(control.status, 0);
   assert.doesNotMatch(control.stderr, /without the boundary layer/);
 });
+
+test('createGpuModel, which always builds the moist scheme, refuses moist false before it opens the GPU', async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  await assert.rejects(createGpuModel(new Grid(16), { moist: false }), /createGpuModel runs no model without moisture: moist is false/);
+});
