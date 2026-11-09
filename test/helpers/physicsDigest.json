@@ -4,9 +4,9 @@
  "dt": 1350,
  "hours": 6,
  "node": "v22.22.2",
- "commit": "9c49a8d048c6",
- "data": "d57dd802b062",
- "stateHash": "34526f664c90da8be95e2ebd2e547a2e",
+ "commit": "a0ec7a9c219b",
+ "data": "bb62de257ad9",
+ "stateHash": "c8f5cb5866bf0e597458078f89153fef",
  "hashed": [
   "atmosphere 7",
   "sea ice 4",
@@ -17,194 +17,194 @@
   "decks 3"
  ],
  "groupHashes": {
-  "atmosphere": "f077c2bca50b2716",
-  "sea ice": "c0f851e059551f58",
-  "land": "81a2932192fbf886",
-  "ocean": "30f559692f9880ee",
+  "atmosphere": "dee2b249fb018ed3",
+  "sea ice": "5cf9e3a049b18c6d",
+  "land": "b1ca20ff69cd9d36",
+  "ocean": "e36b969e211eac30",
   "lakes": "1a6b96286b1c15fc",
-  "boundary layer": "e5d99d8c8beda289",
+  "boundary layer": "c7c9b46bd75ae6be",
   "decks": "df7bbed83d95d407"
  },
  "rows": [
   {
    "name": "global surface temperature",
    "units": "°C",
-   "value": 12.733705169276107
+   "value": 12.744609557214119
   },
   {
    "name": "global absorbed solar",
    "units": "W/m²",
-   "value": 213.10789260574575
+   "value": 259.75894741214086
   },
   {
    "name": "global outgoing longwave",
    "units": "W/m²",
-   "value": 202.13619582348412
+   "value": 222.22356580099873
   },
   {
    "name": "global shortwave cloud effect",
    "units": "W/m²",
-   "value": -77.26739081027195
+   "value": -30.648794672880673
   },
   {
    "name": "global longwave cloud effect",
    "units": "W/m²",
-   "value": 46.07217762113599
+   "value": 28.004648635291495
   },
   {
    "name": "global precipitation",
    "units": "mm/day",
-   "value": 0.7412037825512792
+   "value": 0.980150050446966
   },
   {
    "name": "global convective precipitation",
    "units": "mm/day",
-   "value": 0.7399031320447897
+   "value": 0.9769373360060445
   },
   {
    "name": "global evaporation",
    "units": "mm/day",
-   "value": 7.524166055979036
+   "value": 6.941647675620905
   },
   {
    "name": "global sensible heat",
    "units": "W/m²",
-   "value": 105.52611811666983
+   "value": 110.10456561152596
   },
   {
    "name": "global water vapor path",
    "units": "kg/m²",
-   "value": 6.532839508551781
+   "value": 6.5321511372978955
   },
   {
    "name": "global cloud water path",
    "units": "g/m²",
-   "value": 116.79762838677482
+   "value": 28.123165545328394
   },
   {
    "name": "global low cloud cover",
    "units": "fraction",
-   "value": 0.4972586971717222
+   "value": 0.1330115765035536
   },
   {
    "name": "global surface wind speed",
    "units": "m/s",
-   "value": 3.6610898715162854
+   "value": 3.8779575669176847
   },
   {
    "name": "30S-30N surface temperature",
    "units": "°C",
-   "value": 23.22726911681451
+   "value": 23.427025442639888
   },
   {
    "name": "30S-30N absorbed solar",
    "units": "W/m²",
-   "value": 242.51450279315105
+   "value": 305.10636732829886
   },
   {
    "name": "30S-30N outgoing longwave",
    "units": "W/m²",
-   "value": 191.23396922289646
+   "value": 216.53006003694406
   },
   {
    "name": "30S-30N shortwave cloud effect",
    "units": "W/m²",
-   "value": -119.58084935161989
+   "value": -57.035944574589514
   },
   {
    "name": "30S-30N longwave cloud effect",
    "units": "W/m²",
-   "value": 75.32027636678752
+   "value": 52.749587852342195
   },
   {
    "name": "30S-30N precipitation",
    "units": "mm/day",
-   "value": 1.2573684806304348
+   "value": 1.6161032625523886
   },
   {
    "name": "30S-30N convective precipitation",
    "units": "mm/day",
-   "value": 1.257368476301224
+   "value": 1.6161032556016561
   },
   {
    "name": "30S-30N evaporation",
    "units": "mm/day",
-   "value": 10.959534633079413
+   "value": 10.097743335426488
   },
   {
    "name": "30S-30N sensible heat",
    "units": "W/m²",
-   "value": 131.48150492553023
+   "value": 128.31247373294653
   },
   {
    "name": "30S-30N water vapor path",
    "units": "kg/m²",
-   "value": 9.321677641944282
+   "value": 9.335090959663246
   },
   {
    "name": "30S-30N cloud water path",
    "units": "g/m²",
-   "value": 185.83264424884453
+   "value": 51.33975635889337
   },
   {
    "name": "30S-30N low cloud cover",
    "units": "fraction",
-   "value": 0.6939314566639949
+   "value": 0.21518936282747525
   },
   {
    "name": "30S-30N surface wind speed",
    "units": "m/s",
-   "value": 2.2500299993549384
+   "value": 2.4464558013890825
   },
   {
    "name": "land surface temperature",
    "units": "°C",
-   "value": 0.457894546822331
+   "value": 0.4896741220792933
   },
   {
    "name": "sea-cell surface temperature",
    "units": "°C",
-   "value": 17.641912932448747
+   "value": 17.644470844572595
   },
   {
    "name": "30S-30N land precipitation",
    "units": "mm/day",
-   "value": 0.6332165730620041
+   "value": 0.5986449039757898
   },
   {
    "name": "30S-30N sea precipitation",
    "units": "mm/day",
-   "value": 1.469354184698374
+   "value": 1.9616707820733066
   },
   {
    "name": "Arctic sea-ice area",
    "units": "Mkm²",
-   "value": 12.999270780953916
+   "value": 12.999338637987195
   },
   {
    "name": "Antarctic sea-ice area",
    "units": "Mkm²",
-   "value": 2.982259310744912
+   "value": 2.983400577120895
   },
   {
    "name": "open-land soil fill",
    "units": "fraction",
-   "value": 0.33092363217603404
+   "value": 0.33104842490736386
   },
   {
    "name": "global net TOA",
    "units": "W/m²",
-   "value": 10.971696782261631
+   "value": 37.53538161114213
   },
   {
    "name": "global planetary albedo",
    "units": "fraction",
-   "value": 0.37907435912111226
+   "value": 0.2431486749563956
   },
   {
    "name": "largest wind",
    "units": "m/s",
-   "value": 40.64848573589446
+   "value": 40.42751003663485
   }
  ]
 }
