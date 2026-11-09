@@ -6,7 +6,7 @@ import { createOcean, depthFields } from '../js/ocean/layered.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { upwellingTimescale, upwellingWeight, SURFACE_UPWELLING_DEPTH } from '../js/frames.module.js';
-import { layerVelocities, velocityAt, worstDifference, unevenTopLayers } from './helpers/upwelling.mjs';
+import { layerVelocities, velocityAt, worstDifference, unevenTopLayers, unheldCells } from './helpers/upwelling.mjs';
 
 /*
  * The CPU ocean's upwelling memory at N=16 on a sea with a continent and
@@ -51,20 +51,20 @@ test('after one fold the memory gives the vertical velocity of the model\'s own 
   ocean.foldUpwelling(8 * DT);
   for (const depth of [20, 137, 903, 2500]) {
     const expected = velocityAt(C, L, ocean.h, ocean.cellOcean, velocities, depth), got = ocean.fields(depth).upwelling;
-    const { max, scale } = worstDifference(expected, got);
+    const { max, scale } = worstDifference(expected, got, unheldCells(C, L, ocean.h, ocean.cellOcean, depth));
     assert.ok(scale > 1e-7, `the flow through ${depth} m reaches ${scale} m/s`);
     assert.ok(max <= 1e-6 * scale, `at ${depth} m the memory parts from the model's divergence by ${max} against ${scale}`);
   }
   const temperature = () => 0;
   const mean = depthFields(mesh, L, { h: ocean.h, u: ocean.u, temperature, cellOcean: ocean.cellOcean }, 2500).upwelling;
-  const { max, scale } = worstDifference(velocityAt(C, L, ocean.h, ocean.cellOcean, velocities, 2500), mean);
-  assert.ok(max > 0.2 * scale, `the flow built on the mean of the two cells' thicknesses parts from the model's by only ${max} against ${scale} at 2500 m`);
+  const { max, scale } = worstDifference(velocityAt(C, L, ocean.h, ocean.cellOcean, velocities, 2500), mean, unheldCells(C, L, ocean.h, ocean.cellOcean, 2500));
+  assert.ok(Number.isFinite(max) && max > 0.2 * scale, `the flow built on the mean of the two cells' thicknesses parts from the model's by only ${max} against ${scale} at 2500 m`);
 
   unevenTopLayers(ocean.h, C, L, ocean.cellOcean);
   const uneven = fromTendency(ocean, C, L);
   ocean.foldUpwelling(0);
   for (const depth of [5, 137]) {
-    const { max: gap, scale: size } = worstDifference(velocityAt(C, L, ocean.h, ocean.cellOcean, uneven, depth), ocean.fields(depth).upwelling);
+    const { max: gap, scale: size } = worstDifference(velocityAt(C, L, ocean.h, ocean.cellOcean, uneven, depth), ocean.fields(depth).upwelling, unheldCells(C, L, ocean.h, ocean.cellOcean, depth));
     assert.ok(size > 1e-7 && gap <= 1e-6 * size, `with uneven top layers the memory parts from the model's divergence by ${gap} against ${size} at ${depth} m`);
   }
 });
@@ -96,7 +96,7 @@ test('the memory folds when the ocean has stepped, weights each layer by the tim
   const { mesh, C, L, ocean, advance, surfaceT, ice, state } = scenario();
   const velocities = () => layerVelocities(mesh, L, state(), ocean.cellOcean);
   const check = (expected, label, depth = 500) => {
-    const { max, scale } = worstDifference(velocityAt(C, L, ocean.h, ocean.cellOcean, expected, depth), ocean.fields(depth).upwelling);
+    const { max, scale } = worstDifference(velocityAt(C, L, ocean.h, ocean.cellOcean, expected, depth), ocean.fields(depth).upwelling, unheldCells(C, L, ocean.h, ocean.cellOcean, depth));
     assert.ok(scale > 1e-7 && max <= 1e-6 * scale, `${label}: ${max} against ${scale} at ${depth} m`);
   };
   advance(4);

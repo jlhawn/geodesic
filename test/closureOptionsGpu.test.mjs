@@ -99,8 +99,9 @@ test(`the GPU model takes terrain { conserveVolume } and orography { constants: 
   const PH = gpu.gpu.layout.PH, Kc = cpu.core.K, o = cpu.orography, r = rounded.orography;
   const [beta, wave, stress, launch] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [['OBETA', Kc * C], ['OWAVE', Kc * C], ['OSTRESS', E], ['OLAUNCH', C]].map(([name, length]) => ({ offset: PH[name], length })));
   const report = { beta: apart(beta, o.beta, r.beta), wave: apart(wave, o.wave, r.wave), stress: apart(stress, o.stress, r.stress), launch: apart(launch, o.launch, r.launch) };
-  const parted = Array.from(o.blocking).filter((height, i) => Math.abs(height - r.blocking[i]) > 1).length;
+  const parted = Array.from(o.blocking).filter((height, i) => !(Math.abs(height - r.blocking[i]) <= 1)).length;
   console.log(`engines apart with cy41r2 over the volume-kept terrain, each value against the nearer of the CPU's two starts: ${Object.entries(report).map(([k, v]) => `${k} ${v.relative.toExponential(1)}`).join(', ')}; the starts' blocking heights part by more than 1 m in ${parted} of ${C} columns`);
+  assert.ok(o.blocking.every(Number.isFinite) && r.blocking.every(Number.isFinite), 'a blocking height of the f64 or the f32 start is not finite');
   assert.ok(parted <= 0.01 * C, `the f32 start moves the blocking height in ${parted} columns`);
   for (const [k, v] of Object.entries(report)) assert.ok(v.scale > 0 && v.relative < 1e-3, `${k} ${v.relative} of ${v.scale}`);
 });

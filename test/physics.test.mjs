@@ -897,7 +897,7 @@ test('with deckRest \'inversion\' a deck whose boundary layer is a shallow subcl
     for (let n = 1; n <= 48; n++) {
       const deck = mixedLayerRun(r, noon, column, 1, dt);
       heights.push(r.mlmHeight[noon]);
-      if (!formed && deck.mlmTop > 0) formed = n;
+      if (!Number.isFinite(deck.mlmTop)) formed = -1; else if (!formed && deck.mlmTop > 0) formed = n;
     }
     return { r, noon, top, formed, heights };
   };
@@ -937,7 +937,7 @@ test('with deckRest \'regime\' (the default) a surface-driven or decoupled colum
     for (let n = 1; n <= 48; n++) {
       const deck = mixedLayerRun(r, noon, column, 1, dt);
       heights.push(r.mlmHeight[noon]); gates.push(r.mlmGate[noon]);
-      if (!formed && deck.mlmTop > 0) formed = n;
+      if (!Number.isFinite(deck.mlmTop)) formed = -1; else if (!formed && deck.mlmTop > 0) formed = n;
     }
     return { formed, heights, gates };
   };

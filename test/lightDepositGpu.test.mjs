@@ -44,6 +44,7 @@ test('a known pending light goes into the GPU hybrid ocean\'s stores below the t
   cpu.readSurface(Float64Array.from(surfaceT), ice);
   gpu.readSurface(Float64Array.from(surfaceT), ice);
   const after = await gpu.restartArrays(), { h } = await gpu.download();
+  assert.ok(h.every(Number.isFinite), `the download holds a non-finite thickness at ${h.findIndex((x) => !Number.isFinite(x))}`);
   let layerWorst = 0, columnWorst = 0, cpuColumnWorst = 0, carryWorst = 0, carried = 0, deep = 0, shallow = 0, shallowWorst = 0;
   for (const i of lit) {
     let gpuSum = 0, cpuSum = 0, cpuRounding = 0, above = 0;

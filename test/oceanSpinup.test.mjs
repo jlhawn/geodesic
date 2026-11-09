@@ -98,7 +98,7 @@ test('the recorded stress and fluxes are the means of what each step handed the 
   assert.equal(day.oceanSteps, oceanSteps);
   let largest = 0;
   for (let x = 0; x < E; x++) largest = Math.max(largest, Math.abs(stress[x] / oceanSteps));
-  assert.ok(largest > 1e-3, `the stress is ${largest} N/m² at most`);
+  assert.ok(Number.isFinite(largest) && largest > 1e-3, `the stress is ${largest} N/m² at most`);
   for (let x = 0; x < E; x++) assert.ok(Math.abs(day.fields.stress[x] - stress[x] / oceanSteps) <= 1e-6 * largest, `stress on edge ${x}: ${day.fields.stress[x]} recorded, ${stress[x] / oceanSteps} used`);
   for (let i = 0; i < C; i++) {
     assert.ok(Math.abs(day.fields.netFlux[i] - net[i] / PER_DAY) <= 1e-3, `net flux at ${i}`);
@@ -160,11 +160,11 @@ test('two recorded days replayed over the ocean alone, the ice drifting under th
     if (!sea[i]) continue;
     const off = sst(alone, i) - recorded.fields.sst[i];
     area += mesh.areaCell[i]; square += mesh.areaCell[i] * off * off;
-    if (Math.abs(sst(alone, i) - sst(coupled, i)) > 0.5) apart.push(i);
+    if (!(Math.abs(sst(alone, i) - sst(coupled, i)) <= 0.5)) apart.push(i);
     const a = alone.concentration[i], b = coupled.concentration[i];
-    if (a > 0 || b > 0) { iceArea += mesh.areaCell[i]; iceSquare += mesh.areaCell[i] * (a - b) ** 2; }
+    if (a > 0 || b > 0 || !Number.isFinite(a - b)) { iceArea += mesh.areaCell[i]; iceSquare += mesh.areaCell[i] * (a - b) ** 2; }
   }
-  const edge = apart.filter((i) => Math.abs(mesh.latCell[i]) > Math.PI / 4);
+  const edge = apart.filter((i) => Math.abs(mesh.latCell[i]) > Math.PI / 4 && Number.isFinite(sst(alone, i) - sst(coupled, i)));
   console.log(`after two days alone: SST rms ${Math.sqrt(square / area).toFixed(3)} K from the recorded day, ${apart.length} cells over 0.5 K from the coupled run, ice concentration rms ${Math.sqrt(iceSquare / iceArea).toFixed(4)} from it`);
   assert.ok(Math.sqrt(square / area) < 0.5, `SST rms ${Math.sqrt(square / area)} K from the recorded day`);
   assert.deepEqual(apart, edge, 'cells over 0.5 K from the coupled run outside the ice zone');

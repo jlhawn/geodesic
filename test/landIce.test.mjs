@@ -255,7 +255,7 @@ test('both engines take the observed ice sheets and their balance alike at N=16:
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
   await gpu.sync();
   const end = await gpu.gpu.downloadPhysics();
-  const worst = (pick) => { let max = 0, at = -1; for (let i = 0; i < C; i++) { const d = pick(i); if (d !== null && Math.abs(d) > max) { max = Math.abs(d); at = i; } } return [max, at]; };
+  const worst = (pick) => { let max = 0, at = -1; for (let i = 0; i < C; i++) { const d = pick(i); if (d !== null && !Number.isNaN(max) && !(Math.abs(d) <= max)) { max = Math.abs(d); at = i; } } return [max, at]; };
   const [skin, skinAt] = worst((i) => (iceSheet[i] ? cpu.state[3][i] - gpu.state[3][i] : null));
   const [snow, snowAt] = worst((i) => (iceSheet[i] ? cpu.land.snow[i] - end.SNOW[i] : null));
   const [shed, shedAt] = worst((i) => (iceSheet[i] ? cpu.land.discharge[i] - end.DISCHARGE[i] : null));

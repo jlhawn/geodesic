@@ -36,8 +36,9 @@ function cloudier(model) {
 function stats(cpu, gpu) {
   let maxDiff = 0, sumSq = 0, sumRef = 0;
   const errors = new Float64Array(cpu.length);
-  for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); errors[x] = d; if (d > maxDiff) maxDiff = d; sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
+  for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); errors[x] = d; maxDiff = Math.max(maxDiff, d); sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
   const scale = Math.sqrt(sumRef / cpu.length);
+  if (!Number.isFinite(sumSq) || !Number.isFinite(scale)) return { maxDiff: Infinity, rmsRel: Infinity, p99Rel: Infinity };
   return { maxDiff, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)), p99Rel: errors.sort()[Math.floor(0.99 * (cpu.length - 1))] / Math.max(scale, 1e-300) };
 }
 
@@ -73,7 +74,7 @@ function means(model) {
 }
 
 function agrees(shielded, sequential) {
-  for (const key of ['absorbed', 'atmosphere', 'reflected', 'clear', 'olr', 'theta']) assert.ok(shielded[key].p99Rel < 3 * sequential[key].p99Rel + 2e-4, `${key} 99th percentile ${shielded[key].p99Rel} against ${sequential[key].p99Rel} for the sequential scheme`);
+  for (const key of ['absorbed', 'atmosphere', 'reflected', 'clear', 'olr', 'theta']) assert.ok(Number.isFinite(sequential[key].p99Rel) && shielded[key].p99Rel < 3 * sequential[key].p99Rel + 2e-4, `${key} 99th percentile ${shielded[key].p99Rel} against ${sequential[key].p99Rel} for the sequential scheme`);
 }
 
 test('cloudTop on the GPU matches the CPU model at N = 16 as the sequential scheme does, and moves the same sunlight', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

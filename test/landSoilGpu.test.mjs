@@ -39,7 +39,7 @@ function prepare(model) {
 
 const stats = (a, b, skip = null) => {
   let maxDiff = 0, at = -1;
-  for (let x = 0; x < a.length; x++) { if (skip && skip.has(x)) continue; const d = Math.abs(a[x] - b[x]); if (d > maxDiff) { maxDiff = d; at = x; } }
+  for (let x = 0; x < a.length; x++) { if (skip && skip.has(x)) continue; const d = Math.abs(a[x] - b[x]); if (!Number.isNaN(maxDiff) && !(d <= maxDiff)) { maxDiff = d; at = x; } }
   return { maxDiff, at };
 };
 
@@ -76,8 +76,8 @@ async function fedStep(gpu, land) {
   for (let i = 0; i < C; i++) {
     if (!geography.land[i]) continue;
     const ds = Math.abs(T[i] - gpu.state[3][i]);
-    if (ds > fed.skin) { fed.skin = ds; fed.atSkin = i; }
-    for (const name of gpu.land.deepNames) { const dd = Math.abs(check[name][i] - after[name][i]); if (dd > fed.deep) { fed.deep = dd; fed.atDeep = i; } }
+    if (!Number.isNaN(fed.skin) && !(ds <= fed.skin)) { fed.skin = ds; fed.atSkin = i; }
+    for (const name of gpu.land.deepNames) { const dd = Math.abs(check[name][i] - after[name][i]); if (!Number.isNaN(fed.deep) && !(dd <= fed.deep)) { fed.deep = dd; fed.atDeep = i; } }
   }
   return { before, after, ph, skinBefore, lossBefore, fed };
 }
@@ -125,7 +125,7 @@ test('one GPU step, fed to the CPU land with the fluxes the GPU used, gives the 
     if (after.snow[i] !== before.snow[i] || gpu.land.iceLoss[i] !== lossBefore[i]) { changed++; continue; }
     const h0 = heat(skinBefore, gpu.land.deepNames.map((n) => before[n]), i), h1 = heat(gpu.state[3], gpu.land.deepNames.map((n) => after[n]), i);
     const residual = Math.abs(h1 - h0 - ph.SFLUX[i] * DT) / (Math.abs(h0) + Math.abs(h1));
-    if (residual > worst) { worst = residual; worstAt = i; }
+    if (!Number.isNaN(worst) && !(residual <= worst)) { worst = residual; worstAt = i; }
     compared++; if (geography.iceSheet[i]) sheets++;
   }
   console.log(`one step with the GPU's fluxes on the CPU land: skin ${fed.skin.toExponential(1)} K (cell ${fed.atSkin}), deep layers ${fed.deep.toExponential(1)} K (cell ${fed.atDeep}); GPU land energy row: ${compared} land cells (${sheets} on ice sheets) with the snow and ice unchanged, worst residual ${worst.toExponential(1)} of the column's heat content (cell ${worstAt}); ${changed} cells with melting or fresh snow left out`);

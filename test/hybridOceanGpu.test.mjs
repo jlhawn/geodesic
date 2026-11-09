@@ -35,7 +35,8 @@ function stats(cpu, gpu, mask = null) {
   for (let x = 0; x < cpu.length; x++) {
     if (mask && !mask[x]) continue;
     const d = Math.abs(cpu[x] - gpu[x]);
-    if (d > maxDiff) { maxDiff = d; at = x; }
+    if (!Number.isNaN(maxDiff) && !(d <= maxDiff)) at = x;
+    maxDiff = Math.max(maxDiff, d);
     sumSq += d * d; sumRef += cpu[x] * cpu[x]; n++;
   }
   return { maxDiff, at, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)), rms: Math.sqrt(sumSq / Math.max(n, 1)) };
@@ -546,7 +547,7 @@ test('with rotationLimit rh18 the GPU hybrid ocean\'s boundary layer takes Reich
   let engines = 0, limits = 0;
   for (let i = 0; i < C; i++) if (wet[i]) { engines += Math.abs(boundaryDepths[i] - cpu.boundaryDepths[i]); limits += Math.abs(algebraic.boundaryDepths[i] - cpu.boundaryDepths[i]); }
   console.log(`boundary depths: GPU against CPU ${engines.toFixed(2)} m summed, rh18 against algebraic on the CPU ${limits.toFixed(2)} m`);
-  assert.ok(engines < 0.1 * limits, `the engines part by ${engines} m, the two limits by ${limits} m`);
+  assert.ok(Number.isFinite(limits) && engines < 0.1 * limits, `the engines part by ${engines} m, the two limits by ${limits} m`);
   gpuModel.destroy();
 });
 
@@ -569,7 +570,7 @@ test('with langmuirIce tanh the GPU hybrid ocean weights the Langmuir factor by 
     if (ice[i] > 0) { iced += Math.abs(kept.boundaryDepths[i] - cpu.boundaryDepths[i]); cells++; }
   }
   console.log(`boundary depths: GPU against CPU ${engines.toFixed(2)} m summed; under ice (${cells} cells) tanh against none on the CPU ${iced.toFixed(2)} m`);
-  assert.ok(cells > 0 && engines < 0.1 * iced, `the engines part by ${engines} m, the two options under ice by ${iced} m`);
+  assert.ok(cells > 0 && Number.isFinite(iced) && engines < 0.1 * iced, `the engines part by ${engines} m, the two options under ice by ${iced} m`);
   gpuModel.destroy();
 });
 

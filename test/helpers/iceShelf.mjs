@@ -84,7 +84,7 @@ export async function restingShelf(engines) {
   const bands = shelfBands(250), still = () => [271.65, 34.4], shelves = await restMonth(bands, 'cavity', still, engines), bare = await restMonth(bands, 'land', still, engines);
   console.log(`a month at rest, homogeneous water: with the shelves ${show(shelves)}; with them as land ${show(bare)}`);
   // Rounding walks both oceans off rest; 10× leaves room for the cavity's added cells and catches a load, draft or pin that pushes the water.
-  for (const [u, eta] of engines.map((e) => [e, `${e}Eta`])) assert.ok(shelves[u] < 10 * bare[u] && shelves[eta] < 10 * bare[eta], `${u}: ${show(shelves)} against ${show(bare)}`);
+  for (const [u, eta] of engines.map((e) => [e, `${e}Eta`])) assert.ok(Number.isFinite(bare[u]) && Number.isFinite(bare[eta]) && shelves[u] < 10 * bare[u] && shelves[eta] < 10 * bare[eta], `${u}: ${show(shelves)} against ${show(bare)}`);
 }
 
 export async function steppedDraft(engines) {
@@ -103,11 +103,11 @@ export async function steppedDraft(engines) {
   console.log(`drafts step by up to ${step.toFixed(0)} m between cavity cells: ${empty} edges share no depth and ${thin} share less than ${floor} m; each passes ${floor} m`);
   assert.ok(step >= 300 && empty > 0, `drafts step by ${step} m, ${empty} edges share no depth`);
   console.log(`a month at rest, homogeneous water: with the shelves ${show(shelves)}; with them as land ${show(bare)}`);
-  for (const [u, eta] of engines.map((e) => [e, `${e}Eta`])) assert.ok(shelves[u] < 10 * bare[u] && shelves[eta] < 10 * bare[eta], `${u}: ${show(shelves)} against ${show(bare)}`);
+  for (const [u, eta] of engines.map((e) => [e, `${e}Eta`])) assert.ok(Number.isFinite(bare[u]) && Number.isFinite(bare[eta]) && shelves[u] < 10 * bare[u] && shelves[eta] < 10 * bare[eta], `${u}: ${show(shelves)} against ${show(bare)}`);
   const layered = await restMonth(bands, 'cavity', isomip, engines), flat = await restMonth(bands, 'land', isomip, engines);
   console.log(`a month at rest on ISOMIP+'s warm profile: with the shelves ${show(layered)}, on the cavities' edges ${engines.map((e) => `${e} ${layered[`${e}Cavity`].toExponential(1)}`).join(', ')}; with them as land ${show(flat)}`);
   // On a stratified profile the sloping base's pressure gradient moves the cavity edges at about twice the open sea's speed; 3× still catches a runaway.
-  for (const [u, eta, under] of engines.map((e) => [e, `${e}Eta`, `${e}Cavity`])) assert.ok(layered[u] < 10 * flat[u] && layered[eta] < 10 * flat[eta] && layered[under] < 3 * flat[u], `${u}: ${show(layered)}, cavities ${layered[under]}, against ${show(flat)}`);
+  for (const [u, eta, under] of engines.map((e) => [e, `${e}Eta`, `${e}Cavity`])) assert.ok(Number.isFinite(flat[u]) && Number.isFinite(flat[eta]) && layered[u] < 10 * flat[u] && layered[eta] < 10 * flat[eta] && layered[under] < 3 * flat[u], `${u}: ${show(layered)}, cavities ${layered[under]}, against ${show(flat)}`);
 }
 
 export function shelfModel(make = createModel) {

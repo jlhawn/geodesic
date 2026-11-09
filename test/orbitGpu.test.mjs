@@ -40,6 +40,7 @@ async function bits(gpu) {
   const { device, buffers } = gpu;
   return { S: await readBuffer(device, buffers.S, buffers.S.size, Uint32Array), PH: await readBuffer(device, buffers.PH, buffers.PH.size, Uint32Array) };
 }
+const finite = (words) => new Float32Array(words.buffer, words.byteOffset, words.length).every(Number.isFinite);
 
 function measure(label, { model, state, physics }) {
   const C = model.mesh.nCells, r = model.radiation;
@@ -53,7 +54,10 @@ function measure(label, { model, state, physics }) {
 
 function agrees(kepler, circular) {
   assert.ok(kepler.insolation.rmsRel < 1e-6 && circular.insolation.rmsRel < 1e-6, `insolation sums rms ${kepler.insolation.rmsRel} and ${circular.insolation.rmsRel}`);
-  for (const key of ['absorbed', 'olr', 'theta']) assert.ok(kepler[key].p99Rel < 3 * circular[key].p99Rel + 1e-5, `${key} 99th percentile ${kepler[key].p99Rel} against ${circular[key].p99Rel} on the circular orbit`);
+  for (const key of ['absorbed', 'olr', 'theta']) {
+    assert.ok(Number.isFinite(kepler[key].rmsRel) && Number.isFinite(circular[key].rmsRel), `${key}: a value is not finite on one engine or the other, rms ${kepler[key].rmsRel} and ${circular[key].rmsRel} on the circular orbit`);
+    assert.ok(kepler[key].p99Rel < 3 * circular[key].p99Rel + 1e-5, `${key} 99th percentile ${kepler[key].p99Rel} against ${circular[key].p99Rel} on the circular orbit`);
+  }
 }
 
 test('the kepler orbit on the GPU matches the CPU model at N = 16 as the circular orbit does, the sunlight to single precision', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -84,6 +88,7 @@ test('a batched run of the kepler orbit leaves the device where the same steps o
     let differ = 0;
     for (let x = 0; x < a[name].length; x++) if (a[name][x] !== b[name][x]) differ++;
     assert.equal(differ, 0, `${name} differs in ${differ} words between the stepped and the batched run`);
+    assert.ok(finite(a[name]), `${name} holds a value that is not finite`);
   }
   const { buffers, device } = batched.gpu, params = await readBuffer(device, buffers.P, buffers.P.size, Float32Array);
   assert.equal(params.length, 16);
@@ -96,12 +101,16 @@ test('with no orbit option both engines run the kepler orbit, bit for bit as whe
   const options = { steps: 3, day: 120, offset: 1 };
   const plain = await pair({ radiationEvery: 2 }, options), named = await pair({ orbit: 'kepler', radiationEvery: 2 }, options);
   assert.equal(plain.gpu.physics.orbit, 'kepler');
-  for (let a = 0; a < plain.model.state.length; a++) assert.deepEqual(plain.model.state[a], named.model.state[a], `CPU state ${a}`);
+  for (let a = 0; a < plain.model.state.length; a++) {
+    assert.deepEqual(plain.model.state[a], named.model.state[a], `CPU state ${a}`);
+    assert.ok(plain.model.state[a].every(Number.isFinite), `CPU state ${a} holds a value that is not finite`);
+  }
   const a = await bits(plain.gpu), b = await bits(named.gpu);
   for (const name of ['S', 'PH']) {
     let differ = 0;
     for (let x = 0; x < a[name].length; x++) if (a[name][x] !== b[name][x]) differ++;
     assert.equal(differ, 0, `${name} differs in ${differ} words`);
+    assert.ok(finite(a[name]), `${name} holds a value that is not finite`);
   }
   const params = await readBuffer(plain.gpu.device, plain.gpu.buffers.P, 64, Float32Array);
   assert.equal(params[8], Math.fround(sunDistance(120 * DAY + 3 * DT, 'kepler')), 'the last step\'s distance factor in P[8]');

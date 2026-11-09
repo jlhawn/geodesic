@@ -6,7 +6,7 @@ import { createOcean } from '../js/ocean/layered.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { upwellingTimescale, upwellingWeight, SURFACE_UPWELLING_DEPTH } from '../js/frames.module.js';
-import { layerVelocities, velocityAt, worstDifference, unevenTopLayers } from './helpers/upwelling.mjs';
+import { layerVelocities, velocityAt, worstDifference, unevenTopLayers, unheldCells } from './helpers/upwelling.mjs';
 
 /*
  * The GPU ocean's upwelling memory against the CPU's at N=16 on a sea
@@ -63,29 +63,29 @@ async function paired(steps, uneven = false) {
 const frameOf = async (gpu, depth, time, upwellingDepth = depth) => (await gpu.frame({ fields: ['upwelling'], depth, upwellingDepth, time })).fields.upwelling;
 
 test('the GPU fold of one state matches the CPU ocean\'s at every depth, in the surface view and where the floor lies above the depth', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpu, gpu } = await paired(3, true);
+  const { cpu, gpu, C } = await paired(3, true);
   const time = 3 * DT;
   cpu.foldUpwelling(time);
   for (const depth of DEPTHS) {
     const expected = cpu.fields(depth).upwelling, got = await frameOf(gpu, depth, time);
-    const { max, scale, rms, rmsScale } = worstDifference(expected, got);
+    const { max, scale, rms, rmsScale } = worstDifference(expected, got, unheldCells(C, cpu.layers, cpu.h, cpu.cellOcean, depth));
     console.log(`state fold at ${depth} m: largest |w| ${scale.toExponential(2)} m/s, largest difference ${max.toExponential(2)}, rms ${rms.toExponential(2)} of ${rmsScale.toExponential(2)}`);
     if (depth < 4000) assert.ok(scale > 1e-7, `the flow through ${depth} m reaches ${scale} m/s`);
     assert.ok(max <= 1e-4 * Math.max(scale, 1e-6), `at ${depth} m the GPU parts from the CPU by ${max} against ${scale}`);
   }
-  const surface = worstDifference(cpu.fields(0, SURFACE_UPWELLING_DEPTH).upwelling, await frameOf(gpu, 0, time, SURFACE_UPWELLING_DEPTH));
+  const surface = worstDifference(cpu.fields(0, SURFACE_UPWELLING_DEPTH).upwelling, await frameOf(gpu, 0, time, SURFACE_UPWELLING_DEPTH), unheldCells(C, cpu.layers, cpu.h, cpu.cellOcean, 0));
   assert.ok(surface.scale > 1e-7 && surface.max <= 1e-4 * surface.scale, `the surface view parts by ${surface.max} against ${surface.scale}`);
 });
 
 test('stepped through ocean steps with a frame after each, the GPU memory tracks the CPU\'s at several depths', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpu, gpu, step } = await paired(2);
+  const { cpu, gpu, step, C } = await paired(2);
   let time = 2 * DT;
   for (let n = 0; n < 5; n++) {
     if (n > 0) { await step(); time += DT; }
     cpu.foldUpwelling(time);
     for (const depth of [50, 450, 903, 2500]) {
       const expected = cpu.fields(depth).upwelling, got = await frameOf(gpu, depth, time);
-      const { max, scale, rms, rmsScale } = worstDifference(expected, got);
+      const { max, scale, rms, rmsScale } = worstDifference(expected, got, unheldCells(C, cpu.layers, cpu.h, cpu.cellOcean, depth));
       console.log(`frame ${n + 1} at ${depth} m: largest |w| ${scale.toExponential(2)} m/s, largest difference ${max.toExponential(2)}, rms ${rms.toExponential(2)} of ${rmsScale.toExponential(2)}`);
       assert.ok(max <= 2e-3 * scale && rms <= 1e-3 * rmsScale, `frame ${n + 1} at ${depth} m: the GPU parts from the CPU by ${max} (rms ${rms}) against ${scale} (rms ${rmsScale})`);
     }
@@ -122,7 +122,7 @@ test('the GPU memory is the layer-weighted fold of the velocities computed from 
   });
   compare(folded, second.memory, 'after a gap of 40 days each layer takes the weight of its own timescale');
   for (const depth of [20, 450, 2500]) {
-    const { max, scale } = worstDifference(velocityAt(C, L, second.h, cellOcean, second.memory, depth), await frameOf(gpu, depth, start + gap));
+    const { max, scale } = worstDifference(velocityAt(C, L, second.h, cellOcean, second.memory, depth), await frameOf(gpu, depth, start + gap), unheldCells(C, L, second.h, cellOcean, depth));
     assert.ok(max <= 1e-5 * Math.max(scale, 1e-6), `the frame at ${depth} m reads the memory by interpolation: ${max} against ${scale}`);
   }
 

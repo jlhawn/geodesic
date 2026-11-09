@@ -63,7 +63,7 @@ test('from an observed start both engines recharge the deep store from the root 
   let drew = 0, filled = 0, gpuDrew = 0, gpuFilled = 0;
   for (let i = 0; i < C; i++) {
     if (!grown(i)) { assert.equal(saved.deep[i], 0, `cell ${i} off the grown land`); continue; }
-    if (Math.abs(cpu.land.deepWater[i] - saved.deep[i]) >= 1e-2 || Math.abs(cpu.land.soil[i] - saved.soil[i]) >= 1e-2 || Math.abs(cpu.land.canopy[i] - saved.canopy[i]) >= 1e-4 || Math.abs(cpu.radiation.evaporation[i] - gpu.radiation.evaporation[i]) >= 0.05 * scale) parted.push(i);
+    if (!(Math.abs(cpu.land.deepWater[i] - saved.deep[i]) < 1e-2) || !(Math.abs(cpu.land.soil[i] - saved.soil[i]) < 1e-2) || !(Math.abs(cpu.land.canopy[i] - saved.canopy[i]) < 1e-4) || !(Math.abs(cpu.radiation.evaporation[i] - gpu.radiation.evaporation[i]) < 0.05 * scale)) parted.push(i);
     if (cpu.land.deepWater[i] < start[i] - 1e-3) drew++;
     if (cpu.land.deepWater[i] > start[i] + 1e-3) filled++;
     if (saved.deep[i] < start[i] - 1e-3) gpuDrew++;

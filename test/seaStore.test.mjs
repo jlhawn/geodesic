@@ -63,7 +63,7 @@ test('the heating swings with the yearly harmonic of the sunlight a sea absorbs 
 
 
 const day = (run, field, n) => run.record[field][n];
-const extremum = (values, from, to, sign) => { let best = from; for (let j = from; j <= to; j++) if (sign * values[j] > sign * values[best]) best = j; return best; };
+const extremum = (values, from, to, sign) => { let best = from; for (let j = from; j <= to; j++) { if (!Number.isFinite(values[j])) return NaN; if (sign * values[j] > sign * values[best]) best = j; } return best; };
 
 test('a year at 45°N under 0.1 N/m²: the wind stirs the start to 53 m, spring heating shoals the mixed layer only to 41 m, the surface peaks at 16.7 °C 56 days after the heating where the slab peaks at 23.6 °C after 38, and the top 100 m stores 1.05 GJ/m²', () => {
   const run = createSeaStore({}).column.run(), r = run.record, sst = r.seas.model.sst, slab = r.seas.slab.sst;

@@ -41,7 +41,7 @@ const HELD_UNION = { 222: 2.32e-5, 224: 1.17e-4, 2180: 1.75e-4, 2467: 6.16e-5 };
 const HELD_TWINS = { cover: { outside: 8.08e-6, union: HELD_UNION }, trees: { outside: 3.01e-6, union: {} }, free: { outside: 8.08e-6, union: HELD_UNION } };
 const pastTwins = (a, b, keep, { outside, union }) => {
   const failed = [];
-  for (let i = 0; i < a.length; i++) if (keep(i)) { const gap = Math.abs(b[i] - a[i]), bound = Math.max(2 * outside, 1.5 * (union[i] ?? 0)); if (gap > bound) failed.push(`${i} ${gap.toExponential(2)} past ${bound.toExponential(2)}`); }
+  for (let i = 0; i < a.length; i++) if (keep(i)) { const gap = Math.abs(b[i] - a[i]), bound = Math.max(2 * outside, 1.5 * (union[i] ?? 0)); if (!(gap <= bound)) failed.push(`${i} ${gap.toExponential(2)} past ${bound.toExponential(2)}`); }
   return failed;
 };
 
@@ -75,6 +75,7 @@ for (const [coverGoal, snowHold, plain] of [['water', false, false], ['observed'
       assert.deepEqual(failed, { cover: [], trees: [], free: [] }, 'cells past the twins\x27 spread');
     } else assert.ok(vegetation < 1e-4 && trees < 1e-4 && free < 1e-4, `cover ${vegetation}, trees ${trees}, snow-free cover ${free}`);
     assert.ok(carbon < 1e-6 && held < 1e-6, `carbon ${carbon}, held to ${held}`);
+    assert.ok([cpu.land.vegetation, saved.vegetation, cpu.land.snow, saved.snow].every((a) => Array.from(a).every(Number.isFinite)), 'a non-finite cover or snow');
     const snowy = Array.from({ length: C }, (_, i) => i).filter((i) => grown(i) && cpu.land.snow[i] > 0 && saved.snow[i] > 0);
     const kept = snowy.filter((i) => Math.abs(cpu.land.vegetation[i] - 0.5) < 1e-6 && Math.abs(saved.vegetation[i] - 0.5) < 1e-6).length;
     if (snowHold) assert.ok(snowy.length > 0.05 * count && kept > 0.5 * snowy.length, `${kept} of ${snowy.length} snowy cells keep their cover`);

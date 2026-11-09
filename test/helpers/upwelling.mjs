@@ -28,16 +28,23 @@ export function velocityAt(C, L, h, cellOcean, V, depth, upwellingDepth = depth)
   return out;
 }
 
-// The largest difference between a and b over the cells where a is a number, with where it falls; the two must agree on which cells are NaN.
-export function worstDifference(a, b) {
+export function unheldCells(C, L, h, cellOcean, depth) {
+  return Uint8Array.from({ length: C }, (_, i) => {
+    if (!cellOcean[i]) return 1;
+    let top = 0;
+    for (let k = 0; k < L; k++) { if (depth < top + h[k * C + i]) return 0; top += h[k * C + i]; }
+    return 1;
+  });
+}
+
+export function worstDifference(a, b, expectedNaN = null) {
   let max = 0, at = -1, scale = 0, sumSquares = 0, sumReference = 0, n = 0;
   for (let i = 0; i < a.length; i++) {
-    if (Number.isNaN(a[i]) || Number.isNaN(b[i])) {
-      if (Number.isNaN(a[i]) !== Number.isNaN(b[i])) return { max: Infinity, at: i, scale, rms: Infinity };
-      continue;
-    }
+    if (expectedNaN && expectedNaN[i] && Number.isNaN(a[i]) && Number.isNaN(b[i])) continue;
+    if (!Number.isFinite(a[i]) || !Number.isFinite(b[i])) return { max: Infinity, at: i, scale, rms: Infinity };
     const d = Math.abs(a[i] - b[i]);
-    if (d > max) { max = d; at = i; }
+    if (!(d <= max)) at = i;
+    max = Math.max(max, d);
     scale = Math.max(scale, Math.abs(a[i]));
     sumSquares += d * d; sumReference += a[i] * a[i]; n++;
   }

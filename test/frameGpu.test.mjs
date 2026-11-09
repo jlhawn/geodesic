@@ -28,7 +28,8 @@ function worst(reference, got, { skipNaN = false } = {}) {
   for (let x = 0; x < reference.length; x++) {
     if (skipNaN && Number.isNaN(reference[x])) { assert.ok(Number.isNaN(got[x]), `NaN expected at ${x}`); continue; }
     const d = Math.abs(reference[x] - got[x]);
-    if (!(d <= max)) { max = d; at = x; }
+    if (!Number.isNaN(max) && !(d <= max)) at = x;
+    max = Math.max(max, d);
   }
   return { max, at };
 }
@@ -180,7 +181,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     const speed = expected.speed;
     let magnitude = 0;
     for (let i = 0; i < C; i++) if (!Number.isNaN(expected.upwelling[i])) magnitude = Math.max(magnitude, Math.abs(expected.upwelling[i]));
-    assert.ok(magnitude > 0);
+    assert.ok(Number.isFinite(magnitude) && magnitude > 0);
     for (const [name, [values, tolerance]] of Object.entries({ sst: [expected.temperature, 1e-3], current: [speed, 1e-5], currents: [expected.current, 1e-5], upwelling: [expected.upwelling, 1e-3 * magnitude] })) {
       const { max, at: worstAt } = worst(values, at.fields[name], { skipNaN: true });
       assert.ok(max < tolerance, `${name} at ${depth} m: ${max} at ${worstAt} (${values[worstAt]} against ${at.fields[name][worstAt]})`);
@@ -223,7 +224,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     const averaged = (await model.beginFrame({ depth, fields: ['upwelling'] })).fields.upwelling, expected = velocityAt(C, L, moved.h, cellOcean, mean, depth);
     for (let i = 0; i < C; i++) if (!Number.isNaN(expected[i])) scale = Math.max(scale, Math.abs(expected[i]));
     const { max, at } = worst(expected, averaged, { skipNaN: true });
-    assert.ok(scale > 0 && max < 1e-3 * scale, `the memory at ${depth} m is the mean of the two states: ${max} at ${at} against ${scale}`);
+    assert.ok(Number.isFinite(scale) && scale > 0 && max < 1e-3 * scale, `the memory at ${depth} m is the mean of the two states: ${max} at ${at} against ${scale}`);
   }
 });
 

@@ -98,7 +98,7 @@ test(`at N=${N} on the n1024 mask, a GPU model saved through the page's snapshot
       for (const key of [...LAKE_FIELDS, 'passed']) note(`lake ${key}`, largest(ours[key], others[key]), s);
     }
     console.log(`N=${N}, ${pending} of ${run.lake.cells.length} lake cells with outflow pending at the save; over ${steps} steps after the restore, first parting steps: ${parted.map(([name, s]) => `${name} ${s}`).join(', ') || 'none'}`);
-    assert.deepEqual(Object.entries(worst).filter(([, gap]) => gap > 0), [], 'the restored run parts from the run that did not stop');
+    assert.deepEqual(Object.entries(worst).filter(([, gap]) => !(gap <= 0)), [], 'the restored run parts from the run that did not stop');
     run.destroy();
     twin.destroy();
   } finally {

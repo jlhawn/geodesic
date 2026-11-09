@@ -30,7 +30,7 @@ test('a class held at its floor on one side of an edge, with no depth in common 
   }
   const fastest = maxSpeed(ocean);
   assert.ok(count > 1000, `${count} token edge-layers`);
-  assert.ok(fastest > 0.5, `the front adjusts: ${fastest} m/s`);
+  assert.ok(Number.isFinite(fastest) && fastest > 0.5, `the front adjusts: ${fastest} m/s`);
   assert.ok(shear < 0.012 * fastest, `a token's shear to the layer above reached ${shear} m/s against a fastest current of ${fastest} m/s`);
   assert.equal(ocean.diagnostics().oceanLimited, 0);
 });
@@ -74,7 +74,7 @@ test('an edge takes the deepest channel its two cells hold between them as its s
     for (let k = 0; k < L; k++) { const he = hybrid.hEdge[k * E + e]; if (z >= 300) assert.equal(he, 0, `layer ${k} of ridge edge ${e} at ${z} m`); z += Math.min(hybrid.h[k * C + cellsOnEdge[2 * e]], hybrid.h[k * C + cellsOnEdge[2 * e + 1]]); sum += he; }
     assert.ok(Math.abs(sum - 300) < 1, `ridge edge ${e} column ${sum} m`);
   }
-  assert.ok(maxSpeed(hybrid) > 0.1 && maxSpeed(open) > 0.1, 'the front adjusts');
+  assert.ok([maxSpeed(hybrid), maxSpeed(open)].every((speed) => Number.isFinite(speed) && speed > 0.1), 'the front adjusts');
   assert.equal(sillBelow, 0);
   assert.ok(openThrough > 0 && sillThrough < 0.5 * openThrough, `transport through the ridge edges over 48 steps: ${(sillThrough / 48 / 1e6).toFixed(1)} Sv with the sill, ${(openThrough / 48 / 1e6).toFixed(1)} Sv without`);
   assert.equal(hybrid.diagnostics().oceanLimited, 0);
