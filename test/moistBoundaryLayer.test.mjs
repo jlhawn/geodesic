@@ -324,12 +324,18 @@ async function moistEngines(options = {}, moist = {}) {
   pass.end();
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
-  const lowestInterface = withheldInterface(c, state, r, dt);
+  const lowestInterface = withheldInterface(c, state, r, dt), before = state.map((a) => Float64Array.from(a));
   layer.diagnose(state, 0, nC, dt);
   const cpu = Object.fromEntries(['entrainment', 'mixing', 'regime', 'radiativeVelocity', 'mixingTop', 'depth', 'cloudTopCooling'].map((name) => [name, Float64Array.from(layer[name])]));
   pair.phases.adjust(0, nC, dt);
   pair.phases.mixMomentum(0, nE, dt);
-  return { K: nK, C: nC, E: nE, kTop: layer.kTop, cpu, state, after, ph, mesh: m, lowestInterface };
+  let twinSeed = 12345;
+  const twinSign = () => { twinSeed = (twinSeed * 1664525 + 1013904223) >>> 0; return twinSeed & 0x10000 ? 1 : -1; };
+  for (const s of [0, 1, 4]) for (let x = 0; x < before[s].length; x++) before[s][x] += twinSign() * Math.abs(before[s][x]) * 2 ** -23;
+  c.diagnose(before[0], before[1], before[4], before[5]);
+  layer.diagnose(before, 0, nC, dt);
+  const twin = Object.fromEntries(['entrainment', 'regime', 'depth', 'mixingTop'].map((name) => [name, Float64Array.from(layer[name])]));
+  return { K: nK, C: nC, E: nE, kTop: layer.kTop, cpu, twin, state, after, ph, mesh: m, lowestInterface };
 }
 
 function withheldInterface(core, state, radiation, dt) {
@@ -361,11 +367,12 @@ test('the moist boundary layer matches between the engines on a random set of co
       worstV = Math.max(worstV, Math.abs(cpu.radiativeVelocity[i] - ph.VRAD[i]) / Math.max(0.1, cpu.radiativeVelocity[i]));
       worstW = Math.max(worstW, Math.abs(cpu.entrainment[i] - ph.ENTRAIN[i]) / Math.max(1e-4, cpu.entrainment[i]));
       worstDepth = Math.max(worstDepth, Math.abs(cpu.depth[i] - ph.DEPTH[i]), Math.abs(cpu.mixingTop[i] - ph.MIXTOP[i]));
-      let largest = 0, gap = 0;
+      let largest = 0, gap = 0, above = 0;
       for (let k = kTop; k < nK - 1; k++) largest = Math.max(largest, cpu.mixing[k * nC + i]);
-      for (let k = kTop; k < nK - 1; k++) if (largest > 0) gap = Math.max(gap, Math.abs(cpu.mixing[k * nC + i] - ph.MIX[k * nC + i]) / largest);
-      const room = Math.abs(cpu.depth[i] - run.lowestInterface[i]), apart = Math.abs(cpu.depth[i] - ph.DEPTH[i]);
-      if (gap >= 2e-3 && room < 1 && apart <= 1e-2 && gap <= 4 * apart / room + 1e-3) atTop++;
+      for (let k = kTop; k < nK - 1; k++) if (largest > 0) { const part = Math.abs(cpu.mixing[k * nC + i] - ph.MIX[k * nC + i]) / largest; gap = Math.max(gap, part); if (k < nK - 2) above = Math.max(above, part); }
+      const room = Math.abs(cpu.depth[i] - run.lowestInterface[i]), apart = Math.abs(cpu.depth[i] - ph.DEPTH[i]), limit = 4 * apart / room + 1e-3;
+      const lowest = largest > 0 ? Math.abs(cpu.mixing[(nK - 2) * nC + i] - ph.MIX[(nK - 2) * nC + i]) / largest : 0;
+      if (gap >= 2e-3 && room < 1 && apart <= 1e-2 && limit < 1 && above < 2e-3 && lowest <= limit) atTop++;
       else worstMix = Math.max(worstMix, gap);
     }
     let theta = 0, q = 0, qc = 0, wind = 0, adjusted = 0;
@@ -384,8 +391,11 @@ test('the moist boundary layer matches between the engines on a random set of co
     assert.ok(counts[REGIME.SURFACE] > nC / 20 && counts[REGIME.DECOUPLED] > nC / 20 && counts[REGIME.COUPLED] > nC / 10 && counts[REGIME.STABLE] > nC / 20, `regimes ${counts}`);
     assert.ok(flips <= nC / 100, `${flips} columns differ in regime`);
     assert.ok(atTop <= nC / 200, `${atTop} columns whose top clears the lowest interface by under 1 m part in their coefficients`);
-    const withheld = options.diagnoseFirst !== false ? 5 : 1;
-    assert.ok(worstV < 1e-4 && worstW < 2e-3 * withheld && worstMix < 2e-3 && worstDepth < 0.05 * withheld, `V ${worstV}, w_e ${worstW}, coefficients ${worstMix}, depths ${worstDepth}`);
+    let twinW = 0, twinDepth = 0;
+    for (let i = 0; i < nC; i++) if (cpu.regime[i] === run.twin.regime[i]) { twinW = Math.max(twinW, Math.abs(cpu.entrainment[i] - run.twin.entrainment[i]) / Math.max(1e-4, cpu.entrainment[i])); twinDepth = Math.max(twinDepth, Math.abs(cpu.depth[i] - run.twin.depth[i]), Math.abs(cpu.mixingTop[i] - run.twin.mixingTop[i])); }
+    const held = options.diagnoseFirst === false, wBound = held ? 2e-3 : Math.min(1e-2, Math.max(2e-3, 2 * twinW)), depthBound = held ? 0.05 : Math.min(0.25, Math.max(0.05, 2 * twinDepth));
+    console.log(`${label}: a twin of the CPU nudged a ulp in π, θ and q parts w_e by ${twinW.toExponential(1)} and the depths by ${twinDepth.toExponential(1)} m, so the engines may part by ${wBound.toExponential(1)} and ${depthBound.toExponential(2)} m; they part by ${worstW.toExponential(1)} and ${worstDepth.toExponential(1)} m, and ${atTop} columns part in their coefficients at the lowest interface alone`);
+    assert.ok(worstV < 1e-4 && worstW < wBound && worstMix < 2e-3 && worstDepth < depthBound, `V ${worstV}, w_e ${worstW} against ${wBound}, coefficients ${worstMix}, depths ${worstDepth} against ${depthBound}, from the twin's w_e ${twinW} and depths ${twinDepth}`);
     assert.ok(adjusted <= nC / 50, `${adjusted} columns part`);
     assert.ok(theta < 5e-3 && q < 4e-6 && qc < 2e-6 && wind < 2e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
   }
