@@ -187,9 +187,9 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
   console.log(`12 humid clear columns without scattering: the gases take their absorptivities down and up to ${worst.toExponential(1)}`);
 });
 
-async function engines(radiation, levels = undefined) {
+async function engines(radiation, levels = undefined, order = PREVIOUS_BOUNDARY_LAYER) {
   const grid = levels ? { levels } : {};
-  const cpu = createModel(new Grid(16), { ocean: false, radiation, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...PREVIOUS_BOUNDARY_LAYER, velocityScale: 'capped' }, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...PREVIOUS_BOUNDARY_LAYER, velocityScale: 'capped' }, ...grid });
+  const cpu = createModel(new Grid(16), { ocean: false, radiation, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...order, velocityScale: 'capped' }, ...grid }), gpu = await createGpuModel(new Grid(16), { ocean: false, radiation, moist: PREVIOUS_PCAPE_MINIMUM, boundaryLayer: { ...order, velocityScale: 'capped' }, ...grid });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();
@@ -202,7 +202,7 @@ function stats(cpu, gpu) {
   return { maxDiff, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 
-for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}, each with its table` : ''}: per-cell sums of absorbed and outgoing radiation, clear and all-sky, at N=16`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}, each with its table` : ''}: per-cell sums of absorbed and outgoing radiation, clear and all-sky, at N=16, with the boundary layer diagnosed after the deposit`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true }, grid ? sigmaInterfaces(grid) : undefined);
   const slots = { absorbedSolar: 'ABSSUM', atmosphereSolar: 'ATMSUM', outgoingLongwave: 'OLRSUM', clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
   let kept = Array.from({ length: C }, (_, x) => x);
@@ -230,5 +230,26 @@ for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases a
   for (let s = 4; s < 24; s++) { cpu.step(DT); await gpu.step(DT); }
   const later = await compare(['clearAbsorbedSolar', 'clearOutgoingLongwave'], 1e-4);
   console.log(`spectral gases${grid ? ` on ${grid}` : ''}, CPU against GPU per-cell sums at N=16, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
+  gpu.destroy();
+});
+
+for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}` : ''} at the default order: the means over the cells of the per-cell sums of absorbed and outgoing radiation, clear and all-sky, at N=16, which a cell a threshold parts moves by its share and a shift across many cells moves whole`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true }, grid ? sigmaInterfaces(grid) : undefined, {});
+  const slots = { absorbedSolar: 'ABSSUM', atmosphereSolar: 'ATMSUM', outgoingLongwave: 'OLRSUM', clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
+  const compare = async (names, limit) => {
+    const device = await gpu.gpu.downloadPhysics();
+    return names.map((name) => {
+      let a = 0, b = 0;
+      for (let x = 0; x < C; x++) { a += cpu.radiation.summed[name][x]; b += device[slots[name]][x]; }
+      const gap = Math.abs(b - a) / Math.abs(a), cells = stats(cpu.radiation.summed[name], device[slots[name]].subarray(0, C));
+      assert.ok(gap < limit, `${name}: the means part by ${gap} of the CPU's`);
+      return `${name} ${gap.toExponential(1)} (per-cell rms ${cells.rmsRel.toExponential(1)})`;
+    });
+  };
+  for (let s = 0; s < 4; s++) { cpu.step(DT); await gpu.step(DT); }
+  const early = await compare(Object.keys(slots), 1e-5);
+  for (let s = 4; s < 24; s++) { cpu.step(DT); await gpu.step(DT); }
+  const later = await compare(['clearAbsorbedSolar', 'clearOutgoingLongwave'], 1e-4);
+  console.log(`spectral gases${grid ? ` on ${grid}` : ''} at the default order, the engines' means of the per-cell sums apart at N=16, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
   gpu.destroy();
 });
