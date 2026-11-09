@@ -144,9 +144,11 @@ test('two recorded days replayed over the ocean alone, the ice drifting under th
   run('spinup.mjs', { TAG: 'rec', RECORD: forcing, DAYS: '2', MINUTES: '100', MOIST: JSON.stringify({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 }) });
   assert.deepEqual(readdirSync(forcing).sort(), [forcingName(1), forcingName(2)]);
   run('oceanSpinup.mjs', { TAG: 'alone', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
+  run('oceanSpinup.mjs', { TAG: 'set', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2', OCEAN: JSON.stringify({ everySteps: 1 }) });
 
-  const [alone, coupled] = await Promise.all(['alone_year0001.bin', 'rec_day0002.bin'].map(async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))))));
-  assert.deepEqual([alone.options, alone.given], [records.options, { ...records.given, ocean: {} }], 'the year state carries the loaded state\'s records, with the ocean options it ran in given');
+  const [alone, coupled, set] = await Promise.all(['alone_year0001.bin', 'rec_day0002.bin', 'set_year0001.bin'].map(async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))))));
+  assert.deepEqual([alone.options, alone.given], [records.options, records.given], 'the year state carries the loaded state\'s records, and no ocean group where OCEAN is unset');
+  assert.deepEqual([set.options, set.given], [records.options, { ...records.given, ocean: { everySteps: 1 } }], 'a replay given OCEAN records it as spin-up does, without the drift it derives');
   const recorded = await decodeForcing(new Uint8Array(readFileSync(join(forcing, forcingName(2)))));
   assert.ok(recorded.fields.airStress && recorded.fields.airStress.some((x) => x !== 0), 'the drifting run records the air stress');
   const model = await createGpuModel(new Grid(N), { topography });

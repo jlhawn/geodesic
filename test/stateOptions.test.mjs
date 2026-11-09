@@ -138,7 +138,7 @@ test('a header records the boundary layer\'s order its run was given in `options
   assert.deepEqual([off.options.boundaryLayer, off.given.boundaryLayer], [false, false]);
 });
 
-test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a year-2 control\'s header rebuilds and records so, as in fixedSst, a resume at the default names boundaryLayer, a GIVEN equal to the record as made stands in, a resume of a state that records the order in its options alone, as a page export does, names boundaryLayer where the run differs from it, and one that records it nowhere says the boundary layer now runs diagnoseFirst over a plain-order state', async () => {
+test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a year-2 control\'s header rebuilds and records so, as in fixedSst, a resume at the default names boundaryLayer, a GIVEN equal to the record as made stands in, a resume of a state that records the order in its options alone, as a page export does, names boundaryLayer where the run differs from it, and one that records it nowhere says the order it was made in cannot be told, with the order the run\'s boundary layer runs, and nothing for a run without one', async () => {
   const save = blank(), strip = ({ boundaryLayer, ...rest }) => rest;
   const fresh = headerOptions({ land: { coverGoal: 'observed' } }), plainGiven = headerOptions({ land: { coverGoal: 'observed' }, boundaryLayer: { diagnoseFirst: false } }).given;
   const control = await save({ options: strip(fresh.options), given: strip(fresh.given) });

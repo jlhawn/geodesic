@@ -59,6 +59,7 @@ import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from 
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { loadSavedLand, loadSavedLake, lakeOptionsFor } from './savedLand.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
+import { givenOptions } from './stateOptions.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const N = Number(process.env.N ?? 64), TAG = process.env.TAG ?? `ocean${N}`, YEARS = Number(process.env.YEARS ?? 1), KEEP = Number(process.env.KEEP ?? 2);
@@ -67,7 +68,7 @@ const SNAPSHOT_DAYS = Number(process.env.SNAPSHOT_DAYS ?? 30), STOP_AFTER_STEPS 
 const RESTORE_TO = process.env.RESTORE_TO ?? 'recorded';
 if (!['recorded', 'woa'].includes(RESTORE_TO)) throw new Error(`RESTORE_TO is recorded or woa, not ${RESTORE_TO}`);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname, FORCING = process.env.FORCING;
-const OCEAN_GIVEN = process.env.OCEAN ?? '{}', OCEAN = withCadence({ ocean: JSON.parse(OCEAN_GIVEN) }, 1350 * 16 / N, N).ocean, RADIATION = JSON.parse(process.env.RADIATION ?? '{}');
+const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, RADIATION = JSON.parse(process.env.RADIATION ?? '{}');
 if (!FORCING) throw new Error('FORCING must name a directory of recorded forcing');
 if (LOOP_DAYS % DAYS_PER_YEAR) throw new Error(`LOOP_DAYS ${LOOP_DAYS} is not a whole number of ${DAYS_PER_YEAR}-day years`);
 const log = (line) => { console.log(line); appendFileSync(`${OUT}/${TAG}.log`, line + '\n'); };
@@ -94,6 +95,7 @@ if (saved.N !== N) throw new Error(`${from} is N=${saved.N}`);
 const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const airStress = !!(await decodeForcing(new Uint8Array(readFileSync(`${FORCING}/${days[0]}`)))).fields.airStress;
 OCEAN.iceDrift = OCEAN.iceDrift !== false && airStress ? { ...(OCEAN.iceDrift || COUPLED_ICE_DRIFT), airStress: 'given' } : false;
+const replayGiven = ({ ocean, ...given }) => ({ ...given, ...(process.env.OCEAN === undefined ? {} : { ocean: givenOptions({ ocean: JSON.parse(process.env.OCEAN) }).ocean }) });
 const model = await createGpuModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), topography, geography, land: landOptions, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
 const { mesh, core, state, gpu } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), everySteps = model.oceanEngine.everySteps, oceanDt = everySteps * dt;
@@ -152,7 +154,7 @@ async function save(done, step, read = null) {
   const { o, surfaceT, ice, concentration } = read ?? await readSurface();
   const name = nameAt(done, step), landState = await model.land.serialize();
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
-    N, ...gridHeader(mesh), K: core.K, ...(saved.options ? { options: saved.options } : {}), ...(saved.given ? { given: { ...saved.given, ocean: JSON.parse(OCEAN_GIVEN) } } : {}), day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: saved.terrain ?? !!model.surfaceGeopotential, ...(savedTerrain(saved) ? { terrainOptions: savedTerrain(saved) } : {}), ...geographyHeader(record), ...(saved.soilSeed ? { soilSeed: saved.soilSeed } : {}), levels: core.levels,
+    N, ...gridHeader(mesh), K: core.K, ...(saved.options ? { options: saved.options } : {}), ...(saved.given ? { given: replayGiven(saved.given) } : {}), day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: saved.terrain ?? !!model.surfaceGeopotential, ...(savedTerrain(saved) ? { terrainOptions: savedTerrain(saved) } : {}), ...geographyHeader(record), ...(saved.soilSeed ? { soilSeed: saved.soilSeed } : {}), levels: core.levels,
     oceanYears: Math.floor(done / DAYS_PER_YEAR), oceanDays: done, ...(step ? { oceanStep: step } : {}),
     pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
     ...Object.fromEntries([...Object.keys(MOIST_FIELDS), ...Object.keys(RADIATION_FIELDS)].filter((name) => saved[name]).map((name) => [name, saved[name]])),
