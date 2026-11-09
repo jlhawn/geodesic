@@ -11,9 +11,13 @@
 // missing on the CPU, is all zero on one side only, is all zero on the GPU without being listed in
 // MAY_BE_ZERO, holds a non-finite value, differs from its CPU array by more than TOL (env, relative rms,
 // default 1e-3; a row in ABSOLUTE_FLOOR passes too while its largest gap is under the floor, and once the
-// ocean has stepped the row in CARRIED (PEN) counts only each cell's gap past ρc_p times twice the largest
-// f32 grain of the heat stores h·(T − HEAT_REFERENCE) above PENETRATION_DEPTH, under which the GPU's
-// deposit of the light leaves a remainder that waits for the next ocean step), or, for the
+// ocean has stepped the row in CARRIED (PEN) counts only each cell's gap past ρc_p times CARRY_GRAINS f32
+// grains of the one heat store h·(T − HEAT_REFERENCE) the GPU's deposit of the light fills last, which the
+// deposit's own walk down the GPU's post-step h finds: below the top layer, the layer with thickness that
+// reaches PENETRATION_DEPTH, so the one straddling it, or the deepest with thickness in a shallower column.
+// settle() leaves at most one grain there to wait for the next ocean step, half from rounding the change
+// and half from aligning a store that crossed into the next binade; the quarter grain more covers the f32
+// rounding of the light and of the store recomputed from h and T), or, for the
 // DECISION_ROWS below, differs by more than TOL times the row's largest CPU magnitude in a larger share of
 // its entries than the row's bound, or has its gaps under that threshold exceed, as a root sum of squares,
 // 3·TOL of the root sum of squares of the CPU's values over all its entries. The rows in ABSOLUTE_BOUNDS
@@ -102,14 +106,18 @@ export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'O
 export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001, COND: 0.001, MIXH: 0.0078, STRESS: 0.0165, DRAG: 0.0066, HEATX: 0.0048, DECKF: 0.001, MLMCOVER: 0.001, MLMENT: 0.001, OBETA: 0.001, OBLOCK: 0.001, OLAUNCH: 0.00156, OSTRESS: 0.00126, CONC: 0.001, STRAT: 0.001, USTAR: 0.001 };
 // f32 rounding of the soil store: eight spacings at 300 kg/m²
 const ABSOLUTE_FLOOR = { RUNOFF: 2.5e-4, DISCHARGE: 2.5e-4 };
-const CARRIED = new Set(['PEN']);
+const CARRIED = new Set(['PEN']), CARRY_GRAINS = 1.25;
 const f32Grain = (x) => 2 ** (x ? Math.max(Math.floor(Math.log2(Math.abs(x))) - 23, -126) : -24);
 const carriedLight = (ocean, rhoCp) => {
   const L = ocean.h.length / C, bound = new Float64Array(C);
-  for (let i = 0; i < C; i++) for (let k = 0, top = 0; k < L && top < PENETRATION_DEPTH; k++) {
-    const h = ocean.h[k * C + i];
-    if (h > 0) bound[i] = Math.max(bound[i], 2 * rhoCp * f32Grain(h * (ocean.T[k * C + i] - HEAT_REFERENCE)));
-    top += h;
+  for (let i = 0; i < C; i++) {
+    let z = ocean.h[i], last = 0;
+    for (let k = 1; k < L; k++) {
+      z += ocean.h[k * C + i];
+      if (ocean.h[k * C + i] > 0) last = k;
+      if (z >= PENETRATION_DEPTH && last > 0) break;
+    }
+    bound[i] = CARRY_GRAINS * rhoCp * f32Grain(ocean.h[last * C + i] * (ocean.T[last * C + i] - HEAT_REFERENCE));
   }
   return bound;
 };
