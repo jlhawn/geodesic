@@ -1,4 +1,4 @@
-import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT, seaIceRemoval, ICE_LIGHT } from '../physics/ice.module.js';
+import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT, seaIceRemoval, ICE_LIGHT, pondedIceAlbedo } from '../physics/ice.module.js';
 import { MID_MONTH_DAY_OF_YEAR, DAY_OF_YEAR_AT_ZERO, YEAR as CALENDAR_YEAR } from '../monthCalendar.module.js';
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
@@ -374,8 +374,16 @@ const VIS_H2O_S: f32 = ${VISIBLE_VAPOR.share}; const VIS_H2O_K: f32 = ${VISIBLE_
 const O2_SHARE: f32 = ${OXYGEN.share}; const O2_K: f32 = ${OXYGEN.coefficient}; const O2_PATH: f32 = ${OXYGEN.mixingRatio * STP_DEPTH}; const CO2_PATH: f32 = ${o.carbonDioxide * STP_DEPTH}; const CO2_SW_K: f32 = ${CO2_COEFFICIENT};
 const SCALE_P: f32 = ${SCALING_PRESSURE}; const SCALE_N: f32 = ${SCALING_EXPONENT};
 const SHIELD: bool = ${shielding}; const SCATTER: bool = ${scatters}; const NIR_RAY: f32 = ${o.nearInfraredRayleigh / REFERENCE_PRESSURE}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
-const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo}; const ALB_ICEMELT: f32 = ${o.meltingIceAlbedo}; const ICE_MELTRANGE: f32 = ${o.iceMeltingRange};
-const AGEING: bool = ${!!o.snowAgeing}; const ALB_FRESH: f32 = ${o.freshSnowAlbedo}; const SNOW_COLDAGE: f32 = ${o.coldSnowAgeing}; const SNOW_MELTAGE: f32 = ${o.meltingSnowAgeing}; const SNOW_REFRESH: f32 = ${o.refreshSnowfall}; const WETSNOW: f32 = ${o.wetSnowRange}; const AGE_ACT: f32 = ${o.ageingActivation}; const ICE_SNOWFLOOR: f32 = ${o.iceSnowFloor};
+const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo}; const ALB_ICEMELT: f32 = ${o.iceAlbedoPhases ? pondedIceAlbedo(o) : o.meltingIceAlbedo}; const ICE_MELTRANGE: f32 = ${o.iceMeltingRange};
+const AGEING: bool = ${!!o.snowAgeing}; const ALB_FRESH: f32 = ${o.freshSnowAlbedo}; const SNOW_COLDAGE: f32 = ${o.coldSnowAgeing}; const SNOW_MELTAGE: f32 = ${o.meltingSnowAgeing}; const SNOW_REFRESH: f32 = ${o.refreshSnowfall}; const WETSNOW: f32 = ${o.wetSnowRange}; const AGE_ACT: f32 = ${o.ageingActivation}; const ICE_SNOWFLOOR: f32 = ${o.iceSnowFloor};${o.iceAlbedoPhases ? `
+const ICE_DRYFLOOR: f32 = ${o.iceDrySnowFloor}; const ICE_WETFLOOR: f32 = ${o.iceMeltingSnowFloor};
+fn phasedSnow(albedo: f32, T: f32, dt: f32, melting: bool) -> f32 {
+  let days = dt / 86400.0;
+  if (melting) { return min(albedo, ICE_WETFLOOR + (albedo - ICE_WETFLOOR) * exp(-SNOW_MELTAGE * days)); }
+  var pace = 1.0;
+  if (AGE_ACT > 0.0) { pace = min(1.0, exp(AGE_ACT * (T - MELTING) / (MELTING * T))); }
+  return min(albedo, max(ICE_DRYFLOOR, albedo - SNOW_COLDAGE * pace * days));
+}` : ''}
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME}; const GONE_CONC: f32 = ${seaIceRemoval(!!o.keepSmallIce).concentration}; const GONE_VOLUME: f32 = ${seaIceRemoval(!!o.keepSmallIce).volume}; const PENETRATING: bool = ${!!o.penetration};${o.iceLight ? `
@@ -1151,7 +1159,7 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
  * absorbed sunlight out of T and adds it to PH_PEN (J/m²).
  */
 export const seaSurfaceWgsl = (o) => {
-  const light = !!o.iceLight, brine = !!o.brineReservoir, hibler = o.leadClosure === 'hibler';
+  const light = !!o.iceLight, brine = !!o.brineReservoir, hibler = o.leadClosure === 'hibler', phases = !!o.iceAlbedoPhases;
   return `if (h <= 0.0) {
     if (snow0 > 0.0) { T -= LFUS * snow0 / capacity; PH[PH_SNOW + i] = 0.0; }
     var pen = 0.0;
@@ -1188,7 +1196,8 @@ ${brine ? '    let filling = T >= MELTING || PH[PH_BRINE + i] > 0.0;\n' : ''}   
 `}${light ? `    var share = 0.0;
     if (PENETRATING) { share = PH[PH_TRANS + i]; PH[PH_PEN + i] += dt * cover * through * share; }
     thickness -= dt * through * (1.0 - share) / LATENT_ICE;
-` : ''}    if (T > MELTING) {
+` : ''}${phases ? `    let meltedNow = T > MELTING;
+    if (meltedNow) {` : '    if (T > MELTING) {'}
       var excess = (T - MELTING) * SKINC; T = MELTING;
       let fromSnow = min(snow, excess / LFUS);
       snow -= fromSnow; excess -= fromSnow * LFUS;
@@ -1209,7 +1218,7 @@ ${brine ? `    if (area > 0.0) { let over = min(reservoir, max(0.0, reservoir - 
       snow -= flooded; h = spread + flooded / RHOICE; PH[PH_CONC + i] = area;
     }
     PH[PH_SNOW + i] = snow;
-${brine ? '    PH[PH_BRINE + i] = reservoir;\n' : ''}    PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ICE_SNOWFLOOR), snow > 0.0);
+${brine ? '    PH[PH_BRINE + i] = reservoir;\n' : ''}    PH[PH_SNOWALB + i] = select(ALB_FRESH, ${phases ? 'phasedSnow(PH[PH_SNOWALB + i], T, dt, meltedNow)' : 'agedSnow(PH[PH_SNOWALB + i], T, dt, ICE_SNOWFLOOR)'}, snow > 0.0);
   }`;
 };
 
