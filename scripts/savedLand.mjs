@@ -1,14 +1,24 @@
 import { LAKE_FIELDS, holdsLake, savedLake, savedLakeOptions } from '../js/physics/lake.module.js';
 
 /*
- * The land of a saved state onto a model whose arrays are loaded. The ice
- * argument is left to the model's own default, which on the GPU model is
- * its sea ice, so the snow a save carries on sea ice stays; the deep soil
- * layers of a state saved without them start from the state's skin at its
- * time.
+ * The land of a saved state onto a model whose arrays are loaded; the deep
+ * soil layers of a state saved without them start from the state's skin at
+ * its time.
  */
 export function loadSavedLand(model, saved) {
-  model.land.load(saved.land, undefined, saved.time, model.state[3]);
+  model.land.load(saved.land, model.state[6], saved.time, model.state[3]);
+}
+
+export const savedIceOptions = (saved) => ({ ...(saved.given?.ice ?? {}) });
+
+export function restoreSurface(model, saved, report = (line) => console.error(line)) {
+  const { state, seaIce, land } = model;
+  seaIce.load(state[6], saved.concentration ?? null);
+  if (land && saved.land) land.load(saved.land, state[6], saved.time, state[3]);
+  const missing = [...(saved.concentration ? [] : ['concentration']), ...(land && !saved.land ? ['land'] : []),
+    ...(land && saved.land ? Object.keys(land.serialize()).filter((name) => !name.startsWith('goal') && !(name in saved.land)).map((name) => `land.${name}`) : [])];
+  if (missing.length) report(`restoreSurface: the save holds no ${missing.join(', ')}; the model's starting values stand in for them`);
+  return missing;
 }
 
 export const lakeOptionsFor = (saved) => ({ ...savedLakeOptions(saved), ...JSON.parse(process.env.LAKE ?? '{}') });

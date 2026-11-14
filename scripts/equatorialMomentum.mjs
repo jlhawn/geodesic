@@ -15,6 +15,7 @@
 // 120W–100W's by the height band that carries it. MOIST, BOUNDARY_LAYER
 // and SURFACE (JSON) pass options.
 import { readFileSync } from 'node:fs';
+import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { SEA_DRAG } from '../js/physics/surface.module.js';
@@ -30,14 +31,13 @@ const FILE = process.argv[2], LAT = Number(process.env.LAT ?? 3);
 const BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, moist: JSON.parse(process.env.MOIST ?? "{}") });
+const model = createModel(stateGrid(saved, topography).mesh, { ice: savedIceOptions(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, moist: JSON.parse(process.env.MOIST ?? "{}") });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land, surface } = model;
 const { K, C, E, V, sigmaMid, sigmaLower, dSigma, R, g, exnerLayer, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
-seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
-land.load(saved.land, state[6]);
+restoreSurface(model, saved);
 model.time = saved.time;
 const dt = 1350 * 16 / saved.N, deg = 180 / Math.PI;
 const { latCell, lonCell, cellsOnEdge, verticesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge, maxEdgesOnEdge, dcEdge, dvEdge, fVertex, areaCell } = mesh;

@@ -418,11 +418,12 @@ export function createModel(gridOrMesh, {
    * radiation.meanShortwaveCloudEffect and meanLongwaveCloudEffect.
    */
   let lastPrecipTime = 0;
-  model.diffuseAlbedoAt = (i) => {
+  model.surfaceAlbedoAt = (i, mu = null) => {
     if (land && landMask[i]) return land.albedo(i);
     const h = state[6][i], lakeIce = lakeCell && lakeCell[i] ? lake.albedo(h, state[3][i]) : null;
-    return lakeIce ?? seaIce.albedo(h, null, seaIce.snow[i], seaIce.cover(i, h), state[3][i], seaIce.snowAlbedo[i]);
+    return lakeIce ?? seaIce.albedo(h, mu, seaIce.snow[i], seaIce.cover(i, h), state[3][i], seaIce.snowAlbedo[i]);
   };
+  model.diffuseAlbedoAt = (i) => model.surfaceAlbedoAt(i);
   model.diagnostics = function diagnostics(sums = totals) {
     const [pi, theta, u, surfaceT, q, qc, ice] = state;
     const precipitation = moistPhysics.precipitation;

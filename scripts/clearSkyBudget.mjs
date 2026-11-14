@@ -17,6 +17,7 @@
 // lit separately), with each class's reference range and verdict.
 // RADIATION (JSON) passes options to the radiation, LAND (JSON) to the land.
 import { readFileSync } from 'node:fs';
+import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
@@ -30,12 +31,11 @@ if (!FILE) { console.error('usage: node scripts/clearSkyBudget.mjs <state.bin>')
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const TIMES = Number(process.env.TIMES ?? 48), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), AT = Number(process.env.DAY ?? saved.day);
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, land: { ...ground.land, ...LAND } });
+const model = createModel(stateGrid(saved, topography).mesh, { ice: savedIceOptions(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, land: { ...ground.land, ...LAND } });
 const { mesh, core, state, seaIce, land } = model;
 const { K, C } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
-seaIce.load(state[6], saved.concentration ?? null);
-land.load(saved.land, state[6]);
+restoreSurface(model, saved);
 const result = clearSkyClasses(model, { day: AT, times: TIMES });
 
 const deg = 180 / Math.PI;

@@ -12,6 +12,7 @@
 // and the rest of its layer flux less the lowest layer's sensible heat as the
 // shortwave.
 import { readFileSync } from 'node:fs';
+import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
@@ -31,11 +32,10 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
 const stateMesh = stateGrid(saved, topography).mesh;
 function make(radiation, quiet = false) {
-  const model = createModel(stateMesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation });
+  const model = createModel(stateMesh, { ice: savedIceOptions(saved), lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation });
   STATE_NAMES.forEach((name, a) => model.state[a].set(saved[name]));
-  model.seaIce.load(model.state[6], saved.concentration ?? null);
   for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
-  model.land.load(saved.land, model.state[6]);
+  restoreSurface(model, saved);
   loadSavedLake(model, saved, { quiet });
   model.time = saved.time;
   const { g } = model.core.diagnostics, zs = Float64Array.from({ length: model.mesh.nCells }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));

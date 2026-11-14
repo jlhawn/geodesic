@@ -39,6 +39,7 @@
 // ice water path of order 20-70 g/m2 (CloudSat 2C-ICE, Waliser et al.
 // 2009); cloud effects -47 +- 4 and +26 +- 3 W/m2 (CERES EBAF).
 import { readFileSync } from 'node:fs';
+import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
@@ -60,13 +61,12 @@ const t0 = performance.now();
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const AT = Number(process.env.DAY ?? saved.day);
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { ice: savedIceOptions(saved), lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, dSigma, g, exnerLayer } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
-seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
-land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) }, state[6]);
+restoreSurface(model, saved);
 loadSavedLake(model, saved);
 model.time = saved.time;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
@@ -91,7 +91,7 @@ function surfaces() {
     fluxT[i] = surfaceT[i];
     if (landMask[i]) { adir[i] = adif[i] = land.albedo(i); openSea[i] = 0; continue; }
     const h = ice[i], cover = seaIce.cover(i, h), mu = radiation.cosZenith(i);
-    adir[i] = seaIce.albedo(h, mu, seaIce.snow[i], cover); adif[i] = seaIce.albedo(h, null, seaIce.snow[i], cover);
+    adir[i] = model.surfaceAlbedoAt(i, mu); adif[i] = model.diffuseAlbedoAt(i);
     openSea[i] = 1 - cover;
     if (h > 0 && cover < 1) fluxT[i] = cover * surfaceT[i] + (1 - cover) * FREEZING_POINT;
   }
