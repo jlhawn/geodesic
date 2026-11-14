@@ -85,6 +85,24 @@ test('from a dry start across a month boundary both engines relax the soil and t
   gpu.destroy();
 });
 
+test('across the year end with the moisture gate on the trees, both engines agree on the stores and the four accumulators', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const land = { ...GOAL, treeMoisture: true }, start = (365 - 79) * 86400 - 8 * 900;
+  const cpu = prepareLand(createModel(new Grid(16), options(land))), gpu = prepareLand(await createGpuModel(new Grid(16), options(land)));
+  cpu.time = start; gpu.time = start;
+  const C = cpu.mesh.nCells, cells = Array.from({ length: C }, (_, i) => i).filter((i) => cpu.geography.land[i] && !cpu.geography.iceSheet[i]);
+  for (let n = 0; n < 16; n++) { cpu.step(900); await gpu.step(900); }
+  await gpu.sync();
+  const saved = await gpu.land.serialize(), cpuSaved = cpu.land.serialize();
+  for (const name of FIELDS) {
+    const a = cpuSaved[SAVED[name] ?? name], b = saved[SAVED[name] ?? name];
+    let scale = 0, worst = 0;
+    for (const i of cells) { scale = Math.max(scale, Math.abs(a[i])); worst = Math.max(worst, Math.abs(a[i] - b[i])); }
+    assert.ok(worst < (name === 'goalTrees' ? 3e-3 : 2e-4) * Math.max(scale, 1), `${name} apart by ${worst} of ${scale}`);
+  }
+  assert.ok(cells.some((i) => saved.goalAdded[i] > 1e-3), 'the goal acted');
+  gpu.destroy();
+});
+
 test('a save reloads the accumulators into the GPU and the window goes on from them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const gpu = prepareLand(await createGpuModel(new Grid(16), options(GOAL)));
   gpu.time = START;
@@ -93,6 +111,7 @@ test('a save reloads the accumulators into the GPU and the window goes on from t
   const first = await gpu.land.serialize();
   gpu.land.load(first);
   const second = await gpu.land.serialize();
+  assert.equal(gpu.land.budget.goal, 0, 'the budget counts from the load');
   for (const name of FIELDS.slice(3)) assert.deepEqual(Array.from(second[name]), Array.from(first[name]), name);
   gpu.destroy();
 });

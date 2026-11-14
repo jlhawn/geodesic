@@ -122,7 +122,8 @@
 // save that ends whole days of a segment closes the window those sums
 // cover (header goalSince, the window's first day, and goalOpen false) and
 // the next segment starts a new one, a save inside a day or at a stop
-// leaves it open and the next segment carries it on), ICE (JSON options for the sea ice, e.g.
+// leaves it open and the next segment carries it on),
+// ICE (JSON options for the sea ice, e.g.
 // '{"leadClosure":"hibler"}'), LAND_JUMPS (the
 // model days at whose end land.jump() sets every land cell's topsoil
 // carbon, and the trees unless the start was observed, to the

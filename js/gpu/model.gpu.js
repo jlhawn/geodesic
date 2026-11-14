@@ -386,7 +386,7 @@ export async function createGpuModel(gridOrMesh, {
       for (const [, part] of GOAL_SLOTS) gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH[part], new Float32Array(C));
     },
     initialize(time = 0) { landCpu.initialize(time); gpu.uploadLand(uploaded()); },
-    load(saved, ice = state[6], time = 0, skin = null) { landCpu.load(saved, ice, time, skin); gpu.uploadLand(uploaded()); },
+    load(saved, ice = state[6], time = 0, skin = null) { landCpu.load(saved, ice, time, skin); if (landCpu.goaled) goalBooked = -goalNet(); gpu.uploadLand(uploaded()); },
     async serialize() {
       await pullLand();
       return landCpu.serialize();

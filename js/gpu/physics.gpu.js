@@ -1895,7 +1895,7 @@ ${Array.from({ length: 11 }, (_, j) => `      if (d >= ${mids[j + 1]}) { m0 = ${
       let fill0 = PH[PH_GOALFILL + m0 * C + i]; let fill1 = PH[PH_GOALFILL + m1 * C + i];
       if (!onIceSheet && snow <= ${TRACE_SNOW} && fill0 >= 0.0 && fill1 >= 0.0) {
         let fill = fill0 * (1.0 - weight) + fill1 * weight;
-        let rate = 1.0 - exp(-dt / ${wgslFloat(time)});
+        let rate = smallRate(dt / ${wgslFloat(time)});
         let rootChange = (fill * ROOTCAP - soil) * rate; let surfaceChange = (fill * SURFCAP - surf) * rate;
         soil += rootChange; surf += surfaceChange;
         PH[PH_GOALADD + i] += max(rootChange, 0.0) + max(surfaceChange, 0.0);
