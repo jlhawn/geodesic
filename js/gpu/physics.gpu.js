@@ -383,7 +383,7 @@ const I0_CLEAR: f32 = ${ICE_LIGHT.clear}; const I0_CLOUDY: f32 = ${ICE_LIGHT.clo
 ${o.warmLayer || o.coolSkin ? skinConstants(o) : ''}const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation}; const RAIN_KESSLER: bool = ${o.rainEvaporationLaw === 'kessler'}; const RAIN_CLOUDSC: bool = ${o.rainEvaporationLaw === 'cloudsc'}; const RAIN_OVERLAP: bool = ${o.rainCover === 'overlap' && (o.rainEvaporationLaw !== 'deficit' || o.rainEvaporationCeiling != null)}; const RAIN_FLOOR: f32 = ${RAIN_COVER_FLOOR}; const RAIN_COVER: f32 = ${o.rainCover === 'overlap' ? 0 : o.rainCover}; const RAIN_CEILING: bool = ${o.rainCover === 'overlap' ? o.rainEvaporationCeiling != null : rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover) < 1}; const RAIN_RH: f32 = ${o.rainCover === 'overlap' ? o.rainEvaporationCeiling ?? 1 : rainCeilingHumidity(o.rainEvaporationCeiling, o.rainCover)}; const KE_RATE: f32 = ${KESSLER_EVAPORATION.rate}; const KE_FLUX: f32 = ${KESSLER_EVAPORATION.flux}; const KE_EXP: f32 = ${KESSLER_EVAPORATION.exponent}; const KE_SHAFT: f32 = ${KESSLER_EVAPORATION.cloudsc};
 const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = ${o.boundaryCondensation === 'uniform'}; const BL_CLOUDLAYER: bool = ${o.boundaryCondensation === 'cloudLayer' && moistTurbulence}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
-const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
+const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent}; const ICE_FALL_COLD: bool = ${!!o.iceFallColdOnly};
 const FOG: bool = ${o.fogDroplets !== null}; const FOG_SETTLE_LAND: f32 = ${fog.settleLand}; const FOG_SETTLE_SEA: f32 = ${fog.settleSea}; const FOG_KK_LAND: f32 = ${fog.drizzleLand}; const FOG_KK_SEA: f32 = ${fog.drizzleSea}; const FOG_THIRDS: f32 = 0.6666666666666666;
 const FOG_DEP: bool = ${o.fogDeposition > 0 && o.surfaceExchange === 'roughness' && !!o.implicitDrag}; const FOG_E: f32 = ${o.fogDeposition}; const FOG_VMAX: f32 = ${o.fogDepositionLimit};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const AUTO_MIX: bool = ${o.autoconversionFloor === 'mixingTop'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
@@ -3424,9 +3424,10 @@ fn blSeal(i: i32, pi: f32) {
       if (liquid > 0.0) {
         let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
         let share = clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
-        let iceWater = (1.0 - share) * liquid;
+        var iceWater = (1.0 - share) * liquid;
         let total = liquid;
         liquid = share * total;
+        if (ICE_FALL_COLD && share > 0.0) { iceWater = 0.0; liquid = total; }
         if (iceWater > 0.0) {
           let cover = max(CLEAR_AIR, uniformCover(total, uniformWidth(cloudSat(temperature, pressure), pressure, pi)));
           let speed = FALL_C * pow(pressure / (RGAS * temperature) * iceWater / cover, FALL_EXP);

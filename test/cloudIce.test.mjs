@@ -307,3 +307,33 @@ test('a layer whose only cloud is plume cumulus is seen as its plume: its in-clo
   }
   assert.ok(sigmaMid[k] > 0.85);
 });
+
+test('on the GPU iceFallColdOnly keeps the ice of layers warmer than iceTemperature and matches the CPU column by column to the same tolerances', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: true, iceFallColdOnly: true }));
+
+function adjustedColumns(moist, floor) {
+  const dt = 900, model = createModel(new Grid(16), { ocean: false, levels, moist: { plumeEntrainmentLaw: 'gregory', ...moist } }), { core, mesh } = model, C = mesh.nCells, { K, sigmaMid, exnerLayer } = core.diagnostics;
+  const [pi, theta, , surfaceT, q, qc] = model.state;
+  let seed = 4242;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let pass = 0; pass < 3; pass++) {
+    core.diagnose(pi.fill(1e5), theta, q, qc);
+    for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
+      const x = k * C + i, p = 1e5 * sigmaMid[k], T = Math.max(floor, 300 - 6.5e-3 * 7400 * Math.log(1e5 / p));
+      theta[x] = T / exnerLayer[x];
+      if (pass === 0) { const r = random(), c = random(); q[x] = (0.3 + 0.75 * random()) * cloudSaturation(T, p, true, 273.15, 235.15, {}).qs; qc[x] = r < 0.3 ? 2e-4 * c : 0; }
+    }
+  }
+  surfaceT.fill(300);
+  core.diagnose(pi, theta, q, qc);
+  model.moist.precipitation.fill(0);
+  model.phases.adjust(0, C, dt);
+  return [theta, q, qc, model.moist.precipitation].map((a) => Float64Array.from(a));
+}
+
+test('iceFallColdOnly is iceFall null where no layer is colder than iceTemperature, still drops the colder ice, and false is the default', () => {
+  const same = (a, b) => a.every((values, n) => values.every((v, x) => Object.is(v, b[n][x])));
+  assert.ok(same(adjustedColumns({ iceFallColdOnly: true }, 240), adjustedColumns({ iceFall: null }, 240)));
+  const cold = adjustedColumns({ iceFallColdOnly: true }, 205);
+  assert.ok(!same(cold, adjustedColumns({ iceFall: null }, 205)) && !same(cold, adjustedColumns({}, 205)));
+  assert.ok(same(adjustedColumns({ iceFallColdOnly: false }, 205), adjustedColumns({}, 205)));
+});

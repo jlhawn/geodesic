@@ -558,6 +558,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * the surface's rule. The column is then adjusted again, so that ice
  * falling into subsaturated layers sublimates, moistening and cooling
  * them. Only the liquid share α of the cloud converts to rain as below.
+ * With `iceFallColdOnly` only layers at or below iceTemperature pass ice
+ * down; a warmer layer keeps the ice that falls into it and converts its
+ * whole cloud as liquid, as every layer does with iceFall null.
  * Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime
  * (`upperCloudLifetime` where the layer's pressure is below `shallowTop`,
@@ -676,7 +679,7 @@ export const MOIST_DEFAULTS = {
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', plumeDeparture: 'surface', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', pcapeMinimum: 0.05, pcapeMinimumOver: 'all', pcapeTimescale: 'surface', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: true, plumeConsumption: 'all', convectionRetype: false, midLevelConvection: false, shallowRetype: false,
-  condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
+  condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16, iceFallColdOnly: false,
   liquidTemperature: LIQUID_TEMPERATURE, iceTemperature: ICE_TEMPERATURE, plumeTrace: false,
 };
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
@@ -690,7 +693,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusAscent, cumulusEntrainmentHeight, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeDeparture, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, pcapeMinimum, pcapeMinimumOver, pcapeTimescale, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption, convectionRetype, midLevelConvection, shallowRetype,
-    condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature, plumeTrace,
+    condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, iceFallColdOnly, liquidTemperature, iceTemperature, plumeTrace,
   } = { ...MOIST_DEFAULTS, ...options };
   if (condensation !== 'uniform' && condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${condensation}`);
   if (boundaryCondensation !== 'cloudLayer' && boundaryCondensation !== 'uniform' && boundaryCondensation !== 'saturation') throw new Error(`boundaryCondensation must be 'cloudLayer', 'uniform' or 'saturation', not ${boundaryCondensation}`);
@@ -969,8 +972,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         liquid = qc[idx];
         if (qc[idx] > 0) {
           const temperature = theta[idx] * exnerLayer[idx], pressure = pi[i] * sigmaMid[k];
-          const share = liquidFraction(temperature, liquidTemperature, iceTemperature), ice = (1 - share) * qc[idx];
-          liquid = share * qc[idx];
+          const share = liquidFraction(temperature, liquidTemperature, iceTemperature), held = iceFallColdOnly && share > 0, ice = held ? 0 : (1 - share) * qc[idx];
+          liquid = held ? qc[idx] : share * qc[idx];
           if (ice > 0) {
             saturation(temperature, pressure);
             const cover = Math.max(CLEAR_AIR, uniformCover(qc[idx], halfWidth(pressure, pi[i])));
