@@ -53,7 +53,7 @@ const { core, moist, boundaryLayer: bl, radiation, mesh } = model, C = mesh.nCel
 if (saved.boundaryDepth) bl.depth.set(saved.boundaryDepth);
 model.time = saved.time;
 model.seaIce.load(model.state[6], saved.concentration ?? null);
-if (model.land && saved.land) model.land.load(saved.land);
+if (model.land && saved.land) model.land.load(saved.land, model.state[6]);
 if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
 if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
 if (saved.mlmGate) radiation.mlmGate.set(saved.mlmGate);

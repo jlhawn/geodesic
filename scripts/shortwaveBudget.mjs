@@ -47,7 +47,7 @@ if (saved.boundaryBuoyancy) bl.buoyancyFlux.set(saved.boundaryBuoyancy);
 if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
 placeCumulus(model, saved);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual);
-land.load(saved.land);
+land.load(saved.land, state[6]);
 for (let i = 0; i < C; i++) core.diagnoseColumn(i, pi, theta, q, qc);
 const bottom = (K - 1) * C, landMask = model.geography.land, wind = model.surface.windSpeed;
 const day = Math.round(saved.time / 86400);
