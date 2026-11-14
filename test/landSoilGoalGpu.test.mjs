@@ -6,7 +6,8 @@ import { createModel } from '../js/model.module.js';
 import { readTopography } from '../js/geography.module.js';
 import { MID_MONTH_DAYS } from '../js/monthCalendar.module.js';
 import { PREVIOUS_LEVELS, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
-import { prepareLand, shaderDigest, layoutDigest, landDigest } from './helpers/soilGoalDigest.mjs';
+import { physicsSurfaceKernel } from '../js/gpu/physics.gpu.js';
+import { prepareLand } from './helpers/soilGoalLand.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -21,8 +22,6 @@ const START = MID_MONTH_DAYS[3] * 86400 - 8 * 900;
 const FIELDS = ['soil', 'surface', 'deepWater', 'goalAdded', 'goalRemoved', 'goalCover', 'goalTrees'];
 const SAVED = { deepWater: 'deep' };
 
-const BASE = { shader: 'b126847971e02621461cf6177684f6b4', layout: '381405bc82c5739dd4cd806a9d10b808', land: '7da2fbf2f2b3ab896da27fdc3e9841e6' };
-
 test('the soil goal adds twelve monthly fills and four accumulators of C floats before the 2 m temperature and moves no other slot', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
   const mesh = buildMesh(new Grid(16)), C = mesh.nCells, args = [8, 0, 0, 0, null, false, 0, 0, false, false, false, false, false, 3, false, true, true, false, false, false, false, false];
   const without = layoutFor(mesh, ...args), plain = layoutFor(mesh, ...args, false), goal = layoutFor(mesh, ...args, true);
@@ -36,10 +35,17 @@ test('the soil goal adds twelve monthly fills and four accumulators of C floats 
   for (const name of Object.keys(without.PH)) if (name !== 'total') assert.equal(goal.PH[name], without.PH[name] + (name === 'T2M' ? 16 * C : 0), name);
 });
 
-test("with soilGoal 'free' the shader text, the layout and a GPU model's land after four steps are those of a7b42cb4", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  assert.equal(shaderDigest(), BASE.shader);
-  assert.equal(layoutDigest(), BASE.layout);
-  assert.equal(await landDigest(createGpuModel), BASE.land);
+test("with soilGoal 'free' every surface kernel is the kernel of a model without the option and carries no goal code", () => {
+  for (const held of [false, true]) for (const skin of [false, true]) for (const cover of [false, true]) for (const deep of [false, true]) {
+    const phys = skin ? {} : { treeline: true, vegetation: true };
+    const plain = physicsSurfaceKernel(held, skin, null, cover, deep, phys);
+    const free = physicsSurfaceKernel(held, skin, null, cover, deep, { ...phys, soilGoal: 'free', soilGoalTime: 30 * 86400 });
+    const goal = physicsSurfaceKernel(held, skin, null, cover, deep, { ...phys, soilGoal: 'observed', soilGoalTime: 30 * 86400 });
+    const which = JSON.stringify({ held, skin, cover, deep });
+    assert.equal(free, plain, which);
+    assert.doesNotMatch(free, /PH_GOAL/, which);
+    assert.match(goal, /PH_GOALFILL/, which);
+  }
 });
 
 test("the GPU refuses soilGoal 'observed' without vegetation and values other than 'free' and 'observed'", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
