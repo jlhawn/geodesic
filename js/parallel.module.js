@@ -146,6 +146,7 @@ export async function createParallelModel(grid, options = {}, workers = null, pr
   }
 
   model.step = function step(dt) {
+    if (model.land) model.land.setTime(model.time);
     tendencyPhases(0, 0);
     run(PHASE.ADVANCE, { stage: 0, factor: dt / 2 });
     tendencyPhases(1, 1);

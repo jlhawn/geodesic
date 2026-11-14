@@ -228,6 +228,7 @@ export async function createGpuModel(gridOrMesh, {
 
   model.step = async function step(dt) {
     await gpu.stepModel(dt, model.time);
+    landCpu?.setTime(model.time);
     landCpu?.advance(dt);
     model.time += dt;
     changes++;
@@ -245,6 +246,7 @@ export async function createGpuModel(gridOrMesh, {
     const submissions = await gpu.batched(async () => {
       for (let n = 0; n < count; n++) {
         await gpu.stepModel(dt, model.time);
+        landCpu?.setTime(model.time);
         landCpu?.advance(dt);
         model.time += dt;
         if (afterStep) afterStep();

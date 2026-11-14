@@ -1,5 +1,6 @@
 import { MELTING_POINT, SNOW_AGEING, agedSnowAlbedo, refreshedSnowAlbedo } from './ice.module.js';
 import { SOLAR_CONSTANT, AXIAL_TILT } from './radiation.module.js';
+import { monthWeights } from '../monthCalendar.module.js';
 
 /*
  * The land surface: a skin of small heat capacity, a bucket of soil
@@ -136,6 +137,7 @@ export const TRACE_SNOW = 1e-6;
 
 export const START_CODES = { neutral: 1, bare: 2, green: 3, observed: 4 };
 export const COVER_GOALS = ['water', 'observed'];
+export const SOIL_GOALS = ['free', 'observed'];
 export const FRESH_JUMPS = [365, 730];
 export const holdsTrees = (hold) => hold > 0 && hold !== START_CODES.observed;
 
@@ -393,7 +395,7 @@ export function createLandSurface(mesh, geography, {
   treeMoisture = true, moistureMemory = 3 * 365 * 86400, forestAridity = FOREST_ARIDITY, grassland = true, forestAlbedo = 0.13, grassAlbedo = 0.20, grassSnowDarkening = 0.06,
   soilCarbon: carbonOn = SOIL_CARBON.soilCarbon, mineralAlbedo = SOIL_CARBON.mineralAlbedo, humusAlbedo = SOIL_CARBON.humusAlbedo, organicScale = SOIL_CARBON.organicScale, topsoilMass = SOIL_CARBON.topsoilMass,
   soilTurnover = SOIL_CARBON.soilTurnover, litterInput = SOIL_CARBON.litterInput, treeLitter = SOIL_CARBON.treeLitter, grassLitter = SOIL_CARBON.grassLitter, decompositionWilting = SOIL_CARBON.decompositionWilting,
-  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'water', deepCapacity = null, buffers = null,
+  carbonAcceleration = SOIL_CARBON.carbonAcceleration, start = 'observed', coverGoal = 'water', soilGoal = 'free', soilGoalTime = 30 * 86400, deepCapacity = null, buffers = null,
   soil: soilModel = DEFAULT_SOIL, soilDepths, soilHeatCapacity, soilConductivity, firnDensity,
 } = {}) {
   const C = mesh.nCells;
@@ -401,6 +403,8 @@ export function createLandSurface(mesh, geography, {
   const layered = column !== null, heatCapacity = layered ? column.soil.capacity[0] : givenCapacity ?? 1e6;
   if (!START_CODES[start]) throw new Error(`start is 'observed', 'neutral', 'bare' or 'green', not ${start}`);
   if (!COVER_GOALS.includes(coverGoal)) throw new Error(`coverGoal is 'water' or 'observed', not ${coverGoal}`);
+  if (!SOIL_GOALS.includes(soilGoal)) throw new Error(`soilGoal is 'free' or 'observed', not ${soilGoal}`);
+  if (!(typeof soilGoalTime === 'number' && soilGoalTime > 0 && Number.isFinite(soilGoalTime))) throw new Error(`soilGoalTime is the goal's e-folding time in seconds, above 0, not ${soilGoalTime}`);
   if (deepCapacity === null) deepCapacity = vegetated ? DEEP_CAPACITY : 0;
   if (!(typeof deepCapacity === 'number' && deepCapacity >= 0 && Number.isFinite(deepCapacity))) throw new Error(`deepCapacity is the deep store's capacity in kg/m², 0 (none) or more, not ${deepCapacity}`);
   if (deepCapacity > 0 && !vegetated) throw new Error('deepCapacity needs vegetation: only the trees draw on the deep store');
@@ -412,6 +416,9 @@ export function createLandSurface(mesh, geography, {
   const snowFreeCover = shared('snowFreeCover'), discharge = shared('discharge'), iceLoss = shared('iceLoss');
   const deepNames = layered ? column.depths.slice(1).map((_, k) => `soilT${k + 2}`) : [], deep = deepNames.map((name) => shared(name));
   const record = shared('record', 3);
+  const goaled = soilGoal === 'observed';
+  const goalClock = goaled ? shared('goalClock', 3) : null, goalAdded = goaled ? shared('goalAdded') : null, goalRemoved = goaled ? shared('goalRemoved') : null;
+  const goalCover = goaled ? shared('goalCover') : null, goalTrees = goaled ? shared('goalTrees') : null;
   if (!(buffers && buffers.record)) record[0] = -1;
   if (!(buffers && buffers.snowAlbedo)) snowAlbedoField.fill(freshSnowAlbedo);
   const placeholders = startPlaceholders({ topsoilMass, organicScale }), held = [null, placeholders.neutral, placeholders.bare, placeholders.green, placeholders.observed];
@@ -421,9 +428,11 @@ export function createLandSurface(mesh, geography, {
   const humus = { mineralAlbedo, humusAlbedo, organicScale, topsoilMass }, carbonOptions = { litterInput, soilTurnover, decompositionWilting, seasonThreshold, wetnessThreshold };
   const bareShare = new Float64Array(C);
   const warmth = (t) => Math.min(1, Math.max(0, (t - growthColdest) / (growthWarmest - growthColdest)));
-  const { land, iceSheet = null, treeCover = null, greenMax = null, wetness: observedFill = null } = geography;
+  const { land, iceSheet = null, treeCover = null, greenMax = null, wetness: observedFill = null, wetnessMonthly = null } = geography;
   const observedCover = vegetated && coverGoal === 'observed';
   if (observedCover && !(treeCover && greenMax)) throw new Error("coverGoal 'observed' needs the land cover of data/landCover.bin (geography.treeCover and geography.greenMax); give coverGoal 'water' for a geography without it");
+  if (goaled && !vegetated) throw new Error("soilGoal 'observed' needs vegetation: the goal is the root zone's and the surface layer's");
+  if (goaled && !(Array.isArray(wetnessMonthly) && wetnessMonthly.length === 12)) throw new Error("soilGoal 'observed' needs the monthly soil water of data/soilwater_monthly.bin (geography.wetnessMonthly); give soilGoal 'free' for a geography without it");
   const onIceSheet = (i) => iceSheet !== null && iceSheet[i] > 0;
   const glacier = (i) => iceSheetBalance && onIceSheet(i);
   const skinCapacity = (i) => (layered ? (onIceSheet(i) ? column.firn : column.soil).capacity[0] : heatCapacity);
@@ -456,7 +465,7 @@ export function createLandSurface(mesh, geography, {
     }
   }
   const startDeepLayers = (time) => { for (let i = 0; i < C; i++) if (land[i]) startDeep(i, time); else for (const layer of deep) layer[i] = 0; };
-  const budget = { runoff: 0, melt: 0, discharge: 0, iceMelt: 0 };
+  const budget = { runoff: 0, melt: 0, discharge: 0, iceMelt: 0, ...(goaled ? { goal: 0 } : {}) };
 
   const capacity = () => (vegetated ? rootZoneCapacity : bucketCapacity);
   const darkening = soilDarkening === true ? 'surface' : soilDarkening;
@@ -538,16 +547,23 @@ export function createLandSurface(mesh, geography, {
     if (snow[i] > 0) { if (!snowHold) vegetation[i] *= Math.exp(-dt / snowDeclineTime); }
     else {
       const cap = capacity(i);
-      const goal = observedCover ? greenMax[i] : Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));
-      if (goal > vegetation[i]) vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt * warmth(temperature) / growthTime));
-      else vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt / declineTime));
+      const own = Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));
+      const goal = observedCover ? greenMax[i] : own, from = vegetation[i];
+      const step = (g) => (g > from ? (g - from) * (1 - Math.exp(-dt * warmth(temperature) / growthTime)) : (g - from) * (1 - Math.exp(-dt / declineTime)));
+      vegetation[i] += step(goal);
+      if (goaled && observedCover) goalCover[i] += step(goal) - step(own);
       snowFreeCover[i] = vegetation[i];
     }
     if (!treed) { canopy[i] = Math.max(vegetation[i], canopy[i] + (vegetation[i] - canopy[i]) * (1 - Math.exp(-dt / canopyMemory))); return; }
     const kept = holdsTrees(record[1]);
     if (observedCover && !kept) {
       const goal = snow[i] > 0 ? canopy[i] : Math.min(treeCover[i], vegetation[i]);
+      const was = canopy[i];
       canopy[i] += (goal - canopy[i]) * (1 - Math.exp(-dt / (goal > canopy[i] ? treeGrowthTime : treeDeclineTime)));
+      if (goaled && snow[i] <= 0) {
+        const own = treeFactor(i) * vegetation[i];
+        goalTrees[i] += canopy[i] - was - (own - was) * (1 - Math.exp(-dt / (own > was ? treeGrowthTime : treeDeclineTime)));
+      }
       return;
     }
     const f = treeFactor(i);
@@ -569,6 +585,18 @@ export function createLandSurface(mesh, geography, {
     const decay = rate / soilTurnover;
     const x = carbonAcceleration * decay * dt;
     soilCarbon[i] = Math.max(0, soilCarbon[i] + (input - decay * soilCarbon[i]) * carbonAcceleration * dt * (x > 0 ? -Math.expm1(-x) / x : 1));
+  }
+
+  function relax(i, dt) {
+    if (!land[i] || onIceSheet(i) || snow[i] > TRACE_SNOW) return;
+    const f = goalClock[2], fill = wetnessMonthly[goalClock[0]][i] * (1 - f) + wetnessMonthly[goalClock[1]][i] * f;
+    if (!(fill >= 0)) return;
+    const a = 1 - Math.exp(-dt / soilGoalTime);
+    const rootChange = (fill * capacity(i) - soil[i]) * a, surfaceChange = (fill * surfaceCapacity - surface[i]) * a;
+    soil[i] += rootChange; surface[i] += surfaceChange;
+    goalAdded[i] += Math.max(rootChange, 0) + Math.max(surfaceChange, 0);
+    goalRemoved[i] += Math.max(-rootChange, 0) + Math.max(-surfaceChange, 0);
+    budget.goal += mesh.areaCell[i] * (rootChange + surfaceChange);
   }
 
   function update(i, surfaceT, flux, evaporation, dt, airTemperature = null, potential = null) {
@@ -602,6 +630,7 @@ export function createLandSurface(mesh, geography, {
       budget.runoff += mesh.areaCell[i] * melt; budget.iceMelt += mesh.areaCell[i] * melt;
       surfaceT[i] = MELTING_POINT;
     }
+    if (goaled) relax(i, dt);
     if (vegetated && airTemperature !== null) season(i, airTemperature, dt);
     if (vegetated && potential !== null) moisture(i, potential, dt);
     if (vegetated) grow(i, dt, temperature);
@@ -690,6 +719,15 @@ export function createLandSurface(mesh, geography, {
   }
 
   function advance(dt) { if (record[0] >= 0) record[0] += dt; }
+
+  function setTime(time) {
+    if (!goaled) return;
+    const [m0, m1, f] = monthWeights(time / 86400);
+    goalClock[0] = m0; goalClock[1] = m1; goalClock[2] = f;
+  }
+  if (goaled && !(buffers && buffers.goalClock)) setTime(0);
+
+  function resetIncrements() { if (goaled) for (const a of [goalAdded, goalRemoved, goalCover, goalTrees]) a.fill(0); }
 
   /*
    * Sets every land cell's trees to the cover times its own treeline and
@@ -789,6 +827,9 @@ export function createLandSurface(mesh, geography, {
       else estimateCarbonRecord(i);
     }
     if (deepWater) for (let i = 0; i < C; i++) deepWater[i] = !land[i] || onIceSheet(i) ? 0 : saved.deep ? Math.min(deepCapacity, Math.max(0, saved.deep[i])) : startingDeep(i);
+    if (goaled) for (const [name, array] of [['goalAdded', goalAdded], ['goalRemoved', goalRemoved], ['goalCover', goalCover], ['goalTrees', goalTrees]]) {
+      if (saved[name]) for (let i = 0; i < C; i++) array[i] = land[i] ? saved[name][i] : 0; else array.fill(0);
+    }
     runoff.fill(0); discharge.fill(0); iceLoss.fill(0);
     if (!layered) return;
     const kept = deepNames.every((name) => saved[name]);
@@ -807,8 +848,8 @@ export function createLandSurface(mesh, geography, {
 
   return {
     layered, column, deep, deepNames, skinCapacity, startDeep, ...Object.fromEntries(deepNames.map((name, k) => [name, deep[k]])),
-    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, discharge, iceLoss, record, dryAlbedo, treeFactor, moistureFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load, advance, jump, weights, placeholders, deepWater, deepCapacity,
-    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean), snowFreeCover: Float64Array.from(snowFreeCover), record: Float64Array.from(record) } : {}), ...(humic ? { soilCarbon: Float64Array.from(soilCarbon), litterMean: Float64Array.from(litterMean), decayMean: Float64Array.from(decayMean) } : {}), ...Object.fromEntries(deepNames.map((name, k) => [name, Float64Array.from(deep[k])])), ...(deepWater ? { deep: Float64Array.from(deepWater) } : {}) }; },
-    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer, soilCarbon: soilCarbon.buffer, litterMean: litterMean.buffer, decayMean: decayMean.buffer, snowFreeCover: snowFreeCover.buffer, discharge: discharge.buffer, iceLoss: iceLoss.buffer, record: record.buffer, ...Object.fromEntries(deepNames.map((name, k) => [name, deep[k].buffer])), ...(deepWater ? { deepWater: deepWater.buffer } : {}) },
+    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, discharge, iceLoss, record, dryAlbedo, treeFactor, moistureFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load, advance, setTime, resetIncrements, goaled, goalAdded, goalRemoved, goalCover, goalTrees, jump, weights, placeholders, deepWater, deepCapacity,
+    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean), snowFreeCover: Float64Array.from(snowFreeCover), record: Float64Array.from(record) } : {}), ...(humic ? { soilCarbon: Float64Array.from(soilCarbon), litterMean: Float64Array.from(litterMean), decayMean: Float64Array.from(decayMean) } : {}), ...Object.fromEntries(deepNames.map((name, k) => [name, Float64Array.from(deep[k])])), ...(deepWater ? { deep: Float64Array.from(deepWater) } : {}), ...(goaled ? { goalAdded: Float64Array.from(goalAdded), goalRemoved: Float64Array.from(goalRemoved), goalCover: Float64Array.from(goalCover), goalTrees: Float64Array.from(goalTrees) } : {}) }; },
+    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer, soilCarbon: soilCarbon.buffer, litterMean: litterMean.buffer, decayMean: decayMean.buffer, snowFreeCover: snowFreeCover.buffer, discharge: discharge.buffer, iceLoss: iceLoss.buffer, record: record.buffer, ...Object.fromEntries(deepNames.map((name, k) => [name, deep[k].buffer])), ...(deepWater ? { deepWater: deepWater.buffer } : {}), ...(goaled ? { goalClock: goalClock.buffer, goalAdded: goalAdded.buffer, goalRemoved: goalRemoved.buffer, goalCover: goalCover.buffer, goalTrees: goalTrees.buffer } : {}) },
   };
 }
