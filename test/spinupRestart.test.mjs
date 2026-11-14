@@ -111,3 +111,30 @@ test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extent
     rmSync(out, { recursive: true, force: true });
   }
 });
+
+test("at N=16 spinup.mjs with LAND soilGoal 'observed', stopped inside a day and resumed, carries the goal's window and ends day 2 on the land of the run that did not stop, bit for bit, whose window opened on day 0; a segment that ends at day 1 closes its window, and the next one's holds the second day alone and says so in its header", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const out = mkdtempSync(join(tmpdir(), 'restart-goal-'));
+  try {
+    const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: '16', MINUTES: '100', OUT: out, LAND: JSON.stringify({ soilGoal: 'observed' }), ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    run({ TAG: 'whole', DAYS: '2' });
+    run({ TAG: 'halt', DAYS: '2', STOP_AFTER_STEPS: '96' });
+    const inside = await decoded(join(out, 'halt_day0001_step0032.bin'));
+    assert.deepEqual([inside.goalSince, inside.goalOpen], [0, true], 'a save inside a day leaves the window open');
+    assert.ok(inside.land.goalAdded.some((x) => x > 0), 'and carries its sums');
+    run({ TAG: 'halt', DAYS: '2' });
+    run({ TAG: 'close', DAYS: '1' });
+    run({ TAG: 'close', DAYS: '2' });
+    const [whole, halt, close] = await Promise.all(['whole', 'halt', 'close'].map((tag) => decoded(join(out, `${tag}_day0002.bin`))));
+    assert.deepEqual([whole.goalSince, whole.goalOpen, halt.goalSince, halt.goalOpen], [0, false, 0, false]);
+    const land = (state) => Object.fromEntries(fields(state.land));
+    const differing = Object.entries(land(whole)).filter(([name, values]) => !land(halt)[name] || values.some((x, i) => x !== land(halt)[name][i])).map(([name]) => name);
+    assert.deepEqual(differing, [], `day 2 land, whole against halted: ${differing.join(', ')}`);
+    assert.deepEqual([close.goalSince, close.goalOpen], [1, false], 'the closed window of day 1 is not carried');
+    const sum = (state, name) => state.land[name].reduce((s, x) => s + x, 0);
+    assert.ok(sum(close, 'goalAdded') > 0 && sum(close, 'goalAdded') < 0.8 * sum(whole, 'goalAdded'), `one day of ${sum(close, 'goalAdded').toFixed(0)} against two of ${sum(whole, 'goalAdded').toFixed(0)}`);
+    assert.deepEqual(whole.given.land.soilGoal, 'observed');
+    assert.ok(!('soilGoal' in whole.options.land), 'the page never sees the goal');
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});

@@ -5296,6 +5296,38 @@ The work, in order:
      and `COVERG`, allocated only under 'observed'). `test/landCover.test.mjs`
      and `test/landCoverGpu.test.mjs` hold the file, the resampling, the
      start, the jump and the N = 16 parity of both goals.
+   - `soilGoal` ('free', the default, or 'observed') and `soilGoalTime`
+     (seconds, 30 days by default): a goal for spin-ups that the page
+     never runs, given in `LAND` of `scripts/spinup.mjs` and recorded in a
+     save's `given` only, never in its `options`, so a published state's
+     soil follows the model's own water. 'observed' relaxes the root zone
+     and the surface layer of every open land cell off the ice sheets,
+     with a finite goal and snow at most `TRACE_SNOW`, toward CPC's
+     1991–2020 monthly soil moisture as a fill fraction (soilw/760,
+     `data/soilwater_monthly.bin`, unscaled, interpolated in time between
+     mid-month values on the model calendar by `js/monthCalendar.module.js`)
+     times the store's capacity, each step by `1 − exp(−dt/soilGoalTime)`
+     of the gap; the deep store stays free. The water it adds or removes
+     comes from no rain and goes to no runoff or ocean: `land.budget.goal`
+     books it (kg), so land water closes as the change equals rain minus
+     evaporation plus `goal`. Per cell, `land.goalAdded` and `goalRemoved`
+     (kg/m², gross, both at least 0) sum what it did to the two stores, and
+     `goalCover` and `goalTrees` the change of the cover and of the tree
+     fraction that the observed cover goal made beyond what the model's own
+     goal would have made from the same state in the same step (zero
+     without `coverGoal` 'observed' and under snow). They are saved
+     only under 'observed' and reset after each save of whole days of a
+     segment, carried through a save inside a day or at a stop, the header
+     recording the window's first day (`goalSince`) and whether it is open
+     (`goalOpen`); `scripts/landIncrements.mjs` tabulates a quarter's
+     increments by band and region beside the same quarter of earlier
+     years, the measure of whether the model's own soil water and
+     vegetation approach the observed ones. The GPU compiles the goal in
+     and keeps the monthly fills and the sums in physics slots allocated
+     only under 'observed'; with 'free' every array, budget and shader is
+     what it would be without the option. `test/landSoilGoal.test.mjs`,
+     `test/landSoilGoalGpu.test.mjs` and `test/landIncrements.test.mjs`
+     hold the relaxation, the budget, the parity at N = 16 and the report.
    - `deepCapacity` (kg/m², 300 by default with vegetation and 0 without it; 0: none). Above 0 every land
      cell off the ice sheets carries a deep store of that capacity below
      the root zone, which only the trees reach (saved as `land.deep`; on

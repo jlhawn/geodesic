@@ -5,7 +5,10 @@
 # <REPORTS>/dayDDDD/<PREFIX>_dayDDDD.md: scripts/compareStates.mjs side by
 # side over the quarter, scripts/woaSstBias.mjs merged by box,
 # scripts/cloudRegimes.mjs per resolution, scripts/rounds.py and a
-# top-of-the-atmosphere table by quarter over the logs up to that day, and
+# top-of-the-atmosphere table by quarter over the logs up to that day,
+# scripts/landIncrements.mjs per resolution when the states carry the soil
+# goal's increments (a spin-up with LAND '{"soilGoal":"observed"}'; its
+# section is left out of the report otherwise), and
 # the five figures of scripts/figures/snapshot.sh per resolution, which sit
 # beside it; the tools' raw outputs stay under <REPORTS>/dayDDDD/parts, and a
 # part that failed is marked <name>.failed there and not retried (delete the
@@ -91,6 +94,13 @@ print("W/m² except as marked; the log's daily values are means over the day's s
 PY
 }
 
+increments_of() { # <state> <days>: landIncrements.mjs's tables, or `none` for a state without increments
+  "$NODE" scripts/landIncrements.mjs "$1" --days "$2"
+  local rc=$?
+  [ "$rc" -eq 3 ] && { echo none; return 0; }
+  return "$rc"
+}
+
 make_parts() { # <day> <k>
   local D=$1 k=$2 parts=$(parts_of "$1") N states=() logs=()
   local window=$((D - $(qday $((k - 1)))))
@@ -100,6 +110,7 @@ make_parts() { # <day> <k>
   for N in $NS; do
     run_part "$D" "woa$N.md" "$NODE" scripts/woaSstBias.mjs "$(state_of "$N" "$D")" --json "$parts/woa$N.json"
     run_part "$D" "cloud$N.txt" "$NODE" scripts/cloudRegimes.mjs "$(state_of "$N" "$D")"
+    run_part "$D" "increments$N.md" increments_of "$(state_of "$N" "$D")" "$window"
   done
   if [ ! -s "$parts/rounds.txt" ] || [ ! -s "$parts/toa.md" ]; then
     for N in $NS; do logs+=("$(log_to_day "$N" "$D" "$parts")"); done
@@ -199,6 +210,10 @@ assemble() { # <day> <k>
     for N in $NS; do echo "### N=$N"; echo; code "$parts/cloud$N.txt"; done
     echo "## Top of the atmosphere by quarter"; echo; section "$parts/toa.md"
     echo "## Rounds"; echo; code "$parts/rounds.txt"
+    for N in $NS; do
+      [ -s "$parts/increments$N.md" ] && [ "$(cat "$parts/increments$N.md")" != none ] || continue
+      echo "## Land increments of the soil goal, N=$N"; echo; cat "$parts/increments$N.md"; echo
+    done
     echo "## Figures"; echo
     for N in $NS; do
       echo "### N=$N"; echo

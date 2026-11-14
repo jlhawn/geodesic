@@ -148,3 +148,18 @@ test('the four arrays reach a save and load back, a save without them loads zero
   land.resetIncrements();
   for (const name of ['goalAdded', 'goalRemoved', 'goalCover', 'goalTrees']) assert.ok(land[name].every((v) => v === 0), name);
 });
+
+test('regridLand keeps no goal increments, at the same cells or on another mesh', async () => {
+  const { regridLand } = await import('../js/physics/regrid.module.js');
+  const land = build(geo, { soilGoal: 'observed', soilGoalTime: 3600 });
+  for (let i = 0; i < C; i++) if (open(i)) land.soil[i] = 250;
+  step(land, DT, 4);
+  const saved = land.serialize();
+  assert.ok(saved.goalRemoved.some((x) => x > 0));
+  const target = { mesh: buildMesh(new Grid(32)) };
+  target.geography = createGeography(target.mesh, readTopography('etopo1'));
+  const same = regridLand({ mesh, geography: geo }, { mesh, geography: geo, land }, saved);
+  assert.deepEqual(Object.keys(same).filter((name) => name.startsWith('goal')), []);
+  const finer = regridLand({ mesh, geography: geo }, { mesh: target.mesh, geography: target.geography, land: createLandSurface(target.mesh, target.geography, {}) }, saved);
+  assert.deepEqual(Object.keys(finer).filter((name) => name.startsWith('goal')), []);
+});
