@@ -6,8 +6,10 @@
 # side over the quarter, scripts/woaSstBias.mjs merged by box,
 # scripts/cloudRegimes.mjs per resolution, scripts/rounds.py and a
 # top-of-the-atmosphere table by quarter over the logs up to that day, and
-# the five figures of scripts/figures/snapshot.sh per resolution, which sit
-# beside it; the tools' raw outputs stay under <REPORTS>/dayDDDD/parts, and a
+# the five figures of scripts/figures/snapshot.sh per resolution and the rain
+# figure of scripts/figures/rainMonths.mjs (the quarter's three saves against
+# GPCP, on the CPU, made once all three saves exist), which sit beside it; the
+# tools' raw outputs stay under <REPORTS>/dayDDDD/parts, and a
 # part that failed is marked <name>.failed there and not retried (delete the
 # marker to retry). With GPU_QUEUE one resolution's figures at a time are
 # made in the background while the passes go on with the parts, the two
@@ -44,7 +46,7 @@ parts_of() { echo "$(day_dir "$1")/parts"; }
 qday() { echo $(( ($1 * 365 * 2 + PER_YEAR) / (2 * PER_YEAR) )); }
 calendar() { "$PYTHON" -c "from datetime import date, timedelta; print((date(2001, 3, 20) + timedelta(days=$1)).strftime('%b %-d'))"; }
 gpu_user() {
-  local p; p=$(ps -axo command | grep -E '^([^ ]*/)?node (--test|([^ ]*/)?scripts/|[^ ]*/scratchpad/)' | grep -vE '^([^ ]*/)?node ([^ ]*/)?scripts/(compareStates|woaSstBias|cloudRegimes)\.mjs' | head -n 1 | cut -c1-80)
+  local p; p=$(ps -axo command | grep -E '^([^ ]*/)?node (--test|([^ ]*/)?scripts/|[^ ]*/scratchpad/)' | grep -vE '^([^ ]*/)?node ([^ ]*/)?scripts/(compareStates|woaSstBias|cloudRegimes|figures/rainMonths)\.mjs' | head -n 1 | cut -c1-80)
   [ -n "$p" ] && { echo "$p"; return; }
   lsof -nP -iTCP:8000 -sTCP:LISTEN > /dev/null 2>&1 && echo "a page server on port 8000"
 }
@@ -109,6 +111,26 @@ make_parts() { # <day> <k>
 }
 
 figure_png() { printf '%s/%s%s_%s_day%04d.png' "$(day_dir "$3")" "$PREFIX" "$1" "$2" "$3"; }
+rain_png() { figure_png "$1" rainMonths "$2"; }
+make_rain() { # <day> <k>: each resolution's rain figure, once its quarter's saves exist
+  local D=$1 k=$2 parts=$(parts_of "$1") N png days d f files tmp
+  for N in $NS; do
+    png=$(rain_png "$N" "$D")
+    [ -s "$png" ] || [ -e "$parts/rainMonths$N.failed" ] && continue
+    days=$("$NODE" scripts/figures/rainMonths.mjs --saves "$k" "$PER_YEAR") || continue
+    files=(); for d in $days; do f=$(state_of "$N" "$d"); [ -s "$f" ] || continue 2; files+=("$f"); done
+    tmp=$parts/rainMonths$N
+    log "$(tag_of "$D"): rain figure N=$N"
+    if "$NODE" scripts/figures/rainMonths.mjs "$tmp.json" "${files[@]}" > "$tmp.log" 2>&1 \
+      && "$PYTHON" scripts/figures/rainMonths.py "$tmp.json" "$tmp.png" "$PREFIX N=$N, day $D, saves $(echo $days): rain against GPCP" >> "$tmp.log" 2>&1; then
+      mv "$tmp.png" "$png"
+    else
+      touch "$parts/rainMonths$N.failed"; log "$(tag_of "$D"): rain figure N=$N failed: $(tail -n 1 "$tmp.log" | cut -c1-200)"
+    fi
+    rm -f "$tmp.json" "$tmp.png"
+  done
+}
+
 figures_missing() { # <N> <day>: 0 when a figure is still to be dumped
   local F; for F in $FIGURES; do [ -s "$(figure_png "$1" "$F" "$2")" ] || return 0; done; return 1
 }
@@ -202,7 +224,7 @@ assemble() { # <day> <k>
     echo "## Figures"; echo
     for N in $NS; do
       echo "### N=$N"; echo
-      for F in $FIGURES; do
+      for F in $FIGURES rainMonths; do
         png=$(figure_png "$N" "$F" "$D")
         if [ -s "$png" ]; then echo "![$F, N=$N, day $D]($(basename "$png"))"; else echo "- $F: not dumped yet"; fi; echo
       done
@@ -217,6 +239,7 @@ pass() { # 0 once every report up to UNTIL is complete
     all=1; for N in $NS; do [ -s "$(state_of "$N" "$D")" ] || all=0; done
     [ "$all" = 1 ] || { complete=0; continue; }
     make_parts "$D" "$k"
+    make_rain "$D" "$k"
     [ "$waiting" = 1 ] || make_figures "$D" || waiting=1
     assemble "$D" "$k"
     figures_done "$D" || complete=0
