@@ -60,6 +60,32 @@ test('with a deep store of 300 kg/m² under the trees the root zone, the surface
   balanced(water);
 });
 
+for (const [label, land] of [[' with the soil goal off', {}], [' with the soil goal on', { soilGoal: 'observed', soilGoalTime: 3 * 86400 }]]) test(`the change of the land's water is rain less evaporation plus the booked goal${label}`, () => {
+  const model = prepare(createModel(new Grid(16), { topography, geography: { soilWaterMonthly: true }, land }));
+  const { mesh, geography, land: surface } = model;
+  const water = landWater(model);
+  const goal = surface.budget.goal ?? 0;
+  assert.ok(Math.abs(water.imbalance - goal) < 1e-9 * water.waterBefore, `change - (rain - evaporation) = ${water.imbalance}, booked ${goal}`);
+  if (land.soilGoal) {
+    let acted = 0;
+    for (let i = 0; i < mesh.nCells; i++) if (geography.land[i] && surface.goalAdded[i] + surface.goalRemoved[i] > 0) acted++;
+    assert.ok(acted > 0 && Math.abs(goal) > 1e-6 * water.waterBefore, `the goal acted on ${acted} cells and booked ${goal}`);
+  } else assert.equal(goal, 0);
+});
+
+test('the parallel engine reproduces the serial model with the soil goal on, its accumulators included', async () => {
+  const options = { topography, geography: { soilWaterMonthly: true }, land: { soilGoal: 'observed', coverGoal: 'observed', soilGoalTime: 3 * 86400 } };
+  const serial = prepare(createModel(new Grid(16), options));
+  const parallel = prepare(await createParallelModel(new Grid(16), options, 3));
+  for (let n = 0; n < 4; n++) { serial.step(1350); await parallel.step(1350); }
+  for (const name of ['soil', 'surface', 'goalAdded', 'goalRemoved', 'goalCover', 'goalTrees']) {
+    let max = 0, size = 0;
+    for (let i = 0; i < serial.mesh.nCells; i++) { max = Math.max(max, Math.abs(serial.land[name][i] - parallel.land[name][i])); size = Math.max(size, Math.abs(serial.land[name][i])); }
+    assert.ok(max < 1e-9 && (name !== 'goalAdded' && name !== 'goalRemoved' || size > 0), `${name}: difference ${max}, largest ${size}`);
+  }
+  await parallel.close();
+});
+
 for (const [label, land] of [['', {}], [' without the deep store', { deepCapacity: 0 }]]) test(`the parallel engine reproduces the serial model over a continent${label}`, async () => {
   const serial = prepare(createModel(new Grid(16), { topography, land }));
   const parallel = prepare(await createParallelModel(new Grid(16), { topography, land }, 3));

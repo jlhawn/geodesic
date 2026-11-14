@@ -5,7 +5,9 @@
 // part listed with its SHA-256 and the run with its id, the SHA-256 of
 // those hashes one per line. A binary state goes in without its SST ring
 // (js/sstMeans.module.js) and its 30-day means
-// (js/intervalMeans.module.js), which the page keeps no recorders for, and with
+// (js/intervalMeans.module.js), which the page keeps no recorders for, and
+// without the soil goal's per-cell increments (land.goal*, goalSince and
+// goalOpen of a spin-up with LAND '{"soilGoal":"observed"}'), and with
 // RADIATION, MOIST and LAND (JSON, as scripts/spinup.mjs takes them; of LAND
 // the soil options) recorded in its header as the options the page's model
 // starts it with, with the radiation's shortwave scheme and aerosol, the
@@ -19,6 +21,9 @@ import { decodeState, encodeState, f64Names } from '../js/stateFile.module.js';
 import { SST_FIELDS, withoutSstRing } from '../js/sstMeans.module.js';
 import { withoutMeans } from '../js/intervalMeans.module.js';
 import { recordedOptions, soilOptions, asMade } from './stateOptions.mjs';
+
+const GOAL_LAND = ['goalAdded', 'goalRemoved', 'goalCover', 'goalTrees'];
+const withoutGoal = ({ goalSince, goalOpen, land, ...rest }) => (land ? { ...rest, land: Object.fromEntries(Object.entries(land).filter(([name]) => !GOAL_LAND.includes(name))) } : rest);
 
 const [file, mib = '10'] = process.argv.slice(2);
 if (!file) { console.error('usage: node scripts/splitState.mjs <state.json|state.bin[.gz]|name.parts.json> [chunkMiB]'); process.exit(1); }
@@ -39,10 +44,11 @@ if (file.endsWith('.parts.json')) {
   const raw = readFileSync(file), saved = kind === 'bin' ? await decodeState(new Uint8Array(raw)) : null;
   if (stamped && !saved) throw new Error('RADIATION and MOIST are recorded in binary states only');
   const ringed = !!saved && SST_FIELDS.some((name) => name in saved), meaned = !!saved && 'means' in saved;
-  const bare = saved ? withoutMeans(withoutSstRing(saved)) : null;
+  const goaled = !!saved && (saved.goalOpen !== undefined || saved.goalSince !== undefined || GOAL_LAND.some((name) => saved.land?.[name]));
+  const bare = saved ? withoutGoal(withoutMeans(withoutSstRing(saved))) : null;
   const recorded = stamped ? recordedOptions(saved.given ? { boundaryLayer: asMade(saved.given).boundaryLayer } : {}, saved.options, given) : null;
   if (recorded && saved.given === undefined && saved.options?.boundaryLayer === undefined) delete recorded.boundaryLayer;
-  const kept = stamped ? { ...bare, options: { ...saved.options, ...recorded } } : ringed || meaned ? bare : null;
+  const kept = stamped ? { ...bare, options: { ...saved.options, ...recorded } } : ringed || meaned || goaled ? bare : null;
   const gz = kept ? gzipSync(encodeState(kept, { f64: f64Names(saved) }), { level: 9 }) : file.endsWith('.gz') ? raw : gzipSync(raw, { level: 9 });
   const parts = [];
   for (let at = 0; at < gz.length; at += chunk) {
@@ -52,5 +58,5 @@ if (file.endsWith('.parts.json')) {
     parts.push({ file: name.replace(/.*\//, ''), bytes: bytes.length, sha256: sha256(bytes) });
   }
   writeFileSync(`${base}.parts.json`, manifest(base.replace(/.*\//, ''), null, parts));
-  console.log(`${base}.parts.json: ${parts.length} parts, ${(gz.length / 1048576).toFixed(1)} MiB gzipped${ringed ? ', its SST ring left out' : ''}${meaned ? ', its 30-day means left out' : ''}${stamped ? `, with the options ${JSON.stringify(kept.options)}` : ''}`);
+  console.log(`${base}.parts.json: ${parts.length} parts, ${(gz.length / 1048576).toFixed(1)} MiB gzipped${ringed ? ', its SST ring left out' : ''}${meaned ? ', its 30-day means left out' : ''}${goaled ? ', its soil-goal increments left out' : ''}${stamped ? `, with the options ${JSON.stringify(kept.options)}` : ''}`);
 }

@@ -29,6 +29,16 @@ test("a spin-up's header keeps `options`, which the page reads, to the radiation
   assert.deepEqual(givenOptions({ land: { soil: 'slab', treeMoisture: false } }).land, { soil: 'slab', treeMoisture: false });
 });
 
+test("a spin-up's soilGoal and soilGoalTime reach the header's given and never its options", () => {
+  const land = { soil: 'layers', coverGoal: 'observed', soilGoal: 'observed', soilGoalTime: 15 * 86400 };
+  const { options, given } = headerOptions({ radiation: {}, moist: {}, land });
+  assert.deepEqual(options.land, { soil: 'layers' });
+  assert.ok(!('soilGoal' in options.land) && !('soilGoalTime' in options.land));
+  assert.equal(given.land.soilGoal, 'observed');
+  assert.equal(given.land.soilGoalTime, 15 * 86400);
+  assert.deepEqual(rebuiltOptions({ options, given }).land, given.land);
+});
+
 test('differingGroups names the groups whose options differ, in any key order, a missing group counting', () => {
   assert.deepEqual(differingGroups({ dynamics: { a: 1, b: 2 } }, { dynamics: { b: 2, a: 1 } }), []);
   assert.deepEqual(differingGroups({ dynamics: { a: 1 }, moist: {} }, { moist: {} }), ['dynamics']);

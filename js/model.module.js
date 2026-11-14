@@ -386,6 +386,7 @@ export function createModel(gridOrMesh, {
   model.step = function step(dt) {
     rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));
     radiation.setTime(model.time);
+    if (land) land.setTime(model.time);
     rk4(tendency, state, dt);
     phases.ocean(dt);
     phases.physics(0, C, dt, totals);

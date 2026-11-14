@@ -69,6 +69,23 @@ test('splitState leaves a binary state\'s 30-day means out of its parts and the 
   assert.deepEqual(parted, await decodeState(encodeState(state, { f64 })));
 });
 
+test('splitState leaves the soil goal\'s increments and window out of its parts and the rest of the land as it was saved', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'split-'));
+  const C = 42, values = (length, from) => Float64Array.from({ length }, (_, i) => from + i / 3);
+  const land = { snow: Float32Array.from(values(C, 0)), soil: Float32Array.from(values(C, 100)) };
+  const state = { N: 2, K: 3, day: 12, time: 12 * 86400, grid: { relax: 30 }, pi: values(C, 1e5), theta: Float32Array.from(values(3 * C, 290)), ocean: { vertical: 'hybrid', h: values(2 * C, 10) }, land };
+  const goal = { goalAdded: Float32Array.from(values(C, 1)), goalRemoved: Float32Array.from(values(C, 2)), goalCover: Float32Array.from(values(C, 0)), goalTrees: Float32Array.from(values(C, 0)) };
+  const f64 = ['pi', 'ocean.h'];
+  writeFileSync(join(dir, 'goaled_day0012.bin'), encodeState({ ...state, goalSince: 0, goalOpen: false, land: { ...land, ...goal } }, { f64 }));
+  const out = execFileSync(process.execPath, [SCRIPT, join(dir, 'goaled_day0012.bin'), String(1 / 1024)], { encoding: 'utf8' });
+  assert.match(out, /its soil-goal increments left out/);
+  const { parts } = JSON.parse(readFileSync(join(dir, 'goaled_day0012.parts.json'), 'utf8'));
+  const parted = await decodeState(new Uint8Array(gunzipSync(Buffer.concat(parts.map((part) => readFileSync(join(dir, part.file)))))));
+  assert.ok(!('goalSince' in parted) && !('goalOpen' in parted));
+  assert.deepEqual(Object.keys(parted.land).sort(), ['snow', 'soil']);
+  assert.deepEqual(parted, await decodeState(encodeState(state, { f64 })));
+});
+
 test('splitState records RADIATION and MOIST in the header of a binary state\'s parts as its options with the shortwave scheme, the aerosol, bergeronAutoconversion, pcapeMinimum, the land\'s soil at their defaults where not given, and the boundary layer\'s order as made only where the header records one, and keeps the arrays as they were saved', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'split-'));
   const C = 42, values = (length, from) => Float64Array.from({ length }, (_, i) => from + i / 3);

@@ -1,4 +1,5 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT, seaIceRemoval, ICE_LIGHT } from '../physics/ice.module.js';
+import { MID_MONTH_DAY_OF_YEAR, DAY_OF_YEAR_AT_ZERO, YEAR as CALENDAR_YEAR } from '../monthCalendar.module.js';
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, TRACE_CHAIN_FLOOR, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
@@ -1880,6 +1881,41 @@ ${held ? `  PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT 
   if (CLEAR_SKY) { PH[PH_RADCLROLR + i] = clearOutgoing; PH[PH_RADTC + i] = clearEscape; }` : `  stash(20, i, back); stash(21, i, outgoing);
   if (CLEAR_SKY) { PH[PH_OLRCLRSUM + i] += clearOutgoing; }`}
 }`;
+const goalRelax = (time) => {
+  const mids = MID_MONTH_DAY_OF_YEAR.map(wgslFloat);
+  const next = (k) => (k === 11 ? wgslFloat(MID_MONTH_DAY_OF_YEAR[0] + CALENDAR_YEAR) : mids[k + 1]);
+  return `    {
+      let doy = P[1] * ${wgslFloat(CALENDAR_YEAR)} + ${wgslFloat(DAY_OF_YEAR_AT_ZERO)};
+      var d = doy - ${wgslFloat(CALENDAR_YEAR)} * floor(doy / ${wgslFloat(CALENDAR_YEAR)});
+      d = select(d, d + ${wgslFloat(CALENDAR_YEAR)}, d < ${mids[0]});
+      var m0 = 0; var lo = ${mids[0]}; var hi = ${mids[1]};
+${Array.from({ length: 11 }, (_, j) => `      if (d >= ${mids[j + 1]}) { m0 = ${j + 1}; lo = ${mids[j + 1]}; hi = ${next(j + 1)}; }`).join('\n')}
+      let m1 = select(m0 + 1, 0, m0 == 11);
+      let weight = (d - lo) / (hi - lo);
+      let fill0 = PH[PH_GOALFILL + m0 * C + i]; let fill1 = PH[PH_GOALFILL + m1 * C + i];
+      if (!onIceSheet && snow <= ${TRACE_SNOW} && fill0 >= 0.0 && fill1 >= 0.0) {
+        let fill = fill0 * (1.0 - weight) + fill1 * weight;
+        let rate = smallRate(dt / ${wgslFloat(time)});
+        let rootChange = (fill * ROOTCAP - soil) * rate; let surfaceChange = (fill * SURFCAP - surf) * rate;
+        soil += rootChange; surf += surfaceChange;
+        PH[PH_GOALADD + i] += max(rootChange, 0.0) + max(surfaceChange, 0.0);
+        PH[PH_GOALREM + i] += max(-rootChange, 0.0) + max(-surfaceChange, 0.0);
+      }
+    }
+`;
+};
+const GOAL_COVER = `
+        if (!onIceSheet) {
+          let ownGoal = clamp((min(soil, cap) / cap - VEG_DRY) / (VEG_WET - VEG_DRY), 0.0, 1.0);
+          let ownVeg = veg0 + (ownGoal - veg0) * (1.0 - exp(-dt * select(1.0, warmth, ownGoal > veg0) / select(VEG_DECLINE, VEG_GROW, ownGoal > veg0)));
+          PH[PH_GOALVEG + i] += veg - ownVeg;
+        }`;
+const GOAL_TREES = `
+        if (snow <= 0.0 && !onIceSheet && !(hold > 0.5 && hold < 3.5)) {
+          let ownTrees = factor * veg;
+          PH[PH_GOALTREE + i] += (trees - standing) - (ownTrees - standing) * smallRate(dt / select(TREE_DECLINE, TREE_GROW, ownTrees > standing));
+        }`;
+
 export const physicsSurfaceKernel = (held, seaSkin = false, soil = null, cover = false, deep = false, ice = {}) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
@@ -1939,12 +1975,12 @@ ${deep ? DEEP_DRAW : ''}      let seep = surf * (1.0 - exp(-dt / PERCT));
       PH[PH_RUNOFF + i] += melt; PH[PH_ICELOSS + i] += melt;
       T = MELTING;
     }
-    var cap = bucket;
+${ice.soilGoal === 'observed' ? goalRelax(ice.soilGoalTime) : ''}    var cap = bucket;
     if (VEGETATED) {
       var veg = ${ice.snowHold ? 'veg0' : 'veg0 * exp(-dt / VEG_SNOW)'};
       if (snow <= 0.0) {
         let goal = ${cover ? 'PH[PH_COVERG + i]' : 'clamp((min(soil, cap) / cap - VEG_DRY) / (VEG_WET - VEG_DRY), 0.0, 1.0)'};
-        veg = veg0 + (goal - veg0) * (1.0 - exp(-dt * select(1.0, warmth, goal > veg0) / select(VEG_DECLINE, VEG_GROW, goal > veg0)));
+        veg = veg0 + (goal - veg0) * (1.0 - exp(-dt * select(1.0, warmth, goal > veg0) / select(VEG_DECLINE, VEG_GROW, goal > veg0)));${ice.soilGoal === 'observed' && cover ? GOAL_COVER : ''}
       }
       if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
@@ -1962,7 +1998,7 @@ ${deep ? DEEP_DRAW : ''}      let seep = surf * (1.0 - exp(-dt / PERCT));
         let moist = select(1.0, clamp((PH[PH_RAINMEAN + i] / max(demand, 1e-3) - ARID_LO) / ARID_SPAN, 0.0, 1.0), GATED);
         let factor = clamp((SEASON_C + seasonWarmth / max(seasonLength, SEASON_SHORTEST) - TREE_LO) / TREE_SPAN, 0.0, 1.0) * moist;
         let goal = ${cover ? 'select(min(PH[PH_COVERT + i], veg), standing, snow > 0.0)' : 'select(factor * veg, min(standing, factor), snow > 0.0)'};
-        trees = standing + (goal - standing) * smallRate(dt / select(TREE_DECLINE, TREE_GROW, goal > standing));
+        trees = standing + (goal - standing) * smallRate(dt / select(TREE_DECLINE, TREE_GROW, goal > standing));${ice.soilGoal === 'observed' && cover ? GOAL_TREES : ''}
         if (hold > 0.5 && hold < 3.5) { trees = select(select(factor * veg, 0.0, hold < 2.5), HELD_SHARE * veg, hold < 1.5); }
       }
       PH[PH_CANOPY + i] = select(trees, 0.0, onIceSheet);
