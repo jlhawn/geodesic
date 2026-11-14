@@ -138,7 +138,7 @@ test('every script that reads a saved state builds its models and geographies on
 });
 
 test("createGeography's options that spread the state's own geography may set beside it what createGeography lays on the ground it builds, its land cover and soil water, inline or through a name, but nothing that sets the ground, and without the spread neither stands", () => {
-  assert.deepEqual(LAID_ON_GROUND, ['landCover', 'soilWater']);
+  assert.deepEqual(LAID_ON_GROUND, ['landCover', 'soilWater', 'soilWaterMonthly']);
   const script = (options) => `import { decodeState } from '../js/stateFile.module.js';\nconst saved = decodeState(bytes), record = savedGeography(saved), raw = readField(path);\nconst options = ${options};\nconst inline = createGeography(mesh, readTopography(record.topography), ${options});\nconst named = createGeography(mesh, readTopography(record.topography), options);\n`;
   for (const options of ['{ ...geographyOptions(record).geography, landCover: null, soilWater: raw }', '{ soilWater: raw, ...geographyOptions(record).geography }', '{ ...geographyOptions(record).geography, soilWater }', '{ ...geographyOptions(record).geography, mask: record.mask }']) assert.deepEqual(misplaced('fixture.mjs', script(options)), [], options);
   for (const options of ['{ ...geographyOptions(record).geography, mask: raw }', '{ ...geographyOptions(record).geography, landCover: null, maskData: raw }', "{ ...geographyOptions(record).geography, 'landIce': raw }", '{ ...geographyOptions(record).geography, landBridges }', '{ ...geographyOptions(record).geography, ...raw }', '{ ...raw, landCover: null }', '{ landCover: null, soilWater: raw }']) {

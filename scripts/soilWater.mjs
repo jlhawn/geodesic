@@ -20,29 +20,43 @@
  * (its fill within SEEDED_RATIO of soilw / 760 in every band) is refused; a band with less than MINIMUM_BAND of the open land
  * takes its factor from the fitted bands either side. --out writes elsewhere than data/soilwater_march.bin.
  *
+ * With --monthly the script writes data/soilwater_monthly.bin ('SWM1', encodeSoilWaterMonthly) instead: the twelve monthly
+ * fills, soilw / 760 clamped to 0–1, on the same grid, month-major from January, unscaled by --reference. A cell that lacks
+ * some months and holds at least one takes each missing month from the nearest valid months before and after it, linear in
+ * month index and cyclic across December and January; south of 60°S every month stays missing, as does a cell with none.
+ * The land with soilGoal 'observed' interpolates between the months in time (js/monthCalendar.module.js). --out writes
+ * elsewhere than data/soilwater_monthly.bin.
+ *
  *   node scripts/soilWater.mjs soilw.dods
+ *   node scripts/soilWater.mjs soilw.dods --monthly
  *   node scripts/soilWater.mjs soilw.dods --reference=a.bin,b.bin --out=soilwater_march_model.bin
  */
 import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { basename } from 'node:path';
 import { createHash } from 'node:crypto';
-import { encodeSoilWater, decodeSoilWater, soilWaterUrl, SOIL_SCALE, SOIL_NONE, createGeography, readTopography, geographyOptions, savedGeography, seededGeography } from '../js/geography.module.js';
+import { monthWeights } from '../js/monthCalendar.module.js';
+import { encodeSoilWater, decodeSoilWater, encodeSoilWaterMonthly, decodeSoilWaterMonthly, soilWaterMonthlyUrl, soilWaterUrl, SOIL_SCALE, SOIL_NONE, createGeography, readTopography, geographyOptions, savedGeography, seededGeography } from '../js/geography.module.js';
 import { Grid } from '../js/grid.module.js';
 import { gridMesh, savedRelax } from '../js/stateGrid.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 
 const COLS = 720, ROWS = 360, MONTHS = 12, CAPACITY = 760, ROOT_ZONE = 300, BAND = 10, SCALE_RANGE = [0.5, 5], MINIMUM_BAND = 0.005, SEEDED_RATIO = 0.02;
-const MID = [15, 45, 74, 105, 135, 166, 196, 227, 258, 288, 319, 349];
+const ANTARCTIC = -60;
 
-function monthWeights(day) {
-  let d = (day + 79) % 365;
-  if (d < MID[0]) d += 365;
-  for (let m = 0; m < 12; m++) {
-    const a = MID[m], b = m === 11 ? MID[0] + 365 : MID[m + 1];
-    if (d >= a && d < b) return [m, (m + 1) % 12, (d - a) / (b - a)];
-  }
-  throw new Error(`no month for day ${day}`);
+// Each month a cell lacks, north of ANTARCTIC and with at least one month valid, takes the linear interpolation in month index
+// between the nearest valid months before and after it, cyclic across December and January (the one valid month if only one).
+export function fillMonths(values) {
+  const valid = values.map((v) => v !== null);
+  if (!valid.some(Boolean)) return values;
+  return values.map((v, m) => {
+    if (v !== null) return v;
+    let before = 1, after = 1;
+    while (!valid[((m - before) % MONTHS + MONTHS) % MONTHS]) before++;
+    while (!valid[(m + after) % MONTHS]) after++;
+    const a = values[((m - before) % MONTHS + MONTHS) % MONTHS], b = values[(m + after) % MONTHS];
+    return a + (b - a) * before / (before + after);
+  });
 }
 
 function readDods(path) {
@@ -139,13 +153,40 @@ export function scaleFill(fill, factor) {
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2), given = (name) => { const arg = args.find((a) => a.startsWith(`--${name}=`)); return arg ? arg.slice(name.length + 3) : null; };
   const inputs = args.filter((a) => !a.startsWith('--'));
+  const monthly = args.includes('--monthly');
+  if (monthly && given('reference')) throw new Error('--monthly writes the observed monthly fills; --reference scales the March seed');
   if (given('reference') && !given('out')) throw new Error('a seed scaled to reference states goes to its own file (--out); data/soilwater_march.bin stays the observed fill');
-  if (inputs.length !== 1 || args.some((a) => a.startsWith('--') && !/^--(reference|out)=/.test(a))) throw new Error('usage: node scripts/soilWater.mjs soilw.dods [--reference=a.bin,b.bin] [--out=file.bin]');
-  const references = given('reference') ? given('reference').split(',') : [], outUrl = given('out') ? pathToFileURL(given('out')) : soilWaterUrl;
+  if (inputs.length !== 1 || args.some((a) => a.startsWith('--') && !/^--(reference|out)=/.test(a) && a !== '--monthly')) throw new Error('usage: node scripts/soilWater.mjs soilw.dods [--monthly | --reference=a.bin,b.bin] [--out=file.bin]');
+  const references = given('reference') ? given('reference').split(',') : [], outUrl = given('out') ? pathToFileURL(given('out')) : monthly ? soilWaterMonthlyUrl : soilWaterUrl;
   const { soilw, time, lat, lon } = readDods(inputs[0]);
   if (time.length !== MONTHS || lat.length !== ROWS || lon.length !== COLS || soilw.length !== MONTHS * ROWS * COLS) throw new Error(`shape: time ${time.length}, lat ${lat.length}, lon ${lon.length}, soilw ${soilw.length}`);
   lat.forEach((v, j) => { if (Math.abs(v - (89.75 - 0.5 * j)) > 1e-4) throw new Error(`lat[${j}] = ${v}`); });
   lon.forEach((v, k) => { if (Math.abs(v - (0.25 + 0.5 * k)) > 1e-4) throw new Error(`lon[${k}] = ${v}`); });
+
+  if (monthly) {
+    const out = new Uint8Array(MONTHS * ROWS * COLS).fill(SOIL_NONE), validMonths = (v) => v >= 0 && v < 1e30;
+    let cells = 0, filled = 0, clamped = 0;
+    for (let r = 0; r < ROWS; r++) {
+      const j = ROWS - 1 - r;
+      if (-89.75 + 0.5 * r < ANTARCTIC) continue;
+      for (let c = 0; c < COLS; c++) {
+        const k = (c + COLS / 2) % COLS, values = Array.from({ length: MONTHS }, (_, m) => { const v = soilw[(m * ROWS + j) * COLS + k]; return validMonths(v) ? v / CAPACITY : null; });
+        const missing = values.filter((v) => v === null).length;
+        if (missing === MONTHS) continue;
+        cells++;
+        if (missing) filled++;
+        fillMonths(values).forEach((v, m) => { if (v < 0 || v > 1) clamped++; out[(m * ROWS + r) * COLS + c] = Math.round(Math.min(1, Math.max(0, v)) * SOIL_SCALE); });
+      }
+    }
+    const bytes = new Uint8Array(encodeSoilWaterMonthly({ cols: COLS, rows: ROWS, months: MONTHS, fill: out }));
+    writeFileSync(outUrl, bytes);
+    const back = decodeSoilWaterMonthly(readFileSync(outUrl));
+    const sample = (m, la, lo) => { const v = back.fill[(m * ROWS + Math.round((la + 89.75) / 0.5)) * COLS + Math.round((lo + 179.75) / 0.5)]; return v === SOIL_NONE ? 'none' : (v / SOIL_SCALE).toFixed(3); };
+    console.log(`${cells} points with a value, ${filled} with some months filled, ${clamped} month values clamped`);
+    console.log(Object.entries({ Sahara: [23, 10], Amazon: [-3, -60], India: [22, 78], Greenland: [72, -40], Antarctica: [-80, 0] }).map(([name, [la, lo]]) => `${name} ${Array.from({ length: MONTHS }, (_, m) => sample(m, la, lo)).join(' ')}`).join('\n'));
+    console.log(`wrote ${outUrl.pathname} (${bytes.length} bytes)`);
+    process.exit(0);
+  }
 
   const [m0, m1, f] = monthWeights(0), valid = (v) => v >= 0 && v < 1e30;
   const fill = new Uint8Array(ROWS * COLS).fill(SOIL_NONE);

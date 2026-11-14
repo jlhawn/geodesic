@@ -216,6 +216,43 @@ export function readSoilWater() {
   return (soilWaterFile ??= decodeSoilWater(fs.readFileSync(soilWaterUrl)));
 }
 
+/*
+ * data/soilwater_monthly.bin, which scripts/soilWater.mjs --monthly writes:
+ * CPC's fill of its 760 mm column for each of the twelve months on the same
+ * 0.5° grid, after a 16-byte header ('SWM1', columns, rows, months), as
+ * uint8 times SOIL_SCALE, month-major, SOIL_NONE where the source has none.
+ * soilWaterMonthlyOnMesh resamples each month as soilWaterOnMesh does;
+ * geography.wetnessMonthly exists only when a caller asks for it
+ * (createGeography's soilWaterMonthly), the land's soilGoal 'observed'.
+ */
+export const soilWaterMonthlyUrl = new URL('../data/soilwater_monthly.bin', import.meta.url);
+
+export function encodeSoilWaterMonthly({ cols, rows, months, fill }) {
+  if (fill.length !== months * rows * cols) throw new Error(`monthly soil water: ${fill.length} values for ${months} × ${rows} × ${cols}`);
+  const out = new Uint8Array(16 + fill.length), head = new DataView(out.buffer);
+  [83, 87, 77, 49].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, cols, true); head.setUint32(8, rows, true); head.setUint32(12, months, true);
+  out.set(fill, 16);
+  return out.buffer;
+}
+
+export function decodeSoilWaterMonthly(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const head = new DataView(bytes);
+  if (bytes.byteLength < 16 || String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'SWM1') throw new Error('not a monthly soil-water file');
+  const cols = head.getUint32(4, true), rows = head.getUint32(8, true), months = head.getUint32(12, true);
+  if (months !== 12) throw new Error(`monthly soil-water file of ${months} months`);
+  if (bytes.byteLength !== 16 + months * rows * cols) throw new Error('monthly soil-water file of the wrong size');
+  return { cols, rows, months, fill: new Uint8Array(bytes, 16, months * rows * cols) };
+}
+
+let soilWaterMonthlyFile = null;
+export function readSoilWaterMonthly() {
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+  if (!fs || !fs.existsSync(soilWaterMonthlyUrl)) return null;
+  return (soilWaterMonthlyFile ??= decodeSoilWaterMonthly(fs.readFileSync(soilWaterMonthlyUrl)));
+}
+
 export function seededGeography(geography, seed) {
   if (!seed) return geography;
   const fs = globalThis.process?.getBuiltinModule?.('node:fs');
@@ -298,6 +335,17 @@ export function soilWaterOnMesh(soil, mesh, land) {
   return { wetness: value };
 }
 
+export function soilWaterMonthlyOnMesh(soil, mesh, land) {
+  const { cols, rows, months, fill } = soil, size = rows * cols;
+  const slices = Array.from({ length: months }, (_, m) => fill.subarray(m * size, (m + 1) * size));
+  const sums = rasterSumsOn(soil, slices, SOIL_NONE, mesh);
+  return Array.from({ length: months }, (_, m) => {
+    const { value, has } = meanOnMesh(sums, m, SOIL_SCALE, mesh, land);
+    for (let i = 0; i < mesh.nCells; i++) if (!land[i] || !has[i]) value[i] = NaN;
+    return value;
+  });
+}
+
 /*
  * The geography and land options of a geography record: the observed
  * ice sheets take the ice of data/landice_0p25.bin (`landIce` when
@@ -339,10 +387,12 @@ export const NARROW_STRAITS = {
   danish: { sill: 50, points: [[55.5, 12.7], [56.1, 12.3], [56.8, 11.5], [57.6, 10.5]] },
 };
 
-export function createGeography(mesh, topography, { landCover = readLandCover(), soilWater = readSoilWater(), ...options } = {}) {
+export function createGeography(mesh, topography, { landCover = readLandCover(), soilWater = readSoilWater(), soilWaterMonthly = null, ...options } = {}) {
   const geography = buildGeography(mesh, topography, options);
-  if (!landCover && !soilWater) return geography;
-  return { ...geography, ...(landCover && landCoverOnMesh(landCover, mesh, geography.land)), ...(soilWater && soilWaterOnMesh(soilWater, mesh, geography.land)) };
+  const monthly = soilWaterMonthly === true ? readSoilWaterMonthly() : soilWaterMonthly;
+  if (soilWaterMonthly === true && !monthly) throw new Error('the monthly soil water needs data/soilwater_monthly.bin');
+  if (!landCover && !soilWater && !monthly) return geography;
+  return { ...geography, ...(landCover && landCoverOnMesh(landCover, mesh, geography.land)), ...(soilWater && soilWaterOnMesh(soilWater, mesh, geography.land)), ...(monthly && { wetnessMonthly: soilWaterMonthlyOnMesh(monthly, mesh, geography.land) }) };
 }
 
 function buildGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land', cavityDepth = 50, mask = 'raster', maskData = null } = {}) {
