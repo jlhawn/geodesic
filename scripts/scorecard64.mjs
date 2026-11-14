@@ -105,7 +105,8 @@ export const ROWS = [
   ...R.TAO_STATIONS.flatMap((s) => [[`euc_${s}`, `undercurrent core speed ${s}, snapshot (not matched)`, 'm/s'], [`eucDepth_${s}`, `undercurrent core depth ${s}, snapshot (not matched)`, 'm']]),
 ];
 
-export const monthAt = (t) => new Date(Date.UTC(2001, 2, 20, 12) + (((t % 365) + 365) % 365) * 86400e3).getUTCMonth() + 1;
+export const calendarDate = (t) => new Date(Date.UTC(2001, 2, 20, 12) + (((t % 365) + 365) % 365) * 86400e3);
+export const monthAt = (t) => calendarDate(t).getUTCMonth() + 1;
 export const windowDays = (D) => Array.from({ length: 30 }, (_, j) => D - 29 + j);
 export const dayWeighted = (D, f) => windowDays(D).reduce((s, d) => { let h = 0; for (let k = 0; k < 24; k++) h += f(monthAt(d - 1 + (k + 0.5) / 24)); return s + h / 24; }, 0) / 30;
 

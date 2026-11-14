@@ -8,7 +8,8 @@
 # top-of-the-atmosphere table by quarter over the logs up to that day, and
 # the five figures of scripts/figures/snapshot.sh per resolution and the rain
 # figure of scripts/figures/rainMonths.mjs (the quarter's three saves against
-# GPCP, on the CPU, made once all three saves exist), which sit beside it; the tools' raw outputs stay under <REPORTS>/dayDDDD/parts, and a
+# GPCP, on the CPU, made once all three saves exist), which sit beside it; the
+# tools' raw outputs stay under <REPORTS>/dayDDDD/parts, and a
 # part that failed is marked <name>.failed there and not retried (delete the
 # marker to retry). With GPU_QUEUE one resolution's figures at a time are
 # made in the background while the passes go on with the parts, the two
@@ -45,7 +46,7 @@ parts_of() { echo "$(day_dir "$1")/parts"; }
 qday() { echo $(( ($1 * 365 * 2 + PER_YEAR) / (2 * PER_YEAR) )); }
 calendar() { "$PYTHON" -c "from datetime import date, timedelta; print((date(2001, 3, 20) + timedelta(days=$1)).strftime('%b %-d'))"; }
 gpu_user() {
-  local p; p=$(ps -axo command | grep -E '^([^ ]*/)?node (--test|([^ ]*/)?scripts/|[^ ]*/scratchpad/)' | grep -vE '^([^ ]*/)?node ([^ ]*/)?scripts/(compareStates|woaSstBias|cloudRegimes)\.mjs' | head -n 1 | cut -c1-80)
+  local p; p=$(ps -axo command | grep -E '^([^ ]*/)?node (--test|([^ ]*/)?scripts/|[^ ]*/scratchpad/)' | grep -vE '^([^ ]*/)?node ([^ ]*/)?scripts/(compareStates|woaSstBias|cloudRegimes|figures/rainMonths)\.mjs' | head -n 1 | cut -c1-80)
   [ -n "$p" ] && { echo "$p"; return; }
   lsof -nP -iTCP:8000 -sTCP:LISTEN > /dev/null 2>&1 && echo "a page server on port 8000"
 }

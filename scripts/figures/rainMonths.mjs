@@ -5,7 +5,7 @@
 //   node scripts/figures/rainMonths.mjs --saves <report number> [reports a year]
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { monthAt, dayWeighted } from '../scorecard64.mjs';
+import { calendarDate, dayWeighted } from '../scorecard64.mjs';
 
 export const SAVES_PER_YEAR = 12;
 export const saveDay = (m) => Math.floor((m * 365 + 6) / SAVES_PER_YEAR);
@@ -19,7 +19,7 @@ export function quarterSaves(k, perYear = 4) {
 export const monthWeights = (D) => Array.from({ length: 12 }, (_, m) => dayWeighted(D, (month) => (month === m + 1 ? 1 : 0)));
 
 const NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const dateAt = (t) => { const d = new Date(Date.UTC(2001, 2, 20, 12) + (((t % 365) + 365) % 365) * 86400e3); return `${NAMES[d.getUTCMonth()]} ${d.getUTCDate()}`; };
+const dateAt = (t) => { const d = calendarDate(t); return `${NAMES[d.getUTCMonth()]} ${d.getUTCDate()}`; };
 export const windowDates = (D, days = 30) => `${dateAt(D - days)} – ${dateAt(D)}`;
 export const weightLabel = (weights) => weights.map((w, m) => [w, m]).filter(([w]) => w > 1e-9).sort((a, b) => a[1] - b[1]).map(([w, m]) => `${NAMES[m]} ${w.toFixed(2)}`).join(', ');
 
@@ -57,7 +57,10 @@ async function main(args) {
       cells = { mesh, land: Uint8Array.from(geo.land, (v) => (v ? 1 : 0)), lat: Float64Array.from(mesh.latCell, (v) => v * DEG), lon: Float64Array.from(mesh.lonCell, (v) => v * DEG) };
       tag = basename(stateName(file)).replace(/_day\d+(?:_step\d+)?$/, ''); N = saved.N;
     }
-    const D = Math.round(saved.day), weights = monthWeights(D), C = cells.mesh.nCells;
+    const D = Math.round(saved.day);
+    const named = /_day(\d+)/.exec(basename(file));
+    if (named && Number(named[1]) !== D) throw new Error(`${file} holds day ${D}`);
+    const weights = monthWeights(D), C = cells.mesh.nCells;
     const model = new Float64Array(C), obs = new Float64Array(C);
     for (let m = 0; m < 12; m++) {
       if (weights[m] < 1e-9) continue;

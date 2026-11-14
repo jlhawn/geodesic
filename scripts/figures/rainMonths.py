@@ -13,13 +13,13 @@ raster = Raster(lon, lat, 0.25 if d['N'] > 64 else 0.5)
 landG = raster(land.astype(float))
 
 RAIN_BOUNDS = [0, 10, 25, 50, 100, 200, 400, 800]
-rain_cmap = ListedColormap(LinearSegmentedColormap.from_list('rain', ['#101a36', '#16407a', '#1f78b4', '#4fb3e8', '#a6e3ff', '#f4fbff'])(np.linspace(0, 1, len(RAIN_BOUNDS))))
+rain_cmap = ListedColormap(LinearSegmentedColormap.from_list('rain', ['#18244a', '#1a4a8a', '#1f78b4', '#4fb3e8', '#a6e3ff', '#f4fbff'])(np.linspace(0, 1, len(RAIN_BOUNDS))))
 rain_norm = BoundaryNorm(RAIN_BOUNDS, rain_cmap.N, extend='max')
 
 DIFF_BOUNDS = [-200, -100, -50, -25, -10, 10, 25, 50, 100, 200]
 brbg = plt.get_cmap('BrBG')
 diff_colors = [brbg(x) for x in np.linspace(0.08, 0.92, len(DIFF_BOUNDS) + 1)]
-diff_colors[len(DIFF_BOUNDS) // 2] = '#2a3042'
+diff_colors[len(DIFF_BOUNDS) // 2] = '#3d4559'
 diff_cmap = ListedColormap(diff_colors)
 diff_norm = BoundaryNorm(DIFF_BOUNDS, diff_cmap.N, extend='both')
 
@@ -37,14 +37,14 @@ for row, s in zip(axes, d['saves']):
         else: right = im
     g, l, o = st['global'], st['land'], st['sea']
     row[0].set_title(f"Day {s['day']}, {s['window']} ({s['weights']})\nmodel rain: global {mm(g['model'])} mm ({g['model'] / s['days']:.2f} mm/d), land {mm(l['model'])}, sea {mm(o['model'])}", color=TEXT, fontsize=10, loc='left')
-    row[1].set_title(f"Day {s['day']}, model minus GPCP: global {sg(g['diff'])} mm, land {sg(l['diff'])}, sea {sg(o['diff'])}; mean |difference| {mm(g['absDiff'])}\nGPCP: global {mm(g['obs'])} mm, land {mm(l['obs'])}, sea {mm(o['obs'])}", color=TEXT, fontsize=10, loc='left')
-for im, ax, label, ticks in ((left, axes[:, 0], 'Rain over the 30-day window, mm', RAIN_BOUNDS), (right, axes[:, 1], 'Model minus GPCP over the same window, mm (brown too dry, teal too wet)', DIFF_BOUNDS)):
+    row[1].set_title(f"Day {s['day']}, {s['window']} ({s['weights']}): model minus GPCP\nglobal {sg(g['diff'])} mm, land {sg(l['diff'])}, sea {sg(o['diff'])}; mean |difference| {mm(g['absDiff'])} mm; GPCP: global {mm(g['obs'])}, land {mm(l['obs'])}, sea {mm(o['obs'])}", color=TEXT, fontsize=10, loc='left')
+for im, ax, label, ticks in ((left, axes[:, 0], 'Rain over the 30-day window, mm', RAIN_BOUNDS), (right, axes[:, 1], 'Model minus GPCP over the same window, mm (brown too dry, teal too wet, gray within ±10)', DIFF_BOUNDS)):
     cb = fig.colorbar(im, ax=ax, location='bottom', shrink=0.8, aspect=45, pad=0.02, ticks=ticks, spacing='uniform')
     cb.ax.xaxis.set_tick_params(color=MUTED, labelsize=8)
     plt.setp(cb.ax.get_xticklabels(), color=MUTED)
     cb.outline.set_edgecolor('#444')
     cb.set_label(label, color=TEXT, fontsize=9)
 fig.suptitle(title, color=TEXT, fontsize=13)
-fig.supxlabel('GPCP v2.3 is a 1991–2020 monthly climatology weighted by the days of each calendar month in the window; each model window is a single model year.', color=MUTED, fontsize=8.5)
+fig.supxlabel('\nGPCP v2.3 is a 1991–2020 monthly climatology weighted by the days of each calendar month in the window; each model window is a single model year.', color=MUTED, fontsize=8.5)
 fig.savefig(sys.argv[2], dpi=100 if d['N'] > 64 else 80, facecolor=fig.get_facecolor())
 print('wrote', sys.argv[2])
