@@ -15,6 +15,7 @@
 //   node scripts/adjustStages.mjs runs/eleven64_day1825.bin
 //   BC=cloudLayer DUMP=1234 node scripts/adjustStages.mjs runs/eleven64_day1825.bin
 import { readFileSync } from 'node:fs';
+import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { createModel } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { getDevice } from '../js/gpu/device.module.js';
@@ -47,13 +48,12 @@ device.createShaderModule = (descriptor) => {
 
 const moistOptions = { boundaryCondensation: BC };
 const savedGround = stateGeography(saved), { topography } = savedGround;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), ocean: false, levels, moist: moistOptions, topography, geography: savedGround.geography, land: savedGround.land });
+const model = createModel(stateGrid(saved, topography).mesh, { ice: savedIceOptions(saved), terrain: stateTerrain(saved), ocean: false, levels, moist: moistOptions, topography, geography: savedGround.geography, land: savedGround.land });
 const { core, moist, boundaryLayer: bl, radiation, mesh } = model, C = mesh.nCells, { K, geopotential, g } = core.diagnostics, dt = 1350 * 16 / saved.N;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => model.state[a].set(saved[name]));
 if (saved.boundaryDepth) bl.depth.set(saved.boundaryDepth);
 model.time = saved.time;
-model.seaIce.load(model.state[6], saved.concentration ?? null);
-if (model.land && saved.land) model.land.load(saved.land, model.state[6]);
+restoreSurface(model, saved);
 if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
 if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
 if (saved.mlmGate) radiation.mlmGate.set(saved.mlmGate);

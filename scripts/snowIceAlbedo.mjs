@@ -28,6 +28,7 @@
 // whose mean factor is below a half.
 // LAND (JSON) passes options to the land, ICE (JSON) to the sea ice.
 import { readFileSync } from 'node:fs';
+import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
@@ -43,12 +44,11 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const TIMES = Number(process.env.TIMES ?? 48), LAND = JSON.parse(process.env.LAND ?? '{}'), ICE = JSON.parse(process.env.ICE ?? '{}'), AT = Number(process.env.DAY ?? saved.day);
 const SNOWY = 10, MELTING = 273.15;
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, levels: savedLevels(saved), ocean: false, land: { ...ground.land, ...LAND }, ice: ICE });
+const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, levels: savedLevels(saved), ocean: false, land: { ...ground.land, ...LAND }, ice: { ...savedIceOptions(saved), ...ICE } });
 const { mesh, state, seaIce, land, geography, radiation } = model;
 const C = mesh.nCells, deg = 180 / Math.PI;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
-seaIce.load(state[6], saved.concentration ?? null);
-land.load(saved.land, state[6]);
+restoreSurface(model, saved);
 const [, , , surfaceT, , , ice] = state;
 const fall = Float64Array.from({ length: C }, (_, i) => (surfaceT[i] < MELTING && saved.convectiveRain ? saved.convectiveRain[i] + saved.largeScaleRain[i] : 0));
 const iceSheet = (i) => !!(geography.iceSheet && geography.iceSheet[i]);
