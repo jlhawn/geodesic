@@ -12,6 +12,7 @@
 // RADIATION (JSON) replaces the radiation options the page's states are spun
 // up with and EXTRA (JSON) adds to them, MOIST (JSON) sets the moist physics'.
 import { readFileSync, writeFileSync } from 'node:fs';
+import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
@@ -32,12 +33,11 @@ const RADIATION = withCadence({ radiation: { clearSkyPass: true, ...RADIATION_OP
 const dragEvery = withCadence({ dragEvery: undefined }, dt, N).dragEvery;
 const GEOGRAPHY = checkGeography({ ...savedGeography(saved) });
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
-const model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: sheets.geography, ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: {}, surface: {}, land: { ...sheets.land }, dynamics: {}, dragEvery, levels: savedLevels(saved) });
+const model = createModel(stateGrid(saved, topography).mesh, { ice: savedIceOptions(saved), terrain: stateTerrain(saved), topography, geography: sheets.geography, ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: {}, surface: {}, land: { ...sheets.land }, dynamics: {}, dragEvery, levels: savedLevels(saved) });
 const { mesh, core, state, radiation, boundaryLayer: bl, seaIce, land } = model;
 const { K, C, g, geopotential } = core.diagnostics;
 const [pi, theta, , surfaceT, q, qc, ice] = state;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
-seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 for (const field of Object.keys(MOIST_FIELDS)) model.moist[field].set(savedMoistField(saved, field, model));
 if (saved.boundaryDepth) bl.depth.set(saved.boundaryDepth);
@@ -47,7 +47,7 @@ if (saved.boundaryBuoyancy) bl.buoyancyFlux.set(saved.boundaryBuoyancy);
 if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
 placeCumulus(model, saved);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual);
-land.load(saved.land);
+restoreSurface(model, saved);
 for (let i = 0; i < C; i++) core.diagnoseColumn(i, pi, theta, q, qc);
 const bottom = (K - 1) * C, landMask = model.geography.land, wind = model.surface.windSpeed;
 const day = Math.round(saved.time / 86400);
@@ -57,11 +57,7 @@ for (let i = 0; i < C; i++) {
   const isLand = !!landMask[i];
   cells.push({ i, la: mesh.latCell[i] * deg, w: mesh.areaCell[i], isLand, h: ice[i], area: isLand ? 0 : seaIce.cover(i, ice[i]), sum: Object.fromEntries(KEYS.map((k) => [k, 0])) });
 }
-const albedos = (c, mu) => {
-  if (c.isLand) { const a = land.albedo(c.i); return [a, a]; }
-  const skin = surfaceT[c.i], snowy = seaIce.snowAlbedo[c.i];
-  return [seaIce.albedo(c.h, mu, seaIce.snow[c.i], c.area, skin, snowy), seaIce.albedo(c.h, null, seaIce.snow[c.i], c.area, skin, snowy)];
-};
+const albedos = (c, mu) => [model.surfaceAlbedoAt(c.i, mu), model.diffuseAlbedoAt(c.i)];
 const gasOf = (b) => b.vaporSolar + b.oxygenSolar + b.carbonDioxideSolar + b.methaneSolar;
 if (PASS === 'clear') radiation.useCumulus(null, null);
 for (let h = 0; h < TIMES; h++) {

@@ -9,6 +9,7 @@
 // from the snapshots:
 //   MOIST='{...}' node scripts/armMetrics.mjs <label> <state.bin>...
 import { readFileSync } from 'node:fs';
+import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { SECTIONS, sectionName as binName, sectionOf, monthOfDay, utcHourOfDay, era5Sections, MONTHS, sectionTable } from './equatorialSections.mjs';
 import { diagnoseExchange } from './surfaceExchange.mjs';
 import { stateTerrain } from '../js/stateFile.module.js';
@@ -22,7 +23,7 @@ const [LABEL, ...FILES] = process.argv.slice(2), LAT = Number(process.env.LAT ??
 const env = (n) => JSON.parse(process.env[n] ?? '{}');
 const first = await decodeState(new Uint8Array(readFileSync(FILES[0])));
 const { topography, geography, land: landOptions } = stateGeography(first);
-const model = createModel(stateGrid(first, topography).mesh, { terrain: stateTerrain(first), topography, geography, land: landOptions, levels: savedLevels(first), ocean: false, radiation: env('RADIATION'), moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
+const model = createModel(stateGrid(first, topography).mesh, { ice: savedIceOptions(first), terrain: stateTerrain(first), topography, geography, land: landOptions, levels: savedLevels(first), ocean: false, radiation: env('RADIATION'), moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
 const { mesh, core, state, radiation, seaIce, land, surface } = model;
 const { K, C, E, sigmaMid, R: Rd, g, exnerLayer, geopotential } = core.diagnostics;
 const { thetaV } = core.arrays;
@@ -67,11 +68,11 @@ for (const file of FILES) {
   const saved = file === FILES[0] ? first : await decodeState(new Uint8Array(readFileSync(file)));
   if (meaned(saved) !== useMeans) throw new Error(`${file} ${useMeans ? 'carries no' : 'carries'} 30-day means, unlike ${FILES[0]}; give saves of one kind`);
   if (terrainKey(stateTerrain(saved)) !== terrainKey(stateTerrain(first))) throw new Error(`${file} stands on other terrain than ${FILES[0]}; give saves of one run`);
+  if (JSON.stringify(savedIceOptions(saved)) !== JSON.stringify(savedIceOptions(first))) throw new Error(`${file} ran with other ice options than ${FILES[0]}; give saves of one run`);
   const means = useMeans ? saved.means : null;
   STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
-  seaIce.load(state[6], saved.concentration ?? null);
   for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
-  land.load(saved.land, state[6]);
+  restoreSurface(model, saved);
   model.time = saved.time;
   const [pi, theta, u, , q] = state;
   core.phaseFlux(state, 0, K); core.phaseColumn(state, [new Float64Array(C)], 0, C);
