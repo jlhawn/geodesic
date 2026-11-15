@@ -76,6 +76,20 @@ test("one step of the whole model with leadClosure 'hibler': cover 0.6 under a c
   assert.ok(faster > 0, 'some leads close');
 });
 
+test('one step of the whole model with meltOpening 0.5: cover 0.6 on a melting skin opens less water than with the whole of Hibler\'s opening, as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const melting = (model, cells) => { for (const i of cells) { model.state[6][i] = 0.3; model.state[3][i] = MELTING_POINT + 8; model.seaIce.snow[i] = 0; } };
+  const whole = await oneStep(false, 0.6, {}, melting), half = await oneStep(false, 0.6, { meltOpening: 0.5 }, melting);
+  let opened = 0;
+  for (let n = 0; n < half.cells.length; n++) {
+    const i = half.cells[n], cpu = half.model.seaIce.concentration[i], gpu = half.concentration[i], cpuWhole = whole.model.seaIce.concentration[i], gpuWhole = whole.concentration[i];
+    assert.ok(Math.abs(cpu - gpu) < 1e-4 && Math.abs(cpuWhole - gpuWhole) < 1e-4, `cell ${i}: cover ${cpu} vs ${gpu}, with Hibler's whole opening ${cpuWhole} vs ${gpuWhole}`);
+    assert.ok(Math.abs(half.model.state[6][i] - half.thickness[i]) < 1e-3 * half.model.state[6][i], `cell ${i}: thickness ${half.model.state[6][i]} vs ${half.thickness[i]}`);
+    if (0.6 - cpuWhole > 1e-3) { assert.ok(cpu > cpuWhole && gpu > gpuWhole && Math.abs(cpu - cpuWhole - (gpu - gpuWhole)) < 1e-4, `cell ${i}: kept ${cpu - cpuWhole} on the CPU, ${gpu - gpuWhole} on the device`); opened++; }
+  }
+  console.log(`meltOpening 0.5 on ${half.cells.length} cells, ${opened} opening: CPU cover ${half.cells.map((i) => half.model.seaIce.concentration[i].toFixed(5)).join(' ')} | whole opening ${whole.cells.map((i) => whole.model.seaIce.concentration[i].toFixed(5)).join(' ')}`);
+  assert.ok(opened > 0, 'some cells open');
+});
+
 test('one step of the whole model with iceLight and brineReservoir: under a skin below the melting point the brine holds the upper half-layer there and warms the skin, at the melting point it keeps what light it holds, as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const start = 5e5, cold = (n) => n % 2 === 1, skin = (n) => (cold(n) ? FREEZING_POINT - 3 : MELTING_POINT);
   const prepare = (seed) => (model, cells) => cells.forEach((i, n) => { model.seaIce.snow[i] = 0; model.seaIce.brine[i] = seed; model.state[3][i] = skin(n); });

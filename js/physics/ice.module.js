@@ -63,7 +63,9 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * and the water's per unit water area average back to it. The ice part
  * evolves as above; the heat the leads gain or lose, with the ocean's
  * flux under them, melts ice or freezes new ice. Melting takes area as
- * Hibler (1979) does, half the relative loss of volume from the area;
+ * Hibler (1979) does, half the relative loss of volume from the area,
+ * which assumes the thickness spread evenly from 0 to 2h; meltOpening
+ * scales it for a pack with less thin ice than that;
  * ice frozen in the leads closes them as (1 − A) of new ice leadClosing
  * thick, so the open area closes as its square, or with leadClosure
  * 'hibler' as all of it, Hibler's (1979) h₀ law with h₀ = leadClosing
@@ -175,7 +177,7 @@ export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.62, meltingIceAlbedo = 0.48, iceMeltingRange = 1, fullAlbedoThickness = 0.5,
   iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10,
-  leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
+  leadClosure = 'squared', meltOpening = 1, snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
   iceLight = false, brineReservoir = false, iceAlbedoPhases = false, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
@@ -183,6 +185,7 @@ export function createSeaIce(mesh, {
 } = {}) {
   if (brineReservoir && !iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
   if (!LEAD_CLOSURES.includes(leadClosure)) throw new Error(`leadClosure is ${LEAD_CLOSURES.join(' or ')}, not ${leadClosure}`);
+  if (!(meltOpening >= 0)) throw new Error(`meltOpening is a share of Hibler's melt opening, at least 0, not ${meltOpening}`);
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion, openShare = leadClosure === 'hibler' ? () => 1 : (A) => 1 - A;
   const removal = seaIceRemoval(keepSmallIce);
@@ -337,7 +340,7 @@ export function createSeaIce(mesh, {
     budget.lateralMelted += cellArea * leadMelt;
     const energyLeft = A * skinHeatCapacity * (T - FREEZING_POINT) - latent * (A * thickness - leadHeat / latent) - latentHeatFusion * A * s + A * Q;
     let volume = A * thickness - leadHeat / latent;
-    const area = Math.min(1, A - melted / (2 * h) + openShare(A) * leadIce / leadClosing);
+    const area = Math.min(1, A - meltOpening * melted / (2 * h) + openShare(A) * leadIce / leadClosing);
     let skin = T, snowOnIce = s, kept = Q;
     if (area < A) volume += (A - area) * (s / iceDensity - (skinHeatCapacity * (T - FREEZING_POINT) + Q) / latent);
     else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; kept = A * Q / area; }

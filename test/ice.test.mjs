@@ -179,6 +179,34 @@ test('a half-covered cell in the sun loses its area faster than a full one loses
   assert.ok(half.concentration[0] === 0 && full.concentration[0] === 0 && stepsHalf < stepsFull);
 });
 
+test("with meltOpening a melting cell gives up that share of Hibler's opening, thins by the rest, and its energy still closes", () => {
+  const dt = 900, contrast = 340 * (0.5 - 0.06), scale = seaIce.slabHeatCapacity * 2;
+  const run = (options, steps) => {
+    const sea = createSeaIce(model.mesh, options);
+    sea.concentration[0] = 0.5;
+    const surfaceT = new Float64Array([MELTING_POINT]), ice = new Float64Array([1]), flux = new Float64Array([200 + 0.5 * contrast]);
+    let energy = energyOf(sea, surfaceT, ice), worst = 0;
+    for (let n = 0; n < steps; n++) {
+      sea.update(surfaceT, ice, flux, 0, dt, contrast);
+      energy += dt * (flux[0] + sea.oceanFlux[0]);
+      worst = Math.max(worst, Math.abs(energyOf(sea, surfaceT, ice) - energy));
+    }
+    return { A: sea.concentration[0], h: ice[0], worst };
+  };
+  const hibler = run({}, 1), one = run({ meltOpening: 1 }, 1), half = run({ meltOpening: 0.5 }, 1), none = run({ meltOpening: 0 }, 1);
+  console.log(`one step in the sun from cover 0.5: Hibler's opening ${(0.5 - hibler.A).toExponential(4)}, meltOpening 0.5 ${(0.5 - half.A).toExponential(4)}, 0 ${(0.5 - none.A).toExponential(4)}; thickness ${hibler.h.toFixed(6)}, ${half.h.toFixed(6)}, ${none.h.toFixed(6)} m`);
+  assert.equal(one.A, hibler.A);
+  assert.equal(one.h, hibler.h);
+  assert.ok(hibler.A < 0.5 && Math.abs(0.5 - half.A - 0.5 * (0.5 - hibler.A)) < 1e-15, `opening ${0.5 - half.A} against half of ${0.5 - hibler.A}`);
+  assert.equal(none.A, 0.5);
+  assert.ok(none.h < half.h && half.h < hibler.h, 'the melt that opens no water thins the ice');
+  for (const meltOpening of [0.5, 0.25, 0]) {
+    const day = run({ meltOpening }, 96);
+    assert.ok(day.worst < 1e-9 * scale, `meltOpening ${meltOpening}: energy off by ${day.worst} J/m²`);
+  }
+  assert.throws(() => createSeaIce(model.mesh, { meltOpening: -0.5 }), /meltOpening/);
+});
+
 test('a lead under a cold sky closes: the area rises toward full cover as the volume grows by what freezes', () => {
   const sea = createSeaIce(model.mesh, { leadExchange: 0 }), dt = 900;
   const surfaceT = new Float64Array([FREEZING_POINT - 10]), ice = new Float64Array([1]), flux = new Float64Array([-100]);
