@@ -3836,7 +3836,8 @@ const MEMORY_SHARE_WGSL = `fn memoryShare(idx: i32, T: f32, resolved: f32, cumul
   let total = resolved + cumulus;
   if (!(total > 0.0)) { return 0.0; }
   let ramped = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
-  return (resolved * (1.0 - PH[PH_CICE + idx]) + cumulus * ramped) / total;
+  let own = select(1.0 - PH[PH_CICE + idx], ramped, ramped <= 0.0 || ramped >= 1.0);
+  return (resolved * own + cumulus * ramped) / total;
 }
 `;
 const MEMORY_SHADE = [`        let optics = cloudOptics(IN[S_TH + k * C + i] * D[D_EXM + k * C + i], continental);

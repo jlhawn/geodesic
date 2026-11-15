@@ -1562,7 +1562,8 @@ export function createRadiation(mesh, core, {
       if (memory && cloudWater[k] > 0) {
         if (cloudIce === null) throw new Error("cloudPhase 'memory' needs moist.iceDeposition and the model's cloudIceShare");
         const temperatureK = theta[idx] * exnerLayer[idx], ramped = liquidShare(temperatureK, optics);
-        const share = (resolvedWater * (1 - cloudIce[idx]) + cumulus * ramped) / cloudWater[k];
+        const resolvedShare = ramped <= 0 || ramped >= 1 ? ramped : 1 - cloudIce[idx];
+        const share = (resolvedWater * resolvedShare + cumulus * ramped) / cloudWater[k];
         cloudOptics(temperatureK, continental[i] === 1, optics, layerOptics, share);
         solarDepth[k] = layerOptics.solar;
         infrared[k] = layerOptics.infrared;
@@ -1746,7 +1747,7 @@ export function createRadiation(mesh, core, {
       }
       if (shadow && q) {
         deckLight.incident = incident; deckLight.mu = mu; deckLight.direct = surfaceAlbedo; deckLight.diffuse = diffuseAlbedo;
-        deckLight.path = cloudPath; deckLight.depth = cloudDepth; deckLight.layer = cloudWater[stratusLayer]; deckLight.clear = clearShare * cloudWater[stratusLayer]; deckLight.rate = clearShare; deckLight.unit = solarDepth[stratusLayer];
+        deckLight.path = cloudPath; deckLight.depth = cloudDepth; deckLight.layer = cloudWater[stratusLayer]; deckLight.clear = clearShare * cloudWater[stratusLayer]; deckLight.rate = clearShare; deckLight.unit = (memory ? rampSolar : solarDepth)[stratusLayer];
         if (shadowDeck(i, pi, theta, q, qc, mixedDepth, sensible, evaporation, dt, stratusSolar ? deckAbsorption : null)) {
           fraction = budget.mlmCover * openSea;
           if (fraction > 0) deck = Math.min(stratusWaterMax, budget.mlmWater);
