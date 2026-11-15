@@ -55,13 +55,17 @@ export const ICE_EXCHANGE = { heatTransfer: 0.006, frictionMinimum: 5e-4, latera
 export function iceExchangeOptions(option = 'instant') {
   const given = typeof option === 'string' ? { mode: option } : option;
   if (given === null || typeof given !== 'object') throw new Error(`iceExchange is ${ICE_EXCHANGES.join(' or ')} or an object of ${Object.keys(ICE_EXCHANGE).join(', ')} with a mode, not ${option}`);
-  const { mode = 'turbulent', turbulent, lateralRate, ...rest } = given;
+  const { mode, turbulent, lateralRate, ...rest } = given;
+  if (mode === undefined) throw new Error(`iceExchange given as an object names its mode, ${ICE_EXCHANGES.join(' or ')}: ${JSON.stringify(given)}`);
   if (!ICE_EXCHANGES.includes(mode)) throw new Error(`iceExchange is one of ${ICE_EXCHANGES.join(', ')}, not ${mode}`);
   for (const key of Object.keys(rest)) if (!(key in ICE_EXCHANGE)) throw new Error(`iceExchange has no option ${key}; its options are ${Object.keys(ICE_EXCHANGE).join(', ')}`);
   const set = { ...ICE_EXCHANGE, ...rest };
   for (const key of ['heatTransfer', 'lateralExponent', 'floeDiameter', 'floeShape']) if (!(set[key] > 0)) throw new Error(`iceExchange.${key} is positive, not ${set[key]}`);
   for (const key of ['frictionMinimum', 'lateralMelt']) if (!(set[key] >= 0)) throw new Error(`iceExchange.${key} is not negative, not ${set[key]}`);
-  return { mode, turbulent: mode === 'turbulent', ...set, lateralRate: set.lateralMelt * Math.PI / (set.floeShape * set.floeDiameter) };
+  const resolved = { mode, turbulent: mode === 'turbulent', ...set, lateralRate: set.lateralMelt * Math.PI / (set.floeShape * set.floeDiameter) };
+  if (turbulent !== undefined && turbulent !== resolved.turbulent) throw new Error(`iceExchange.turbulent follows its mode ${mode}, not ${turbulent}`);
+  if (lateralRate !== undefined && lateralRate !== resolved.lateralRate) throw new Error(`iceExchange.lateralRate follows lateralMelt, floeShape and floeDiameter (${resolved.lateralRate}), not ${lateralRate}`);
+  return resolved;
 }
 
 /*
