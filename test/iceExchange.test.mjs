@@ -12,7 +12,7 @@ import { hybridOcean, DT, mesh as oceanMesh } from './helpers/layered.mjs';
  * the ice keeps the heat it holds above freezing, the ice draws on it at McPhee's bottom flux and Maykut and
  * Perovich's lateral rate, and the leads' gain warms it. The ocean and the ice stepped alone, with no air
  * above, are a closed system whose heat, ice volume and salt are checked step by step; a restart carries
- * what the exchange adds; and the default exchange is the model it was.
+ * what the exchange adds; and the default exchange keeps the default model's pinned hashes.
  */
 const POLAR = 62 * Math.PI / 180;
 
@@ -170,7 +170,7 @@ test('the ocean and the sea ice agree on the exchange, and the model builds the 
   assert.throws(() => createModel(grid, { ocean: { iceExchange: 'gradual' } }), /iceExchange/);
 });
 
-test('with the default exchange the coupled model and the ice are the model before iceExchange, bit for bit', () => {
+test('with the default exchange the coupled model over 48 steps and a 200-day ice column keep their pinned hashes', () => {
   const sha = (arrays) => { const h = createHash('sha256'); for (const a of arrays) h.update(Buffer.from(Float64Array.from(a).buffer)); return h.digest('hex').slice(0, 16); };
   const m = createModel(new Grid(16), { ocean: { everySteps: 4 } });
   initializeState(m, {}).forEach((v, a) => m.state[a].set(v));
