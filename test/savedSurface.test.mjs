@@ -5,7 +5,7 @@ import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { restoreSurface, savedIceOptions, resumedIceExchange } from '../scripts/savedLand.mjs';
+import { restoreSurface, savedIceOptions, resumedIceExchange, resumedOcean, resumedIce } from '../scripts/savedLand.mjs';
 
 const N = 16, DT = 1350, ICE = { meltingIceAlbedo: 0.4, iceMeltingRange: 3 };
 const topography = readTopography('etopo2022'), sheets = geographyOptions({ ...FRESH_GEOGRAPHY });
@@ -88,4 +88,7 @@ test('a resumed run whose ocean options name no iceExchange takes the one its sa
   assert.equal(resumedIceExchange({}, {}), 'instant');
   assert.deepEqual(savedIceOptions({ given: { ice: { iceAlbedoPhases: true } } }), { iceExchange: 'instant', iceAlbedoPhases: true });
   assert.throws(() => resumedIceExchange({ given: {}, ...held }, {}), /iceWater/);
+  assert.equal(resumedIceExchange({ given: { ocean: { iceExchange: turbulent } } }, false), undefined, 'an ocean given as false takes no exchange');
+  assert.equal(resumedOcean({ given: { ocean: { iceExchange: turbulent } } }, false), false);
+  assert.deepEqual(resumedIce({ given: { ocean: { iceExchange: turbulent }, ice: { iceAlbedoPhases: true, meltOpening: 0.5 } } }, { meltOpening: 0.25 }), { iceAlbedoPhases: true, meltOpening: 0.25 }, 'the save\'s ice options under the run\'s, the exchange left to the ocean');
 });

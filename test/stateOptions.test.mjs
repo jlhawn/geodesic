@@ -167,12 +167,13 @@ test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a 
   assert.deepEqual(resumeNotes(fresh.given, null, 'none'), []);
 });
 
-test('resumeNotes says when a run takes another ice exchange than its base was made under, a record whose ocean names none counting as the instant exchange', () => {
+test('resumeNotes says when a run takes another ice exchange than its base was made under, a record whose ocean names none counting as the instant exchange and one exchange spelled two ways as one', () => {
   const turbulent = { mode: 'turbulent', frictionMinimum: 2e-2 }, given = (ocean) => headerOptions(ocean === undefined ? {} : { ocean }).given;
   assert.deepEqual(resumeNotes(given({ iceExchange: 'instant' }), { given: given() }, 'old'), []);
   assert.deepEqual(resumeNotes(given({ iceExchange: turbulent }), { given: given() }, 'eighteen'), ["options other than eighteen's header records: ocean", 'iceExchange {"mode":"turbulent","frictionMinimum":0.02} where eighteen was made under "instant"']);
   assert.deepEqual(resumeNotes(given({ iceExchange: 'instant' }), { given: given({ closureHours: 3, iceExchange: turbulent }) }, 'cand'), ["options other than cand's header records: ocean", 'iceExchange "instant" where cand was made under {"mode":"turbulent","frictionMinimum":0.02}']);
   assert.deepEqual(resumeNotes(given({ iceExchange: { ...turbulent } }), { given: given({ iceExchange: turbulent }) }, 'same'), []);
+  assert.deepEqual(resumeNotes(given({ iceExchange: 'turbulent' }), { given: given({ iceExchange: { mode: 'turbulent' } }) }, 'spelled'), [], 'one exchange spelled two ways');
   const own = given({ iceExchange: 'turbulent' });
   assert.deepEqual(resumeNotes(own, { options: { boundaryLayer: own.boundaryLayer, ocean: { iceExchange: turbulent } } }, 'page'), ['iceExchange "turbulent" where page was made under {"mode":"turbulent","frictionMinimum":0.02}'], 'the constants count');
 });

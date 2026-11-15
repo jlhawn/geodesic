@@ -90,7 +90,7 @@ export function resumeNotes(given, base, name) {
   return [...(other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : []), ...exchange];
 }
 
-const withExchange = (given) => (isGroup(given) && given.ocean !== false ? { ...given, ocean: { iceExchange: savedIceExchange({ given }), ...(isGroup(given.ocean) ? given.ocean : {}) } } : given);
+const withExchange = (given) => (isGroup(given) && given.ocean !== false ? { ...given, ocean: { ...(isGroup(given.ocean) ? given.ocean : {}), iceExchange: iceExchangeOptions(savedIceExchange({ given })) } } : given);
 const resolvedExchange = (exchange) => canonical(iceExchangeOptions(exchange));
 
 function exchangeNotes(given, base, name) {

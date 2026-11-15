@@ -14,7 +14,7 @@ export const recordedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?
 export const savedIceOptions = (saved) => ({ iceExchange: savedIceExchange(saved), ...(saved.given?.ice ?? {}) });
 
 export function resumedIceExchange(saved, ocean = {}) {
-  if (!saved || ocean.iceExchange !== undefined) return undefined;
+  if (!saved || ocean === false || ocean.iceExchange !== undefined) return undefined;
   if (recordedIceExchange(saved) === undefined && saved.ocean?.iceWater) throw new Error('the save holds the heat of the water under its ice (ocean.iceWater) but records no iceExchange: give the ocean\'s iceExchange');
   return savedIceExchange(saved);
 }
@@ -22,6 +22,11 @@ export function resumedIceExchange(saved, ocean = {}) {
 export function resumedOcean(saved, ocean = {}) {
   const exchange = resumedIceExchange(saved, ocean);
   return exchange === undefined ? ocean : { ...ocean, iceExchange: exchange };
+}
+
+export function resumedIce(saved, ice = {}) {
+  const { iceExchange, ...recorded } = savedIceOptions(saved);
+  return { ...recorded, ...ice };
 }
 
 export function restoreSurface(model, saved, report = (line) => console.error(line)) {
