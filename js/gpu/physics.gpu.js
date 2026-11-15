@@ -1208,7 +1208,7 @@ ${brine ? '    let filling = T >= MELTING || PH[PH_BRINE + i] > 0.0;\n' : ''}   
     let leadIce = max(0.0, -leadHeat / LATENT_ICE);
     let remaining = cover * SKINC * (T - FREEZING) - LATENT_ICE * (cover * thickness - leadHeat / LATENT_ICE) - LFUS * cover * snow${brine ? ' + cover * reservoir' : ''};
     var volume = cover * thickness - leadHeat / LATENT_ICE;
-    let area = min(1.0, cover - ${o.meltOpening === 1 ? '' : `${o.meltOpening} * `}melted / (2.0 * h) + ${hibler ? '' : '(1.0 - cover) * '}leadIce / LEADC);
+    let area = min(1.0, cover - melted / (2.0 * h) + ${hibler ? '' : '(1.0 - cover) * '}leadIce / LEADC);
     if (area < cover) { volume += (cover - area) * (snow / RHOICE - ${brine ? '(SKINC * (T - FREEZING) + reservoir)' : 'SKINC * (T - FREEZING)'} / LATENT_ICE); }
     else if (area > cover) { T = FREEZING + cover * (T - FREEZING) / area; snow = cover * snow / area;${brine ? ' reservoir = cover * reservoir / area;' : ''} }
 ${brine ? `    if (area > 0.0) { let over = min(reservoir, max(0.0, reservoir - BRINE_SHARE * LATENT_ICE * max(0.0, volume) / area) / (1.0 - BRINE_SHARE)); reservoir -= over; volume -= area * over / LATENT_ICE; }

@@ -173,7 +173,6 @@ async function build(file) {
   const fs = await import(`${REPO}/scripts/figures/figureState.mjs`);
   const { withCadence } = await import(`${REPO}/js/cadence.module.js`);
   const { savedLevels } = await import(`${REPO}/js/stateFile.module.js`);
-  const { savedIceOptions } = await import(`${REPO}/scripts/savedLand.mjs`);
   const { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } = await import(`${REPO}/js/physics/regrid.module.js`);
   const { stateGrid } = await import(`${REPO}/js/stateGrid.module.js`);
   const { stateGeography } = await import(`${REPO}/js/geography.module.js`);
@@ -181,7 +180,7 @@ async function build(file) {
   const saved = await fs.readState(file), sg = stateGeography(saved), topography = sg.topography, dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
   const subgrid = process.env.NO_SUBGRID ? { subgrid: false } : {};
-  const options = { terrain: stateTerrain(saved), topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ice: { ...savedIceOptions(saved), ...JSON.parse(process.env.ICE ?? '{}') }, ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
+  const options = { terrain: stateTerrain(saved), topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.ICE ? { ice: JSON.parse(process.env.ICE) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
   const lakeOptions = { ...savedLakeOptions(saved), ...JSON.parse(process.env.LAKE ?? '{}') };
   if (Object.keys(lakeOptions).length) options.lake = lakeOptions;
   const load = (model) => {
