@@ -254,6 +254,27 @@ test('ice that drifts into open water at a Courant number of 0.005 persists on t
   s.gpuModel.destroy();
 });
 
+test('with iceExchange turbulent, ice that drifts into open water leaves the water its heat on the GPU as on the CPU, the ocean handing the arrived ice none of it at once', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh, toward = northwardOn(pm, (lat) => lat < -40 * DEG);
+  probe.destroy();
+  const velocity = Float64Array.from(toward, (d, e) => d * 0.005 * pm.dcEdge[e] / DT);
+  const s = await scenario({ rheology: 'frozen' }, { velocity, keep: true, ocean: { iceExchange: 'turbulent' } });
+  const open = Uint8Array.from(s.ice, (h) => (h > 0 ? 0 : 1));
+  for (let n = 0; n < 5; n++) { s.stepCpu(); await s.stepGpu(); }
+  const { iceWater, flux } = await s.ocean.restartArrays(), g = await s.readIce();
+  const arrived = Array.from(open.keys()).filter((i) => open[i] && s.cpu.cellOcean[i] && s.ice[i] > 0 && g.h[i] > 0);
+  const heat = arrived.map((i) => s.seaIce.waterHeat[i]), device = arrived.map((i) => iceWater[i]);
+  let handed = 0, warm = 0;
+  for (const i of arrived) { handed = Math.max(handed, Math.abs(s.seaIce.oceanFlux[i]), Math.abs(flux[i])); warm = Math.max(warm, s.seaIce.waterHeat[i] / s.cpu.capacity[i]); }
+  const r = stats(Float64Array.from(heat), Float64Array.from(device));
+  console.log(`after five calls ${arrived.length} cells hold ice that arrived on both engines, their water up to ${warm.toFixed(3)} K above freezing; water heat rms ${r.rmsRel.toExponential(2)} max ${r.maxDiff.toExponential(2)} J/m², the most handed at once ${handed.toExponential(2)} W/m²`);
+  assert.ok(arrived.length >= 10 && warm > 0.05, `${arrived.length} arrivals, water ${warm} K above freezing`);
+  assert.ok(heat.every((x) => x > 0), 'the arrived ice leaves the water its heat on the CPU');
+  assert.ok(r.rmsRel < 1e-3, `the device's water heat at the arrivals: rms relative ${r.rmsRel}`);
+  assert.ok(handed < 1e-3, `no heat handed at once: ${handed} W/m²`);
+  s.gpuModel.destroy();
+});
+
 test('ice that drifts into open water brings its brine on the GPU as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh, toward = northwardOn(pm, (lat) => lat < -40 * DEG);
   probe.destroy();
