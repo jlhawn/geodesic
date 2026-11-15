@@ -304,3 +304,34 @@ test('with iceAlbedoPhases both engines give the ice the same albedo and age the
   assert.ok(ponded > 10 && cells > 20 && wet > cells / 10 && dry > cells / 10, `${ponded} ponded, ${cells} snowy, ${wet} wet, ${dry} dry`);
   assert.ok(iceWorst < 1e-5 && worst < 1e-4, `ice albedo apart by ${iceWorst}, snow albedo by ${worst}`);
 });
+
+for (const iceAlbedoPhases of [true, false]) {
+  test(`with iceAlbedoPhases ${iceAlbedoPhases}, both engines give the ice the same albedo on skins at the melting plateau and below it`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+    const one = { topography, ice: { iceAlbedoPhases } };
+    const cpu = createModel(new Grid(16), one), gpu = await createGpuModel(new Grid(16), one);
+    const C = cpu.mesh.nCells, landMask = cpu.geography.land, init = initializeState(cpu, {});
+    let r = 11;
+    const rnd = () => { r = (r * 1664525 + 1013904223) >>> 0; return r / 4294967296; };
+    for (let i = 0; i < C; i++) { if (landMask[i]) init[6][i] = 0; else if (rnd() < 0.5) { init[6][i] = 0.1 + 2 * rnd(); init[3][i] = rnd() < 0.4 ? MELTING_POINT : MELTING_POINT - 3 + 3 * rnd(); } }
+    const snow = Float64Array.from({ length: C }, () => (rnd() < 0.5 ? 40 * rnd() : 0)), snowAlbedo = Float64Array.from({ length: C }, () => 0.7 + 0.15 * rnd());
+    for (const m of [cpu, gpu]) {
+      for (let a = 0; a < init.length; a++) m.state[a].set(init[a]);
+      m.seaIce.load(m.state[6], null);
+      m.land.load({ soil: new Float64Array(C).fill(60), snow, vegetation: new Float64Array(C).fill(0.6), snowAlbedo }, m.state[6]);
+    }
+    gpu.load();
+    const expected = Float64Array.from({ length: C }, (_, i) => cpu.seaIce.albedo(cpu.state[6][i], null, cpu.seaIce.snow[i], cpu.seaIce.cover(i, cpu.state[6][i]), cpu.state[3][i], cpu.seaIce.snowAlbedo[i]));
+    await gpu.step(900);
+    const { ADIF } = await gpu.gpu.downloadPhysics();
+    gpu.destroy();
+    let plateau = 0, worstPlateau = 0, worst = 0;
+    for (let i = 0; i < C; i++) {
+      if (landMask[i] || !(init[6][i] > 0)) continue;
+      const apart = Math.abs(ADIF[i] - expected[i]);
+      if (init[3][i] === MELTING_POINT) { plateau++; worstPlateau = Math.max(worstPlateau, apart); } else worst = Math.max(worst, apart);
+    }
+    console.log(`N=16, iceAlbedoPhases ${iceAlbedoPhases}: ${plateau} iced cells at the melting plateau, ice albedo engines apart by ${worstPlateau.toExponential(1)} there and ${worst.toExponential(1)} below it`);
+    assert.ok(plateau > 10, `${plateau} cells at the plateau`);
+    assert.ok(worstPlateau < 1e-5 && worst < 1e-5, `apart by ${worstPlateau} at the plateau, ${worst} below it`);
+  });
+}
