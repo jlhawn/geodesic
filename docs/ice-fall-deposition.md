@@ -174,12 +174,36 @@ Under 'ramp' every kernel text, the shared functions and the PH layout are those
 
 Tests are in `test/cloudPhaseOptics.test.mjs`: the defaults and throws (including a model without moisture), the CPU optics at 255 K with φ = 0.2, with cumulus water and outside the ramp's limits, the mixed-layer deck on both `deckCloud` modes (the deck takes the ramp, the resolved water above it 1 − φ), kernel identity, and N=16 CPU against GPU rows on bl34 and bl48 with cumulus water in layers that also hold resolved water, and on bl48 with the mixed-layer deck on (a deck on most columns on both engines). The parity rows bound the engines' gap on the change the memory makes at 5 % of that change.
 
-What I expect from arm B, against dep64 (iceDeposition on the ramp) from the same fresh start, written before the run:
+What I expect from arm B, against dep64 (iceDeposition on the ramp) from the same fresh start and the same tree, written before the run. Both arms run from one export of ecf628e4 and differ only in `RADIATION`.
 
-- On the first day of a CPU run under iceDeposition, the stored φ exceeds the ramp's ice share 1 − α in every latitude band and temperature bin. At 253–263 K it is 0.66–0.94 against 0.38–0.39; at 263–273 K, 0.42–0.76 against 0.12–0.15. So resolved cloud between the limits reads icier under 'memory' than under the ramp.
+Measured inputs, not predictions:
+
+- φ on the first day of icedep/f7, a CPU N=64 run of dep64's configuration (iceDeposition, radiation on the ramp) from ctl64's day-30 save, exceeds the ramp's ice share 1 − α in every latitude band and temperature bin. At 253–263 K it is 0.66–0.94 against 0.38–0.39; at 263–273 K, 0.42–0.76 against 0.12–0.15. So resolved cloud between the limits reads icier under 'memory' than under the ramp.
 - Per kilogram, ice has 0.4–0.7 of liquid's solar depth and 0.2–0.3 of its longwave absorption.
+- ctl64 (seaice/code at 44021ee3, without iceDeposition), from its monthly saves:
+  - 70–90N ice, surface shortwave cloud effect (all-sky minus clear-sky sunlight at the surface): −72.7 W/m² in the day-61 save (Apr 19–May 19) and −58.1 in the day-426 save.
+  - Days 395–730: global SWCRE −48.1 and LWCRE 23.9 W/m²; 30–60° in both hemispheres −51.2 and 23.6; 30S–30N −52.2 and 25.8; net TOA +3.6 against CERES's +1.1 over the same months.
+  - Arctic September extent (the day-183 save): 0.49 million km² against NSIDC's 5.91.
+- Tropical φ at 263–273 K, about 0.75 against a ramp of 0.14, is set by ice that falls in from above and by the memory, which is not advected; local deposition does not set it, since there the caps remove about as much ice as deposition adds (1.82, 1.46, 1.35, 1.27, 1.20 and 0.98 times as much over f7's days 1–6). This bin, not the Arctic, carries the global SWCRE prediction, so read the tropical and storm-track rows separately.
+
+The predictions as registered at 3049ac24:
+
 - **255–273 K cloud:** its SWCRE weakens. Global SWCRE weakens by 1 to 4 W/m², toward CERES.
 - **Thin 235–255 K cloud:** its LWCRE weakens. Global LWCRE weakens by 0.3 to 1.5 W/m².
 - **Arctic:** the spring surface shortwave cloud effect weakens by 2 to 6 W/m², the wrong way for the melt-out rows. September extent ends below dep64's.
 - **Net TOA:** 1 to 3 W/m² more absorbed than in dep64.
-- **Revised from day 5 of the same CPU run, before the launch:** φ still exceeds 1 − α in every band and bin. One bin moved by more than 0.1: 60–90N at 253–263 K fell from 0.70 to 0.48, against 0.38. Arctic cloud between 253 and 273 K now sits 0.10 and 0.24 above the ramp, against 0.31 and 0.32 on day 1, so the Arctic range drops to 1 to 4 W/m². The global ranges stand: no other bin’s day-5 φ is more than 0.08 from its day-1 value.
+
+The rows these are scored on, added on Nov 15 before the run. Δ is arm B minus dep64. The global and band rows are means over days 395–1095, and the Arctic row is the mean of the day-61, 426 and 791 saves. dep64's expected value is ctl64's, since iceDeposition's own shift is not yet known. Every W/m² range is my conversion of the φ gap through the optics ratios above, a judgment that no radiation run has checked.
+
+| Row | dep64 expected | Target | Predicted Δ | Falsified if |
+|---|---|---|---|---|
+| 70–90N ice surface SW cloud effect, Apr 19–May 19 | −65 ± 8 (ctl64 −72.7, −58.1) | ERA5 −61 | +2 to +6: toward ERA5 from below, and more sunlight on the ice for the melt-out rows | Δ ≤ 0 |
+| Global SWCRE | −48 ± 2 | CERES −45.1 | +1 to +4, toward CERES | Δ < 0 |
+| Global LWCRE | 24 ± 1 | CERES 25.6 | −0.3 to −1.5, away from CERES | Δ > 0 |
+| 30S–30N SWCRE, LWCRE | −52, 26 | none on disk (the CERES file holds global means only) | +1 to +5; −0.3 to −1.5 | ΔSW < 0 or ΔLW > 0 |
+| 30–60° SWCRE, LWCRE (storm tracks) | −51, 24 | none on disk | +1 to +5; −0.2 to −1.5 | ΔSW < 0 or ΔLW > 0 |
+| Arctic September extent | 0.5 to 2.5 million km² (ctl64 0.49; iceFallColdOnly 2.55 in year 1) | NSIDC 5.91 | −0.2 to −1.0, and never below 0 | Δ > +0.2 |
+| Net TOA | +3.6 ± 1.5 | CERES +1.1 | +1 to +3 as registered; the SW and LW ranges together allow −0.5 to +3.7 | Δ ≤ 0 |
+| Inert | | | | \|ΔSWCRE\| < 0.3 and \|ΔLWCRE\| < 0.1 W/m² globally: the coupling did nothing, and the pair says nothing about it |
+
+Amendment, Nov 15 07:00, before the run, not a measurement. It comes from icedep/f7: a CPU probe of dep64's configuration, not arm B's, started from ctl64's day-30 save. Its days 1–6 therefore fall in the Apr 19–May 19 window that the Arctic row scores. Its 60–90N φ at 253–263 K went 0.696, 0.606, 0.518, 0.511, 0.477 and 0.420 over days 1–6, against a ramp of 0.38, and was still falling. From that gap I would put the Arctic row at +1 to +4 W/m², but that conversion is a judgment, and a gap that keeps closing would lower it further. The registered +2 to +6 stays the prediction to score.
