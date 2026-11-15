@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createSeaIce, openWaterAlbedo, iceExchangeOptions, ICE_EXCHANGE, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
+import { createSeaIce, openWaterAlbedo, iceExchangeOptions, ICE_EXCHANGE, DEFAULT_ICE_EXCHANGE, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 
 const model = createModel(new Grid(16));
@@ -435,7 +435,8 @@ const TURBULENT = (extra = {}) => ({ iceExchange: { mode: 'turbulent', ...extra 
 const volumeOf = (sea, ice) => sea.concentration[0] * ice[0];
 
 test('iceExchange is the mode name or an object of the exchange constants that names its mode, CICE\'s by default', () => {
-  assert.equal(iceExchangeOptions().mode, 'instant');
+  assert.equal(iceExchangeOptions('instant').mode, 'instant');
+  assert.deepEqual(iceExchangeOptions(), iceExchangeOptions(DEFAULT_ICE_EXCHANGE));
   assert.equal(iceExchangeOptions('turbulent').turbulent, true);
   assert.deepEqual(Object.fromEntries(Object.keys(ICE_EXCHANGE).map((key) => [key, iceExchangeOptions('turbulent')[key]])), { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66 });
   assert.ok(Math.abs(iceExchangeOptions('turbulent').lateralRate - 1.6e-6 * Math.PI / (0.66 * 300)) < 1e-20);

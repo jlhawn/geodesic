@@ -6,7 +6,7 @@ import { oceanCells, NEUTRAL_STRATIFICATION, HEAT_REFERENCE, SALT_REFERENCE, res
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare, INTERIOR_SHEARS, LMD94_RICHARDSON, LMD94_VISCOSITY } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
-import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval, iceExchangeOptions } from '../physics/ice.module.js';
+import { FREEZING_POINT, MINIMUM_CONCENTRATION, SNOW_AGEING, seaIceRemoval, iceExchangeOptions, DEFAULT_ICE_EXCHANGE } from '../physics/ice.module.js';
 import { iceDriftOptions, iceDriftPasses, ICE_REMNANT } from '../ocean/iceDrift.module.js';
 import { iceDriftHead, iceDriftKernels, driftStressKernel, driftSections, DRIFT_EDGE_SECTIONS } from './iceDrift.gpu.js';
 import { basalMeltWgsl, baseFreezing, SHELF_MELT } from '../ocean/iceShelfMelt.module.js';
@@ -60,7 +60,7 @@ export const OCEAN_DEFAULTS = {
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, rotationLimit: 'rh18', mstarScheme: 'rh18', langmuirScheme: 'rescale', nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   backgroundLatitude: 'uniform', equatorialDiffusivity: 1e-6,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, shearDiffusivityResolution: false, isoneutralDiffusion: false, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
-  edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 20, iceExchange: 'instant',
+  edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 20, iceExchange: DEFAULT_ICE_EXCHANGE,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
@@ -2167,7 +2167,7 @@ ${core.fieldConstants}
     stericSurface(h, Q, W, eta);
     return { h, u, Q, W, eta, T0, previousT0, filled: atlas ? filled : null };
   }
-  function uploadArrays({ h, u, Q, Qref, W, Wref, T, S, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart) {
+  function uploadArrays({ h, u, Q, Qref, W, Wref, T, S, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart, held = restart) {
     edgesCurrent = false;
     upwellingFolds = 0; upwellingTime = NaN; upwellingSeen = upwellingSteps;
     for (const name of RETAINED) delete outside[name];
@@ -2234,8 +2234,9 @@ ${core.fieldConstants}
     if (restart) putSection('BUOY', restart.buoyancy);
     const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
     const kept = (name) => (restart && restart[name] && restart[name].length === C ? restart[name] : null);
+    const keptHeld = (name) => (held && held[name] && held[name].length === C ? held[name] : null);
     const rhoCp = o.density * o.specificHeat, topHeat = (i) => (Qref ? Qref[i] + HEAT_REFERENCE * h[i] : Q[i]);
-    const iceWater = turbulent ? kept('iceWater') ?? Float64Array.from({ length: C }, (_, i) => (ice[i] > 0 && cellOcean[i] && !shelf[i] ? Math.max(0, rhoCp * (topHeat(i) - h[i] * FREEZING_POINT)) : 0)) : null;
+    const iceWater = turbulent ? keptHeld('iceWater') ?? Float64Array.from({ length: C }, (_, i) => (ice[i] > 0 && cellOcean[i] && !shelf[i] ? Math.max(0, rhoCp * (topHeat(i) - h[i] * FREEZING_POINT)) : 0)) : null;
     const iceVelocity = driftOptions && restart && restart.iceVelocity && restart.iceVelocity.length === E ? restart.iceVelocity : null, waterRoot = driftOptions ? Math.sqrt(driftOptions.waterDrag) : 0;
     const stirred = (i) => {
       if (!cellOcean[i] || shelf[i]) return 0;
@@ -2250,7 +2251,7 @@ ${core.fieldConstants}
       }
       return rhoCp * transfer.heatTransfer * Math.max(transfer.frictionMinimum, waterRoot * speed);
     };
-    const iceConductance = turbulent ? kept('iceConductance') ?? Float64Array.from({ length: C }, (_, i) => stirred(i)) : null;
+    const iceConductance = turbulent ? keptHeld('iceConductance') ?? Float64Array.from({ length: C }, (_, i) => stirred(i)) : null;
     core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h) : null, penetrated: kept('penetrated'), waterHeat: iceWater, conductance: iceConductance, oceanCells: cellOcean });
     if (regridOnDevice) regrid(Infinity);
   }
@@ -2360,7 +2361,7 @@ ${core.fieldConstants}
     }
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) u[k * E + e] = 0;
     const restart = own && restartable({ ...saved, h, eta }) ? saved : null;
-    uploadArrays({ h, u, Q, W, eta }, surfaceT, ice, restart, concentration, !own);
+    uploadArrays({ h, u, Q, W, eta }, surfaceT, ice, restart, concentration, !own, own ? saved : null);
     const previousT0 = new Float64Array(C);
     for (let i = 0; i < C; i++) previousT0[i] = cellOcean[i] ? Q[i] / h[i] : surfaceAt(i);
     putSection('PREVT0', restart ? restart.previousT0 : previousT0);
@@ -2398,6 +2399,12 @@ ${core.fieldConstants}
     return { h: Array.from(d.h), u: Array.from(d.u), T: Array.from(d.T), S: Array.from(d.S), eta: Array.from(d.eta), densities: Array.from(labels), vertical: 'hybrid', generator: o.generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), ...(d.shelfMelted ? { shelfMelted: Array.from(d.shelfMelted), shelfDraw: Array.from(d.shelfDraw) } : {}) } : {}) };
   }
   async function serialize() { return serializeFrom(await download()); }
+  async function heldArrays() {
+    if (!turbulent) return {};
+    const PHL = core.layout.PH, [iceWater, iceConductance] = await readRanges(device, buffers.PH, [{ offset: PHL.WHEAT, length: C }, { offset: PHL.CONDUCT, length: C }]);
+    return { iceWater, iceConductance };
+  }
+
   /*
    * What upload needs beside serialize()'s fields to put the device back
    * exactly as it stands between two ocean steps: the surface's last
@@ -2491,7 +2498,7 @@ ${core.fieldConstants}
   return {
     layers: L, everySteps: o.everySteps, options: o, D, sillEdge, cellOcean, edgeOcean, vertical: 'hybrid', generator: o.generator, table,
     useSeaIce(concentration) { seaCover = concentration; },
-    initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
+    initialize, upload, download, serialize, serializeFrom, heldArrays, restartArrays, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated, readShelfMelt, driftStep, setAirStress, iceDrift: driftOptions,
     setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, salt, writeSurface, step, phases, eddyTransport,
     buffers: ob, layout: { OS, OD, B, MI: TMI, MF: TMF }, packing: pk,

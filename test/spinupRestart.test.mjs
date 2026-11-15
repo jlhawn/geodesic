@@ -86,6 +86,29 @@ test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed insi
   }
 });
 
+test("at N=16 spinup.mjs records the default ice exchange in its header, and a run that resumes a save under another exchange says so and takes its own: an instant save resumed under OCEAN iceExchange turbulent, as confirm128 started, holds the water's heat by the end of day 1, and that save resumed under OCEAN iceExchange instant holds none", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const out = mkdtempSync(join(tmpdir(), 'restart-switch-')), turbulent = { mode: 'turbulent', frictionMinimum: 2e-2 };
+  try {
+    const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: Object.fromEntries(Object.entries({ ...withoutOptionGroups(), N: '16', MINUTES: '100', OUT: out, TAG: 'switch', ...extra }).filter(([, value]) => value !== undefined)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    run({ DAYS: '1', STOP_AFTER_STEPS: '32' });
+    const instant = await decoded(join(out, 'switch_day0000_step0032.bin'));
+    assert.equal(instant.given.ocean.iceExchange, 'instant', 'the header records the default exchange');
+    assert.equal(instant.ocean.iceWater, undefined);
+    assert.match(run({ DAYS: '1', OCEAN: JSON.stringify({ iceExchange: turbulent }) }), /iceExchange \{"mode":"turbulent","frictionMinimum":0\.02\} where switch_day0000_step0032\.bin was made under "instant"/);
+    const day1 = await decoded(join(out, 'switch_day0001.bin')), C = day1.surfaceT.length;
+    assert.deepEqual(day1.given.ocean.iceExchange, turbulent);
+    const held = day1.ocean.iceWater?.length === C ? day1.ocean.iceWater.filter((x) => x > 0).length : 0;
+    assert.ok(held > 0, `the turbulent run holds the water's heat under its ice in ${held} cells`);
+    assert.match(run({ DAYS: '2', OCEAN: JSON.stringify({ iceExchange: 'instant' }) }), /iceExchange "instant" where switch_day0001\.bin was made under \{"mode":"turbulent","frictionMinimum":0\.02\}/);
+    const day2 = await decoded(join(out, 'switch_day0002.bin'));
+    assert.equal(day2.given.ocean.iceExchange, 'instant');
+    assert.equal(day2.ocean.iceWater, undefined, 'the instant run holds no water heat');
+    assert.ok(day2.surfaceT.every(Number.isFinite) && day2.ocean.T.every(Number.isFinite));
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
 test("at N=64 on the n1024 mask spinup.mjs's daily line gives the sea-ice extents of the day's save, with FLake over the sea cells and saying its frozen lakes are left out, and with the lake model off over every cell off land and saying nothing of lakes, and a surface shortwave over the save's iced sea cells poleward of 60° within a factor of 2 of N 17.3 and S 41.9 W/m²",{ skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'spinup-extents-'));
   try {

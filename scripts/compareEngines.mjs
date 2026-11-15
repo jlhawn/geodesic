@@ -46,11 +46,11 @@
 //   --trace C1,C2,… --trace-out FILE  appends to FILE after every step one JSON line per engine built: the rows of
 //                TRACE_ROWS, Ts and the ice thickness at those cells
 //   --out FILE   also writes the report to FILE;  env FLAGS sets Dawn toggles for the GPU adapter,
-//                env OCEAN a JSON object of ocean options for both models (the iceExchange the save records
-//                where it names none), env BOUNDARY_LAYER one of
+//                env OCEAN a JSON object of ocean options for both models (the iceExchange the save was made
+//                under where it names none; the save's other ocean options are not taken), env BOUNDARY_LAYER one of
 //                boundary-layer options, env RADIATION one of
 //                radiation options, env MOIST one of moist options, env SURFACE one of surface options, env ICE
-//                one of sea-ice options and env LAND one of land options; env LAKE, lake options over those the save records (savedLakeOptions)
+//                one of sea-ice options over those the save records (savedIceOptions) and env LAND one of land options; env LAKE, lake options over those the save records (savedLakeOptions)
 //   The default runs the clear-sky pass, which the page does not: RADIATION='{"clearSkyPass":false}' compares the page's shader.
 // Run it with the GPU free (CLAUDE.md): one GPU model at a time.
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
@@ -186,10 +186,12 @@ async function build(file) {
   const saved = await fs.readState(file), sg = stateGeography(saved), topography = sg.topography, dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
   const subgrid = process.env.NO_SUBGRID ? { subgrid: false } : {};
-  const givenOcean = JSON.parse(process.env.OCEAN ?? '{}'), { resumedIceExchange } = await import(`${REPO}/scripts/savedLand.mjs`), recorded = resumedIceExchange ? resumedIceExchange(saved, givenOcean) : undefined;
+  const givenOcean = JSON.parse(process.env.OCEAN ?? '{}'), { resumedIceExchange, recordedIceExchange, savedIceOptions } = await import(`${REPO}/scripts/savedLand.mjs`), recorded = resumedIceExchange ? resumedIceExchange(saved, givenOcean) : undefined;
+  const { iceExchange, ...savedIce } = savedIceOptions ? savedIceOptions(saved) : {}, ice = { ...savedIce, ...JSON.parse(process.env.ICE ?? '{}') };
+  console.log(`ice options ${JSON.stringify(ice)}: the save's (savedIceOptions) under ICE, the exchange in the ocean's`);
   const ocean = recorded === undefined ? givenOcean : { ...givenOcean, iceExchange: recorded };
-  if (recorded !== undefined) console.log(`iceExchange ${JSON.stringify(recorded)}, as ${file} records`);
-  const options = { terrain: stateTerrain(saved), topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.ICE ? { ice: JSON.parse(process.env.ICE) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean, radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
+  if (recorded !== undefined) console.log(`iceExchange ${JSON.stringify(recorded)}, as ${file} ${recordedIceExchange?.(saved) === undefined ? 'was made under, recording none' : 'records'}`);
+  const options = { terrain: stateTerrain(saved), topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ice, ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean, radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
   const lakeOptions = { ...savedLakeOptions(saved), ...JSON.parse(process.env.LAKE ?? '{}') };
   if (Object.keys(lakeOptions).length) options.lake = lakeOptions;
   const load = (model) => {

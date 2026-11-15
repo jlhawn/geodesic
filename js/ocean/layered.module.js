@@ -1,6 +1,6 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../dynamics/operators.module.js';
 import { createIceDrift, coverOf } from './iceDrift.module.js';
-import { FREEZING_POINT, iceExchangeOptions } from '../physics/ice.module.js';
+import { FREEZING_POINT, iceExchangeOptions, DEFAULT_ICE_EXCHANGE } from '../physics/ice.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
 import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, MSTAR_SCHEMES, LANGMUIR_SCHEMES, surfaceBuoyancy, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities, INTERIOR_SHEARS, LMD94_VISCOSITY } from './column.module.js';
@@ -33,10 +33,11 @@ import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
  * reconstruction the surface stress uses (the drift's C_w, the stirring
  * u*_min alone where the drift is off). Water below freezing under ice
  * freezes onto the base through `oceanFlux`, which then holds no heat for
- * the ice to melt; waterHeat and the conductance are saved in restartArrays.
- * Between a write and the next read the top layer's Q of an iced cell still
- * holds what the ice has since drawn from waterHeat, so only waterHeat tells
- * the water's heat there, and a save without restartArrays rebuilds it from Q.
+ * the ice to melt; waterHeat and the conductance are saved as iceWater and
+ * iceConductance, in restartArrays and in a lean save. Between a write and
+ * the next read the top layer's Q of an iced cell still holds what the ice
+ * has since drawn from waterHeat, so only waterHeat tells the water's heat
+ * there, and a save without iceWater rebuilds it from Q.
  *
  * The interior classes of the saved slab oceans, placed where the World Ocean Atlas holds its water
  * in this equation of state: 1019.5–1021.5 for the warm pool, the two
@@ -632,7 +633,7 @@ export function createOcean(mesh, {
   backgroundLatitude = 'uniform', equatorialDiffusivity = 1e-6,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, shearDiffusivityResolution = false, isoneutralDiffusion = false, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
-  iceDrift = false, mixedLayerRestratification = true, eddyTracers = 'donor', iceExchange = 'instant',
+  iceDrift = false, mixedLayerRestratification = true, eddyTracers = 'donor', iceExchange = DEFAULT_ICE_EXCHANGE,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -1948,7 +1949,7 @@ export function createOcean(mesh, {
     }
     if (turbulent) {
       holdWater();
-      if (restartable(saved)) {
+      if (own) {
         if (saved.iceWater && saved.iceWater.length === C) seaWater.set(saved.iceWater);
         if (saved.iceConductance && saved.iceConductance.length === C) seaConductance.set(saved.iceConductance);
       }
@@ -1973,7 +1974,7 @@ export function createOcean(mesh, {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
     const fields = { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
-    return restart ? { ...fields, ...restartArrays() } : fields;
+    return restart ? { ...fields, ...restartArrays() } : { ...fields, ...(turbulent ? { iceWater: Float64Array.from(seaWater), iceConductance: Float64Array.from(seaConductance) } : {}) };
   }
 
   const thermoclineDepth = new Float64Array(C), surfaceSalinity = new Float64Array(C), sst = T0, sss = S0;

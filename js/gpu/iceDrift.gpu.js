@@ -220,7 +220,7 @@ ${brine ? '  let B1 = max(0.0, OD[O_IBR + i] + dB / omega);\n' : ''}${last ? `  
     S[S_ICE + gi] = 0.0; PH[PH_SNOW + gi] = 0.0; PH[PH_SNOWALB + gi] = ID_FRESH; PH[PH_CONC + gi] = 0.0;${brine ? ' PH[PH_BRINE + gi] = 0.0;' : ''}${turbulent ? ' PH[PH_WHEAT + gi] = 0.0;' : ''}
     return;
   }
-  if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + gi]; OD[O_ARRIVED + i] = 1.0;${turbulent ? ' PH[PH_WHEAT + gi] = PH[PH_CAP + gi] * (S[S_TS + gi] - ID_FREEZE);' : ''} }
+  if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + gi]; OD[O_ARRIVED + i] = 1.0;${turbulent ? ' PH[PH_WHEAT + gi] = select(0.0, PH[PH_CAP + gi] * (S[S_TS + gi] - ID_FREEZE), PH[PH_WET + gi] > 0.5);' : ''} }
   S[S_ICE + gi] = V1 / full; PH[PH_CONC + gi] = full; PH[PH_SNOW + gi] = S1 / full;
   S[S_TS + gi] = ID_FREEZE + E1 / (full * ID_SKINC);
 ${brine ? '  PH[PH_BRINE + gi] = B1 / full;\n' : ''}  PH[PH_SNOWALB + gi] = select(ID_FRESH, min(1.0, Sa1 / S1), S1 > 0.0);

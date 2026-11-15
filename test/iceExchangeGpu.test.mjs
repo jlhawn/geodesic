@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { lakeArrays } from '../js/physics/lake.module.js';
@@ -8,7 +9,7 @@ import { loadSavedLand, loadSavedLake } from '../scripts/savedLand.mjs';
 import { buildMesh } from '../js/mesh.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { iceExchangeOptions, FREEZING_POINT } from '../js/physics/ice.module.js';
+import { iceExchangeOptions, FREEZING_POINT, DEFAULT_ICE_EXCHANGE } from '../js/physics/ice.module.js';
 
 /*
  * The GPU model with the ocean's iceExchange 'turbulent' (physics/ice.module.js): the layout of the
@@ -21,7 +22,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 const { layoutFor } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
 const { physicsSurfaceKernel, seaSurfaceWgsl } = gpuAvailable ? await import('../js/gpu/physics.gpu.js') : {};
-const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
+const { readRanges, getDevice } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 const N = 16, DT = 1350;
 
 test('the physics buffer, the surface kernel and the constants carry the turbulent exchange only when it is asked for', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
@@ -36,6 +37,29 @@ test('the physics buffer, the surface kernel and the constants carry the turbule
   assert.equal(seaSurfaceWgsl(instant), seaSurfaceWgsl({}));
   assert.equal(physicsSurfaceKernel(false), physicsSurfaceKernel(false, false, null, false, false, instant));
   assert.ok(!/PH_WHEAT|PH_CONDUCT|XFER_/.test(physicsSurfaceKernel(false)) && /PH_WHEAT/.test(physicsSurfaceKernel(false, false, null, false, false, turbulent)));
+});
+
+test('the GPU model at N=16 over the aquaplanet compiles its pinned WGSL, 85 modules each: under iceExchange \'instant\' of digest a2432b2c07f16c72, under \'turbulent\' of digest 35bb61260615ba48, and given no exchange those of DEFAULT_ICE_EXCHANGE', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const sha = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16), { device } = await getDevice(), compile = device.createShaderModule;
+  const compiled = async (options) => {
+    const modules = {};
+    let n = 0;
+    device.createShaderModule = (descriptor) => { modules[`${descriptor.label ?? 'anonymous'}#${n++}`] = sha(descriptor.code); return compile.call(device, descriptor); };
+    try { (await createGpuModel(new Grid(N), options)).destroy(); } finally { device.createShaderModule = compile; }
+    const listed = Object.entries(modules).sort(([a], [b]) => a.localeCompare(b));
+    return { modules: listed.length, digest: sha(listed.map(([name, code]) => `${name}:${code}`).join('\n')) };
+  };
+  const pinned = { instant: await compiled({ ocean: { iceExchange: 'instant' } }), turbulent: await compiled({ ocean: { iceExchange: 'turbulent' } }) };
+  assert.deepEqual(pinned, { instant: { modules: 85, digest: 'a2432b2c07f16c72' }, turbulent: { modules: 85, digest: '35bb61260615ba48' } }, 'a change to a kernel updates its pin');
+  assert.deepEqual(await compiled({}), await compiled({ ocean: { iceExchange: DEFAULT_ICE_EXCHANGE } }));
+});
+
+test('a model given no exchange takes DEFAULT_ICE_EXCHANGE on both engines, in the ocean and in the sea ice', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const cpu = createModel(new Grid(N), {}), gpu = await createGpuModel(new Grid(N), {}), resolved = iceExchangeOptions(DEFAULT_ICE_EXCHANGE);
+  try {
+    assert.deepEqual({ cpuOcean: cpu.ocean.iceExchange, cpuIce: cpu.seaIce.iceExchange, gpuOcean: iceExchangeOptions(gpu.oceanEngine.options.iceExchange), gpuIce: gpu.seaIce.iceExchange }, { cpuOcean: resolved, cpuIce: resolved, gpuOcean: resolved, gpuIce: resolved });
+    assert.equal(gpu.gpu.layout.PH.WHEAT === undefined, !resolved.turbulent, 'the physics buffer holds the water\'s heat only under a turbulent exchange');
+  } finally { gpu.destroy(); }
 });
 
 test('the GPU model steps with ice over a turbulent exchange: the water under the ice holds heat above freezing, nothing goes wrong, and a save and load of the ocean give the device its heat and conductance back', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -225,6 +249,37 @@ test('a GPU run over land with iceExchange turbulent, saved by serialize({ resta
   }
   console.log(`N=${N}, ${2 * n} steps whole against ${n}, a save and a load, then ${n}: ${fields(ended).length} arrays compared; at the save ${held} cells hold the water's heat and ${stirred} a conductance`);
   assert.deepEqual(differ, [], `whole against resumed: ${differ.join('; ')}`);
+});
+
+test('a lean turbulent save, serialize() without the restart arrays, carries the water\'s heat under the ice and the conductance, and a fresh turbulent GPU model loads them as they were saved', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { topography, ocean: { iceExchange: TURBULENT }, ice: { iceAlbedoPhases: true } };
+  const model = await steps(await begin(options), 16);
+  await model.sync();
+  const saved = { time: model.time, host: Object.fromEntries(host(model).map(([name, values]) => [name, Float64Array.from(values)])), fresh: await model.readFreshwater(), ocean: await model.ocean.serialize(), land: await model.land.serialize(), lake: model.lake ? lakeArrays(await model.lake.serialize()) : {} };
+  model.destroy();
+  const C = saved.host.state6.length, held = saved.ocean.iceWater?.filter((x) => x > 0).length ?? 0;
+  assert.equal(saved.ocean.Qref, undefined, 'the save is lean');
+  for (const name of ['iceWater', 'iceConductance']) assert.equal(saved.ocean[name]?.length, C, `the lean save holds ocean.${name}`);
+  assert.ok(held > 0, `the lean save holds the water's heat in ${held} cells`);
+  const back = await restore(saved, options), again = await back.ocean.serialize();
+  back.destroy();
+  for (const name of ['iceWater', 'iceConductance']) assert.deepEqual([...again[name].keys()].filter((i) => !Object.is(again[name][i], saved.ocean[name][i])), [], `ocean.${name} loads as saved`);
+});
+
+test('a turbulent save, restart or lean, loaded into an explicitly instant GPU model steps on bit for bit as the same save without the water\'s heat under the ice and the conductance', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { topography, ocean: { iceExchange: TURBULENT }, ice: { iceAlbedoPhases: true } }, instant = { ...options, ocean: { iceExchange: 'instant' } };
+  const model = await steps(await begin(options), 16), { oceanEvery } = model.cadence;
+  await model.sync();
+  const lean = await model.ocean.serialize(), saved = await save(model);
+  for (const [kind, ocean] of [['restart', saved.ocean], ['lean', lean]]) {
+    const { iceWater, iceConductance, ...without } = ocean;
+    assert.ok(iceWater.some((x) => x > 0) && iceConductance.some((x) => x > 0), `the ${kind} save holds heat and a conductance under the ice`);
+    const taken = await save(await steps(await restore({ ...saved, ocean }, instant), 2 * oceanEvery));
+    const plain = Object.fromEntries(fields(await save(await steps(await restore({ ...saved, ocean: without }, instant), 2 * oceanEvery))));
+    assert.ok(!('iceWater' in taken.ocean), 'the instant model saves no water heat');
+    const differ = fields(taken).filter(([name, values]) => !plain[name] || plain[name].length !== values.length || values.some((x, i) => !Object.is(x, plain[name][i]))).map(([name]) => name);
+    assert.deepEqual(differ, [], `from the ${kind} save, over ${2 * oceanEvery} steps`);
+  }
 });
 
 test('an instant save with ice loaded into the turbulent model on both engines: the water under the ice starts within the f32 grain of the freezing point, as on the CPU, and over two ocean intervals the ice, the held heat and the conductance follow the CPU and no ice collapses', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

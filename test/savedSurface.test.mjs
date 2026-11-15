@@ -5,7 +5,7 @@ import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { restoreSurface, savedIceOptions, resumedIceExchange } from '../scripts/savedLand.mjs';
+import { restoreSurface, savedIceOptions, resumedIceExchange, resumedOcean, resumedIce } from '../scripts/savedLand.mjs';
 
 const N = 16, DT = 1350, ICE = { meltingIceAlbedo: 0.4, iceMeltingRange: 3 };
 const topography = readTopography('etopo2022'), sheets = geographyOptions({ ...FRESH_GEOGRAPHY });
@@ -36,7 +36,7 @@ test('a model restored from a save by restoreSurface has the running model\'s su
     N, K: run.core.K, day: 0, time: run.time, given: { ice: ICE },
     ...Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a]])), concentration: seaIce.concentration, land: land.serialize(),
   }));
-  assert.deepEqual(savedIceOptions(saved), ICE);
+  assert.deepEqual(savedIceOptions(saved), { iceExchange: 'instant', ...ICE });
 
   const back = restored(saved, savedIceOptions(saved));
   assert.deepEqual(restoreSurface(back, saved, () => {}), []);
@@ -77,13 +77,18 @@ test('restoreSurface hands a turbulent save\'s held heat and conductance to the 
   assert.deepEqual(restoreSurface(restored(saved, savedIceOptions(saved)), withoutExchange, () => {}), ['ocean.iceWater', 'ocean.iceConductance']);
 });
 
-test('a resumed run whose ocean options name no iceExchange takes the one its save records, in given or else in options, and a save that holds the held heat but records none is refused', () => {
+test('a resumed run whose ocean options name no iceExchange takes the one its save was made under: the one it records, in given or else in options, or the instant exchange where it records none; a save that holds the held heat but records none is refused', () => {
   const turbulent = { mode: 'turbulent', frictionMinimum: 2e-2 }, held = { ocean: { iceWater: new Float64Array(4) } };
   assert.equal(resumedIceExchange(null, {}), undefined);
   assert.equal(resumedIceExchange({ given: { ocean: { iceExchange: turbulent } } }, { iceExchange: 'instant' }), undefined, 'the run\'s own option stands');
   assert.deepEqual(resumedIceExchange({ given: { ocean: { iceExchange: turbulent } }, ...held }, {}), turbulent);
   assert.deepEqual(resumedIceExchange({ options: { ocean: { iceExchange: turbulent } }, ...held }, { closureHours: 3 }), turbulent);
   assert.deepEqual(savedIceOptions({ options: { ocean: { iceExchange: turbulent } } }), { iceExchange: turbulent });
-  assert.equal(resumedIceExchange({ given: {} }, {}), undefined, 'a save of the default exchange');
+  assert.equal(resumedIceExchange({ given: {} }, {}), 'instant', 'a save that records no exchange was made under the instant one');
+  assert.equal(resumedIceExchange({}, {}), 'instant');
+  assert.deepEqual(savedIceOptions({ given: { ice: { iceAlbedoPhases: true } } }), { iceExchange: 'instant', iceAlbedoPhases: true });
   assert.throws(() => resumedIceExchange({ given: {}, ...held }, {}), /iceWater/);
+  assert.equal(resumedIceExchange({ given: { ocean: { iceExchange: turbulent } } }, false), undefined, 'an ocean given as false takes no exchange');
+  assert.equal(resumedOcean({ given: { ocean: { iceExchange: turbulent } } }, false), false);
+  assert.deepEqual(resumedIce({ given: { ocean: { iceExchange: turbulent }, ice: { iceAlbedoPhases: true, meltOpening: 0.5 } } }, { meltOpening: 0.25 }), { iceAlbedoPhases: true, meltOpening: 0.25 }, 'the save\'s ice options under the run\'s, the exchange left to the ocean');
 });

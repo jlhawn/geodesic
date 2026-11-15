@@ -5,6 +5,7 @@ import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
 import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 import { terrainKey, terrainOptions, terrainCache, surfaceGeopotential, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { savedTerrain, stateTerrain } from '../js/stateFile.module.js';
+import { iceExchangeOptions, savedIceExchange } from '../js/physics/ice.module.js';
 
 const SOIL_OPTIONS = ['soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity'];
 export const soilOptions = (land = {}) => Object.fromEntries(SOIL_OPTIONS.filter((name) => land[name] !== undefined).map((name) => [name, land[name]]));
@@ -73,17 +74,28 @@ export function asMade(given) {
  * for a base without `given`, the boundary layer against the group its
  * `options` record, as a page export's do, or, where neither records it,
  * that the state's order cannot be told, with the order this run's
- * boundary layer runs.
+ * boundary layer runs; and, where this run's ice exchange is not the one
+ * base was made under (savedIceExchange), the two. A record whose ocean
+ * names no iceExchange counts as the instant exchange.
  */
 export function resumeNotes(given, base, name) {
   if (!base) return [];
+  const exchange = exchangeNotes(given, base, name);
   if (base.given === undefined) {
     const recorded = base.options?.boundaryLayer;
-    if (recorded !== undefined) return differingGroups({ boundaryLayer: given.boundaryLayer }, { boundaryLayer: recorded }).length ? [`options other than ${name}'s header records in its options: boundaryLayer`] : [];
-    return isGroup(given.boundaryLayer) ? [`${name} records no boundary-layer order, so the order it was made in cannot be told: this run's boundary layer runs ${(given.boundaryLayer.diagnoseFirst ?? DIAGNOSE_FIRST) ? 'diagnoseFirst' : 'in the plain order'}`] : [];
+    if (recorded !== undefined) return [...(differingGroups({ boundaryLayer: given.boundaryLayer }, { boundaryLayer: recorded }).length ? [`options other than ${name}'s header records in its options: boundaryLayer`] : []), ...exchange];
+    return [...(isGroup(given.boundaryLayer) ? [`${name} records no boundary-layer order, so the order it was made in cannot be told: this run's boundary layer runs ${(given.boundaryLayer.diagnoseFirst ?? DIAGNOSE_FIRST) ? 'diagnoseFirst' : 'in the plain order'}`] : []), ...exchange];
   }
-  const other = differingGroups(given, asMade(base.given));
-  return other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : [];
+  const other = differingGroups(withExchange(given), withExchange(asMade(base.given)));
+  return [...(other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : []), ...exchange];
+}
+
+const withExchange = (given) => (isGroup(given) && given.ocean !== false ? { ...given, ocean: { ...(isGroup(given.ocean) ? given.ocean : {}), iceExchange: iceExchangeOptions(savedIceExchange({ given })) } } : given);
+const resolvedExchange = (exchange) => canonical(iceExchangeOptions(exchange));
+
+function exchangeNotes(given, base, name) {
+  const before = savedIceExchange(base), after = savedIceExchange({ given });
+  return resolvedExchange(before) === resolvedExchange(after) ? [] : [`iceExchange ${JSON.stringify(after)} where ${name} was made under ${JSON.stringify(before)}`];
 }
 
 /*

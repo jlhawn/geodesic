@@ -54,8 +54,9 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * name or an object of them with a `mode`.
  */
 export const ICE_EXCHANGES = ['instant', 'turbulent'];
+export const DEFAULT_ICE_EXCHANGE = 'instant';
 export const ICE_EXCHANGE = { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66 };
-export function iceExchangeOptions(option = 'instant') {
+export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   const given = typeof option === 'string' ? { mode: option } : option;
   if (given === null || typeof given !== 'object') throw new Error(`iceExchange is ${ICE_EXCHANGES.join(' or ')} or an object of ${Object.keys(ICE_EXCHANGE).join(', ')} with a mode, not ${option}`);
   const { mode, turbulent, lateralRate, ...rest } = given;
@@ -70,6 +71,9 @@ export function iceExchangeOptions(option = 'instant') {
   if (lateralRate !== undefined && lateralRate !== resolved.lateralRate) throw new Error(`iceExchange.lateralRate follows lateralMelt, floeShape and floeDiameter (${resolved.lateralRate}), not ${lateralRate}`);
   return resolved;
 }
+
+// A header that records no exchange is an instant save, whatever DEFAULT_ICE_EXCHANGE is; scripts/savedLand.mjs resumedIceExchange refuses one that holds ocean.iceWater.
+export const savedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange ?? 'instant';
 
 /*
  * The slab ocean and its sea ice, a zero-layer thermodynamic model: the
@@ -244,7 +248,7 @@ export const pondedIceAlbedo = ({ whiteIceAlbedo, pondAlbedo, pondFraction } = A
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.62, meltingIceAlbedo = 0.48, iceMeltingRange = 1, fullAlbedoThickness = 0.5,
-  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10, areaLossFactor = 1, iceExchange = 'instant',
+  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10, areaLossFactor = 1, iceExchange = DEFAULT_ICE_EXCHANGE,
   leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, oceanCells = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
