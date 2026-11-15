@@ -9,7 +9,18 @@ export function loadSavedLand(model, saved) {
   model.land.load(saved.land, model.state[6], saved.time, model.state[3]);
 }
 
-export const savedIceOptions = (saved) => ({ ...(saved.given?.ocean?.iceExchange !== undefined ? { iceExchange: saved.given.ocean.iceExchange } : {}), ...(saved.given?.ice ?? {}) });
+const recordedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange;
+export const savedIceOptions = (saved) => ({ ...(recordedIceExchange(saved) !== undefined ? { iceExchange: recordedIceExchange(saved) } : {}), ...(saved.given?.ice ?? {}) });
+
+/*
+ * The iceExchange a run resumed from a save takes when its ocean options name none: the one the save records.
+ */
+export function resumedIceExchange(saved, ocean = {}) {
+  if (!saved || ocean.iceExchange !== undefined) return undefined;
+  const recorded = recordedIceExchange(saved);
+  if (recorded === undefined && saved.ocean?.iceWater) throw new Error('the save holds the heat of the water under its ice (ocean.iceWater) but records no iceExchange: give the ocean\'s iceExchange');
+  return recorded;
+}
 
 export function restoreSurface(model, saved, report = (line) => console.error(line)) {
   const { state, seaIce, land } = model;

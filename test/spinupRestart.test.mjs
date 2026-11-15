@@ -138,3 +138,28 @@ test("at N=16 spinup.mjs with LAND soilGoal 'observed', stopped inside a day and
     rmSync(out, { recursive: true, force: true });
   }
 });
+
+test("at N=16 spinup.mjs with OCEAN iceExchange turbulent and ICE iceAlbedoPhases, stopped inside a day, saves the water's heat under the ice and the conductance, and resumed with no OCEAN takes the exchange its save records and ends day 2 on the state of the run that did not stop, bit for bit but for the day's means", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const out = mkdtempSync(join(tmpdir(), 'restart-exchange-')), iceExchange = { mode: 'turbulent', frictionMinimum: 2e-2 };
+  try {
+    const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: Object.fromEntries(Object.entries({ ...withoutOptionGroups(), N: '16', MINUTES: '100', OUT: out, DAYS: '2', OCEAN: JSON.stringify({ iceExchange }), ICE: JSON.stringify({ iceAlbedoPhases: true }), ...extra }).filter(([, value]) => value !== undefined)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    run({ TAG: 'whole' });
+    run({ TAG: 'halt', STOP_AFTER_STEPS: '96' });
+    const inside = await decoded(join(out, 'halt_day0001_step0032.bin')), C = inside.surfaceT.length;
+    assert.deepEqual(inside.given.ocean.iceExchange, iceExchange);
+    for (const name of ['iceWater', 'iceConductance']) assert.equal(inside.ocean[name]?.length, C, `the save inside the day holds ocean.${name}`);
+    const held = inside.ocean.iceWater.filter((x) => x > 0).length, stirred = inside.ocean.iceConductance.filter((x) => x > 0).length;
+    assert.ok(held > 0 && stirred > 0, `the save inside the day holds the water's heat in ${held} cells and a conductance in ${stirred}`);
+    assert.match(run({ TAG: 'halt', OCEAN: undefined }), /iceExchange \{"mode":"turbulent","frictionMinimum":0\.02\}, as halt_day0001_step0032\.bin records/);
+    const [whole, halt] = await Promise.all(['whole', 'halt'].map((tag) => decoded(join(out, `${tag}_day0002.bin`))));
+    assert.deepEqual(halt.given.ocean, { iceExchange }, 'the resumed run records the exchange it took');
+    const means = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect'];
+    const parted = apart(whole, halt, [...means, 'energyRecord']), gaps = gapRows(whole.energyRecord.length, [2]);
+    assert.deepEqual(parted, [], `day 2, whole against halted: ${parted.join(', ')}`);
+    const recorded = [...whole.energyRecord.keys()].filter((i) => (gaps[i] ? !Number.isNaN(halt.energyRecord[i]) : !Object.is(whole.energyRecord[i], halt.energyRecord[i])));
+    assert.deepEqual(recorded, [], 'the energy record is the whole run\'s but for day 2, which the stop leaves unrecorded');
+    assert.ok(whole.ocean.iceWater.some((x) => x > 0), 'the day-2 save holds the water\'s heat');
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});

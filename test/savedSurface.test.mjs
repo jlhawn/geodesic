@@ -5,7 +5,7 @@ import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { restoreSurface, savedIceOptions } from '../scripts/savedLand.mjs';
+import { restoreSurface, savedIceOptions, resumedIceExchange } from '../scripts/savedLand.mjs';
 
 const N = 16, DT = 1350, ICE = { meltingIceAlbedo: 0.4, iceMeltingRange: 3 };
 const topography = readTopography('etopo2022'), sheets = geographyOptions({ ...FRESH_GEOGRAPHY });
@@ -75,4 +75,15 @@ test('restoreSurface hands a turbulent save\'s held heat and conductance to the 
   const { ocean, ...withoutExchange } = saved;
   assert.ok(ocean.iceWater);
   assert.deepEqual(restoreSurface(restored(saved, savedIceOptions(saved)), withoutExchange, () => {}), ['ocean.iceWater', 'ocean.iceConductance']);
+});
+
+test('a resumed run whose ocean options name no iceExchange takes the one its save records, in given or else in options, and a save that holds the held heat but records none is refused', () => {
+  const turbulent = { mode: 'turbulent', frictionMinimum: 2e-2 }, held = { ocean: { iceWater: new Float64Array(4) } };
+  assert.equal(resumedIceExchange(null, {}), undefined);
+  assert.equal(resumedIceExchange({ given: { ocean: { iceExchange: turbulent } } }, { iceExchange: 'instant' }), undefined, 'the run\'s own option stands');
+  assert.deepEqual(resumedIceExchange({ given: { ocean: { iceExchange: turbulent } }, ...held }, {}), turbulent);
+  assert.deepEqual(resumedIceExchange({ options: { ocean: { iceExchange: turbulent } }, ...held }, { closureHours: 3 }), turbulent);
+  assert.deepEqual(savedIceOptions({ options: { ocean: { iceExchange: turbulent } } }), { iceExchange: turbulent });
+  assert.equal(resumedIceExchange({ given: {} }, {}), undefined, 'a save of the default exchange');
+  assert.throws(() => resumedIceExchange({ given: {}, ...held }, {}), /iceWater/);
 });

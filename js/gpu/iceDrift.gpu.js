@@ -217,7 +217,7 @@ ${brine ? '  let B1 = max(0.0, OD[O_IBR + i] + dB / omega);\n' : ''}${last ? `  
   if (full < ID_GONECONC || V1 < ID_GONEVOL || !tidy) {
     let base = ${turbulent ? 'select(S[S_TS + gi], ID_FREEZE + PH[PH_WHEAT + gi] / PH[PH_CAP + gi], started > 0.0)' : 'select(S[S_TS + gi], ID_FREEZE, started > 0.0)'};
     S[S_TS + gi] = base + (E1${brine ? ' + B1' : ''} - ID_LATENT * V1 - ID_LFUS * S1) / PH[PH_CAP + gi];
-    S[S_ICE + gi] = 0.0; PH[PH_SNOW + gi] = 0.0; PH[PH_SNOWALB + gi] = ID_FRESH; PH[PH_CONC + gi] = 0.0;${brine ? ' PH[PH_BRINE + gi] = 0.0;' : ''}
+    S[S_ICE + gi] = 0.0; PH[PH_SNOW + gi] = 0.0; PH[PH_SNOWALB + gi] = ID_FRESH; PH[PH_CONC + gi] = 0.0;${brine ? ' PH[PH_BRINE + gi] = 0.0;' : ''}${turbulent ? ' PH[PH_WHEAT + gi] = 0.0;' : ''}
     return;
   }
   if (started == 0.0) { OD[O_WATERT + i] = S[S_TS + gi]; OD[O_ARRIVED + i] = 1.0;${turbulent ? ' PH[PH_WHEAT + gi] = PH[PH_CAP + gi] * (S[S_TS + gi] - ID_FREEZE);' : ''} }

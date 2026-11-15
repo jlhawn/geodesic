@@ -34,6 +34,9 @@ import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
  * u*_min alone where the drift is off). Water below freezing under ice
  * freezes onto the base through `oceanFlux`, which then holds no heat for
  * the ice to melt; waterHeat and the conductance are saved in restartArrays.
+ * Between a write and the next read the top layer's Q of an iced cell still
+ * holds what the ice has since drawn from waterHeat, so only waterHeat tells
+ * the water's heat there, and a save without restartArrays rebuilds it from Q.
  *
  * The interior classes of the saved slab oceans, placed where the World Ocean Atlas holds its water
  * in this equation of state: 1019.5–1021.5 for the warm pool, the two

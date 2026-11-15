@@ -39,7 +39,10 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * as `conductance` (W m⁻² K⁻¹) each time it steps, and u*_min is 5·10⁻⁴ m/s,
  * the value of CICE's namelist and the one Icepack's documentation
  * recommends (Icepack's source default is 5·10⁻³ and the documentation
- * allows 0). Floes also melt at their sides, at the rate
+ * allows 0). A floor of 2·10⁻² m/s stands in for stirring the model does not
+ * resolve (tides, internal waves, eddies): √C_w |u_ice − u_ocean| passes it
+ * only above about 0.27 m/s, so the drift then barely sets the conductance,
+ * about 490 W m⁻² K⁻¹. Floes also melt at their sides, at the rate
  *   w_lat = m1 (T_w − T_f)^m2,  m1 = 1.6·10⁻⁶ m s⁻¹ K^−m2,  m2 = 1.36
  * (Maykut and Perovich 1987), which takes the fraction w_lat π/(α D) of their
  * area per second for floes of diameter D = 300 m and shape α = 0.66
@@ -55,13 +58,17 @@ export const ICE_EXCHANGE = { heatTransfer: 0.006, frictionMinimum: 5e-4, latera
 export function iceExchangeOptions(option = 'instant') {
   const given = typeof option === 'string' ? { mode: option } : option;
   if (given === null || typeof given !== 'object') throw new Error(`iceExchange is ${ICE_EXCHANGES.join(' or ')} or an object of ${Object.keys(ICE_EXCHANGE).join(', ')} with a mode, not ${option}`);
-  const { mode = 'turbulent', turbulent, lateralRate, ...rest } = given;
+  const { mode, turbulent, lateralRate, ...rest } = given;
+  if (mode === undefined) throw new Error(`iceExchange given as an object names its mode, ${ICE_EXCHANGES.join(' or ')}: ${JSON.stringify(given)}`);
   if (!ICE_EXCHANGES.includes(mode)) throw new Error(`iceExchange is one of ${ICE_EXCHANGES.join(', ')}, not ${mode}`);
   for (const key of Object.keys(rest)) if (!(key in ICE_EXCHANGE)) throw new Error(`iceExchange has no option ${key}; its options are ${Object.keys(ICE_EXCHANGE).join(', ')}`);
   const set = { ...ICE_EXCHANGE, ...rest };
   for (const key of ['heatTransfer', 'lateralExponent', 'floeDiameter', 'floeShape']) if (!(set[key] > 0)) throw new Error(`iceExchange.${key} is positive, not ${set[key]}`);
   for (const key of ['frictionMinimum', 'lateralMelt']) if (!(set[key] >= 0)) throw new Error(`iceExchange.${key} is not negative, not ${set[key]}`);
-  return { mode, turbulent: mode === 'turbulent', ...set, lateralRate: set.lateralMelt * Math.PI / (set.floeShape * set.floeDiameter) };
+  const resolved = { mode, turbulent: mode === 'turbulent', ...set, lateralRate: set.lateralMelt * Math.PI / (set.floeShape * set.floeDiameter) };
+  if (turbulent !== undefined && turbulent !== resolved.turbulent) throw new Error(`iceExchange.turbulent follows its mode ${mode}, not ${turbulent}`);
+  if (lateralRate !== undefined && lateralRate !== resolved.lateralRate) throw new Error(`iceExchange.lateralRate follows lateralMelt, floeShape and floeDiameter (${resolved.lateralRate}), not ${lateralRate}`);
+  return resolved;
 }
 
 /*
@@ -193,7 +200,7 @@ export function iceExchangeOptions(option = 'instant') {
  * `oceanFlux`, as with the instant exchange, which then holds no heat for the
  * ice to melt. The ice's surface energy plus waterHeat changes by exactly the
  * surface flux plus `oceanFlux`. Over a cell with no ocean column under it
- * (`oceanCells` 0, a lake) nothing is held and the ice takes the instant exchange.
+ * (`oceanCells` 0: a lake, or any cell of a model without an ocean) nothing is held and the ice takes the instant exchange.
  */
 export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
 
@@ -318,6 +325,7 @@ export function createSeaIce(mesh, {
     snowAlbedo[i] = freshSnowAlbedo;
     concentration[i] = 0;
     if (brine) brine[i] = 0;
+    if (turbulent) waterHeat[i] = 0;
   }
 
   const capacityOf = (i) => (heatCapacity ? heatCapacity[i] : slabHeatCapacity);
@@ -326,7 +334,7 @@ export function createSeaIce(mesh, {
    * and above it by waterHeat over the layer's heat capacity when the ice
    * exchanges heat with the water as turbulence does.
    */
-  const waterTemperature = (i) => (turbulent ? FREEZING_POINT + waterHeat[i] / capacityOf(i) : FREEZING_POINT);
+  const waterTemperature = (i) => (holds(i) ? FREEZING_POINT + waterHeat[i] / capacityOf(i) : FREEZING_POINT);
   const holdWater = (i, temperature) => { if (holds(i)) waterHeat[i] = capacityOf(i) * (temperature - FREEZING_POINT); };
 
   function deposit(i, amount, airTemperature, ice, surfaceT) {

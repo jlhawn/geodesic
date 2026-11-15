@@ -1313,7 +1313,7 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   assert.ok(convective.rmsRel < 1e-3 && largeScaleOfRain < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScaleOfRain} of the rain`);
 });
 
-async function meltingPolarCells(ice) {
+async function meltingPolarCells(ice, { conducting = true, moves = [1e-3, 1e5] } = {}) {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
@@ -1327,7 +1327,7 @@ async function meltingPolarCells(ice) {
   for (const m of [cpu, gpu]) { for (let a = 0; a < init.length; a++) m.state[a].set(init[a]); m.seaIce.load(m.state[6], concentration); m.time = 91 * 86400 + 12 * 3600; }
   cpu.seaIce.snow.set(snow);
   const turbulent = ice.iceExchange !== undefined;
-  const water = Float32Array.from({ length: C }, (_, i) => (iced.includes(i) ? Math.fround(2.1e7 * (0.2 + 0.4 * (i % 5))) : 0)), conductance = Float32Array.from({ length: C }, (_, i) => (iced.includes(i) ? 40 + 10 * (i % 3) : 0));
+  const water = Float32Array.from({ length: C }, (_, i) => (iced.includes(i) ? Math.fround(2.1e7 * (0.2 + 0.4 * (i % 5))) : 0)), conductance = Float32Array.from({ length: C }, (_, i) => (iced.includes(i) && conducting ? 40 + 10 * (i % 3) : 0));
   if (turbulent) { cpu.seaIce.waterHeat.set(water); cpu.seaIce.conductance.set(conductance); }
   gpu.load();
   const { device, buffers, layout } = gpu.gpu;
@@ -1376,9 +1376,10 @@ async function meltingPolarCells(ice) {
     for (let a = 0; a < init.length; a++) reference.state[a].set(init[a]);
     reference.seaIce.load(reference.state[6], concentration); reference.time = 91 * 86400 + 12 * 3600; reference.seaIce.snow.set(snow);
     for (let n = 0; n < steps; n++) reference.step(dt);
-    const thinner = Math.max(...iced.map((i) => reference.state[6][i] - cpu.state[6][i])), drawn = Math.max(...iced.map((i) => water[i] - cpu.seaIce.waterHeat[i]));
-    console.log(`against the instant exchange (no ocean beneath) the turbulent one thinned the ice by up to ${thinner.toExponential(1)} m and drew up to ${drawn.toExponential(1)} J/m² from the water`);
-    assert.ok(thinner > 1e-3 && drawn > 1e5, `the exchange moved the ice by only ${thinner} m and the water by ${drawn} J/m²`);
+    const shifted = Math.max(...iced.map((i) => Math.abs(reference.state[6][i] - cpu.state[6][i]))), drawn = Math.max(...iced.map((i) => water[i] - cpu.seaIce.waterHeat[i]));
+    console.log(`against the instant exchange (no ocean beneath) the turbulent one changed the ice by up to ${shifted.toExponential(1)} m and drew up to ${drawn.toExponential(1)} J/m² from the water`);
+    assert.ok(shifted > moves[0] && drawn > moves[1], `the exchange moved the ice by only ${shifted} m and the water by ${drawn} J/m²`);
+    assert.ok(worst.water < 1e-3 * drawn, `the engines differ by ${worst.water} J/m² in the heat of the water under the ice, against a draw of ${drawn} J/m²`);
   }
   const near = neighbourhood(cpu.mesh, new Set([...merged, ...decided]), 2);
   for (let i = 0; i < C; i++) {
@@ -1393,4 +1394,6 @@ async function meltingPolarCells(ice) {
 }
 test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux and the lowest layers, but for the columns where a discrete decision parted (the dry adjustment merging one layer more on one engine, a layer\'s cloud water switching a cover or the boundary layer\'s regime on one engine only) and, outside the ice, their neighbors within two cells, with the boundary layer diagnosed after the deposit', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({}));
 test('the engines agree the same way on those melting polar cells when areaLossFactor halves the area melting takes', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({ areaLossFactor: 0.5 }));
-test('the engines agree the same way on those melting polar cells, and on the heat of the water under them, when the ice and the water exchange heat as turbulence does (iceExchange turbulent)', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({ iceExchange: 'turbulent' }));
+test('the engines agree the same way on those melting polar cells, and on the heat of the water under them, when the ice and the water exchange heat as turbulence does (iceExchange turbulent)', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({ iceExchange: 'turbulent', oceanCells: new Uint8Array(10 * N * N + 2).fill(1) }));
+test('the engines agree the same way on those melting polar cells and the heat of the water under them when the turbulent exchange draws on that heat through the lateral melt alone (conductance 0)', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({ iceExchange: 'turbulent', oceanCells: new Uint8Array(10 * N * N + 2).fill(1) }, { conducting: false, moves: [1e-4, 1e5] }));
+test('the engines agree the same way on those melting polar cells and the heat of the water under them when the turbulent exchange draws on that heat through the bottom melt alone (lateralMelt 0)', { skip: !gpuAvailable && 'webgpu not installed' }, () => meltingPolarCells({ iceExchange: { mode: 'turbulent', lateralMelt: 0 }, oceanCells: new Uint8Array(10 * N * N + 2).fill(1) }, { moves: [1e-4, 1e5] }));
