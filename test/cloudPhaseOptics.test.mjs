@@ -24,7 +24,7 @@ const close = (a, b, tolerance = 1e-9) => Math.abs(a - b) <= tolerance * Math.ma
  * water-weighted mean.
  */
 
-test("cloudPhase is 'ramp' by default, 'memory' needs moist.iceDeposition on both engines, and anything else is refused", async () => {
+test("cloudPhase is 'ramp' by default, 'memory' needs moist.iceDeposition and the optics of cloudOptics on both engines, and anything else is refused", async () => {
   const phase = { ...PREVIOUS_AEROSOL };
   const plain = createModel(new Grid(N), { ocean: false, radiation: phase }), ramp = createModel(new Grid(N), { ocean: false, radiation: { ...phase, cloudPhase: 'ramp' }, moist: { iceDeposition: true } });
   for (const model of [plain, ramp]) assert.doesNotThrow(() => model.radiation);
@@ -32,10 +32,12 @@ test("cloudPhase is 'ramp' by default, 'memory' needs moist.iceDeposition on bot
   assert.throws(() => createModel(new Grid(N), { ocean: false, radiation: { cloudPhase: 'memory' }, moist: { iceDeposition: false } }), /needs moist.iceDeposition/);
   assert.throws(() => createModel(new Grid(N), { ocean: false, radiation: { cloudPhase: 'frozen' }, moist: { iceDeposition: true } }), /cloudPhase must be 'ramp' or 'memory', not frozen/);
   assert.doesNotThrow(() => createModel(new Grid(N), { ocean: false, radiation: { cloudPhase: 'memory' }, moist: { iceDeposition: true } }));
+  for (const gray of [{ cloudScattering: 150 }, { cloudAbsorption: 100 }]) assert.throws(() => createModel(new Grid(N), { ocean: false, radiation: { cloudPhase: 'memory', ...gray }, moist: { iceDeposition: true } }), /not a gray cloudScattering or cloudAbsorption/, JSON.stringify(gray));
   if (!gpuAvailable) return;
   const { mesh: base } = createModel(new Grid(N), { ocean: false, levels: bl34 });
   await assert.rejects(createGpuCore(base, { levels: bl34, physics: { cloudPhase: 'memory' } }), /cloudPhase 'memory' needs iceDeposition/);
   await assert.rejects(createGpuCore(base, { levels: bl34, physics: { cloudPhase: 'frozen', iceDeposition: true } }), /cloudPhase must be 'ramp' or 'memory', not frozen/);
+  for (const gray of [{ cloudScattering: 150 }, { cloudAbsorption: 100 }]) await assert.rejects(createGpuCore(base, { levels: bl34, physics: { cloudPhase: 'memory', iceDeposition: true, ...gray } }), /not a gray cloudScattering or cloudAbsorption/, JSON.stringify(gray));
 });
 
 test('cloudOptics takes a liquid share that replaces the ramp, and the optics of a mixture of two shares are the water-weighted mean', () => {

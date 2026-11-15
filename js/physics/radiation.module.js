@@ -905,6 +905,7 @@ export function createRadiation(mesh, core, {
   const graySolar = cloudScattering !== null, grayInfrared = cloudAbsorption !== null;
   if (cloudPhase !== 'ramp' && cloudPhase !== 'memory') throw new Error(`cloudPhase must be 'ramp' or 'memory', not ${cloudPhase}`);
   const memory = cloudPhase === 'memory';
+  if (memory && (graySolar || grayInfrared)) throw new Error("cloudPhase 'memory' needs the optics of cloudOptics, not a gray cloudScattering or cloudAbsorption");
   let cloudIce = null;
   const rampSolar = new Float64Array(K), rampInfrared = new Float64Array(K);
   if (shortwaveScheme !== 'sequential' && shortwaveScheme !== 'layered') throw new Error(`shortwave must be 'sequential' or 'layered', not ${shortwaveScheme}`);
@@ -1558,13 +1559,13 @@ export function createRadiation(mesh, core, {
         cloudWater[k] += cumulus;
         cloudPath += cumulus;
       }
-      if (memory && cloudWater[k] > 0 && !(graySolar && grayInfrared)) {
+      if (memory && cloudWater[k] > 0) {
         if (cloudIce === null) throw new Error("cloudPhase 'memory' needs moist.iceDeposition and the model's cloudIceShare");
         const temperatureK = theta[idx] * exnerLayer[idx], ramped = liquidShare(temperatureK, optics);
         const share = (resolvedWater * (1 - cloudIce[idx]) + cumulus * ramped) / cloudWater[k];
         cloudOptics(temperatureK, continental[i] === 1, optics, layerOptics, share);
-        solarDepth[k] = graySolar ? cloudScattering : layerOptics.solar;
-        infrared[k] = grayInfrared ? cloudAbsorption : layerOptics.infrared;
+        solarDepth[k] = layerOptics.solar;
+        infrared[k] = layerOptics.infrared;
         if (layering) layerLiquid[k] = layerOptics.liquid;
       }
       cloudDepth += solarDepth[k] * cloudWater[k];

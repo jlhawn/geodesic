@@ -231,6 +231,7 @@ ${NIR_SHIELDED_STUB}`}`;
 
 export function physicsConstants(o) {
   if (o.cloudPhase !== undefined && o.cloudPhase !== 'ramp' && o.cloudPhase !== 'memory') throw new Error(`cloudPhase must be 'ramp' or 'memory', not ${o.cloudPhase}`);
+  if (o.cloudPhase === 'memory' && (o.cloudScattering != null || o.cloudAbsorption != null)) throw new Error("cloudPhase 'memory' needs the optics of cloudOptics, not a gray cloudScattering or cloudAbsorption");
   if (o.cloudPhase === 'memory' && !o.iceDeposition) throw new Error("cloudPhase 'memory' needs iceDeposition: the memory is the share of each layer's cloud that is ice");
   if (o.plumeEntrainmentLaw !== 'ifs' && o.plumeEntrainmentLaw !== 'gregory') throw new Error(`plumeEntrainmentLaw must be 'ifs' or 'gregory', not ${o.plumeEntrainmentLaw}`);
   if (o.plumeConversion !== 'sundqvist' && o.plumeConversion !== 'zhangMcFarlane') throw new Error(`plumeConversion must be 'sundqvist' or 'zhangMcFarlane', not ${o.plumeConversion}`);

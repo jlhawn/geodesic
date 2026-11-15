@@ -150,7 +150,7 @@ What I expect under the option:
 
 ## Arm B: radiation on the memory
 
-`radiation.cloudPhase` is 'ramp' (the default) or 'memory'; 'memory' needs `moist.iceDeposition` and throws without it, in `createModel`, `createGpuCore` and at the first radiation column.
+`radiation.cloudPhase` is 'ramp' (the default) or 'memory'; 'memory' needs `moist.iceDeposition` and throws without it, in `createModel`, `createGpuCore` and at the first radiation column. It also needs `cloudOptics`'s optics, and both engines refuse it with a gray `cloudScattering` or `cloudAbsorption`.
 
 The rule: a layer's resolved cloud water q_c has liquid share 1 − φ. Its cumulus water keeps the ramp's α(T). The optics per kilogram are linear in the liquid share, so the layer's combined water has the water-weighted mean share (q_c (1 − φ) + w_cu α) / (q_c + w_cu), with the masses and the clear-sky mask applied as the radiation applies them. The deck's water (the mixed-layer or stratus deck, its home layer's unit) stays on α(T).
 
@@ -166,4 +166,4 @@ Sites that decide the radiation's cloud phase:
 
 Under 'ramp' every kernel text, the shared functions and the PH layout are those of the default. Under 'memory' only the physics, radiation and layered kernels change, by string patches that each anchor exactly once, and the shared `cloudOptics` is split into `cloudOpticsAt` and its wrapper. The kernels read `PH_CICE`, which exists under `iceDeposition`.
 
-Tests are in `test/cloudPhaseOptics.test.mjs`: the defaults and throws, the CPU optics at 255 K with φ = 0.2 and with cumulus water, kernel identity, and an N=16 CPU against GPU row on bl34 and bl48 for both shortwave schemes.
+Tests are in `test/cloudPhaseOptics.test.mjs`: the defaults and throws, the gray-optics refusal, the CPU optics at 255 K with φ = 0.2 and with cumulus water, kernel identity, and an N=16 CPU against GPU row on bl34 and bl48 for both shortwave schemes.
