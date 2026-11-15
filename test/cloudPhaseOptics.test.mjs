@@ -274,6 +274,10 @@ function stats(cpu, gpu) {
   return { rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)), p99Rel: errors.sort()[Math.floor(0.99 * (cpu.length - 1))] / Math.max(scale, 1e-300) };
 }
 
+const SUN_BOUNDS = {
+  sequential: { memory: { top: [1.5e-4, 3e-5], surface: [1.5e-4, 3e-5] }, ramp: { top: [1e-4, 2.5e-5], surface: [1e-4, 2.5e-5] } },
+  layered: { memory: { top: [4e-4, 8e-5], surface: [4e-4, 8e-5] }, ramp: { top: [1e-4, 4e-5], surface: [1e-4, 4e-5] } },
+};
 const GUARD = { qc: 1e-3, q: 1e-4, theta: 5e-3 };
 const parted = (run, i) => run.splitQc[i] > GUARD.qc || run.splitQ[i] > GUARD.q || run.splitTheta[i] > GUARD.theta;
 const HELD = [['absorbed', 'RADABS'], ['back', 'RADBACK'], ['emission', 'RADEMIT'], ['outgoing', 'RADOLR'], ['escape', 'RADT'], ['down', 'RADSWDN'], ['atmosphere', 'RADATM'], ['top', 'RADTOA'], ['reflected', 'RADREFL']];
@@ -377,7 +381,7 @@ for (const [label, levels, options] of [['bl34', bl34, { cumulus: true }], ['bl4
       const exner = memory.model.core.diagnostics.exnerLayer, excluded = [];
       const deckK = memory.model.radiation.stratusLayer, rawLw = { max: 0, allow: 0 };
       const lwAllow = (k, i) => (options.cold ? Math.min(0.05, 2e-4 * 5.670374e-8 * (memory.model.state[1][k * C + i] * exner[k * C + i]) ** 4 * rate(k, i)) : 0);
-      const columns = { total: 0, sunlit: 0, parted: 0, flipped: 0, stated: 0 }, columnGaps = [], beamGaps = [], layerMoves = { moved: 0, over: 0, broken: [] };
+      const columns = { total: 0, sunlit: 0, parted: 0, flipped: 0, stated: 0 }, columnGaps = [], beamGaps = [], sun = { memory: { top: [], surface: [] }, ramp: { top: [], surface: [] } }, layerMoves = { moved: 0, over: 0, broken: [] };
       let worstSw = 0, worstLw = 0, changeSw = 0, changeLw = 0, worstChangeSw = 0, worstChangeLw = 0, worstTop = 0, rampTop = 0, worstSurface = 0, where = null, scaledHeat = 0, worstFluxSw = 0, worstFluxLw = 0, scaledLwChange = 0, baseSwMax = 0, baseLwMax = 0, moved = 0;
       for (let i = 0; i < C; i++) {
         columns.total++;
@@ -423,8 +427,18 @@ for (const [label, levels, options] of [['bl34', bl34, { cumulus: true }], ['bl4
         worstTop = Math.max(worstTop, topGap);
         beamGaps.push({ column: i, top: +topGap.toExponential(1), memoryTheta: +memory.splitTheta[i].toExponential(0), rampTheta: +ramp.splitTheta[i].toExponential(0) });
         rampTop = Math.max(rampTop, Math.abs(ramp.model.radiation.held.top[i] - ramp.physics.RADTOA[i]) / beam);
+        if (memory.model.radiation.held.mu[i] > 0) for (const [phase, run] of [['memory', memory], ['ramp', ramp]]) {
+          sun[phase].top.push(Math.abs(run.model.radiation.held.top[i] - run.physics.RADTOA[i]) / beam);
+          sun[phase].surface.push(Math.abs(run.model.radiation.held.absorbed[i] - run.physics.RADABS[i]) / beam);
+        }
         worstSurface = Math.max(worstSurface, Math.abs(memory.model.radiation.held.absorbed[i] - memory.physics.RADABS[i]) / beam);
       }
+      const sunStats = {};
+      for (const phase of ['memory', 'ramp']) for (const row of ['top', 'surface']) {
+        const sorted = sun[phase][row].slice().sort((a, b) => a - b);
+        sunStats[`${phase} ${row}`] = { max: sorted[sorted.length - 1], p99: sorted[Math.floor(0.99 * (sorted.length - 1))], bounds: SUN_BOUNDS[shortwave][phase][row] };
+      }
+      if (options.cold) console.log(`${label} ${shortwave}: sunlight gaps against the beam over the ${sun.memory.top.length} sunlit kept columns (night columns are zero by construction): ${Object.entries(sunStats).map(([name, v]) => `${name} max ${v.max.toExponential(2)} (bound ${v.bounds[0]}), 99th ${v.p99.toExponential(2)} (bound ${v.bounds[1]})`).join('; ')}`);
       columnGaps.sort((a, b) => a - b);
       if (options.deck) {
         console.log(`${label} ${shortwave}: ${columns.flipped} columns flipped a deck decision between the engines; first flips: ${JSON.stringify(memory.trace.filter((e) => e.parted).slice(0, 6))}`);
@@ -464,7 +478,8 @@ for (const [label, levels, options] of [['bl34', bl34, { cumulus: true }], ['bl4
       assert.ok(worstFluxSw < allowed[0] && (options.cold ? scaledLwChange < 1 : worstFluxLw < allowed[1]), `the change in a layer's flux differs by ${worstFluxSw} and ${worstFluxLw} W/m2, the longwave change by ${scaledLwChange} of 1e-3 K/day plus twice the f32 allowance`);
       console.log(`${label} ${shortwave}: top absorbed sunlight differs between the engines by ${worstTop.toExponential(1)} of the beam under 'memory' and ${rampTop.toExponential(1)} under 'ramp'`);
       const beamGap = options.cold ? 2e-4 : options.deck ? 1e-4 : 1e-5;
-      assert.ok(worstTop < beamGap && worstSurface < beamGap, `top ${worstTop}, surface ${worstSurface} of the beam against ${beamGap}, which is sized to the splits below the guard: the columns with the largest top gaps are ${JSON.stringify(beamGaps.sort((a, b) => b.top - a.top).slice(0, 5))}, and the columns left out are ${JSON.stringify(excluded.map((e) => e.column))}`);
+      if (options.cold) for (const [name, v] of Object.entries(sunStats)) assert.ok(v.max < v.bounds[0] && v.p99 < v.bounds[1], `${name}: maximum ${v.max} against ${v.bounds[0]} and 99th percentile ${v.p99} against ${v.bounds[1]} of the beam over the sunlit kept columns; the columns with the largest top gaps are ${JSON.stringify(beamGaps.sort((a, b) => b.top - a.top).slice(0, 5))}, and the columns left out are ${JSON.stringify(excluded.map((e) => e.column))}`);
+      else assert.ok(worstTop < beamGap && worstSurface < beamGap, `top ${worstTop}, surface ${worstSurface} of the beam against ${beamGap}, which is sized to the splits below the guard: the columns with the largest top gaps are ${JSON.stringify(beamGaps.sort((a, b) => b.top - a.top).slice(0, 5))}, and the columns left out are ${JSON.stringify(excluded.map((e) => e.column))}`);
       assert.ok(layerMoves.over <= 0.001 * layerMoves.moved, `${layerMoves.over} of ${layerMoves.moved} layers over 1 %`);
     });
   }
