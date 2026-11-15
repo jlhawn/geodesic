@@ -20,7 +20,9 @@ import { createGeography, stateGeography } from '../js/geography.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { resumedOcean, headerWithIceRecords } from './savedLand.mjs';
 import { GENERATORS } from '../js/ocean/column.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const [input, output] = process.argv.slice(2), generator = process.env.GENERATOR ?? 'hybrid';
 if (!input || !output) { console.error('usage: [GENERATOR=hybrid|isopycnal|zstar] node scripts/convertOcean.mjs <in.bin|in.parts.json> <out.bin[.gz]>'); process.exit(1); }
 if (!GENERATORS.includes(generator)) { console.error(`the generator is one of ${GENERATORS.join(', ')}, not ${generator}`); process.exit(1); }
