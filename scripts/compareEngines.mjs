@@ -79,7 +79,7 @@ export const PH_MAP = {
   INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.summed.clearOutgoingLongwave',
   ASRMEAN: 'radiation.meanAbsorbedSolar', OLRMEAN: 'radiation.meanOutgoingLongwave', ALBMEAN: 'radiation.meanPlanetaryAlbedo', SWCREMEAN: 'radiation.meanShortwaveCloudEffect', LWCREMEAN: 'radiation.meanLongwaveCloudEffect',
   CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
-  PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo',
+  PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo', WHEAT: 'seaIce.waterHeat', CONDUCT: 'seaIce.conductance',
   SURF: 'land.surface', SOIL: 'land.soil', RUNOFF: 'land.runoff', DISCHARGE: 'land.discharge', ICELOSS: 'land.iceLoss', MLMK: 'radiation.mlmLayer', MLMM: 'radiation.mlmShare', DECKK: 'radiation.deckLayer', DECKFROM: 'radiation.deckFrom', VEG: 'land.vegetation', CANOPY: 'land.canopy', SEASONL: 'land.seasonLength', SEASONW: 'land.seasonWarmth', DEMAND: 'land.demandMean', RAINMEAN: 'land.rainMean',
   LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4', DEEP: 'land.deepWater',
   GWE: 'gravityWaves.east', GWN: 'gravityWaves.north', OLAUNCH: 'orography.launch', OWAVE: 'orography.wave', OSTRESS: 'orography.stress', OBETA: 'orography.beta', OBLOCK: 'orography.blocking', ODIR: 'orography.direction',
@@ -99,7 +99,7 @@ export const PH_INPUT = {
 };
 // mapped regions that may legitimately be all zero in a configuration (env MAY_BE_ZERO_EXTRA adds names, comma separated); the land
 // regions are exempt on a planet without land and the radiation.held ones where held radiation is off (no CPU array, no GPU region)
-export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'OSTRESS', 'OLAUNCH', 'OWAVE', 'OBETA', 'OBLOCK', 'ODIR', 'GWE', 'GWN', 'RUNOFF', 'DISCHARGE', 'ICELOSS', 'MLMK', 'MLMM', 'SNOW', 'SNOWALB', 'FOG', 'FOGMEAN', ...(process.env.MAY_BE_ZERO_EXTRA ?? '').split(',').filter(Boolean)]);
+export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'OSTRESS', 'OLAUNCH', 'OWAVE', 'OBETA', 'OBLOCK', 'ODIR', 'GWE', 'GWN', 'RUNOFF', 'DISCHARGE', 'ICELOSS', 'MLMK', 'MLMM', 'SNOW', 'SNOWALB', 'WHEAT', 'FOG', 'FOGMEAN', ...(process.env.MAY_BE_ZERO_EXTRA ?? '').split(',').filter(Boolean)]);
 // mapped regions set by a threshold decision in each column (mixing regime, cumulus trigger, rain, fog, launch): f32 and
 // f64 part at a few columns near the threshold, so these are judged by the share of cells that differ by more than TOL of
 // the row's largest CPU value and fail past their bound here, max(3 × the worst share measured on
