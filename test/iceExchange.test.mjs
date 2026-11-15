@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createSeaIce, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
+import { createSeaIce, FREEZING_POINT, MELTING_POINT, COVER_GRAIN } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { hybridOcean, DT } from './helpers/layered.mjs';
 
@@ -48,10 +48,18 @@ function rig(iceExchange, { thickness = 1.2, cover = 0.8, flux = 0, global = fal
   return r;
 }
 
-test('the ocean\'s surface and the ice conserve heat exactly through bottom melt, lateral melt, the leads\' gain and the freezing of supercooled water, and the ice volume closes with its budget', () => {
+test('the ocean\'s surface and the ice conserve heat exactly through bottom melt, lateral melt, the lateral melt dropped below the f32 grain over water barely above freezing, the leads\' gain and the freezing of supercooled water, and the ice volume closes with its budget', () => {
   const r = rig('turbulent', { flux: 40, global: true }), { mesh, C, ocean, seaIce, ice } = r;
   const area = mesh.areaCell.reduce((s, a) => s + a, 0), input = DT * 40 * area;
   r.seed(1.5);
+  const { lateralRate, lateralExponent } = seaIce.iceExchange;
+  let fine = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(ice[i] > 0) || i % 3 !== 1) continue;
+    seaIce.waterHeat[i] = ocean.capacity[i] * 0.005;
+    if (lateralRate * Math.pow(0.005, lateralExponent) * DT < COVER_GRAIN) fine++;
+  }
+  assert.ok(fine > 0, 'some cells hold water whose lateral melt falls below the grain');
   let before = r.cellEnergy(), moved = 0, warm = 0, worst = 0, supercooled = 0;
   const volume0 = r.volume();
   for (let n = 0; n < 48; n++) {
@@ -67,7 +75,7 @@ test('the ocean\'s surface and the ice conserve heat exactly through bottom melt
   }
   const grown = seaIce.budget.frozen - seaIce.budget.melted;
   assert.ok(Math.abs(r.volume() - volume0 - grown) < 1e-9 * volume0, `the ice volume went from ${volume0} to ${r.volume()} and the budget says ${grown}`);
-  console.log(`48 cycles of the ocean's surface and its ice under 40 W/m²: heat closes to ${worst.toExponential(1)} of a cycle's input; the water under the ice reached ${warm.toFixed(2)} K above freezing; ice volume ${(volume0 / 1e12).toFixed(2)} → ${(r.volume() / 1e12).toFixed(2)} thousand km³ (${(grown / 1e12).toFixed(3)} by the budget, ${(seaIce.budget.lateralMelted / 1e12).toFixed(3)} melted at the sides or by leads); ${supercooled} cell-cycles freezing supercooled water`);
+  console.log(`48 cycles of the ocean's surface and its ice under 40 W/m², ${fine} iced cells starting 0.005 K above freezing where the lateral melt drops out: heat closes to ${worst.toExponential(1)} of a cycle's input; the water under the ice reached ${warm.toFixed(2)} K above freezing; ice volume ${(volume0 / 1e12).toFixed(2)} → ${(r.volume() / 1e12).toFixed(2)} thousand km³ (${(grown / 1e12).toFixed(3)} by the budget, ${(seaIce.budget.lateralMelted / 1e12).toFixed(3)} melted at the sides or by leads); ${supercooled} cell-cycles freezing supercooled water`);
   assert.ok(moved > 0 && warm > 0 && supercooled > 0, 'the water under the ice held heat above freezing and some was supercooled');
   assert.ok(seaIce.budget.lateralMelted > 0 && seaIce.budget.melted + seaIce.budget.frozen !== 0);
 });

@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { iceExchangeOptions } from '../js/physics/ice.module.js';
+import { iceExchangeOptions, FREEZING_POINT } from '../js/physics/ice.module.js';
 
 /*
  * The GPU model with the ocean's iceExchange 'turbulent' (physics/ice.module.js): the layout of the
@@ -70,4 +70,32 @@ test('the GPU model steps with ice over a turbulent exchange: the water under th
   const instant = await createGpuModel(new Grid(N), { ocean: {} });
   assert.equal(instant.gpu.layout.PH.WHEAT, undefined, 'the default model has no water heat on the device');
   model.destroy(); instant.destroy();
+});
+
+test('winter full pack over water held at the f32 freezing point keeps a cover of exactly 1 on both engines, and over water 0.3 K above freezing it opens alike on both (iceExchange turbulent)', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { ocean: false, ice: { iceExchange: 'turbulent' } };
+  const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
+  const C = cpu.mesh.nCells, init = initializeState(cpu, {}), packed = [];
+  for (let i = 0; i < C; i++) if (cpu.mesh.latCell[i] > 70 * Math.PI / 180) { packed.push(i); init[6][i] = 2; init[3][i] = 250; }
+  for (const a of init) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  const full = Float64Array.from({ length: C }, (_, i) => (packed.includes(i) ? 1 : 0)), warm = (i) => packed.indexOf(i) % 2 === 1;
+  for (const m of [cpu, gpu]) { for (let a = 0; a < init.length; a++) m.state[a].set(init[a]); m.seaIce.load(m.state[6], full); m.time = 270 * 86400; }
+  for (const i of packed) cpu.seaIce.holdWater(i, warm(i) ? FREEZING_POINT + 0.3 : Math.fround(FREEZING_POINT));
+  const water = Float32Array.from(cpu.seaIce.waterHeat), conductance = Float32Array.from({ length: C }, (_, i) => (packed.includes(i) ? 500 : 0));
+  cpu.seaIce.waterHeat.set(water); cpu.seaIce.conductance.set(conductance);
+  gpu.load();
+  const { device, buffers, layout } = gpu.gpu;
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.WHEAT, water); device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CONDUCT, conductance);
+  for (let n = 0; n < 4; n++) { cpu.step(DT); await gpu.step(DT); }
+  await gpu.sync();
+  const [conc] = await readRanges(device, buffers.PH, [{ offset: layout.PH.CONC, length: C }]);
+  let held = 0, opened = 0, gap = 0, least = 1;
+  for (const i of packed) {
+    if (!warm(i)) { assert.equal(cpu.seaIce.concentration[i], 1, `cell ${i} on the CPU`); assert.equal(conc[i], 1, `cell ${i} on the GPU`); held++; continue; }
+    assert.ok(cpu.seaIce.concentration[i] < 1 - 1e-5 && conc[i] < 1 - 1e-5, `cell ${i} opens: CPU ${cpu.seaIce.concentration[i]}, GPU ${conc[i]}`);
+    gap = Math.max(gap, Math.abs(cpu.seaIce.concentration[i] - conc[i])); least = Math.min(least, cpu.seaIce.concentration[i]); opened++;
+  }
+  console.log(`after 4 steps at N=${N}: ${held} packed cells over water at the f32 freezing point at exactly 1 on both engines; ${opened} over water 0.3 K warmer opened to as low as ${least.toFixed(6)}, the engines within ${gap.toExponential(1)}`);
+  assert.ok(held > 0 && opened > 0 && gap < 1e-6, `${held} held, ${opened} opened, gap ${gap}`);
+  cpu.destroy?.(); gpu.destroy();
 });

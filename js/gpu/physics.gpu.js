@@ -1,4 +1,4 @@
-import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT, seaIceRemoval, ICE_LIGHT, pondedIceAlbedo, iceExchangeOptions } from '../physics/ice.module.js';
+import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT, COVER_GRAIN, seaIceRemoval, ICE_LIGHT, pondedIceAlbedo, iceExchangeOptions } from '../physics/ice.module.js';
 import { MID_MONTH_DAY_OF_YEAR, DAY_OF_YEAR_AT_ZERO, YEAR as CALENDAR_YEAR } from '../monthCalendar.module.js';
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
@@ -1209,7 +1209,8 @@ ${turbulent ? `    let wStored = PH[PH_WHEAT + i] + (1.0 - cover) * (waterFlux +
     var wHeat = max(0.0, wStored);
     let wRise = wHeat / capacity;
     let wBasal = PH[PH_CONDUCT + i] * wRise * dt;
-    let wSideWant = select(0.0, min(1.0, XFER_RATE * pow(max(wRise, 1.0e-30), XFER_EXP) * dt), wRise > 0.0);
+    let wLateral = min(1.0, XFER_RATE * pow(max(wRise, 1.0e-30), XFER_EXP) * dt);
+    let wSideWant = select(0.0, wLateral, wRise > 0.0 && wLateral >= COVER_GRAIN);
     let wWanted = cover * wBasal + LATENT_ICE * wSideWant * cover * max(0.0, thickness);
     let wShare = select(1.0, wHeat / wWanted, wWanted > wHeat);
     let wSide = wShare * wSideWant;
@@ -1240,7 +1241,7 @@ ${brine ? '    PH[PH_BRINE + i] = reservoir;\n' : ''}    PH[PH_SNOWALB + i] = se
 };
 
 const lit = (x) => Number(x).toExponential(10);
-const turbulentConstants = (t) => ` const XFER_RATE: f32 = ${lit(t.lateralRate)}; const XFER_EXP: f32 = ${lit(t.lateralExponent)};`;
+const turbulentConstants = (t) => ` const XFER_RATE: f32 = ${lit(t.lateralRate)}; const XFER_EXP: f32 = ${lit(t.lateralExponent)}; const COVER_GRAIN: f32 = ${lit(COVER_GRAIN)};`;
 
 
 /*

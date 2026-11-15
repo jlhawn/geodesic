@@ -5,6 +5,7 @@ export const MINIMUM_CONCENTRATION = 0.01;
 export const MINIMUM_VOLUME = 1e-4;
 export const NEGLIGIBLE_CONCENTRATION = 1e-6;
 export const NEGLIGIBLE_VOLUME = 1e-6;
+export const COVER_GRAIN = 2 ** -24;
 
 /*
  * Open water forms ice only from MINIMUM_CONCENTRATION of its cell and
@@ -409,7 +410,7 @@ export function createSeaIce(mesh, {
       const stored = waterHeat[i] + leadHeat, rise = Math.max(0, stored) / capacity;
       leadHeat = Math.min(0, stored);
       excess = Math.max(0, stored);
-      const wantBasal = conductance[i] * rise * dt, wantSide = rise > 0 ? Math.min(1, transfer.lateralRate * Math.pow(rise, transfer.lateralExponent) * dt) : 0;
+      const wantBasal = conductance[i] * rise * dt, lateral = Math.min(1, transfer.lateralRate * Math.pow(rise, transfer.lateralExponent) * dt), wantSide = lateral >= COVER_GRAIN ? lateral : 0;
       const wanted = A * wantBasal + latent * wantSide * A * Math.max(0, thickness);
       const share = wanted > excess ? excess / wanted : 1;
       side = share * wantSide;
