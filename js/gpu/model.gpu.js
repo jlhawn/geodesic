@@ -358,7 +358,7 @@ export async function createGpuModel(gridOrMesh, {
       return started;
     },
     load(saved, surfaceT, iceField, concentration = null, phase = 0) { oceanCounter = phase; if (gpuOcean.upload(saved, surfaceT, iceField)) gpu.uploadSurfaceTemperature(surfaceT); },
-    async serialize({ restart = false } = {}) { return restart ? { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) } : gpuOcean.serialize(); },
+    async serialize({ restart = false } = {}) { return { ...(await gpuOcean.serialize()), ...(await (restart ? gpuOcean.restartArrays() : gpuOcean.heldArrays())) }; },
   } : null;
 
   const LAND_BUFFERS = { soil: 'SOIL', snow: 'SNOW', vegetation: 'VEG', surface: 'SURF', snowAlbedo: 'SNOWALB', canopy: 'CANOPY', seasonLength: 'SEASONL', seasonWarmth: 'SEASONW', rainMean: 'RAINMEAN', demandMean: 'DEMAND', soilCarbon: 'SOILC', litterMean: 'LITTERM', decayMean: 'DECAYM', snowFreeCover: 'SNOWFREEV', iceLoss: 'ICELOSS', ...Object.fromEntries((landCpu ? landCpu.deepNames : []).map((name) => [name, name.toUpperCase()])), ...(landCpu && landCpu.deepWater ? { deepWater: 'DEEP' } : {}), ...(landCpu && landCpu.goaled ? Object.fromEntries(GOAL_SLOTS) : {}) };

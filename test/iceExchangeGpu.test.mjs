@@ -227,6 +227,21 @@ test('a GPU run over land with iceExchange turbulent, saved by serialize({ resta
   assert.deepEqual(differ, [], `whole against resumed: ${differ.join('; ')}`);
 });
 
+test('a lean turbulent save, serialize() without the restart arrays, carries the water\'s heat under the ice and the conductance, and a fresh turbulent GPU model loads them as they were saved', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { topography, ocean: { iceExchange: TURBULENT }, ice: { iceAlbedoPhases: true } };
+  const model = await steps(await begin(options), 16);
+  await model.sync();
+  const saved = { time: model.time, host: Object.fromEntries(host(model).map(([name, values]) => [name, Float64Array.from(values)])), fresh: await model.readFreshwater(), ocean: await model.ocean.serialize(), land: await model.land.serialize(), lake: model.lake ? lakeArrays(await model.lake.serialize()) : {} };
+  model.destroy();
+  const C = saved.host.state6.length, held = saved.ocean.iceWater?.filter((x) => x > 0).length ?? 0;
+  assert.equal(saved.ocean.Qref, undefined, 'the save is lean');
+  for (const name of ['iceWater', 'iceConductance']) assert.equal(saved.ocean[name]?.length, C, `the lean save holds ocean.${name}`);
+  assert.ok(held > 0, `the lean save holds the water's heat in ${held} cells`);
+  const back = await restore(saved, options), again = await back.ocean.serialize();
+  back.destroy();
+  for (const name of ['iceWater', 'iceConductance']) assert.deepEqual([...again[name].keys()].filter((i) => !Object.is(again[name][i], saved.ocean[name][i])), [], `ocean.${name} loads as saved`);
+});
+
 test('an instant save with ice loaded into the turbulent model on both engines: the water under the ice starts within the f32 grain of the freezing point, as on the CPU, and over two ocean intervals the ice, the held heat and the conductance follow the CPU and no ice collapses', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const options = { topography, ocean: { iceExchange: TURBULENT } }, source = await begin({ topography }), { oceanEvery } = source.cadence;
   const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length;

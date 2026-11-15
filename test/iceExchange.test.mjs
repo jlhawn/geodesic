@@ -145,6 +145,23 @@ test('a restart carries what the exchange adds: the water\'s heat and the conduc
   assert.throws(() => compare(lost), /whole against/, 'dropping the water\'s heat changes the run');
 });
 
+test('a lean turbulent save, serialize() without the restart arrays, carries the water\'s heat under the ice and the conductance, and a turbulent ocean loads them as they were saved; an instant save carries neither', () => {
+  const run = rig('turbulent', { flux: 40, global: true }), { C } = run;
+  for (let n = 0; n < 4; n++) run.cycle();
+  const lean = run.ocean.serialize();
+  assert.equal(lean.Q, undefined, 'the save is lean');
+  for (const name of ['iceWater', 'iceConductance']) assert.equal(lean[name]?.length, C, `the lean save holds ${name}`);
+  assert.ok(lean.iceWater.some((x) => x > 0) && lean.iceConductance.some((x) => x > 0), 'the lean save holds heat and a conductance under the ice');
+  const back = rig('turbulent', { flux: 40, global: true });
+  back.ice.set(run.ice); back.surfaceT.set(run.surfaceT); back.seaIce.concentration.set(run.seaIce.concentration);
+  back.ocean.load(lean, back.surfaceT, back.ice, back.seaIce.concentration);
+  assert.deepEqual(Array.from(back.seaIce.waterHeat), Array.from(lean.iceWater));
+  assert.deepEqual(Array.from(back.seaIce.conductance), Array.from(lean.iceConductance));
+  const plain = rig('instant', { flux: 40, global: true });
+  plain.cycle();
+  assert.ok(!('iceWater' in plain.ocean.serialize()) && !('iceConductance' in plain.ocean.serialize()));
+});
+
 test('ice on a cell with no ocean under it, as on a lake, holds no heat under the turbulent exchange and takes the leads\' gain as the instant exchange does, and the ocean stays finite there', () => {
   const { nCells, nEdges, latCell, cellsOnEdge } = oceanMesh, land = Uint8Array.from({ length: nCells }, (_, i) => (latCell[i] > POLAR && i % 4 === 0 ? 1 : 0));
   const geography = { land, elevation: Float64Array.from(land, (l) => (l ? 100 : -4000)), edgeOcean: Uint8Array.from({ length: nEdges }, (_, e) => (land[cellsOnEdge[2 * e]] || land[cellsOnEdge[2 * e + 1]] ? 0 : 1)) };

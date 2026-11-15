@@ -1948,7 +1948,7 @@ export function createOcean(mesh, {
     }
     if (turbulent) {
       holdWater();
-      if (restartable(saved)) {
+      if (own) {
         if (saved.iceWater && saved.iceWater.length === C) seaWater.set(saved.iceWater);
         if (saved.iceConductance && saved.iceConductance.length === C) seaConductance.set(saved.iceConductance);
       }
@@ -1973,7 +1973,7 @@ export function createOcean(mesh, {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
     const fields = { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
-    return restart ? { ...fields, ...restartArrays() } : fields;
+    return restart ? { ...fields, ...restartArrays() } : { ...fields, ...(turbulent ? { iceWater: Float64Array.from(seaWater), iceConductance: Float64Array.from(seaConductance) } : {}) };
   }
 
   const thermoclineDepth = new Float64Array(C), surfaceSalinity = new Float64Array(C), sst = T0, sss = S0;
