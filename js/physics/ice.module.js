@@ -117,7 +117,11 @@ export const savedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? s
  * evolves as above; the heat the leads gain or lose, with the ocean's
  * flux under them, melts ice or freezes new ice. Melting takes area as
  * Hibler (1979) does, half the relative loss of volume from the area,
- * times areaLossFactor;
+ * times areaLossFactor. The half assumes thickness spread evenly from 0
+ * to 2h: melting δ off the pack removes the ice thinner than δ, a share
+ * δ/(2h) of the ice's area, whether the heat comes through the ice's
+ * top, its base or the leads. A summer pack, whose leads do not refreeze,
+ * holds less thin ice than that, which areaLossFactor below 1 represents;
  * ice frozen in the leads closes them as (1 − A) of new ice leadClosing
  * thick, so the open area closes as its square, or with leadClosure
  * 'hibler' as all of it, Hibler's (1979) h₀ law with h₀ = leadClosing
@@ -245,7 +249,8 @@ export function phasedSnowAlbedo(albedo, temperature, melting, dt, dryFloor, wet
 }
 export const pondedIceAlbedo = ({ whiteIceAlbedo, pondAlbedo, pondFraction } = ALBEDO_PHASES) => (1 - pondFraction) * whiteIceAlbedo + pondFraction * pondAlbedo;
 
-export function createSeaIce(mesh, {
+export function createSeaIce(mesh, options = {}) {
+  const {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.62, meltingIceAlbedo = 0.48, iceMeltingRange = 1, fullAlbedoThickness = 0.5,
   iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10, areaLossFactor = 1, iceExchange = DEFAULT_ICE_EXCHANGE,
@@ -254,7 +259,9 @@ export function createSeaIce(mesh, {
   heatCapacity = null, oceanCells = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
   iceLight = false, brineReservoir = false, iceAlbedoPhases = false, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
   whiteIceAlbedo = ALBEDO_PHASES.whiteIceAlbedo, pondAlbedo = ALBEDO_PHASES.pondAlbedo, pondFraction = ALBEDO_PHASES.pondFraction,
-} = {}) {
+  } = options;
+  const unread = iceAlbedoPhases ? ['meltingIceAlbedo', 'iceSnowFloor', 'wetSnowRange'].filter((name) => options[name] !== undefined) : [];
+  if (unread.length) console.warn(`iceAlbedoPhases leaves ${unread.join(', ')} unread: the phases set the melting ice's albedo and age the snow on the ice their own way`);
   if (brineReservoir && !iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
   if (!LEAD_CLOSURES.includes(leadClosure)) throw new Error(`leadClosure is ${LEAD_CLOSURES.join(' or ')}, not ${leadClosure}`);
   const C = mesh.nCells;

@@ -227,7 +227,7 @@
 // scripts/spinup.sh runs segments back to back, scripts/asyncSpinup.sh
 // alternates them with ocean-only spin-ups.
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { Grid } from '../js/grid.module.js';
 import { stateGrid, gridHeader, savedRelax, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
 import { createGeography, stateGeography, savedGeography, checkGeography, geographyHeader, readTopography, geographyOptions, FRESH_GEOGRAPHY, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
@@ -481,6 +481,8 @@ const MEANS_FIELDS_FOR_POLAR = ['concentration', 'ice', 'surfaceT', 'shortwave',
 const RECORD = process.env.RECORD;
 const POLAR_LINES = process.env.POLAR_LINES ? (process.env.POLAR_LINES === '1' ? `${OUT}/${TAG}_polar.jsonl` : process.env.POLAR_LINES) : null;
 if (POLAR_LINES && !(MEANS_FIELDS_FOR_POLAR.every((name) => meansFields(process.env.MEANS).includes(name)))) throw new Error(`POLAR_LINES reads the day means of ${MEANS_FIELDS_FOR_POLAR.join(', ')}`);
+if (POLAR_LINES && !RADIATION.clearSkyPass) throw new Error('POLAR_LINES reads the clear-sky pass: leave RADIATION.clearSkyPass on');
+if (POLAR_LINES) mkdirSync(dirname(POLAR_LINES), { recursive: true });
 if (RECORD) mkdirSync(RECORD, { recursive: true });
 const partOfDay = RECORD && startStep && saved.forcingSums ? { sums: saved.forcingSums, steps: saved.forcingSteps, oceanSteps: saved.forcingOceanSteps, seconds: saved.forcingSeconds, rain: saved.forcingRain, runoff: saved.forcingRunoff } : null;
 if (RECORD && startStep && !partOfDay) log(`the snapshot holds no recorded part of its day, so forcing day ${saved.day + 1} covers its last ${perDay - startStep} steps alone`);
