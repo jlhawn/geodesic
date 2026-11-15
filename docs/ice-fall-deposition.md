@@ -137,16 +137,22 @@ What I expect under the option:
   - doubling q_c between steps doubles q_i;
   - the Bergeron factor has no effect under the option;
   - the post-plume cap by hand: a cloud all ice that the first pass halves and the second regrows by 0.3 at α = 0.5 holds 0.8125 of its water as ice;
+  - the same cap on the GPU: after adjustMix and adjustPlume, with every mixed-phase cloud all ice and `cumulusMemory` 0, the ice matches the CPU's stages where the post-plume pass regrows cloud by more than 1e-7 kg/kg under stale ice, and the hand example set above a deep plume gives 0.8125 on both engines;
   - `placeCloudIce`, and a GPU model's ramp start from a fresh start, a save without the fraction and one of another length;
   - the option-off kernel text and layout;
   - the source lint over restorers and writers;
   - GPU parity at N=16 on bl34 and bl48, at two time steps, with `detrainedPhase` 'ramp' and 'liquid' and with `bergeronAutoconversion`;
-  - the refusal of other rain-evaporation laws and of a ceiling, on both engines.
+  - the refusal of other rain-evaporation laws and of a ceiling, on each engine;
+  - a GPU core's refusal of a glaciated fraction whose length is not K × C.
 - `test/gpuReload.test.mjs`: under the option a load restores every device buffer word for word.
 - `test/pageRestore.test.mjs`: under the option a page save restores and steps on as the run that did not stop.
 - `test/spinupRestart.test.mjs`: under the option a split spin-up ends bit for bit on the whole one.
 - `test/atmosphereConservation.test.mjs`: the moist row "over a slab with iceDeposition".
 - CLAUDE.md's M5 checks: `test/boundaryLayer.test.mjs`, `test/gpuModel.test.mjs`, and compareEngines at the page state with and without the option.
+
+## Open items
+
+- `rainEvaporationLaw` 'kessler' with `rainCover` 'overlap': the engines part where ice falls into rain below an ice cloud, in the `iceAbove` rule for the rain's cover. The case is `test/iceDeposition.test.mjs`'s random state (seed 4242) at N=16 on bl34 with a 1350 s step. There the θ gap moves by 1.1e-2 K beside the engines' gap without the option, at column 1017, layers 19–20, below the ice cloud at k17. Both engines refuse the combination until the rule matches.
 
 ## Arm B: radiation on the memory
 
