@@ -42,7 +42,8 @@
 //   --against P  builds only the CPU model and compares it at each count in STEPS with P.step<n> from a
 //                --gpu-dump run of the same state, options and STEPS: the CPU half, which needs no GPU
 //   --out FILE   also writes the report to FILE;  env FLAGS sets Dawn toggles for the GPU adapter,
-//                env OCEAN a JSON object of ocean options for both models, env BOUNDARY_LAYER one of
+//                env OCEAN a JSON object of ocean options for both models (the iceExchange the save records
+//                where it names none), env BOUNDARY_LAYER one of
 //                boundary-layer options, env RADIATION one of
 //                radiation options, env MOIST one of moist options, env SURFACE one of surface options, env ICE
 //                one of sea-ice options and env LAND one of land options; env LAKE, lake options over those the save records (savedLakeOptions)
@@ -180,7 +181,10 @@ async function build(file) {
   const saved = await fs.readState(file), sg = stateGeography(saved), topography = sg.topography, dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
   const subgrid = process.env.NO_SUBGRID ? { subgrid: false } : {};
-  const options = { terrain: stateTerrain(saved), topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.ICE ? { ice: JSON.parse(process.env.ICE) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
+  const givenOcean = JSON.parse(process.env.OCEAN ?? '{}'), { resumedIceExchange } = await import(`${REPO}/scripts/savedLand.mjs`), recorded = resumedIceExchange ? resumedIceExchange(saved, givenOcean) : undefined;
+  const ocean = recorded === undefined ? givenOcean : { ...givenOcean, iceExchange: recorded };
+  if (recorded !== undefined) console.log(`iceExchange ${JSON.stringify(recorded)}, as ${file} records`);
+  const options = { terrain: stateTerrain(saved), topography, geography: sg.geography, land: { ...sg.land, ...JSON.parse(process.env.LAND ?? '{}') }, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...(process.env.ICE ? { ice: JSON.parse(process.env.ICE) } : {}), ...(process.env.SURFACE ? { surface: JSON.parse(process.env.SURFACE) } : {}), ...withCadence({ ocean, radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
   const lakeOptions = { ...savedLakeOptions(saved), ...JSON.parse(process.env.LAKE ?? '{}') };
   if (Object.keys(lakeOptions).length) options.lake = lakeOptions;
   const load = (model) => {

@@ -39,7 +39,10 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * as `conductance` (W m⁻² K⁻¹) each time it steps, and u*_min is 5·10⁻⁴ m/s,
  * the value of CICE's namelist and the one Icepack's documentation
  * recommends (Icepack's source default is 5·10⁻³ and the documentation
- * allows 0). Floes also melt at their sides, at the rate
+ * allows 0). A floor of 2·10⁻² m/s stands in for stirring the model does not
+ * resolve (tides, internal waves, eddies): √C_w |u_ice − u_ocean| passes it
+ * only above about 0.27 m/s, so the drift then barely sets the conductance,
+ * about 490 W m⁻² K⁻¹. Floes also melt at their sides, at the rate
  *   w_lat = m1 (T_w − T_f)^m2,  m1 = 1.6·10⁻⁶ m s⁻¹ K^−m2,  m2 = 1.36
  * (Maykut and Perovich 1987), which takes the fraction w_lat π/(α D) of their
  * area per second for floes of diameter D = 300 m and shape α = 0.66
