@@ -94,12 +94,12 @@ transfer under the same overlap). The plumes' cumulus water, about
 of the cell, is pooled the same way.
 
 Independent columns of the same overlap, each layer's water in its own
-cover, reflect 7.6 to 7.9 percent less (one band; day 1825 83.7 against
-77.1 W/m², day 1643 93.0 against 85.9). Columns with cloud both below
-and above 680 hPa (46 percent of the globe) carry 70 percent of it,
+cover, reflect 7.6 to 7.9 percent less (one band; day 1825 84.7 against
+78.0 W/m², day 1643 93.3 against 86.2). Columns with cloud both below
+and above 680 hPa (46 percent of the globe) carry 69 percent of it,
 low-only columns 26 percent, and every latitude band shares it. In the
 model's own radiation on day 1825 (24 hourly calls) the change is
-**+5.0 W/m² of absorbed sunlight**, all of it in SWCRE (−56.0 to −51.0),
+**+5.1 W/m² of absorbed sunlight**, all of it in SWCRE (−56.7 to −51.6),
 the longwave untouched.
 
 ### 2. The water inside each cloud is uniform
@@ -120,9 +120,9 @@ W/m² with finding 1.
 
 | | ASR | SWCRE | LWCRE | net change |
 |---|---|---|---|---|
-| pooled (today) | 231.5 | −56.0 | +28.6 | |
-| independent columns | 236.5 | −51.0 | +28.6 | +5.0 |
-| independent columns, FSD 0.75 | 238.5 | −49.0 | +27.6 | +6.0 |
+| pooled (today) | 232.7 | −56.7 | +28.6 | |
+| independent columns | 237.8 | −51.6 | +28.6 | +5.1 |
+| independent columns, FSD 0.75 | 239.8 | −49.6 | +27.6 | +6.0 |
 
 (model CPU radiation, thirteen64 day 1825 held fixed, day means of 24
 calls)
@@ -208,7 +208,7 @@ noise):
 | cumulusOvershoot 1 alone | 235.5 | 226.7 | −54.7 | +33.0 | +8.8 | 3.08 | −71 / −51 / −50 |
 
 The independent columns add 5.9 W/m² of absorbed sunlight with the
-cloud free to adjust (5.0 on the fixed state), the spread 2.8 more and
+cloud free to adjust (5.1 on the fixed state), the spread 2.8 more and
 2.8 less cloud longwave effect, and the three together put SWCRE on
 EBAF's −45.8. The rain moves by at most 0.06 mm/d and the stress by no
 more than the noise. The cloud itself barely moves: on day 1845 the
@@ -421,7 +421,7 @@ and 2) and, in brackets, from the 20-day arms over WOA23 (findings 5 and
 
 | | change | reference | ΔASR | ΔOLR | Δclear-sky OLR | status |
 |---|---|---|---|---|---|---|
-| 1 | Independent columns in the shortwave (`cloudColumns`): each layer's water in its own cover under the overlap the cover and the longwave already use; the column's τ' lognormal with the overlap's exact first two moments, at four Gauss-Hermite values | Cahalan et al. 1994 (independent columns); Pincus, Barker and Morcrette 2003; Räisänen et al. 2004 (the overlap's columns); Barker 1996 (a distribution of τ in the two-stream) | +5.0 (+5.9) | 0 (+0.2) | 0 | both engines (8bcecac); parity test, trace-cloud case included; off by default |
+| 1 | Independent columns in the shortwave (`cloudColumns`): each layer's water in its own cover under the overlap the cover and the longwave already use; the column's τ' lognormal with the overlap's exact first two moments, at four Gauss-Hermite values | Cahalan et al. 1994 (independent columns); Pincus, Barker and Morcrette 2003; Räisänen et al. 2004 (the overlap's columns); Barker 1996 (a distribution of τ in the two-stream) | +5.1 (+5.9) | 0 (+0.2) | 0 | both engines (8bcecac); parity test, trace-cloud case included; off by default |
 | 2 | Water spread inside each cloud (`cloudSpread` 0.75), in both bands | Shonk et al. 2010; Oreopoulos and Cahalan 2005; Hill et al. 2012 | +2.0 (+2.8) | +1.0 (+2.8) | 0 | both engines (8bcecac), with 1; off by default |
 | 3 | The cover of the shallow plumes' water: the variance cover's spread (1.0–2.5 g/kg, four to eight times the condensation's half-width) covers every cloudy layer of the cumulus layer by about one half whatever its water (BOMEX: 0.43–0.46 against the LES's 0.03). The variance pair (`docs/trade-cumulus-cover.md`): `varianceCover` 'water', the Gaussian that holds the layer's water, with `buoyancyLength` 0.53, the length bounded in stable layers | Sommeria and Deardorff 1977; Bougeault 1981; Galperin et al. 1988; Siebesma et al. 2003 (BOMEX) | (+4.5) | (+1.3) | (+0.2) | both engines (6254bce); off by default |
 | — | The buoyant shallow plume (`cumulusEntrainmentHeight` 1, `cumulusAscent` 'kinetic'): BOMEX's plume top and the same 4.6 W/m², but the trade stress unmoved (alone and with the pair, single runs within one realization of the defaults' and the pair's means), the SE Pacific's cover at 0.35 | Siebesma et al. 2003 | (+4.6) | (+0.5) | (0) | both engines (7f950f6); an option |

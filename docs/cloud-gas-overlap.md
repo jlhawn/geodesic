@@ -146,20 +146,20 @@ of the same months; CERES EBAF Ed4.0 as Loeb et al. (2018, Table 5, July
 
 | | sequential | cloudTop | cloudTop, kappa 0.55 | layered | ERA5 | CERES |
 |---|---|---|---|---|---|---|
-| ASR | 242.4 | 237.4 | 240.1 | 234.0 | 243.7 | 240.9 |
+| ASR | 242.3 | 237.3 | 240.0 | 233.9 | 243.7 | 240.9 |
 | atmosphere | 83.4 | 78.7 | 82.0 | 77.0 | 79.6 | |
 | cloud-induced atmosphere | 10.3 | 5.6 | 8.9 | 3.9 | 2.4 | |
-| surface | 158.9 | 158.7 | 158.1 | 157.0 | 164.1 | |
-| SWCRE | -50.5 | -55.5 | -52.8 | -58.9 | -46.7 | -45.8 |
+| surface | 158.9 | 158.6 | 158.0 | 156.9 | 164.1 | |
+| SWCRE | -50.5 | -55.4 | -52.7 | -58.9 | -46.7 | -45.8 |
 | June 0-20N ASR | 312.3 | 302.1 | 307.8 | 291.2 | 326.5 | |
 | June 0-20N SWCRE | -78.0 | -88.3 | -82.5 | -99.1 | -44.4 | -52.1 |
 | June 40-60N ASR | 333.8 | 326.5 | 331.3 | 318.9 | 316.7 | |
 | June 40-60N SWCRE | -95.1 | -102.5 | -97.7 | -110.1 | -99.3 | -90.4 |
 
-The clear-sky ASR is 292.9 in every column. CERES's 286.7 is that of cloud-free
+The clear-sky ASR is 292.7 in every column. CERES's 286.7 is that of cloud-free
 scenes, which differ from the clear sky of cloudy columns by 0.24 W/m² in the
 global shortwave (Kato et al. 2013, as quoted by Loeb et al.), so the model's
-clear sky absorbs 6.2 W/m² more (ERA5: 290.4, 2.5 less): the surface 219.7
+clear sky absorbs 6.0 W/m² more (ERA5: 290.4, 2.3 less): the surface 219.6
 against ERA5's 213.2, the atmosphere 73.1 against 77.2. The Kepler orbit
 changes none of the differences between the columns by more than 0.05 W/m²
 (annual means; June, near aphelion, is 3 % dimmer).
@@ -175,14 +175,14 @@ water than the sky does.
 
 The shallow-cumulus cloud that the saved states hold for the radiation (the
 lowest 18 layers' plume cover and water) is part of these numbers: left out it
-would read 0.5 W/m² more absorbed sunlight in the sequential scheme (242.8) and
-1.0 more in the layered one (235.0).
+would read 0.5 W/m² more absorbed sunlight in the sequential scheme (242.7) and
+1.0 more in the layered one (234.9).
 
 ## Where the layered scheme's brightening sits
 
 Layered less sequential, the same clouds and decks, over the 163,847 cell-times
-of the four seasonal days, global means in W/m²: reflected +8.39 (98.14 to
-106.54), absorbed -8.39, of which the atmosphere -6.45 and the surface -1.94.
+of the four seasonal days, global means in W/m²: reflected +8.39 (98.23 to
+106.62), absorbed -8.39, of which the atmosphere -6.45 and the surface -1.94.
 By latitude band:
 
 | band | area | reflected, band mean | atmosphere | surface | share of the global change |
@@ -192,7 +192,7 @@ By latitude band:
 | 30S-0 | 25.0 % | +8.47 | -6.06 | -2.41 | 25 % |
 | 0-30N | 25.0 % | +11.56 | -8.97 | -2.60 | 34 % |
 | 30N-60N | 18.3 % | +8.01 | -6.33 | -1.68 | 17 % |
-| 60N-90N | 6.7 % | +4.67 | -4.46 | -0.21 | 4 % |
+| 60N-90N | 6.7 % | +4.68 | -4.46 | -0.22 | 4 % |
 
 By cloud class, ISCCP-style: the pressure of the first cloud the light meets
 (the level by optical depth) below 440 hPa, from 440 to 680 and above 680, and the
@@ -224,7 +224,7 @@ samples, change it by 1.0 W/m².
 
 ## The model's clouds against satellite retrievals and ERA5
 
-The sequential scheme's absorbed sunlight is near CERES's (242.4 against 240.9)
+The sequential scheme's absorbed sunlight is near CERES's (242.3 against 240.9)
 with clouds that are optically thick. The tropical means (30S-30N) of the model's
 four seasonal days against the ESA Cloud_cci L3C v2.0 monthly products of
 MODIS-Aqua and AVHRR NOAA-18 (Stengel et al. 2017) and against ERA5 (the cloud
@@ -336,25 +336,25 @@ else altered:
 
 | process | evidence | reference | layered | sequential |
 |---|---|---|---|---|
-| the model as is | | | 234.0 / -58.9 | 242.4 / -50.5 |
-| mixed-phase condensate, 250-450 hPa: glaciation (Bergeron-Findeisen, riming), conversion to precipitation, ice fall speed | 2.6 times ERA5's mass | Korolev et al. 2017; Tiedtke 1993; Heymsfield and Donner 1990 | 235.2 / -57.6 | 242.9 / -50.0 |
-| anvil condensate above 250 hPa: detrainment, lifetime | 1.2 times | Tiedtke 1993; Li et al. 2012; Waliser et al. 2009 | 234.3 / -58.5 | 242.6 / -50.2 |
-| shallow-cumulus plume water added to the resolved cloud, 9.7 g/m² | 10 % of the depth | Siebesma et al. 2003 | 235.0 / -57.9 | 242.8 / -50.0 |
-| the cloud below 450 hPa as a whole (the plume's water, the resolved excess at 650-750 and 950-1000 hPa) | 1.24 times | Khairoutdinov and Kogan 2000; Siebesma et al. 2003 | 237.3 / -55.5 | 245.1 / -47.7 |
-| phase partition: the ramp taken to ERA5's mass shares (271.15 to 251.15 K, everywhere) | 47 % against 8 % liquid at -21 C | Korolev et al. 2017; Hu et al. 2010; ECMWF IFS Documentation Part IV | 234.9 / -57.9 | 242.9 / -50.0 |
-| the tropical profile at ERA5's, bin by bin, reductions only | 71 g/m² against 102 | | 239.1 / -53.7 | 246.1 / -46.8 |
-| the same with ERA5's phase partition | | | 240.0 / -52.9 | 246.6 / -46.3 |
+| the model as is | | | 233.9 / -58.9 | 242.3 / -50.5 |
+| mixed-phase condensate, 250-450 hPa: glaciation (Bergeron-Findeisen, riming), conversion to precipitation, ice fall speed | 2.6 times ERA5's mass | Korolev et al. 2017; Tiedtke 1993; Heymsfield and Donner 1990 | 235.1 / -57.6 | 242.8 / -50.0 |
+| anvil condensate above 250 hPa: detrainment, lifetime | 1.2 times | Tiedtke 1993; Li et al. 2012; Waliser et al. 2009 | 234.2 / -58.5 | 242.5 / -50.2 |
+| shallow-cumulus plume water added to the resolved cloud, 9.7 g/m² | 10 % of the depth | Siebesma et al. 2003 | 234.9 / -57.8 | 242.7 / -50.0 |
+| the cloud below 450 hPa as a whole (the plume's water, the resolved excess at 650-750 and 950-1000 hPa) | 1.24 times | Khairoutdinov and Kogan 2000; Siebesma et al. 2003 | 237.2 / -55.5 | 245.0 / -47.7 |
+| phase partition: the ramp taken to ERA5's mass shares (271.15 to 251.15 K, everywhere) | 47 % against 8 % liquid at -21 C | Korolev et al. 2017; Hu et al. 2010; ECMWF IFS Documentation Part IV | 234.8 / -57.9 | 242.8 / -49.9 |
+| the tropical profile at ERA5's, bin by bin, reductions only | 71 g/m² against 102 | | 239.0 / -53.7 | 246.0 / -46.8 |
+| the same with ERA5's phase partition | | | 239.9 / -52.9 | 246.5 / -46.3 |
 | autoconversion of the warm cloud (Kessler, 1 h) | the resolved liquid at 700-1000 hPa is ERA5's within 9 % | Kessler 1969; Khairoutdinov and Kogan 2000 | not implicated | |
-| overlap, the two bounds (random, maximum) | cover 53 % against 55 to 58 % | Hogan and Illingworth 2000; Shonk et al. 2010 | 229.1 / -63.8; 235.7 / -57.2 | 237.6 / -55.3; 244.0 / -48.9 |
+| overlap, the two bounds (random, maximum) | cover 53 % against 55 to 58 % | Hogan and Illingworth 2000; Shonk et al. 2010 | 229.0 / -63.7; 235.6 / -57.1 | 237.5 / -55.3; 243.9 / -48.8 |
 
-The tropical condensate at ERA5's takes the layered scheme to within 1.8 W/m² of
-CERES's absorbed sunlight (0.9 with ERA5's phase partition), and its cloud
+The tropical condensate at ERA5's takes the layered scheme to within 1.9 W/m² of
+CERES's absorbed sunlight (1.0 with ERA5's phase partition), and its cloud
 effect from -58.9 to -53.7 (-52.9). The layer 250-450 hPa holds half of the
 excess condensate and gives a quarter of the sunlight, because three quarters of
 a column's depth lies below it; the cloud below 450 hPa gives two thirds. What
 remains of the cloud effect, 7 W/m² too strong, is outside what this changes: the
 clouds outside 30S-30N (June 40-60N is -110 against CERES's -90), the optics and
-the cover. The clear sky's 6.2 W/m² excess absorption is separate; with the
+the cover. The clear sky's 6.0 W/m² excess absorption is separate; with the
 cloud effect at CERES's -45.8 the layered scheme would absorb 247.
 
 ## What else would close the gap to CERES (none applied)
@@ -368,24 +368,24 @@ optics changed offline, in W/m²:
 
 | change | sequential | cloudTop | layered |
 |---|---|---|---|
-| none | 242.4 / -50.5 | 237.4 / -55.5 | 234.0 / -58.9 |
-| cloud water above 440 hPa x 0.7 | 243.4 / -49.4 | | 235.8 / -57.1 |
-| cloud water above 440 hPa x 0.5 | 244.3 / -48.6 | | 237.2 / -55.7 |
-| cloud water above 440 hPa x 0.3 | 245.5 / -47.4 | | 239.0 / -53.9 |
-| cloud water above 440 hPa x 0.15 | 246.6 / -46.3 | | 240.6 / -52.2 |
-| cloud water at every level x 0.7 | 250.1 / -42.8 | | 243.8 / -49.1 |
-| cloud water at every level x 0.5 | 256.8 / -36.0 | | 252.1 / -40.8 |
-| droplet radii +20 % (sea 14.2, land 10.2 um) | | 241.3 / -51.6 | 238.2 / -54.6 |
-| cloudSpread 1.0 | | 238.7 / -54.1 | 235.2 / -57.6 |
-| both | | 242.5 / -50.4 | 239.4 / -53.5 |
-| liquid asymmetry +0.02 (Slingo's 0.846 at 6.9 um; Mie about 0.86) | | | 236.5 / -56.4 |
-| cloudSolarAbsorption 0.55 | 244.8 / -48.1 | 240.1 / -52.8 | |
+| none | 242.3 / -50.5 | 237.3 / -55.4 | 233.9 / -58.9 |
+| cloud water above 440 hPa x 0.7 | 243.3 / -49.4 | | 235.7 / -57.1 |
+| cloud water above 440 hPa x 0.5 | 244.2 / -48.5 | | 237.1 / -55.6 |
+| cloud water above 440 hPa x 0.3 | 245.4 / -47.4 | | 238.9 / -53.9 |
+| cloud water above 440 hPa x 0.15 | 246.5 / -46.2 | | 240.5 / -52.2 |
+| cloud water at every level x 0.7 | 250.0 / -42.8 | | 243.7 / -49.0 |
+| cloud water at every level x 0.5 | 256.8 / -36.0 | | 252.0 / -40.8 |
+| droplet radii +20 % (sea 14.2, land 10.2 um) | | 241.2 / -51.6 | 238.2 / -54.6 |
+| cloudSpread 1.0 | | 238.6 / -54.1 | 235.1 / -57.6 |
+| both | | 242.4 / -50.3 | 239.3 / -53.4 |
+| liquid asymmetry +0.02 (Slingo's 0.846 at 6.9 um; Mie about 0.86) | | | 236.4 / -56.4 |
+| cloudSolarAbsorption 0.55 | 244.7 / -48.0 | 240.0 / -52.7 | |
 
 The layered scheme reaches CERES's absorbed sunlight with the cloud water above
 440 hPa at about 0.12 of its present amount, with the water at every level at
 about 0.8, or with the droplet radii and the inhomogeneity both at the edge of
-their observed ranges (239.4); its SWCRE of -45.8 needs the water at every level
-at about 0.6, with the clear sky's 6.2 W/m² excess as it is. The same changes of
+their observed ranges (239.3); its SWCRE of -45.8 needs the water at every level
+at about 0.6, with the clear sky's 6.0 W/m² excess as it is. The same changes of
 the water put the sequential scheme 3 to 16 W/m² above CERES.
 
 ## Mixed-phase liquid at 250-450 hPa: `moist.bergeronAutoconversion`
@@ -1119,12 +1119,12 @@ two nodes in place of four:
 
 | g-points | nodes | work (34 x 5 = 1) | direct beam absorption miss, W/m² of 1360 (mean, worst) | global ASR | SWCRE |
 |---|---|---|---|---|---|
-| 32 | 4 | 1.00 | 1.2, 4.1 | 234.0 | -58.9 |
-| 24 | 4 | 0.76 | 2.0, 7.3 | 233.9 | -59.0 |
-| 16 | 4 | 0.53 | 5.5, 29.9 | 233.8 | -59.1 |
-| 32 | 2 | 0.60 | 1.2, 4.1 | 232.7 | -60.2 |
-| 24 | 2 | 0.46 | 2.0, 7.3 | 232.6 | -60.3 |
-| 16 | 2 | 0.32 | 5.5, 29.9 | 232.4 | -60.4 |
+| 32 | 4 | 1.00 | 1.2, 4.1 | 233.9 | -58.9 |
+| 24 | 4 | 0.76 | 2.0, 7.3 | 233.8 | -58.9 |
+| 16 | 4 | 0.53 | 5.5, 29.9 | 233.7 | -59.1 |
+| 32 | 2 | 0.60 | 1.2, 4.1 | 232.6 | -60.2 |
+| 24 | 2 | 0.46 | 2.0, 7.3 | 232.5 | -60.3 |
+| 16 | 2 | 0.32 | 5.5, 29.9 | 232.3 | -60.4 |
 
 The global balance hardly notices the g-points (0.1 to 0.2 W/m²) and takes
 1.3 W/m² less sunlight with two nodes in place of four; the clear-sky
