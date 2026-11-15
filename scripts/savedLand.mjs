@@ -19,6 +19,11 @@ export function resumedIceExchange(saved, ocean = {}) {
   return savedIceExchange(saved);
 }
 
+export function resumedOcean(saved, ocean = {}) {
+  const exchange = resumedIceExchange(saved, ocean);
+  return exchange === undefined ? ocean : { ...ocean, iceExchange: exchange };
+}
+
 export function restoreSurface(model, saved, report = (line) => console.error(line)) {
   const { state, seaIce, land } = model;
   seaIce.load(state[6], saved.concentration ?? null);

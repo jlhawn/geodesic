@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
+import { resumedOcean } from './savedLand.mjs';
 import { THIN } from '../js/ocean/layered.module.js';
 import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
@@ -16,8 +17,9 @@ let model = null, modelKey = null;
 for (const file of process.argv.slice(2)) {
   const saved = await decodeState(new Uint8Array(readFileSync(file)));
   const ground = stateGeography(saved), { topography } = ground;
-  const key = `${saved.N} ${stateRelax(saved, topography).relax} ${savedLevels(saved).join(',')} ${JSON.stringify(stateTerrain(saved))} ${JSON.stringify(ground.record)}`;
-  if (key !== modelKey) { model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') } }); modelKey = key; }
+  const oceanOptions = resumedOcean(saved, { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') });
+  const key = `${JSON.stringify(oceanOptions.iceExchange)} ${saved.N} ${stateRelax(saved, topography).relax} ${savedLevels(saved).join(',')} ${JSON.stringify(stateTerrain(saved))} ${JSON.stringify(ground.record)}`;
+  if (key !== modelKey) { model = createModel(stateGrid(saved, topography).mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: oceanOptions }); modelKey = key; }
   const { mesh, ocean, state } = model;
   STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
   ocean.load(saved.ocean, state[3], state[6]);

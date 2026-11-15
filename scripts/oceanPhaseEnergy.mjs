@@ -11,15 +11,15 @@ import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const R = new URL('../', import.meta.url).pathname;
-const [{ decodeState, savedLevels, stateTerrain }, { stateGrid }, { stateGeography }, { createParallelModel }] = await Promise.all([
-  import(R + 'js/stateFile.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/geography.module.js'), import(R + 'js/parallel.module.js')]);
+const [{ decodeState, savedLevels, stateTerrain }, { stateGrid }, { stateGeography }, { createParallelModel }, { resumedOcean }] = await Promise.all([
+  import(R + 'js/stateFile.module.js'), import(R + 'js/stateGrid.module.js'), import(R + 'js/geography.module.js'), import(R + 'js/parallel.module.js'), import(R + 'scripts/savedLand.mjs')]);
 const FROM = process.env.FROM, STEPS = Number(process.env.STEPS ?? 32), STEP = Number(process.env.STEP ?? 1350), WORKERS = Number(process.env.WORKERS ?? 12), EVERY = Number(process.env.EVERY ?? 8);
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
 const [la0, la1, lo0, lo1] = (process.env.BOX ?? '0,12,125,150').split(',').map(Number);
 const saved = await decodeState(new Uint8Array(readFileSync(FROM)));
 const ground = stateGeography(saved), { topography } = ground;
 const mesh = stateGrid(saved, topography).mesh, C = mesh.nCells, E = mesh.nEdges, deg = 180 / Math.PI;
-const parallel = await createParallelModel(mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: { vertical: 'hybrid', everySteps: 1, ...OCEAN } }, WORKERS);
+const parallel = await createParallelModel(mesh, { terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: resumedOcean(saved, { vertical: 'hybrid', everySteps: 1, ...OCEAN }) }, WORKERS);
 const ocean = parallel.ocean, L = ocean.layers, { h, u } = ocean, avgEta = new Float64Array(ocean.shared.baroAvgEta);
 const ice = Float64Array.from(saved.ice), concentration = saved.concentration ? Float64Array.from(saved.concentration) : null;
 ocean.load(saved.ocean, Float64Array.from(saved.surfaceT), ice, concentration);
