@@ -312,8 +312,9 @@ test('a turbulent save with ice loaded into the instant model on both engines: o
     for (let n = 0; n < oceanEvery; n++) { await gpu.step(DT); cpu.step(DT); }
     await gpu.sync();
     const [flux] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.OFLUX, length: C }]), area = Float64Array.from(cpu.mesh.areaCell);
+    const columns = Float64Array.from((await gpu.ocean.serialize({ restart: true })).Qref);
     gpu.destroy();
-    return { cpu: Float64Array.from(cpu.seaIce.oceanFlux), gpu: Float64Array.from(flux), area };
+    return { cpu: Float64Array.from(cpu.seaIce.oceanFlux), gpu: Float64Array.from(flux), area, Q: { cpu: Float64Array.from(cpu.ocean.Q), gpu: columns } };
   };
   const taken = await handed(saved.ocean), plain = await handed(without), { area } = taken, interval = oceanEvery * DT;
   const iced = [...Array(C).keys()].filter((i) => saved.host.state6[i] > 0 && iceWater[i] !== 0);
@@ -322,9 +323,22 @@ test('a turbulent save with ice loaded into the instant model on both engines: o
   console.log(`${iced.length} cells held ${held.toExponential(4)} J under their ice; over the first ocean interval the first write hands the ice ${extra.cpu.toExponential(4)} J beyond a load without it on the CPU, ${extra.gpu.toExponential(4)} J on the GPU; the flux to the ice differs by up to ${worst.toExponential(2)} of it`);
   assert.ok(extra.cpu > 0 && extra.cpu <= 1.0001 * held, `the CPU hands the ice ${extra.cpu} J of the ${held} J booked`);
   assert.ok(Math.abs(extra.gpu - extra.cpu) <= 1e-3 * extra.cpu && worst < 2e-3,`the GPU hands it ${extra.gpu} J against the CPU's ${extra.cpu} J, the flux apart by up to ${worst}`);
+  const heatCapacity = 1025 * 3985, layers = taken.Q.cpu.length / C;
+  const booked = (engine) => {
+    let total = 0;
+    for (let i = 0; i < C; i++) {
+      let column = 0;
+      for (let k = 0; k < layers; k++) column += taken.Q[engine][k * C + i] - plain.Q[engine][k * C + i];
+      total += area[i] * (heatCapacity * column + (taken[engine][i] - plain[engine][i]) * interval);
+    }
+    return total;
+  };
+  const closed = { cpu: Math.abs(booked('cpu') - held) / held, gpu: Math.abs(booked('gpu') - held) / held };
+  console.log(`over all cells the columns' heat change plus the heat handed to the ice, beyond a load without the booking, differs from the ${held.toExponential(4)} J held by ${closed.cpu.toExponential(2)} of it on the CPU and ${closed.gpu.toExponential(2)} on the GPU`);
+  assert.ok(closed.cpu < 1e-5 && closed.gpu < 1e-4, `the booked heat closed to ${JSON.stringify(closed)} of the held heat, bounds 1e-5 (f64, three times the 3.1e-6 measured, which is the hybrid rescale acting on the booked heat: it closes to 3.5e-11 with the rescale's heat change taken out) and 1e-4 (f32, six times the 1.7e-5 measured)`);
 });
 
-test('both engines built with no ice or ocean options step the defaults alike: from one state, over three ocean intervals the ice, the water\'s heat under it, the conductance and the surface temperature over the sea follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both engines built with no ice or ocean options step the defaults alike, the conductance at the friction floor of 490.155 W/m²/K in every iced cell so that it checks the floor only: from one state, over three ocean intervals the ice, the water\'s heat under it, the conductance and the surface temperature over the sea follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const source = await begin({ topography }), { oceanEvery } = source.cadence;
   const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length;
   const gpu = await createGpuModel(new Grid(N), { topography }), cpu = createModel(new Grid(N), { topography }), { device, buffers, layout } = gpu.gpu;
@@ -349,7 +363,39 @@ test('both engines built with no ice or ocean options step the defaults alike: f
   };
   console.log(`${iced.length} iced cells of ${sea.length} sea cells after ${3 * oceanEvery} steps at the defaults; the engines differ by up to ${JSON.stringify(apart)}`);
   assert.ok(iced.length > 10 && cpu.seaIce.waterHeat.some((x) => x > 0), `${iced.length} iced cells, some holding heat`);
-  assert.ok(apart.heat < 1e-3 && apart.conductance < 1e-5 && apart.volume < 1e-4 && apart.surface < 0.05, JSON.stringify(apart));
+  assert.ok(apart.heat < 1e-3 && apart.conductance < 1e-5 && apart.volume < 1e-5 && apart.surface < 0.025, `${JSON.stringify(apart)}; volume bound 1e-5 m as in the instant-save test, surface bound 3 times the 0.0082 K measured`);
+  gpu.destroy();
+});
+
+test('both engines built with the turbulent exchange at frictionMinimum 5e-4 and the default ice and coupled drift otherwise step alike, a real share of the iced cells above the friction floor on both engines: from one state, over three ocean intervals the ice, the water\'s heat under it, the conductance and the surface temperature over the sea follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { topography, ocean: { iceExchange: 'turbulent' } }, source = await begin(options), { oceanEvery } = source.cadence;
+  const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length;
+  const gpu = await createGpuModel(new Grid(N), options), cpu = createModel(new Grid(N), options), { device, buffers, layout } = gpu.gpu;
+  assert.ok(cpu.seaIce.turbulent && layout.PH.WHEAT !== undefined && cpu.seaIce.iceExchange.frictionMinimum === 5e-4, 'both engines take the turbulent exchange at frictionMinimum 5e-4');
+  for (const model of [gpu, cpu]) {
+    model.state.forEach((values, a) => values.set(saved.host[`state${a}`]));
+    model.seaIce.load(model.state[6], saved.host.concentration, null);
+    model.time = saved.time;
+  }
+  gpu.load(); gpu.ocean.load(saved.ocean, gpu.state[3], gpu.state[6]); loadSavedLand(gpu, saved);
+  cpu.ocean.load(saved.ocean, cpu.state[3], cpu.state[6], cpu.seaIce.concentration); loadSavedLand(cpu, saved);
+  for (let n = 0; n < 3 * oceanEvery; n++) { await gpu.step(DT); cpu.step(DT); }
+  await gpu.sync();
+  const [heat, conductance] = await readRanges(device, buffers.PH, ['WHEAT', 'CONDUCT'].map((name) => ({ offset: layout.PH[name], length: C })));
+  const capacity = Float64Array.from(cpu.ocean.capacity), sea = [...Array(C).keys()].filter((i) => cpu.ocean.cellOcean[i]), iced = sea.filter((i) => cpu.state[6][i] > 0);
+  const volume = (model, i) => (model.state[6][i] > 0 ? model.state[6][i] * model.seaIce.concentration[i] : 0);
+  const apart = {
+    heat: Math.max(...iced.map((i) => Math.abs(heat[i] - cpu.seaIce.waterHeat[i]) / capacity[i])),
+    conductance: Math.max(...iced.map((i) => Math.abs(conductance[i] - cpu.seaIce.conductance[i]) / Math.max(1e-9, cpu.seaIce.conductance[i]))),
+    volume: Math.max(...sea.map((i) => Math.abs(volume(gpu, i) - volume(cpu, i)))),
+    surface: Math.max(...sea.map((i) => Math.abs(gpu.state[3][i] - cpu.state[3][i]))),
+  };
+  const floor = 4.08e6 * 0.006 * cpu.seaIce.iceExchange.frictionMinimum, above = (values) => iced.filter((i) => values[i] > 1.05 * floor).length / iced.length;
+  const share = { cpu: above(cpu.seaIce.conductance), gpu: above(conductance) }, driven = iced.filter((i) => cpu.seaIce.conductance[i] > 1.05 * floor && conductance[i] > 1.05 * floor);
+  console.log(`${iced.length} iced cells of ${sea.length} sea cells after ${3 * oceanEvery} steps at frictionMinimum 5e-4; the share of them above the friction floor ${JSON.stringify(share)}, ${driven.length} above it on both; the engines differ by up to ${JSON.stringify(apart)}`);
+  assert.ok(iced.length > 10 && share.cpu >= 0.2 && share.gpu >= 0.2, `${iced.length} iced cells, the share above the floor ${JSON.stringify(share)}`);
+  assert.ok(driven.length >= 0.2 * iced.length, `${driven.length} of ${iced.length} iced cells above the floor on both engines`);
+  assert.ok(apart.heat < 1e-3 && apart.conductance < 2e-4 && apart.volume < 1e-5 && apart.surface < 0.025, `${JSON.stringify(apart)}; the surface bound 0.025 K is 3 times the 0.0082 K measured; the conductance bound 2e-4 is about three times the 5.95e-5 measured over the drag and speed branch, which the f32 relative speed makes looser than the floor's 1e-5`);
   gpu.destroy();
 });
 
