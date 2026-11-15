@@ -191,3 +191,35 @@ test('with the default exchange the coupled model and the ice are the model befo
   assert.equal(coupled, 'd25e8222cf1e1ff8');
   assert.equal(column, '3819c4d3c156057d');
 });
+
+test('an instant save taken as its ocean hands the ice heat loads into the turbulent exchange holding no heat under the ice and keeping the heat in transit, which the ice takes as the instant ice does; the heat then closes step by step and no ice collapses', () => {
+  const instant = rig('instant', { flux: 40, global: true }), turbulent = rig('turbulent', { flux: 40, global: true }), { mesh, C } = instant;
+  const area = mesh.areaCell.reduce((s, a) => s + a, 0), input = DT * 40 * area;
+  for (let n = 0; n < 4; n++) instant.cycle();
+  instant.ocean.readSurface(instant.surfaceT, instant.ice, instant.seaIce.concentration);
+  instant.ocean.salt();
+  for (let i = 0; i < C; i++) if (instant.ice[i] > 0) instant.ocean.Q[i] += instant.ocean.h[i] * (0.2 + 0.1 * (i % 3));
+  instant.ocean.writeSurface(instant.surfaceT, instant.seaIce.oceanFlux, DT);
+  const saved = instant.ocean.serialize({ restart: true });
+  assert.ok(!('iceWater' in saved) && saved.flux.every((x, i) => !(instant.ice[i] > 0) || x > 0), 'an instant save whose every iced cell has heat in transit to the ice');
+  turbulent.ice.set(instant.ice); turbulent.surfaceT.set(instant.surfaceT); turbulent.seaIce.concentration.set(instant.seaIce.concentration);
+  turbulent.ocean.load(saved, turbulent.surfaceT, turbulent.ice, turbulent.seaIce.concentration);
+  const held = [...turbulent.seaIce.waterHeat.keys()].filter((i) => turbulent.ice[i] > 0 && turbulent.seaIce.waterHeat[i] !== 0);
+  assert.deepEqual(held, [], 'iced cells holding heat at the load');
+  assert.deepEqual(Array.from(turbulent.seaIce.oceanFlux), Array.from(saved.flux), 'the load keeps the heat in transit');
+  const stored = (r) => r.cellEnergy().reduce((s, e, i) => s + mesh.areaCell[i] * e, 0), transit = saved.flux.reduce((s, x, i) => s + mesh.areaCell[i] * x * DT, 0);
+  const atSave = stored(instant) + transit, volume0 = Float64Array.from(instant.ice, (h, i) => h * instant.seaIce.concentration[i]);
+  assert.ok(Math.abs(stored(turbulent) + transit - atSave) < 1e-12 * atSave, 'the load holds the save\'s heat');
+  let before = atSave, worst = 0;
+  for (let n = 0; n < 9; n++) {
+    for (const r of [instant, turbulent]) if (n === 0) { for (let i = 0; i < C; i++) r.seaIce.update(r.surfaceT, r.ice, r.heat, i, DT); } else r.cycle();
+    const after = stored(turbulent);
+    worst = Math.max(worst, Math.abs(after - before - input) / transit);
+    before = after;
+  }
+  const volume = (r) => Float64Array.from(r.ice, (h, i) => h * r.seaIce.concentration[i]), [vi, vt] = [volume(instant), volume(turbulent)];
+  const kept = Math.min(...[...vt.keys()].filter((i) => volume0[i] > 0).map((i) => vt[i] / volume0[i])), ahead = Math.min(...[...vt.keys()].map((i) => vt[i] - vi[i]));
+  console.log(`transit ${(transit / area).toExponential(3)} J/m², the heat closed to ${worst.toExponential(2)} of it over 9 steps; the turbulent ice keeps at least ${kept.toFixed(6)} of its volume at the save, at least ${ahead.toExponential(2)} m above the instant ice's in every cell`);
+  assert.ok(worst < 1e-9, `the heat closes to ${worst} of the transit`);
+  assert.ok(kept > 0.95 && ahead >= 0, `kept ${kept}, above the instant ice by ${ahead} m`);
+});

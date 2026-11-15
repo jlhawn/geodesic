@@ -140,54 +140,55 @@ test('over cells with no ocean column under the ice the turbulent exchange holds
   cpu.destroy?.(); gpu.destroy();
 });
 
+const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer), TURBULENT = { mode: 'turbulent', frictionMinimum: 2e-2 };
+const host = (model) => Object.entries({
+  ...Object.fromEntries(model.state.map((values, a) => [`state${a}`, values])),
+  concentration: model.seaIce.concentration, brine: model.seaIce.brine, windSpeed: model.surface.windSpeed, seaFlow: model.seaFlow,
+  ...Object.fromEntries(['mlmSubsidence', 'mlmHeight', 'mlmGate', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'evaporation'].map((name) => [name, model.radiation[name]])),
+  ...Object.fromEntries(['convectiveRain', 'largeScaleRain', 'cumulusCover', 'cumulusWater', 'subcloudVirtual'].map((name) => [name, model.moist[name]])),
+  ...Object.fromEntries(['depth', 'mixingTop', 'regime', 'buoyancyFlux'].map((name) => [`boundary.${name}`, model.boundaryLayer[name]])),
+  ...(model.exchange ? { exchangeWind: model.exchange.wind, ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }) } : {}),
+  ...(model.skin ? { warmLayer: model.skin.warm, coolSkin: model.skin.cool } : {}),
+}).filter(([, values]) => values);
+const begin = async (options) => {
+  const model = await createGpuModel(new Grid(N), options);
+  initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => model.state[a].set(values));
+  for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
+  model.load();
+  model.ocean.initialize(model.state[3], model.state[6]);
+  model.land.initialize();
+  return model;
+};
+const save = async (model) => {
+  await model.sync();
+  const saved = { time: model.time, host: Object.fromEntries(host(model).map(([name, values]) => [name, Float64Array.from(values)])), fresh: await model.readFreshwater(), ocean: await model.ocean.serialize({ restart: true }), land: await model.land.serialize(), lake: model.lake ? lakeArrays(await model.lake.serialize()) : {} };
+  model.destroy();
+  return saved;
+};
+const restore = async (saved, options) => {
+  const model = await createGpuModel(new Grid(N), options), { state } = model;
+  state.forEach((values, a) => values.set(saved.host[`state${a}`]));
+  model.seaIce.load(state[6], saved.host.concentration, saved.host.brine ?? null);
+  for (const [name, values] of host(model)) if (!/^state|^concentration$|^brine$/.test(name)) values.set(saved.host[name]);
+  model.time = saved.time;
+  model.load();
+  model.ocean.load(saved.ocean, state[3], state[6]);
+  loadSavedLand(model, saved);
+  if (model.lake) loadSavedLake(model, saved.lake, { quiet: true });
+  model.writeFreshwater(saved.fresh);
+  return model;
+};
+const fields = (value, prefix = '') => (ArrayBuffer.isView(value) || (Array.isArray(value) && typeof value[0] === 'number') ? [[prefix, value]] : value && typeof value === 'object' ? Object.entries(value).flatMap(([name, part]) => fields(part, prefix ? `${prefix}.${name}` : name)) : []);
+const steps = async (model, n) => { for (let s = 0; s < n; s++) await model.step(DT); return model; };
+
 test('a GPU run over land with iceExchange turbulent, saved by serialize({ restart: true }) on every cadence and loaded into a fresh model, steps on bit for bit with the run that did not stop: the state, the ice, the ocean with the water\'s heat and the conductance, and the land', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const options = { topography, ocean: { iceExchange: { mode: 'turbulent', frictionMinimum: 2e-2 } }, ice: { iceAlbedoPhases: true } };
-  const host = (model) => Object.entries({
-    ...Object.fromEntries(model.state.map((values, a) => [`state${a}`, values])),
-    concentration: model.seaIce.concentration, brine: model.seaIce.brine, windSpeed: model.surface.windSpeed, seaFlow: model.seaFlow,
-    ...Object.fromEntries(['mlmSubsidence', 'mlmHeight', 'mlmGate', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'evaporation'].map((name) => [name, model.radiation[name]])),
-    ...Object.fromEntries(['convectiveRain', 'largeScaleRain', 'cumulusCover', 'cumulusWater', 'subcloudVirtual'].map((name) => [name, model.moist[name]])),
-    ...Object.fromEntries(['depth', 'mixingTop', 'regime', 'buoyancyFlux'].map((name) => [`boundary.${name}`, model.boundaryLayer[name]])),
-    ...(model.exchange ? { exchangeWind: model.exchange.wind, ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }) } : {}),
-    ...(model.skin ? { warmLayer: model.skin.warm, coolSkin: model.skin.cool } : {}),
-  }).filter(([, values]) => values);
-  const begin = async () => {
-    const model = await createGpuModel(new Grid(N), options);
-    initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => model.state[a].set(values));
-    for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
-    model.load();
-    model.ocean.initialize(model.state[3], model.state[6]);
-    model.land.initialize();
-    return model;
-  };
-  const save = async (model) => {
-    await model.sync();
-    const saved = { time: model.time, host: Object.fromEntries(host(model).map(([name, values]) => [name, Float64Array.from(values)])), fresh: await model.readFreshwater(), ocean: await model.ocean.serialize({ restart: true }), land: await model.land.serialize(), lake: model.lake ? lakeArrays(await model.lake.serialize()) : {} };
-    model.destroy();
-    return saved;
-  };
-  const restore = async (saved) => {
-    const model = await createGpuModel(new Grid(N), options), { state } = model;
-    state.forEach((values, a) => values.set(saved.host[`state${a}`]));
-    model.seaIce.load(state[6], saved.host.concentration, saved.host.brine ?? null);
-    for (const [name, values] of host(model)) if (!/^state|^concentration$|^brine$/.test(name)) values.set(saved.host[name]);
-    model.time = saved.time;
-    model.load();
-    model.ocean.load(saved.ocean, state[3], state[6]);
-    loadSavedLand(model, saved);
-    if (model.lake) loadSavedLake(model, saved.lake, { quiet: true });
-    model.writeFreshwater(saved.fresh);
-    return model;
-  };
-  const fields = (value, prefix = '') => (ArrayBuffer.isView(value) || (Array.isArray(value) && typeof value[0] === 'number') ? [[prefix, value]] : value && typeof value === 'object' ? Object.entries(value).flatMap(([name, part]) => fields(part, prefix ? `${prefix}.${name}` : name)) : []);
-  const steps = async (model, n) => { for (let s = 0; s < n; s++) await model.step(DT); return model; };
-  const whole = await begin(), gcd = (a, b) => (b ? gcd(b, a % b) : a), { radiationEvery, dragEvery, oceanEvery } = whole.cadence;
+  const options = { topography, ocean: { iceExchange: TURBULENT }, ice: { iceAlbedoPhases: true } };
+  const whole = await begin(options), gcd = (a, b) => (b ? gcd(b, a % b) : a), { radiationEvery, dragEvery, oceanEvery } = whole.cadence;
   const every = [radiationEvery, dragEvery, oceanEvery].reduce((a, b) => (a * b) / gcd(a, b)), n = every * Math.ceil(16 / every);
-  const ended = await save(await steps(whole, 2 * n)), saved = await save(await steps(await begin(), n));
+  const ended = await save(await steps(whole, 2 * n)), saved = await save(await steps(await begin(options), n));
   const held = saved.ocean.iceWater.filter((x) => x > 0).length, stirred = saved.ocean.iceConductance.filter((x) => x > 0).length;
   assert.ok(held > 0 && stirred > 0, `the save after ${n} steps holds the water's heat in ${held} cells and a conductance in ${stirred}`);
-  const after = await save(await steps(await restore(saved), n)), theirs = Object.fromEntries(fields(after)), differ = [];
+  const after = await save(await steps(await restore(saved, options), n)), theirs = Object.fromEntries(fields(after)), differ = [];
   for (const [name, values] of fields(ended)) {
     const other = theirs[name];
     if (!other || other.length !== values.length) { differ.push(`${name} missing`); continue; }
@@ -197,4 +198,37 @@ test('a GPU run over land with iceExchange turbulent, saved by serialize({ resta
   }
   console.log(`N=${N}, ${2 * n} steps whole against ${n}, a save and a load, then ${n}: ${fields(ended).length} arrays compared; at the save ${held} cells hold the water's heat and ${stirred} a conductance`);
   assert.deepEqual(differ, [], `whole against resumed: ${differ.join('; ')}`);
+});
+
+test('an instant save with ice loaded into the turbulent model on both engines: the water under the ice starts within the f32 grain of the freezing point, as on the CPU, and over two ocean intervals the ice, the held heat and the conductance follow the CPU and no ice collapses', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { topography, ocean: { iceExchange: TURBULENT } }, source = await begin({ topography }), { oceanEvery } = source.cadence;
+  const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length;
+  assert.ok(!('iceWater' in saved.ocean) && saved.ocean.flux.some((x) => x > 0), 'an instant save with heat in transit to the ice');
+  const place = (model) => {
+    model.state.forEach((values, a) => values.set(saved.host[`state${a}`]));
+    model.seaIce.load(model.state[6], saved.host.concentration, null);
+    model.time = saved.time;
+  };
+  const gpu = await createGpuModel(new Grid(N), options), cpu = createModel(new Grid(N), options), { device, buffers, layout } = gpu.gpu;
+  place(gpu); gpu.load(); gpu.ocean.load(saved.ocean, gpu.state[3], gpu.state[6]); loadSavedLand(gpu, saved);
+  place(cpu); cpu.ocean.load(saved.ocean, cpu.state[3], cpu.state[6], cpu.seaIce.concentration); loadSavedLand(cpu, saved);
+  const capacity = Float64Array.from(cpu.ocean.capacity), iced = [...Array(C).keys()].filter((i) => cpu.state[6][i] > 0 && cpu.ocean.cellOcean[i]);
+  const onDevice = async () => { const [heat, conductance] = await readRanges(device, buffers.PH, ['WHEAT', 'CONDUCT'].map((name) => ({ offset: layout.PH[name], length: C }))); return { heat, conductance }; };
+  const rise = (heat) => Math.max(...iced.map((i) => heat[i] / capacity[i]));
+  const apart = (a, b, scale = () => 1) => Math.max(...iced.map((i) => Math.abs(a[i] - b[i]) / scale(i)));
+  const loaded = await onDevice(), [wet] = await readRanges(device, buffers.PH, [{ offset: layout.PH.WET, length: C }]);
+  assert.ok(gpu.oceanEngine.cellOcean.some((x) => !x) && wet.every((x, i) => x === gpu.oceanEngine.cellOcean[i]), 'the device\'s cells with water under the ice are the ocean\'s');
+  const atLoad = { cpu: rise(cpu.seaIce.waterHeat), gpu: rise(loaded.heat), heat: apart(cpu.seaIce.waterHeat, loaded.heat, (i) => capacity[i]), conductance: apart(cpu.seaIce.conductance, loaded.conductance, (i) => cpu.seaIce.conductance[i]) };
+  const volume = (model) => Float64Array.from(model.state[6], (h, i) => (h > 0 ? h * model.seaIce.concentration[i] : 0)), volume0 = volume(cpu);
+  for (let n = 0; n < 2 * oceanEvery; n++) { await gpu.step(DT); cpu.step(DT); }
+  await gpu.sync();
+  const after = await onDevice(), [vg, vc] = [volume(gpu), volume(cpu)];
+  const stepped = { heat: apart(cpu.seaIce.waterHeat, after.heat, (i) => capacity[i]), conductance: apart(cpu.seaIce.conductance, after.conductance, (i) => cpu.seaIce.conductance[i]), volume: apart(vc, vg), rise: rise(after.heat) };
+  const kept = Math.min(...iced.map((i) => vg[i] / volume0[i])), total = vg.reduce((s, v, i) => s + v * gpu.mesh.areaCell[i], 0) / volume0.reduce((s, v, i) => s + v * gpu.mesh.areaCell[i], 0);
+  console.log(`${iced.length} iced cells; at the load the water under the ice is up to ${atLoad.cpu.toExponential(2)} K above freezing on the CPU and ${atLoad.gpu.toExponential(2)} K on the GPU, apart by ${atLoad.heat.toExponential(2)} K, the conductance by ${atLoad.conductance.toExponential(2)}; after ${2 * oceanEvery} steps up to ${stepped.rise.toExponential(2)} K, the engines apart by ${stepped.heat.toExponential(2)} K, ${stepped.conductance.toExponential(2)} in the conductance and ${stepped.volume.toExponential(2)} m in the ice volume; the GPU ice keeps ${kept.toFixed(5)} of its volume in every cell and ${total.toFixed(6)} in all`);
+  const grain = Math.fround(FREEZING_POINT) * 2 ** -23;
+  assert.ok(atLoad.cpu < grain && atLoad.gpu < grain && atLoad.heat < 1e-9 && atLoad.conductance < 1e-6, `the held heat at the load beyond the f32 grain of the freezing point, ${grain} K: ${JSON.stringify(atLoad)}`);
+  assert.ok(stepped.heat < 1e-3 && stepped.conductance < 1e-5 && stepped.volume < 1e-5, JSON.stringify(stepped));
+  assert.ok(kept > 0.9 && total > 0.99, `kept ${kept}, ${total} in all`);
+  gpu.destroy();
 });
