@@ -1064,6 +1064,7 @@ export async function createGpuCore(mesh, {
   if (temperatureClosure === 'standard') kernelBodies.lapScalar1 = standardReferenceClosure(kernelBodies.lapScalar1);
   if (thetaFace === 'arakawaSuarez') kernelBodies.cellTendency = hydrostaticThetaFaces(kernelBodies.cellTendency);
   if (verticalAdvection === 'vanLeerWater') kernelBodies.cellTendency = limitedInterfaces(kernelBodies.cellTendency);
+  if (phys.iceDeposition && (phys.rainEvaporationLaw !== 'deficit' || phys.rainEvaporationCeiling != null)) throw new Error("iceDeposition runs only with rainEvaporationLaw 'deficit' and no rainEvaporationCeiling: under the others the engines part where ice falls into rain");
   if (phys.rainEvaporationLaw !== 'deficit' || phys.rainEvaporationCeiling != null) kernelBodies.adjustRain = rainEvaporationOptions(kernelBodies.adjustRain);
   if (phys.convectionRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = plumeRetype(kernelBodies[name]);
   if (phys.shallowRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = shallowPlumeRetype(kernelBodies[name]);

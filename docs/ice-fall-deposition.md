@@ -69,8 +69,9 @@ The memory is not advected. Cloud that moves keeps its share, because each step 
 
 The model has no detrained-condensate stream: the plume writes only θ and q, and the saturation pass after it (`condenseColumn`'s second call on the CPU, `adjustPlume`'s on the GPU, in columns where a plume ran) makes the condensate.
 
-- `detrainedPhase: 'ramp'` (the default) gives that pass's positive change the ramp's ice share: q_i += (1 − α(T)) Δq_c, with T the layer's temperature after the plume. The plume's own ice is the same ramp share at its own temperature.
+- `detrainedPhase: 'ramp'` (the default) gives that pass's positive change the ramp's ice share: q_i = min(max(0, q_i), q_c) + (1 − α(T)) Δq_c, with q_c and T the layer's cloud and temperature after the plume. The cap matters where the first pass evaporated cloud and left q_i above q_c; without it, the regrown cloud would all count as ice. The plume's own ice is the same ramp share at its own temperature.
 - `detrainedPhase: 'liquid'` makes it liquid, for an attribution arm. It needs `iceDeposition`.
+- `iceDeposition` runs only with `rainEvaporationLaw` 'deficit' and no `rainEvaporationCeiling`, and both engines refuse the others. Under 'kessler' with `rainCover` 'overlap', at N=16, the engines part by 1e-2 K where ice falls into rain below an ice cloud.
 - The model's ramp is linear over 235.15–273.15 K. The IFS's (eq 7.6) is quadratic over 250.16–273.16 K, so this entry is less icy than the IFS's at 250–268 K. Deposition makes up the difference within the times above.
 
 ## Arriving ice
@@ -135,10 +136,12 @@ What I expect under the option:
   - the glaciation times;
   - doubling q_c between steps doubles q_i;
   - the Bergeron factor has no effect under the option;
-  - `placeCloudIce`;
+  - the post-plume cap by hand: a cloud all ice that the first pass halves and the second regrows by 0.3 at α = 0.5 holds 0.8125 of its water as ice;
+  - `placeCloudIce`, and a GPU model's ramp start from a fresh start, a save without the fraction and one of another length;
   - the option-off kernel text and layout;
   - the source lint over restorers and writers;
-  - GPU parity at N=16 on bl34 and bl48, at two time steps, with `detrainedPhase` 'ramp' and 'liquid' and with `bergeronAutoconversion`.
+  - GPU parity at N=16 on bl34 and bl48, at two time steps, with `detrainedPhase` 'ramp' and 'liquid' and with `bergeronAutoconversion`;
+  - the refusal of other rain-evaporation laws and of a ceiling, on both engines.
 - `test/gpuReload.test.mjs`: under the option a load restores every device buffer word for word.
 - `test/pageRestore.test.mjs`: under the option a page save restores and steps on as the run that did not stop.
 - `test/spinupRestart.test.mjs`: under the option a split spin-up ends bit for bit on the whole one.

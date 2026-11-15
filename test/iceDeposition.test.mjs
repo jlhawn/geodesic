@@ -215,6 +215,28 @@ test('under iceDeposition bergeronAutoconversion changes nothing: a step of ever
   assert.deepEqual(on, off);
 });
 
+test("the plumes' condensation pass caps the cloud ice the first pass left above its layer's cloud before it adds the ramp share: at 254.15 K (α = 0.5) a cloud all ice that the first pass halves and the second regrows by 0.3 of its start holds 0.8125 of its water as ice", () => {
+  const model = build({ iceDeposition: true }), { moist } = model, { C, cp, sigmaMid, exnerLayer } = model.core.diagnostics;
+  const { pi, theta, q, qc } = column(model, (k, T, p) => 0.3 * saturated(T, p), () => 254.15);
+  const k = layerAt(model, 5e4), idx = k * C, p = pi[0] * sigmaMid[k], ice = moist.cloudIceShare;
+  const vapor = (cloud, held) => {
+    const liquidT = theta[idx] * exnerLayer[idx] - LATENT_HEAT * cloud / cp, out = cloudSaturation(liquidT, p, true, 273.15, 235.15, {}), b = halfWidth(model, liquidT, p);
+    return (held >= b ? held : 2 * Math.sqrt(b * held) - b) * (1 + LATENT_HEAT * out.slope / cp) + out.qs - cloud;
+  };
+  qc[idx] = 1e-4; q[idx] = vapor(1e-4, 5e-5); ice.fill(0); ice[idx] = 1e-4;
+  moist.condenseColumn(0, pi, theta, q, qc);
+  assert.ok(Math.abs(qc[idx] - 5e-5) < 1e-9 && ice[idx] === 1e-4, `the first pass leaves ${qc[idx]} of cloud and ${ice[idx]} of ice`);
+  theta[idx] = 254.15 / exnerLayer[idx];
+  const before = qc[idx], T = theta[idx] * exnerLayer[idx];
+  q[idx] = vapor(before, before + 3e-5);
+  moist.condenseColumn(0, pi, theta, q, qc, true);
+  const grown = qc[idx] - before, expected = Math.min(1e-4, before) + (1 - liquidFraction(T, 273.15, 235.15)) * grown;
+  console.log(`cloud ${before.toExponential(4)} + ${grown.toExponential(4)} kg/kg; ice ${ice[idx].toExponential(4)}, ${(ice[idx] / qc[idx]).toFixed(6)} of the cloud`);
+  assert.ok(Math.abs(grown - 3e-5) < 1e-9, `${grown}`);
+  assert.ok(Math.abs(ice[idx] - expected) <= 1e-14 * expected, `${ice[idx]} against ${expected}`);
+  assert.ok(Math.abs(ice[idx] / qc[idx] - 0.8125) < 1e-6, `${ice[idx] / qc[idx]}`);
+});
+
 test("placeCloudIce places a saved glaciated fraction of the model's length, and otherwise, as for a fresh start, the ramp's share 1 − α(T) where there is cloud and 0 where there is none; a model without the memory takes nothing", () => {
   const model = build({ iceDeposition: true }), { K, C } = model.core.diagnostics, [, theta, , , , qc] = model.state;
   randomState(model);
@@ -345,3 +367,34 @@ test("on the GPU iceDeposition with detrainedPhase 'liquid' matches the CPU, and
   assert.ok(ramp.plumes > 0 && more > 0);
 });
 test('on the GPU iceDeposition with bergeronAutoconversion matches the CPU, which steps as without the factor', GPU, () => gpuParity({ bergeronAutoconversion: true }));
+test("iceDeposition refuses a rainEvaporationLaw other than 'deficit' and a rainEvaporationCeiling on the CPU and the GPU", GPU, async () => {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js'), { mesh } = createModel(new Grid(16), { ocean: false, levels: bl34 });
+  for (const rain of [{ rainEvaporationLaw: 'kessler', rainCover: 'overlap' }, { rainEvaporationCeiling: 0.7 }]) {
+    assert.throws(() => build({ iceDeposition: true, ...rain }), /rainEvaporationLaw 'deficit'/, JSON.stringify(rain));
+    await assert.rejects(createGpuCore(mesh, { levels: bl34, physics: { iceDeposition: true, ...rain } }), /rainEvaporationLaw 'deficit'/, JSON.stringify(rain));
+  }
+});
+test('a GPU model under iceDeposition takes the ramp share 1 − α(T), in f32, for each cloudy layer from a fresh start, a save without the glaciated fraction and one of another length, and steps from it', GPU, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  const model = await createGpuModel(new Grid(16), { ocean: false, moist: { iceDeposition: true } }), { K, C, exnerLayer } = model.core.diagnostics;
+  randomState(model);
+  if (model.land) model.land.initialize();
+  const start = model.state.map((a) => Float64Array.from(a));
+  for (const [label, saved] of [['a fresh start', null], ['a save without it', { N: 16 }], ['a save of another length', { cloudIceShare: new Float32Array(K * C - C).fill(0.5) }]]) {
+    start.forEach((values, a) => model.state[a].set(values));
+    model.moist.cloudIceShare.fill(0.37);
+    placeCloudIce(model, saved);
+    const [, theta, , , , qc] = model.state;
+    const ramp = Float32Array.from({ length: K * C }, (_, x) => (qc[x] > CLEAR_AIR ? 1 - liquidFraction(theta[x] * exnerLayer[x], 273.15, 235.15) : 0));
+    model.load();
+    const placed = (await model.gpu.downloadPhysics()).CICE;
+    let differ = 0, mixed = 0;
+    for (let x = 0; x < K * C; x++) { if (placed[x] !== ramp[x]) differ++; if (ramp[x] > 0 && ramp[x] < 1) mixed++; }
+    await model.step(1350);
+    const after = await model.gpu.download(), stepped = (await model.gpu.downloadPhysics()).CICE.subarray(0, K * C);
+    const finite = [1, 4, 5].every((a) => after[a].every(Number.isFinite)), inRange = stepped.every((v) => v >= 0 && v <= 1);
+    console.log(`${label}: ${mixed} layers part ice of ${K * C}; ${differ} differ from the ramp; the step leaves θ, q and q_c ${finite ? 'finite' : 'not finite'} and the fraction ${inRange ? 'in [0, 1]' : 'out of range'}`);
+    assert.ok(mixed > 0 && differ === 0 && finite && inRange, label);
+  }
+  model.destroy();
+});

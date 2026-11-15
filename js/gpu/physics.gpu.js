@@ -2887,10 +2887,7 @@ export function boundaryLayerDiagnosis(body, { diagnoseFirst = DIAGNOSE_FIRST, s
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
 const CLOUD_ICE_RAIN = [
-  [`  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
-`, `  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
-  var depCoverAbove = 0.0; var dzTop = 0.0;
-`],
+  ['var fogged = 0.0;', 'var fogged = 0.0; var depCoverAbove = 0.0; var dzTop = 0.0;'],
   [`    let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
 `, `    let idx = k * C + i;
@@ -3002,8 +2999,9 @@ export function cloudIcePlume(body) {
   const head = 'fn saturateColumn(i: i32, pi: f32) {\n', update = '    IN[S_Q + idx] -= change; IN[S_QC + idx] += change;';
   const start = body.indexOf(head), close = body.indexOf('\n}\n', start), source = body.slice(start, close + 3);
   if (start < 0 || close < 0 || body.indexOf(head, start + 1) >= 0 || source.split(update).length !== 2) throw new Error('the saturation pass is not in the adjustPlume kernel exactly once');
-  const detrained = source.replace(head, 'fn saturateDetrained(i: i32, pi: f32) {\n').replace(update, `    if (change > 0.0) { PH[PH_CICE + idx] += (1.0 - clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)) * change; }\n${update}`);
-  return patchOnce(body.slice(0, close + 3) + detrained + body.slice(close + 3), ['  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n', '  if (PH[PH_CUMF + i] > 0.0) { saturateDetrained(i, pi); }\n'], 'adjustPlume');
+  const detrained = source.replace(head, 'fn saturateDetrained(i: i32, pi: f32) {\n').replace(update, `    if (change > 0.0) { PH[PH_CICE + idx] = min(max(0.0, PH[PH_CICE + idx]), IN[S_QC + idx]) + (1.0 - clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)) * change; }\n${update}`);
+  const live = patchOnce(body.slice(0, close + 3) + detrained + body.slice(close + 3), ['  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n', '  if (PH[PH_CUMF + i] > 0.0) { saturateDetrained(i, pi); }\n'], 'adjustPlume');
+  return patchOnce(live, ['  saturateOutOfLine(i, pi, dt);\n', '  saturateOutOfLine(i, pi, dt);\n  if (dt < 0.0) { saturateDetrained(i, pi); saturateDetrained(i, pi + 1.0); }\n'], 'adjustPlume');
 }
 const BERGERON_RAIN = [
   ['    let excess = max(0.0, liquid - AUTO_T);\n', `    let temperature = IN[S_TH + idx] * D[D_EXM + idx];
