@@ -55,3 +55,24 @@ test('a model restored from a save by restoreSurface has the running model\'s su
   assert.ok(snowAlbedo);
   assert.deepEqual(restoreSurface(restored(saved, ICE), { ...saved, land: withoutSnowAlbedo }, () => {}), ['land.snowAlbedo']);
 });
+
+test('restoreSurface hands a turbulent save\'s held heat and conductance to the sea ice, and savedIceOptions carries the ocean\'s iceExchange', async () => {
+  const run = createModel(new Grid(N), { ...OPTIONS, ice: { iceExchange: 'turbulent' } });
+  const { mesh, state, seaIce, land } = run, C = mesh.nCells;
+  initializeState(run, { geostrophic: !run.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
+  land.initialize();
+  const iceWater = Float64Array.from({ length: C }, (_, i) => (i % 3) * 1e6), iceConductance = Float64Array.from({ length: C }, (_, i) => 20 + (i % 5));
+  const saved = await decodeState(encodeState({
+    N, K: run.core.K, day: 0, time: run.time, given: { ocean: { iceExchange: 'turbulent' } },
+    ...Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a]])), concentration: seaIce.concentration, land: land.serialize(), ocean: { iceWater, iceConductance },
+  }));
+  assert.deepEqual(savedIceOptions(saved), { iceExchange: 'turbulent' });
+  const back = restored(saved, savedIceOptions(saved));
+  assert.ok(back.seaIce.turbulent);
+  assert.deepEqual(restoreSurface(back, saved, () => {}), []);
+  assert.deepEqual(Array.from(back.seaIce.waterHeat), Array.from(iceWater));
+  assert.deepEqual(Array.from(back.seaIce.conductance), Array.from(iceConductance));
+  const { ocean, ...withoutExchange } = saved;
+  assert.ok(ocean.iceWater);
+  assert.deepEqual(restoreSurface(restored(saved, savedIceOptions(saved)), withoutExchange, () => {}), ['ocean.iceWater', 'ocean.iceConductance']);
+});

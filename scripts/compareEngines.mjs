@@ -79,7 +79,7 @@ export const PH_MAP = {
   INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.summed.clearOutgoingLongwave',
   ASRMEAN: 'radiation.meanAbsorbedSolar', OLRMEAN: 'radiation.meanOutgoingLongwave', ALBMEAN: 'radiation.meanPlanetaryAlbedo', SWCREMEAN: 'radiation.meanShortwaveCloudEffect', LWCREMEAN: 'radiation.meanLongwaveCloudEffect',
   CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
-  PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo',
+  PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo', WHEAT: 'seaIce.waterHeat', CONDUCT: 'seaIce.conductance',
   SURF: 'land.surface', SOIL: 'land.soil', RUNOFF: 'land.runoff', DISCHARGE: 'land.discharge', ICELOSS: 'land.iceLoss', MLMK: 'radiation.mlmLayer', MLMM: 'radiation.mlmShare', DECKK: 'radiation.deckLayer', DECKFROM: 'radiation.deckFrom', VEG: 'land.vegetation', CANOPY: 'land.canopy', SEASONL: 'land.seasonLength', SEASONW: 'land.seasonWarmth', DEMAND: 'land.demandMean', RAINMEAN: 'land.rainMean',
   LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4', DEEP: 'land.deepWater',
   GWE: 'gravityWaves.east', GWN: 'gravityWaves.north', OLAUNCH: 'orography.launch', OWAVE: 'orography.wave', OSTRESS: 'orography.stress', OBETA: 'orography.beta', OBLOCK: 'orography.blocking', ODIR: 'orography.direction',
@@ -91,7 +91,7 @@ export const PH_MAP = {
 };
 // regions that are inputs or hand-offs with no CPU array of their own (they are checked for non-finite values only)
 export const PH_INPUT = {
-  TAU: 'relaxation time, an input', LAKE: 'lake state slots, some compared by test/lakeGpu.test.mjs', ADIF: 'diffuse albedo, a local of model.module.js', LAND: 'surface flags 0/1/2, an input', CUFALL: 'plume-to-rain hand-off', CURESERVE: 'plume-to-rain hand-off', CUFROZEN: 'plume-to-rain hand-off',
+  TAU: 'relaxation time, an input', WET: 'cells with an ocean column under the ice, an input of the turbulent exchange', LAKE: 'lake state slots, some compared by test/lakeGpu.test.mjs', ADIF: 'diffuse albedo, a local of model.module.js', LAND: 'surface flags 0/1/2, an input', CUFALL: 'plume-to-rain hand-off', CURESERVE: 'plume-to-rain hand-off', CUFROZEN: 'plume-to-rain hand-off',
   CUDEEP: 'plume-to-rain hand-off', CUBASE: 'plume-to-rain hand-off', CURAIN: 'cumulus part of CONV', LWSFCSUM: 'running sum for the means', CLOUDK: 'cloud layer index, written inside the physics kernel',
   CUSHALLOW: 'plume diagnostic', CUSNOW: 'plume diagnostic', MOMU: 'momentum-layer scratch', MOMK: 'momentum-layer scratch', MOMD: 'momentum-layer scratch', MOMKD: 'momentum-layer scratch', MOMS: 'momentum-layer scratch',
   ABS: 'per-step value whose CPU counterpart is the running sum ABSSUM compares', INS: 'per-step value whose CPU counterpart is the running sum INSSUM compares', REFL: 'per-step value whose CPU counterpart is the running sum REFLSUM compares', ATMSW: 'per-step value whose CPU counterpart is the running sum ATMSUM compares',
@@ -99,7 +99,7 @@ export const PH_INPUT = {
 };
 // mapped regions that may legitimately be all zero in a configuration (env MAY_BE_ZERO_EXTRA adds names, comma separated); the land
 // regions are exempt on a planet without land and the radiation.held ones where held radiation is off (no CPU array, no GPU region)
-export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'OSTRESS', 'OLAUNCH', 'OWAVE', 'OBETA', 'OBLOCK', 'ODIR', 'GWE', 'GWN', 'RUNOFF', 'DISCHARGE', 'ICELOSS', 'MLMK', 'MLMM', 'SNOW', 'SNOWALB', 'FOG', 'FOGMEAN', ...(process.env.MAY_BE_ZERO_EXTRA ?? '').split(',').filter(Boolean)]);
+export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'OSTRESS', 'OLAUNCH', 'OWAVE', 'OBETA', 'OBLOCK', 'ODIR', 'GWE', 'GWN', 'RUNOFF', 'DISCHARGE', 'ICELOSS', 'MLMK', 'MLMM', 'SNOW', 'SNOWALB', 'WHEAT', 'FOG', 'FOGMEAN', ...(process.env.MAY_BE_ZERO_EXTRA ?? '').split(',').filter(Boolean)]);
 // mapped regions set by a threshold decision in each column (mixing regime, cumulus trigger, rain, fog, launch): f32 and
 // f64 part at a few columns near the threshold, so these are judged by the share of cells that differ by more than TOL of
 // the row's largest CPU value and fail past their bound here, max(3 × the worst share measured on

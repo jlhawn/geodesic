@@ -51,7 +51,7 @@ async function scenario(drift, { global = false, velocity = null, stress = null,
   const gpuModel = await createGpuModel(new Grid(N), { topography, ice: { keepSmallIce: keep, ...light }, ocean: { vertical: 'hybrid', everySteps: 1, iceDrift: drift ? { ...drift, airStress: 'given' } : false, ...options } });
   const mesh = gpuModel.mesh, geography = gpuModel.geography, C = mesh.nCells, E = mesh.nEdges, gpu = gpuModel.gpu, ocean = gpuModel.oceanEngine;
   const cpu = createOcean(mesh, { geography, vertical: 'hybrid', everySteps: 1, iceDrift: drift, ...options });
-  const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity, keepSmallIce: keep, ...light });
+  const seaIce = createSeaIce(mesh, { heatCapacity: cpu.capacity, keepSmallIce: keep, ...light, iceExchange: cpu.iceExchange });
   cpu.useSeaIce(seaIce.concentration, seaIce);
   const surfaceT = new Float64Array(C).fill(280), ice = new Float64Array(C);
   const centre = [Math.cos(-78 * DEG) * Math.cos(40 * DEG), Math.cos(-78 * DEG) * Math.sin(40 * DEG), Math.sin(-78 * DEG)];
@@ -66,10 +66,11 @@ async function scenario(drift, { global = false, velocity = null, stress = null,
   for (let i = 0; i < C; i++) if (cpu.cellOcean[i] && !(ice[i] > 0)) surfaceT[i] = cpu.T0[i];
   seaIce.snowAlbedo.fill(0.85);
   if (brine) for (let i = 0; i < C; i++) seaIce.brine[i] = ice[i] > 0 ? (seaIce.concentration[i] < 0.1 ? 4e7 : 4e6) * (1 + Math.sin(3 * mesh.lonCell[i])) : 0;
+  if (cpu.iceExchange.turbulent) for (let i = 0; i < C; i++) if (ice[i] > 0) seaIce.waterHeat[i] = cpu.capacity[i] * (0.3 + 0.2 * (i % 4));
   if (velocity) cpu.iceDrift.velocity.set(velocity);
   const wind = stress ?? new Float64Array(E);
   const volume = Float64Array.from(ice, (h, i) => h * seaIce.concentration[i]);
-  await ocean.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: volume, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity, ...(velocity ? { iceVelocity: velocity } : {}) }, Float64Array.from(surfaceT), ice, seaIce.concentration);
+  await ocean.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: volume, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity, ...(cpu.iceExchange.turbulent ? { iceWater: Float64Array.from(seaIce.waterHeat), iceConductance: Float64Array.from(seaIce.conductance) } : {}), ...(velocity ? { iceVelocity: velocity } : {}) }, Float64Array.from(surfaceT), ice, seaIce.concentration);
   gpu.uploadSurfaceTemperature(Float64Array.from(surfaceT));
   const write = (buffer, offset, values) => gpu.device.queue.writeBuffer(buffer, 4 * offset, Float32Array.from(values));
   write(gpu.buffers.S, gpu.layout.S.ICE, ice);
@@ -192,10 +193,44 @@ async function cavitating(options) {
   assert.ok(rT.rmsRel < 1e-4 && rS.rmsRel < 1e-4 && wet.length > 0);
   for (const f of [fields.h, fields.u, fields.T, fields.S]) for (const v of f) assert.ok(Number.isFinite(v));
   assert.ok(rT.maxDiff < 0.1 && rS.maxDiff < 0.02, `the top layer parts by up to ${rT.maxDiff} K and ${rS.maxDiff} psu`);
+  if (s.cpu.iceExchange.turbulent) {
+    const { iceWater, iceConductance, flux } = await s.ocean.restartArrays(), iced = Array.from(s.ice, (h) => h > 0), only = (values) => Float64Array.from(values, (x, i) => (iced[i] ? x : 0));
+    const rW = stats(only(s.seaIce.waterHeat), only(iceWater)), rK = stats(only(s.seaIce.conductance), only(iceConductance)), rF = stats(only(s.seaIce.oceanFlux), only(flux));
+    let held = 0, fast = 0;
+    for (let i = 0; i < s.C; i++) if (iced[i]) { held = Math.max(held, s.seaIce.waterHeat[i] / s.cpu.capacity[i]); fast = Math.max(fast, s.seaIce.conductance[i]); }
+    console.log(`the water under the ice after twenty coupled calls: heat rms ${rW.rmsRel.toExponential(2)} max ${rW.maxDiff.toExponential(2)} J/m² (up to ${held.toFixed(2)} K above freezing), conductance rms ${rK.rmsRel.toExponential(2)} (up to ${fast.toFixed(1)} W/m²/K), supercooled flux rms ${rF.rmsRel.toExponential(2)}`);
+    assert.ok(held > 0.2 && fast > 3 * 4.08e6 * 0.006 * 5e-4, `the water holds ${held} K and the conductance reaches ${fast}`);
+    assert.ok(rW.rmsRel < 2e-2 && rK.rmsRel < 5e-2 && rF.rmsRel < 5e-2, `heat ${rW.rmsRel}, conductance ${rK.rmsRel}, flux ${rF.rmsRel}`);
+  }
   s.gpuModel.destroy();
 }
 test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mixedLayerRestratification: false }));
+test('twenty coupled calls with the cavitating fluid and iceExchange turbulent: the water\'s heat under the ice, the conductance of the ice\'s stirring, ice, ice velocity and the ocean follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mixedLayerRestratification: false, iceExchange: 'turbulent' }));
 test('twenty coupled calls with the cavitating fluid, mstarScheme rh18 and langmuirScheme rescale: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mstarScheme: 'rh18', langmuirScheme: 'rescale', mixedLayerRestratification: false }));
+
+test('loading a save made without iceExchange turbulent, the GPU starts the conductance as the CPU does: zero on land, from the ice\'s drift over the top layer elsewhere', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), stress = windStress(probe.mesh);
+  probe.destroy();
+  const made = await scenario({ rheology: 'cavitating' }, { stress });
+  for (let n = 0; n < 6; n++) made.stepCpu();
+  const saved = made.cpu.serialize({ restart: true });
+  made.gpuModel.destroy();
+  assert.ok(!('iceConductance' in saved) && saved.iceVelocity.some((v) => Math.abs(v) > 1e-3), 'a save made without the option, its ice moving');
+  const s = await scenario({ rheology: 'cavitating' }, { stress, ocean: { iceExchange: 'turbulent' } });
+  s.cpu.load(saved, s.surfaceT, s.ice, s.seaIce.concentration);
+  await s.ocean.upload(saved, s.surfaceT, s.ice, s.seaIce.concentration);
+  const [loaded] = await readRanges(s.gpu.device, s.gpu.buffers.PH, [{ offset: s.gpu.layout.PH.CONDUCT, length: s.C }]);
+  const want = s.seaIce.conductance, floor = Math.min(...Array.from(want).filter((k) => k > 0));
+  let dry = 0, stirred = 0, worst = 0;
+  for (let i = 0; i < s.C; i++) {
+    if (!s.cpu.cellOcean[i]) { dry++; assert.equal(want[i], 0); assert.equal(loaded[i], 0, `land cell ${i}`); continue; }
+    if (want[i] > 1.5 * floor) stirred++;
+    worst = Math.max(worst, Math.abs(loaded[i] - want[i]) / want[i]);
+  }
+  console.log(`loaded without the option: ${dry} land cells at zero, ${stirred} of ${s.C - dry} sea cells above 1.5 times the floor ${floor.toFixed(1)} W/m²/K, the device within ${worst.toExponential(2)} of the CPU`);
+  assert.ok(dry > 0 && stirred > 0 && worst < 1e-6, `${dry} land, ${stirred} stirred, worst ${worst}`);
+  s.gpuModel.destroy();
+});
 
 test('inside the model\'s own step every rheology takes the atmosphere\'s stress, validates on the device and keeps the ice finite and below the speed limit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createModel } = await import('../js/model.module.js'), { initializeState } = await import('../js/physics/init.module.js');
@@ -240,6 +275,27 @@ test('ice that drifts into open water at a Courant number of 0.005 persists on t
   assert.equal(missing.length, 0, 'every trace cell above 1e-5 on the CPU is on the device');
   assert.ok(worst < 1e-4 * scale + 1e-8, 'their covers agree');
   await compareIce('five calls of trace arrivals', s, { A: 1e-4, V: 1e-4, S: 1e-4, E: 1e-3 });
+  s.gpuModel.destroy();
+});
+
+test('with iceExchange turbulent, ice that drifts into open water leaves the water its heat on the GPU as on the CPU, the ocean handing the arrived ice none of it at once', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh, toward = northwardOn(pm, (lat) => lat < -40 * DEG);
+  probe.destroy();
+  const velocity = Float64Array.from(toward, (d, e) => d * 0.005 * pm.dcEdge[e] / DT);
+  const s = await scenario({ rheology: 'frozen' }, { velocity, keep: true, ocean: { iceExchange: 'turbulent' } });
+  const open = Uint8Array.from(s.ice, (h) => (h > 0 ? 0 : 1));
+  for (let n = 0; n < 5; n++) { s.stepCpu(); await s.stepGpu(); }
+  const { iceWater, flux } = await s.ocean.restartArrays(), g = await s.readIce();
+  const arrived = Array.from(open.keys()).filter((i) => open[i] && s.cpu.cellOcean[i] && s.ice[i] > 0 && g.h[i] > 0);
+  const heat = arrived.map((i) => s.seaIce.waterHeat[i]), device = arrived.map((i) => iceWater[i]);
+  let handed = 0, warm = 0;
+  for (const i of arrived) { handed = Math.max(handed, Math.abs(s.seaIce.oceanFlux[i]), Math.abs(flux[i])); warm = Math.max(warm, s.seaIce.waterHeat[i] / s.cpu.capacity[i]); }
+  const r = stats(Float64Array.from(heat), Float64Array.from(device));
+  console.log(`after five calls ${arrived.length} cells hold ice that arrived on both engines, their water up to ${warm.toFixed(3)} K above freezing; water heat rms ${r.rmsRel.toExponential(2)} max ${r.maxDiff.toExponential(2)} J/m², the most handed at once ${handed.toExponential(2)} W/m²`);
+  assert.ok(arrived.length >= 10 && warm > 0.05, `${arrived.length} arrivals, water ${warm} K above freezing`);
+  assert.ok(heat.every((x) => x > 0), 'the arrived ice leaves the water its heat on the CPU');
+  assert.ok(r.rmsRel < 1e-3, `the device's water heat at the arrivals: rms relative ${r.rmsRel}`);
+  assert.ok(handed < 1e-3, `no heat handed at once: ${handed} W/m²`);
   s.gpuModel.destroy();
 });
 

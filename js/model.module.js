@@ -169,6 +169,7 @@ export function createModel(gridOrMesh, {
   const sharedCapacity = !ocean && buffers && buffers.ocean ? new Float64Array(buffers.ocean.capacity) : null;
   const seaIce = createSeaIce(mesh, {
     buffers: { ...(buffers && buffers.ice ? buffers.ice : {}), ...(land ? { snow: land.shared.snow, snowAlbedo: land.shared.snowAlbedo } : {}) },
+    ...(ocean ? { iceExchange: ocean.iceExchange, oceanCells: ocean.cellOcean } : {}),
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...(ocean && ocean.penetration ? { transmission: ocean.transmission, penetrated: ocean.penetrated } : {}),
     keepSmallIce: !!ocean && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift),
