@@ -367,12 +367,86 @@ test("on the GPU iceDeposition with detrainedPhase 'liquid' matches the CPU, and
   assert.ok(ramp.plumes > 0 && more > 0);
 });
 test('on the GPU iceDeposition with bergeronAutoconversion matches the CPU, which steps as without the factor', GPU, () => gpuParity({ bergeronAutoconversion: true }));
-test("iceDeposition refuses a rainEvaporationLaw other than 'deficit' and a rainEvaporationCeiling on the CPU and the GPU", GPU, async () => {
-  const { createGpuCore } = await import('../js/gpu/core.gpu.js'), { mesh } = createModel(new Grid(16), { ocean: false, levels: bl34 });
-  for (const rain of [{ rainEvaporationLaw: 'kessler', rainCover: 'overlap' }, { rainEvaporationCeiling: 0.7 }]) {
-    assert.throws(() => build({ iceDeposition: true, ...rain }), /rainEvaporationLaw 'deficit'/, JSON.stringify(rain));
-    await assert.rejects(createGpuCore(mesh, { levels: bl34, physics: { iceDeposition: true, ...rain } }), /rainEvaporationLaw 'deficit'/, JSON.stringify(rain));
+test("after the GPU's adjustMix and adjustPlume the cloud ice is the CPU's stage for stage where the plumes' condensation pass regrows cloud under ice the first pass left above it, and a layer set up as the hand example above a deep plume holds 0.8125 of its water as ice on both engines", GPU, async () => {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js');
+  const options = { plumeEntrainmentLaw: 'gregory', iceDeposition: true, cumulusMemory: 0 }, dt = 1350;
+  const model = createModel(new Grid(16), { ocean: false, levels: bl48, moist: options }), { core, mesh, moist } = model, C = mesh.nCells, { K, cp, sigmaMid, exnerLayer } = core.diagnostics;
+  randomState(model, 4242, true);
+  placeCloudIce(model, null);
+  const [pi, theta, u, , q, qc] = model.state, ice = moist.cloudIceShare;
+  for (let x = 0; x < K * C; x++) if (ice[x] > 0) ice[x] = 1;
+  const i0 = 0, k0 = layerAt(model, 5e3), idx0 = k0 * C + i0, p0 = pi[i0] * sigmaMid[k0], handTheta = Math.fround(254.15 / exnerLayer[idx0]), start = Math.fround(1e-4);
+  const vapor = (cloud, held) => {
+    const liquidT = handTheta * exnerLayer[idx0] - LATENT_HEAT * cloud / cp, out = cloudSaturation(liquidT, p0, true, 273.15, 235.15, {}), b = halfWidth(model, liquidT, p0);
+    return (held >= b ? held : 2 * Math.sqrt(b * held) - b) * (1 + LATENT_HEAT * out.slope / cp) + out.qs - cloud;
+  };
+  theta[idx0] = handTheta; qc[idx0] = start; q[idx0] = Math.fround(vapor(start, 5e-5)); ice[idx0] = 1;
+
+  const gpu = await createGpuCore(mesh, { levels: bl48, physics: options }), { device, buffers, kernels, layout } = gpu;
+  gpu.upload(model.state);
+  gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, concentration: model.seaIce.concentration, cloudIceShare: ice });
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
+  const group = device.createBindGroup({ layout: kernels.adjustMix.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+  const run = (name) => {
+    const encoder = device.createCommandEncoder(), computePass = encoder.beginComputePass();
+    computePass.setPipeline(kernels[name]); computePass.setBindGroup(0, group); computePass.dispatchWorkgroups(Math.ceil(C / 64)); computePass.end();
+    device.queue.submit([encoder.finish()]);
+  };
+  run('adjustMix');
+  const gpuMid = (await gpu.download())[5][idx0], gpuStale = (await gpu.downloadPhysics()).CICE[idx0];
+  device.queue.writeBuffer(buffers.S, 4 * (layout.S.TH + idx0), Float32Array.of(handTheta));
+  device.queue.writeBuffer(buffers.S, 4 * (layout.S.Q + idx0), Float32Array.of(vapor(gpuMid, gpuMid + 3e-5)));
+  run('adjustPlume');
+  const after = await gpu.download(), ph = await gpu.downloadPhysics();
+
+  let cpuMid = 0, cpuStale = 0, exercised = 0, testable = 0, split = 0, worstOff = 0, worstIce = 0, worstTheta = 0, worstQ = 0, worstQc = 0;
+  const cloudBefore = new Float64Array(K), iceBefore = new Float64Array(K), excess = new Float64Array(K * C), regrowth = new Float64Array(K * C);
+  for (let i = 0; i < C; i++) {
+    core.diagnoseColumn(i, pi, theta, q, qc);
+    for (let k = 0; k < K; k++) ice[k * C + i] *= Math.max(0, qc[k * C + i]);
+    moist.condenseColumn(i, pi, theta, q, qc);
+    if (i === i0) { cpuMid = qc[idx0]; cpuStale = ice[idx0]; theta[idx0] = handTheta; q[idx0] = vapor(cpuMid, cpuMid + 3e-5); }
+    const hand = i === i0 ? [theta[idx0], q[idx0], qc[idx0]] : null;
+    moist.plumeColumn(i, pi, theta, q, qc, dt, u);
+    if (hand) assert.deepEqual([theta[idx0], q[idx0], qc[idx0]], hand, 'the plume reaches the hand layer');
+    for (let k = 0; k < K; k++) { cloudBefore[k] = qc[k * C + i]; iceBefore[k] = ice[k * C + i]; }
+    if (moist.cumulusBaseFlux[i] > 0) moist.condenseColumn(i, pi, theta, q, qc, true);
+    for (let k = 0; k < K; k++) {
+      const x = k * C + i;
+      if (!(qc[x] > cloudBefore[k] && iceBefore[k] > cloudBefore[k])) continue;
+      excess[x] = iceBefore[k] - Math.max(0, cloudBefore[k]); regrowth[x] = qc[x] - cloudBefore[k]; exercised++;
+    }
   }
+  for (let x = 0; x < K * C; x++) {
+    worstTheta = Math.max(worstTheta, Math.abs(theta[x] - after[1][x])); worstQ = Math.max(worstQ, Math.abs(q[x] - after[4][x])); worstQc = Math.max(worstQc, Math.abs(qc[x] - after[5][x]));
+    if (!(excess[x] > 0)) continue;
+    const gap = Math.abs(ice[x] - ph.CICE[x]);
+    worstIce = Math.max(worstIce, gap);
+    if (excess[x] > 1e-7 && regrowth[x] > 1e-7) { testable++; worstOff = Math.max(worstOff, gap / excess[x]); if (gap > 0.5 * excess[x]) split++; }
+  }
+  const shares = [ice[idx0] / qc[idx0], ph.CICE[idx0] / after[5][idx0]];
+  console.log(`# ${exercised} layers regrow cloud under ice the first pass left above it, ${testable} by more than 1e-7 kg/kg under more than 1e-7 kg/kg of it, which both engines resolve; there the engines' ice differs by ${worstOff.toFixed(3)} of the excess at most, by more than half of it in ${split}; ice by ${worstIce.toExponential(1)} kg/kg at most in all ${exercised}; θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, q_c by ${worstQc.toExponential(1)}`);
+  console.log(`# hand layer at ${(p0 / 100).toFixed(1)} hPa above column ${i0}'s plume: the first pass leaves ${cpuMid.toExponential(4)} (CPU) and ${gpuMid.toExponential(4)} (GPU) under ${start.toExponential(4)} of ice; ice ${shares[0].toFixed(6)} (CPU) and ${shares[1].toFixed(6)} (GPU) of the cloud`);
+  assert.ok(moist.cumulusBaseFlux[i0] > 0 && ph.CUMF[i0] > 0, `plume base flux ${moist.cumulusBaseFlux[i0]} (CPU), ${ph.CUMF[i0]} (GPU)`);
+  assert.ok(cpuStale === start && gpuStale === start, `stale ice ${cpuStale} (CPU), ${gpuStale} (GPU)`);
+  assert.ok(Math.abs(cpuMid - 5e-5) < 1e-8 && Math.abs(gpuMid - 5e-5) < 1e-7, `${cpuMid}, ${gpuMid}`);
+  assert.ok(Math.abs(shares[0] - 0.8125) < 1e-6 && Math.abs(shares[1] - 0.8125) < 1e-3, `${shares}`);
+  assert.ok(testable > 100 && split <= Math.max(2, 0.01 * testable), `${exercised} regrown, ${testable} testable, ${split} split, worst ${worstOff} of the excess`);
+  assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
+});
+const REFUSED_RAIN = [{ rainEvaporationLaw: 'kessler', rainCover: 'overlap' }, { rainEvaporationCeiling: 0.7 }];
+test("iceDeposition refuses a rainEvaporationLaw other than 'deficit' and a rainEvaporationCeiling on the CPU", () => {
+  for (const rain of REFUSED_RAIN) assert.throws(() => build({ iceDeposition: true, ...rain }), /rainEvaporationLaw 'deficit'/, JSON.stringify(rain));
+});
+test("iceDeposition refuses a rainEvaporationLaw other than 'deficit' and a rainEvaporationCeiling on the GPU", GPU, async () => {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js'), { mesh } = createModel(new Grid(16), { ocean: false, levels: bl34 });
+  for (const rain of REFUSED_RAIN) await assert.rejects(createGpuCore(mesh, { levels: bl34, physics: { iceDeposition: true, ...rain } }), /rainEvaporationLaw 'deficit'/, JSON.stringify(rain));
+});
+test('a GPU core refuses a glaciated fraction whose length is not K × C, which would run into the next field', GPU, async () => {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js'), model = build({ iceDeposition: true }), { K } = model.core.diagnostics, C = model.mesh.nCells;
+  const gpu = await createGpuCore(model.mesh, { levels: bl34, physics: { iceDeposition: true } }), physics = (cloudIceShare) => ({ mlmGate: model.radiation.mlmGate, concentration: model.seaIce.concentration, cloudIceShare });
+  for (const length of [K * C - 1, K * C + C]) assert.throws(() => gpu.uploadPhysics(physics(new Float32Array(length))), /cloudIceShare must hold K × C/, `${length}`);
+  assert.doesNotThrow(() => gpu.uploadPhysics(physics(new Float32Array(K * C))));
 });
 test('a GPU model under iceDeposition takes the ramp share 1 − α(T), in f32, for each cloudy layer from a fresh start, a save without the glaciated fraction and one of another length, and steps from it', GPU, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
