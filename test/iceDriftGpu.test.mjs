@@ -278,7 +278,7 @@ test('ice that drifts into open water at a Courant number of 0.005 persists on t
   s.gpuModel.destroy();
 });
 
-test('with iceExchange turbulent, ice that drifts into open water leaves the water its heat on the GPU as on the CPU, the ocean handing the arrived ice none of it at once', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('with iceExchange turbulent, ice that drifts into open water leaves the water its heat on the GPU as on the CPU, the ocean handing the arrived ice none of it at once, and ice driven against a coast reaches no cell without an ocean column, where neither engine holds heat', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), pm = probe.mesh, toward = northwardOn(pm, (lat) => lat < -40 * DEG);
   probe.destroy();
   const velocity = Float64Array.from(toward, (d, e) => d * 0.005 * pm.dcEdge[e] / DT);
@@ -296,6 +296,14 @@ test('with iceExchange turbulent, ice that drifts into open water leaves the wat
   assert.ok(heat.every((x) => x > 0), 'the arrived ice leaves the water its heat on the CPU');
   assert.ok(r.rmsRel < 1e-3, `the device's water heat at the arrivals: rms relative ${r.rmsRel}`);
   assert.ok(handed < 1e-3, `no heat handed at once: ${handed} W/m²`);
+  const coast = [...velocity.keys()].filter((e) => {
+    const a = s.mesh.cellsOnEdge[2 * e], b = s.mesh.cellsOnEdge[2 * e + 1];
+    return velocity[e] !== 0 && s.cpu.cellOcean[a] !== s.cpu.cellOcean[b] && !open[s.cpu.cellOcean[a] ? a : b];
+  });
+  const dry = [...open.keys()].filter((i) => !s.cpu.cellOcean[i]), reached = dry.filter((i) => s.ice[i] !== 0 || s.seaIce.waterHeat[i] !== 0 || g.h[i] !== 0 || iceWater[i] !== 0);
+  console.log(`${coast.length} edges carry the velocity from iced sea to land; of ${dry.length} cells without an ocean column ${reached.length} hold ice or heat on either engine`);
+  assert.ok(coast.length > 0, 'the velocity drives ice against the coast');
+  assert.deepEqual(reached, [], 'no ice and no held heat on a cell without an ocean column, on either engine');
   s.gpuModel.destroy();
 });
 

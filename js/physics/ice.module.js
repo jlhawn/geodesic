@@ -72,7 +72,7 @@ export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   return resolved;
 }
 
-// Headers that record no exchange predate the record, and every run that wrote one took the instant exchange.
+// A header that records no exchange is an instant save, whatever DEFAULT_ICE_EXCHANGE is; scripts/savedLand.mjs resumedIceExchange refuses one that holds ocean.iceWater.
 export const savedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange ?? 'instant';
 
 /*
