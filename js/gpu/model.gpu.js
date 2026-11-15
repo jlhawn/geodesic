@@ -4,7 +4,7 @@ import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, GR
 import { createSeaIce, SNOW_AGEING } from '../physics/ice.module.js';
 import { createSurface, relativeWindOf, SEA_DRAG, LAND_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
-import { createRadiation } from '../physics/radiation.module.js';
+import { createRadiation, memoryLimitMismatch } from '../physics/radiation.module.js';
 import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
 import { SIDEREAL_DAY, orographyFields, dragConstants } from '../model.module.js';
@@ -70,6 +70,7 @@ export async function createGpuModel(gridOrMesh, {
   if (oceanOptions !== false && oceanOptions.gustiness !== undefined) throw new Error('ocean.gustiness is not an option: the ocean and the ice drift take surface.gustiness');
   if (boundaryLayer === false) throw new Error('createGpuModel runs no model without the boundary layer: boundaryLayer is false');
   if (moist === false) throw new Error('createGpuModel runs no model without moisture: moist is false');
+  if (radiation.cloudPhase === 'memory' && memoryLimitMismatch(radiation, moist)) throw new Error(`radiation.cloudPhase 'memory' needs the same ${memoryLimitMismatch(radiation, moist)} in radiation and moist: the stored share is the moist physics' and the optics' ramp must be its own`);
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography, terrainOptions(terrain)) : null;

@@ -3,7 +3,7 @@ import { createEnergyRecord } from './physics/energyRecord.module.js';
 import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, dynamicsOptions, VIRTUAL_FACTOR } from './dynamics/sigmaCore.module.js';
 import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from './dynamics/sponge.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
-import { createRadiation } from './physics/radiation.module.js';
+import { createRadiation, memoryLimitMismatch } from './physics/radiation.module.js';
 import { createAerosolSampler, loadAerosol, climatologyOn } from './aerosol.module.js';
 import { createSurface, relativeWindOf, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
@@ -148,7 +148,11 @@ export function createModel(gridOrMesh, {
     ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in radiationOptions).map((key) => [key, radiationOptions[key]])), ...moistOptions,
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
-  if (radiationOptions.cloudPhase === 'memory' && !(moistPhysics && moistPhysics.cloudIceShare)) throw new Error("radiation.cloudPhase 'memory' needs moist.iceDeposition");
+  if (radiationOptions.cloudPhase === 'memory') {
+    if (!(moist && moistPhysics.cloudIceShare)) throw new Error("radiation.cloudPhase 'memory' needs moist.iceDeposition");
+    const mismatch = memoryLimitMismatch(radiationOptions, moistOptions);
+    if (mismatch) throw new Error(`radiation.cloudPhase 'memory' needs the same ${mismatch} in radiation and moist: the stored share is the moist physics' and the optics' ramp must be its own`);
+  }
   if (moist && moistPhysics.cloudIceShare) radiation.useCloudIce(moistPhysics.cloudIceShare);
   if (moist) radiation.useCondensation(moistPhysics.condensation);
   const lake = physics && geography && lakeModelOf(geography, lakeOptions) !== 'off' ? createLake(mesh, geography, lakeOptions) : null, lakeCell = lake ? lake.isLake : null;

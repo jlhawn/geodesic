@@ -709,6 +709,13 @@ export const CLOUD_OPTICS = {
   iceFitWarmest: -20, iceFitColdest: -60,
 };
 
+export function memoryLimitMismatch(radiationOptions, moistOptions) {
+  for (const name of ['liquidTemperature', 'iceTemperature']) {
+    if (moistOptions[name] !== undefined && moistOptions[name] !== (radiationOptions[name] ?? CLOUD_OPTICS[name])) return name;
+  }
+  return null;
+}
+
 export function liquidShare(T, { liquidTemperature, iceTemperature } = CLOUD_OPTICS) {
   return Math.min(1, Math.max(0, (T - iceTemperature) / (liquidTemperature - iceTemperature)));
 }
