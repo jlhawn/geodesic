@@ -179,6 +179,14 @@ test('resumeNotes says when a run takes another ice exchange than its base was m
   assert.deepEqual(resumeNotes(own, { options: { boundaryLayer: own.boundaryLayer, ocean: { iceExchange: turbulent } } }, 'page'), ['iceExchange "turbulent" where page was made under {"mode":"turbulent","frictionMinimum":0.02}'], 'the constants count');
 });
 
+test('resumeNotes says when a run takes other iceAlbedoPhases than its base was made with, from a base with given options or without, a record naming none counting as the phases off', () => {
+  const run = headerOptions({ ice: { iceAlbedoPhases: true } }).given, off = headerOptions({ ice: { iceAlbedoPhases: false } }).given;
+  assert.deepEqual(resumeNotes(run, { options: { boundaryLayer: run.boundaryLayer } }, 'page'), ['iceAlbedoPhases true where page was made with false']);
+  assert.deepEqual(resumeNotes(run, { given: off }, 'arm'), ["options other than arm's header records: ice", 'iceAlbedoPhases true where arm was made with false']);
+  assert.deepEqual(resumeNotes(off, { given: headerOptions({}).given }, 'old'), []);
+  assert.deepEqual(resumeNotes(run, { given: run }, 'same'), []);
+});
+
 test('the page starts a state whose options record diagnoseFirst false in the plain order, one whose options record no boundaryLayer group at today\'s default, records the order it starts, and takes a start message\'s boundaryLayer false over the record', async () => {
   const save = blank();
   const plain = startOptions((await save(headerOptions({ boundaryLayer: { diagnoseFirst: false } }))).options, {}), bare = startOptions((await save({})).options, {});

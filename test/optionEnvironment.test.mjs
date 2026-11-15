@@ -69,7 +69,7 @@ test('fixedSst.mjs refuses a state whose header records no given options, and an
   };
   const plain = fixed({});
   assert.notEqual(plain.status, 0);
-  assert.match(plain.stderr, /records no given options .* GIVEN \(JSON, \{\} for today's defaults\) stands in for them/);
+  assert.match(plain.stderr, /records no given options .* GIVEN \(JSON, \{\} for today's defaults but the sea ice's exchange and iceAlbedoPhases, taken as the header reads them\) stands in for them/);
   assert.doesNotMatch(plain.stdout, /options:/);
   const ocean = fixed({ GIVEN: '{}', OCEAN: '{"mixing":"kpp"}' });
   assert.notEqual(ocean.status, 0);
@@ -114,6 +114,21 @@ test('spinup.mjs, which runs no model without its ocean, refuses OCEAN false on 
   assert.match(started.stderr, /OCEAN is false, and spinup\.mjs runs no model without its ocean/);
   assert.notEqual(resuming.status, 0);
   assert.match(resuming.stderr, /oceanless_day0000\.bin records no ocean, and spinup\.mjs runs no model without its ocean/);
+});
+
+test('compareEngines.mjs and gpuModelFrom, which load the save\'s ocean, refuse OCEAN false before they build anything', async () => {
+  const env = { ...withoutOptionGroups(), OCEAN: 'false' };
+  delete env.GPU_QUEUE_HELD;
+  const compared = spawnSync(process.execPath, [join(scripts, 'compareEngines.mjs'), '/nonexistent/state.bin', '1'], { env, encoding: 'utf8' });
+  assert.notEqual(compared.status, 0);
+  assert.match(compared.stderr, /OCEAN is false, and compareEngines\.mjs loads the save's ocean into both models/);
+  const { gpuModelFrom } = await import('../scripts/figures/figureState.mjs'), before = process.env.OCEAN;
+  process.env.OCEAN = 'false';
+  try {
+    await assert.rejects(gpuModelFrom({ N: 16 }), /OCEAN is false, and gpuModelFrom loads the save's ocean/);
+  } finally {
+    if (before === undefined) delete process.env.OCEAN; else process.env.OCEAN = before;
+  }
 });
 
 test('createGpuModel, which always builds the moist scheme, refuses moist false before it opens the GPU', async () => {
