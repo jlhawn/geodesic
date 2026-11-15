@@ -42,8 +42,9 @@
 // spinup.mjs; OCEAN's everySteps sets the ocean step, by default from
 // js/cadence.module.js), SYNC_CMD and STOP_AFTER_STEPS
 // (as in spinup.mjs). The sea ice takes the ice options the state records,
-// and the ocean its ice exchange unless OCEAN names one; each file records
-// the exchange and the ice options it ran.
+// iceAlbedoPhases false where it records none, and the ocean its ice
+// exchange unless OCEAN names one; each file records the exchange and the
+// ice options it ran.
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync } from 'node:fs';
 import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { stateGeography, geographyHeader } from '../js/geography.module.js';
@@ -53,7 +54,7 @@ import { savedDeckField, DECK_FIELDS, MOIST_FIELDS, RADIATION_FIELDS } from '../
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { withCadence } from '../js/cadence.module.js';
-import { FREEZING_POINT, savedIceExchange, iceExchangeOptions } from '../js/physics/ice.module.js';
+import { FREEZING_POINT, savedIceExchange, iceExchangeOptions, frictionMinimumNote } from '../js/physics/ice.module.js';
 import { createForcedOcean } from '../js/gpu/forcing.gpu.js';
 import { decodeForcing, forcingDay } from '../js/forcing.module.js';
 import { COUPLED_ICE_DRIFT } from '../js/ocean/iceDrift.module.js';
@@ -100,11 +101,13 @@ OCEAN.iceDrift = OCEAN.iceDrift !== false && airStress ? { ...(OCEAN.iceDrift ||
 const RUN_OCEAN = resumedOcean(saved, OCEAN), RUN_ICE = resumedIce(saved), madeUnder = savedIceExchange(saved);
 if (OCEAN.iceExchange === undefined) log(`iceExchange ${JSON.stringify(RUN_OCEAN.iceExchange)}, as ${from} ${recordedIceExchange(saved) === undefined ? 'was made under, recording none' : 'records'}`);
 else if (JSON.stringify(iceExchangeOptions(OCEAN.iceExchange)) !== JSON.stringify(iceExchangeOptions(madeUnder))) log(`iceExchange ${JSON.stringify(OCEAN.iceExchange)} where ${from} was made under ${JSON.stringify(madeUnder)}`);
-if (Object.keys(RUN_ICE).length) log(`ice options ${JSON.stringify(RUN_ICE)}, as ${from} records`);
+log(`ice options ${JSON.stringify(RUN_ICE)}, as ${from} records them, iceAlbedoPhases false where it records none`);
+const exchangeNote = frictionMinimumNote(RUN_OCEAN.iceExchange);
+if (exchangeNote) log(exchangeNote);
 const model = await createGpuModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), topography, geography, land: landOptions, ocean: RUN_OCEAN, ice: RUN_ICE, radiation: RADIATION, levels: savedLevels(saved) });
-const RAN_EXCHANGE = model.oceanEngine.options.iceExchange;
-const replayGiven = ({ ocean, ...given }) => ({ ...given, ocean: { ...(process.env.OCEAN === undefined ? {} : givenOptions({ ocean: JSON.parse(process.env.OCEAN) }).ocean), iceExchange: RAN_EXCHANGE } });
-const replayOptions = (options = {}) => (saved.given && options.ocean === undefined ? options : { ...options, ocean: { ...(options.ocean || {}), iceExchange: RAN_EXCHANGE } });
+const RAN_EXCHANGE = model.oceanEngine.options.iceExchange, RAN_ICE = { ...RUN_ICE, iceAlbedoPhases: model.seaIce.iceAlbedoPhases };
+const replayGiven = ({ ocean, ...given }) => ({ ...given, ocean: { ...(process.env.OCEAN === undefined ? {} : givenOptions({ ocean: JSON.parse(process.env.OCEAN) }).ocean), iceExchange: RAN_EXCHANGE }, ice: RAN_ICE });
+const replayOptions = (options = {}) => (saved.given && options.ocean === undefined ? options : { ...options, ocean: { ...(options.ocean || {}), iceExchange: RAN_EXCHANGE }, ice: RAN_ICE });
 const { mesh, core, state, gpu } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), everySteps = model.oceanEngine.everySteps, oceanDt = everySteps * dt;
 const doneBefore = existing.length ? saved.oceanDays ?? (saved.oceanYears ?? 0) * DAYS_PER_YEAR : 0;

@@ -1,5 +1,5 @@
 import { LAKE_FIELDS, holdsLake, savedLake, savedLakeOptions } from '../js/physics/lake.module.js';
-import { savedIceExchange } from '../js/physics/ice.module.js';
+import { savedIceExchange, savedIceAlbedoPhases } from '../js/physics/ice.module.js';
 
 /*
  * The land of a saved state onto a model whose arrays are loaded; the deep
@@ -11,7 +11,11 @@ export function loadSavedLand(model, saved) {
 }
 
 export const recordedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange;
-export const savedIceOptions = (saved) => ({ iceExchange: savedIceExchange(saved), ...(saved.given?.ice ?? {}) });
+export const headerWithIceRecords = (header) => {
+  const key = header.given ? 'given' : 'options', record = header[key] ?? {};
+  return { ...header, [key]: { ...record, ...(record.ocean === false ? {} : { ocean: { ...(record.ocean ?? {}), iceExchange: savedIceExchange(header) } }), ice: { ...(record.ice ?? {}), iceAlbedoPhases: savedIceAlbedoPhases(header) } } };
+};
+export const savedIceOptions = (saved) => ({ iceExchange: savedIceExchange(saved), ...((saved.given ? saved.given.ice : saved.options?.ice) ?? {}), iceAlbedoPhases: savedIceAlbedoPhases(saved) });
 
 export function resumedIceExchange(saved, ocean = {}) {
   if (!saved || ocean === false || ocean.iceExchange !== undefined) return undefined;

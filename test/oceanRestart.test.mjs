@@ -38,7 +38,7 @@ test(`on ETOPO 2022 with its cavities at N=${N}, an ocean restarted from its arr
 });
 
 test(`at N=${N} a model's ocean saves the heat its top layer hands the sea ice, and a model loaded from it gives the ice the same heat before its first ocean step`, () => {
-  const options = { ocean: { everySteps: 1 } };
+  const options = { ocean: { everySteps: 1, iceExchange: 'instant' } };
   const prepare = (model) => { initializeState(model, {}).forEach((values, a) => model.state[a].set(values)); model.ocean.initialize(model.state[3], model.state[6]); return model; };
   const run = prepare(createModel(new Grid(N), options));
   for (let n = 0; n < 4; n++) run.step(1350);

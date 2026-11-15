@@ -37,7 +37,8 @@
 // (runs/hybrid), TAG (hybrid<N>), DAYS (365), STEP (the ocean step in
 // seconds; the coupled cadence of js/cadence.module.js by default),
 // RESTORE (30 W/m²/K), RESTORE_ICE (100 W/m²/K), RESTORE_TO (woa), DIURNAL (1), LOG_DAYS (10),
-// SAVE_DAYS (30), OCEAN (JSON options for createOcean), WORKERS (the
+// SAVE_DAYS (30), OCEAN (JSON options for createOcean; iceExchange 'instant' unless it
+// names one, RESTORE_ICE standing for the exchange under the ice), WORKERS (the
 // machine's parallelism less one; 0 or 1 runs the ocean on this thread),
 // ENGINE (cpu; gpu runs the same replay on the GPU hybrid ocean of
 // js/gpu/layeredOcean.gpu.js, the surface budget still on this thread,
@@ -100,12 +101,12 @@ function regrid(fields) {
   return out;
 }
 
-const climatologyPath = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, oceanOptions = { vertical: 'hybrid', everySteps: 1, penetration: 'IB', ...OCEAN };
+const climatologyPath = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, oceanOptions = { vertical: 'hybrid', everySteps: 1, penetration: 'IB', iceExchange: 'instant', ...OCEAN };
 const ENGINE = process.env.ENGINE ?? 'cpu';
 if (ENGINE !== 'cpu' && ENGINE !== 'gpu') throw new Error(`ENGINE is cpu or gpu, not ${ENGINE}`);
-const parallel = ENGINE === 'cpu' && WORKERS > 1 ? await createParallelModel(mesh, { topography, geography: geographyOptions, ocean: { climatology: climatologyPath, ...oceanOptions } }, WORKERS) : null;
+const parallel = ENGINE === 'cpu' && WORKERS > 1 ? await createParallelModel(mesh, { topography, geography: geographyOptions, ocean: { climatology: climatologyPath, ...oceanOptions }, ice: { iceAlbedoPhases: false } }, WORKERS) : null;
 if (parallel && parallel.mesh !== mesh) throw new Error('the parallel model built its own mesh');
-const gpuModel = ENGINE === 'gpu' ? await (await import('../js/gpu/model.gpu.js')).createGpuModel(mesh, { topography, geography: geographyOptions, ocean: { climatology: climatologyPath, ...oceanOptions } }) : null;
+const gpuModel = ENGINE === 'gpu' ? await (await import('../js/gpu/model.gpu.js')).createGpuModel(mesh, { topography, geography: geographyOptions, ocean: { climatology: climatologyPath, ...oceanOptions }, ice: { iceAlbedoPhases: false } }) : null;
 if (gpuModel && gpuModel.mesh !== mesh) throw new Error('the GPU model built its own mesh');
 const readRanges = gpuModel ? (await import('../js/gpu/device.module.js')).readRanges : null;
 const ocean = gpuModel ? gpuModel.oceanEngine : parallel ? parallel.ocean : createOcean(mesh, { geography, climatology: await loadClimatology(climatologyPath), ...oceanOptions });
@@ -236,7 +237,7 @@ if (saves.length) {
 
 async function save(day) {
   const s = await io.serialize();
-  const bytes = encodeState({ kind: 'hybridOcean', N, day, time, h: Float32Array.from(s.h), u: Float32Array.from(s.u), T: Float32Array.from(s.T), S: Float32Array.from(s.S), eta: Float32Array.from(s.eta), densities: Float64Array.from(s.densities), surfaceT: Float32Array.from(surfaceT), penetrated: Float32Array.from(s.penetrated) });
+  const bytes = encodeState({ kind: 'hybridOcean', N, day, time, given: { ocean: { iceExchange: oceanOptions.iceExchange } }, h: Float32Array.from(s.h), u: Float32Array.from(s.u), T: Float32Array.from(s.T), S: Float32Array.from(s.S), eta: Float32Array.from(s.eta), densities: Float64Array.from(s.densities), surfaceT: Float32Array.from(surfaceT), penetrated: Float32Array.from(s.penetrated) });
   const name = `${TAG}_day${String(day).padStart(3, '0')}.bin`;
   writeFileSync(`${OUT}/${name}`, bytes);
   return name;

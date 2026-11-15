@@ -12,7 +12,8 @@ import { regridCellField } from './physics/regrid.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels, groupHeader, groupArrays, savedTerrain, stateTerrain } from './stateFile.module.js';
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
-import { runStore, startOptions, withIceExchange } from './snapshots.module.js';
+import { runStore, startOptions, withIceRecords } from './snapshots.module.js';
+import { frictionMinimumNote } from './physics/ice.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
 import { RAIN_MEMORY, frameIsFinite } from './frames.module.js';
 import { cpuFrameFields } from './cpuFrame.module.js';
@@ -672,7 +673,7 @@ async function restore(snapshot) {
   if (snapshot.soilSeed) saved.soilSeed = snapshot.soilSeed;
   const sameGeography = JSON.stringify(savedGeography(saved)) === JSON.stringify(currentGeography);
   if (model && saved.N === currentN && sameGeography && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
-  if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || terrainKey(startTerrain(lastStart, saved)) !== terrainKey(currentTerrain) || !sameOptions(withIceExchange(startOptions(saved.options, lastStart.options), saved), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
+  if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || terrainKey(startTerrain(lastStart, saved)) !== terrainKey(currentTerrain) || !sameOptions(withIceRecords(startOptions(saved.options, lastStart.options), saved), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   await placeSaved(model, saved, currentN);
@@ -693,7 +694,9 @@ async function start(message) {
   const N = message.N ?? saved?.N ?? 16;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const lakeGiven = saved ? savedLakeOptions(saved) : {};
-  const given = withIceExchange(startOptions(saved ? { ...saved.options, ...(Object.keys(lakeGiven).length ? { lake: lakeGiven } : {}) } : null, message.options), saved), options = { ...given };
+  const given = withIceRecords(startOptions(saved ? { ...saved.options, ...(Object.keys(lakeGiven).length ? { lake: lakeGiven } : {}) } : null, message.options), saved), options = { ...given };
+  const exchangeNote = given.ocean ? frictionMinimumNote(given.ocean.iceExchange) : null;
+  if (exchangeNote) console.warn(exchangeNote);
   if (options.lake?.missingBed === 'hydrolakes') options.lake = { ...options.lake, lakeDepths: await loadLakeDepths() };
   const geography = message.land === false ? { ...LEGACY_GEOGRAPHY } : saved ? savedGeography(saved) : checkGeography({ ...FRESH_GEOGRAPHY, ...(message.geography ?? {}) });
   if (message.land !== false) {

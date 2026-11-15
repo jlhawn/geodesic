@@ -15,7 +15,9 @@ export const PREVIOUS_LAND = { soil: 'slab' };
 export const PREVIOUS_AIR_SEA = { relativeWind: false, coolSkin: false };
 export const PREVIOUS_SURFACE = { seaHumidity: 1, ...PREVIOUS_AIR_SEA };
 export const PREVIOUS_BOUNDARY_LAYER = { diagnoseFirst: false };
-export const PREVIOUS_OCEAN = { rotationLimit: 'algebraic', langmuirIce: 'none', shelfMeltLayer: 0, iceDrift: false, mstarScheme: 'fixed', langmuirScheme: 'factor', mixedLayerRestratification: false };
+export const PREVIOUS_OCEAN = { rotationLimit: 'algebraic', langmuirIce: 'none', shelfMeltLayer: 0, iceDrift: false, mstarScheme: 'fixed', langmuirScheme: 'factor', mixedLayerRestratification: false, iceExchange: 'instant' };
+export const PREVIOUS_ICE = { iceAlbedoPhases: false };
+export const PREVIOUS_SEA_ICE = { ...PREVIOUS_ICE, iceExchange: 'instant' };
 
 const lowestLayer = (levels) => levels[levels.length - 1] - levels[levels.length - 2];
 export const ROWS = [['cam26', PREVIOUS_LEVELS], ['bl48', sigmaInterfaces('bl48')]];

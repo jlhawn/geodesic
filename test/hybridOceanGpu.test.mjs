@@ -23,7 +23,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
-const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false };
+const HYBRID = { vertical: 'hybrid', everySteps: 1, iceDrift: false, iceExchange: 'instant' };
 const RESTRAT = { ...HYBRID, mixedLayerRestratification: { coefficient: 50 } };
 const FIXED_ENERGY = { ...HYBRID, mstarScheme: 'fixed', langmuirScheme: 'factor' };
 const RH18_ENERGY = { ...HYBRID, mstarScheme: 'rh18' };

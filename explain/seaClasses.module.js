@@ -15,6 +15,7 @@ import { createOcean } from '../js/ocean/layered.module.js';
 import { HYBRID_LAYERS, labelBoundaries, H_MIN, MODE_DEPTH } from '../js/ocean/column.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction, salinityForDensity } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
+import { PUBLISHED_OCEAN } from './published.module.js';
 
 export { HYBRID_LAYERS, FREEZING_POINT, H_MIN, MODE_DEPTH };
 export const CELSIUS = 273.15;
@@ -88,7 +89,7 @@ export function layersByLatitude(N = 16) {
   const order = Array.from({ length: C }, (_, i) => i).sort((a, b) => mesh.latCell[a] - mesh.latCell[b]);
   const picks = [];
   for (const i of order) if (!picks.length || mesh.latCell[i] - mesh.latCell[picks.at(-1)] > 1e-9) picks.push(i);
-  const ocean = createOcean(mesh);
+  const ocean = createOcean(mesh, { iceExchange: PUBLISHED_OCEAN.iceExchange });
   ocean.initialize(surfaceT, ice);
   const K = ocean.layers, n = picks.length;
   const out = {

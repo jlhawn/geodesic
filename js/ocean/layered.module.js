@@ -37,7 +37,12 @@ import { upwellingTimescale, upwellingWeight } from '../frames.module.js';
  * iceConductance, in restartArrays and in a lean save. Between a write and
  * the next read the top layer's Q of an iced cell still holds what the ice
  * has since drawn from waterHeat, so only waterHeat tells the water's heat
- * there, and a save without iceWater rebuilds it from Q.
+ * there, and a save without iceWater rebuilds it from Q. An instant ocean
+ * given a save with iceWater books it into the top layer of those cells and
+ * keeps it there through its first read, which otherwise reads the freezing
+ * point under ice, so its first write hands the ice what the step leaves of
+ * it in that layer; a load logs the held heat it cannot book, saved on other
+ * layers or where no ice lies over an ocean column.
  *
  * The interior classes of the saved slab oceans, placed where the World Ocean Atlas holds its water
  * in this equation of state: 1019.5–1021.5 for the warm pool, the two
@@ -164,6 +169,8 @@ export function cellUpwelling(mesh, L, { h, u, eta, sillEdge, edgeOcean }, i, ou
 
 // Float32 values, so the host's conversions use the numbers the GPU kernels do.
 export const HEAT_REFERENCE = Math.fround(273.15), SALT_REFERENCE = Math.fround(35);
+export const heldWaterNote = (cells, joules) => `an instant ocean booked the saved ocean.iceWater, the heat the water holds above freezing under ${cells} iced cells, into the top layer: ${(joules / 1e18).toFixed(4)} EJ against the layer's saved heat`;
+export const droppedWaterNote = (cells, joules, where) => `an instant ocean dropped ${(joules / 1e18).toFixed(4)} EJ of the saved ocean.iceWater, held over ${cells} cells ${where}`;
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, RESTORE_TOLERANCE = 0.01;
 
 export { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited };
@@ -702,7 +709,7 @@ export function createOcean(mesh, {
   const eta = shared('eta', C);
   const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = shared('rhoMl', C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), iceVolume = new Float64Array(C), previousVolume = new Float64Array(C);
   let seaCover = null;
-  let seaWater = turbulent ? new Float64Array(C) : null, seaConductance = turbulent ? new Float64Array(C) : null;
+  let seaWater = turbulent ? new Float64Array(C) : null, seaConductance = turbulent ? new Float64Array(C) : null, pendingHeld = null;
   const drift = iceDrift ? createIceDrift(mesh, iceDrift, { cellOpen, edgeOcean, waterDensity: rho0, iceDensity, gravity: g, previousVolume, beyond, limited: limitedEdgeValue }) : null;
   const capacity = shared('capacity', C);
   if (!adopting) capacity.fill(rhoCp * table.depths[1]);
@@ -1511,12 +1518,13 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) {
       if (shelf[i]) { iced[i] = 0; continue; }
       iced[i] = ice[i] > 0 ? 1 : 0;
-      T0[i] = iced[i] ? (turbulent ? FREEZING_POINT + (cellOcean[i] ? seaWater[i] / (rhoCp * h[i]) : 0) : drift && drift.arrived[i] ? drift.waterT[i] : FREEZING_POINT) : surfaceT[i];
+      T0[i] = (iced[i] ? (turbulent ? FREEZING_POINT + (cellOcean[i] ? seaWater[i] / (rhoCp * h[i]) : 0) : drift && drift.arrived[i] ? drift.waterT[i] : FREEZING_POINT) : surfaceT[i]) + (pendingHeld && pendingHeld[i] !== 0 ? pendingHeld[i] / (rhoCp * h[i]) : 0);
       surfaceIn[i] = T0[i];
       Q[i] = h[i] * T0[i];
       lightIn[i] = penetrated[i];
       if (penetrated[i] !== 0) depositLight(i);
     }
+    pendingHeld = null;
     measureIce(ice, concentration, iceVolume);
     surfaceInputs();
   }
@@ -1619,6 +1627,17 @@ export function createOcean(mesh, {
   function holdWater() {
     for (let i = 0; i < C; i++) seaWater[i] = cellOcean[i] && !shelf[i] && iced[i] ? Math.max(0, rhoCp * (Q[i] - h[i] * FREEZING_POINT)) : 0;
     iceConductance();
+  }
+  function bookHeldWater(held, ice) {
+    let cells = 0, joules = 0, dropped = 0, lost = 0;
+    pendingHeld = new Float64Array(C);
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i] || shelf[i] || !(ice[i] > 0)) { if (held[i] !== 0) { dropped++; lost += mesh.areaCell[i] * held[i]; } continue; }
+      const booked = h[i] * FREEZING_POINT + held[i] / rhoCp;
+      joules += mesh.areaCell[i] * rhoCp * (booked - Q[i]); Q[i] = booked; T0[i] = previousT0[i] = booked / h[i]; pendingHeld[i] = held[i]; cells++;
+    }
+    if (cells) console.warn(heldWaterNote(cells, joules));
+    if (dropped) console.warn(droppedWaterNote(dropped, lost, 'without ice over an ocean column'));
   }
   function writeSurface(surfaceT, oceanFlux, dt) {
     if (turbulent) iceConductance();
@@ -1952,6 +1971,14 @@ export function createOcean(mesh, {
       if (own) {
         if (saved.iceWater && saved.iceWater.length === C) seaWater.set(saved.iceWater);
         if (saved.iceConductance && saved.iceConductance.length === C) seaConductance.set(saved.iceConductance);
+      }
+    } else {
+      pendingHeld = null;
+      if (saved.iceWater && saved.iceWater.length === C && own) bookHeldWater(saved.iceWater, ice);
+      else if (saved.iceWater && saved.iceWater.length === C) {
+        let cells = 0, joules = 0;
+        for (let i = 0; i < C; i++) if (saved.iceWater[i] !== 0) { cells++; joules += mesh.areaCell[i] * saved.iceWater[i]; }
+        if (cells) console.warn(droppedWaterNote(cells, joules, 'saved on other layers'));
       }
     }
     counter = phase;

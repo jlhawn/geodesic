@@ -11,7 +11,7 @@ const phrase = (run, d) => seasonPhrase(run.record.day[d]);
 
 test('the conduction through ice and snow is the model\'s: the ice its update freezes on or melts off in one second, times the latent heat', () => {
   for (const [thickness, snow, below] of [[1, 0, 20], [2.5, 0, 35], [0.05, 0, 10], [1.2, 100, 30], [3, 300, 25], [2, 0, -1.8]]) {
-    const sea = createSeaIce({ nCells: 1, areaCell: [1] }, { heatCapacity: Float64Array.of(50 * 1025 * 3985) });
+    const sea = createSeaIce({ nCells: 1, areaCell: [1] }, { heatCapacity: Float64Array.of(50 * 1025 * 3985), iceExchange: 'instant', iceAlbedoPhases: false });
     const ice = Float64Array.of(thickness), skin = Float64Array.of(FREEZING_POINT - below);
     sea.load(ice);
     sea.snow[0] = snow;

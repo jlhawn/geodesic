@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_ICE_EXCHANGE } from '../js/physics/ice.module.js';
+import { DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES } from '../js/physics/ice.module.js';
 import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -103,7 +103,7 @@ test("the page's store keeps every array the worker's snapshot holds, and runs r
     const kept = stored(taken), restore = () => ({ type: 'restore', snapshot: restoreMessage(kept.meta, structuredClone(kept.data)) });
     await send('C', { ...start, options: { ocean: options.ocean } }, 'ready');
     const anew = await send('C', load(), 'ready');
-    assert.deepEqual(anew.options, { ...options, ocean: { ...options.ocean, iceExchange: DEFAULT_ICE_EXCHANGE }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, 'the restore starts a new model with the options the snapshot records, and the boundary layer\'s order');
+    assert.deepEqual(anew.options, { ...options, ocean: { ...options.ocean, iceExchange: DEFAULT_ICE_EXCHANGE }, ice: { iceAlbedoPhases: DEFAULT_ICE_ALBEDO_PHASES }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, 'the restore starts a new model with the options the snapshot records, and the boundary layer\'s order');
     await frame('C');
     const twelve = await send('C', { type: 'snapshot' }, 'snapshotData');
     assert.equal(stepOf(twelve), 12);
@@ -125,7 +125,7 @@ test("the page's store keeps every array the worker's snapshot holds, and runs r
     for (const i of LAKES) assert.notEqual(new Float64Array(lakeless.data.arrays.lakeSeen)[i], 0, `the save holds the water lake ${i} handed the sea`);
     const unlaked = () => ({ type: 'restore', snapshot: restoreMessage(lakeless.meta, structuredClone(lakeless.data)) });
     await send('E', { ...start, options: { ocean: options.ocean } }, 'ready');
-    assert.deepEqual((await send('E', unlaked(), 'ready')).options, { ...options, ocean: { ...options.ocean, iceExchange: DEFAULT_ICE_EXCHANGE }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, 'the restore starts a new model');
+    assert.deepEqual((await send('E', unlaked(), 'ready')).options, { ...options, ocean: { ...options.ocean, iceExchange: DEFAULT_ICE_EXCHANGE }, ice: { iceAlbedoPhases: DEFAULT_ICE_ALBEDO_PHASES }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, 'the restore starts a new model');
     await send('F', start, 'ready');
     await send('F', unlaked(), 'ready');
     const unlakedLater = {};
@@ -171,14 +171,16 @@ test("a spin-up save of the turbulent exchange starts a turbulent page model wit
     assert.ok(new Float64Array(ocean.iceConductance).some((x) => x > 0), 'the snapshot holds a conductance under the ice');
     const record = toSnapshot(messageState(taken));
     assert.deepEqual(record.meta.options.ocean.iceExchange, turbulent, 'the store records the exchange');
-    const { saved, wide } = exportState(record.meta, record.data), { ocean: recorded, ...pageGroups } = saved.options;
+    const { saved, wide } = exportState(record.meta, record.data), { ocean: recorded, ice: iceRecord, ...pageGroups } = saved.options;
     const write = (name, state) => { const path = join(dir, name); writeFileSync(path, encodeState(state, { f64: wide })); return pathToFileURL(path).href; };
-    const spun = await send('Y', { ...start, from: write('spun.bin', { ...saved, options: pageGroups, given: { ocean: { iceExchange: turbulent } } }) }, 'ready');
+    const spun = await send('Y', { ...start, from: write('spun.bin', { ...saved, options: { ...pageGroups, ice: iceRecord }, given: { ocean: { iceExchange: turbulent } } }) }, 'ready');
     assert.deepEqual(spun.options.ocean, { ...options.ocean, iceExchange: turbulent }, 'a turbulent spin-up save starts a turbulent page model with the constants its header records');
+    assert.equal(spun.options.ice.iceAlbedoPhases, true, 'and with the iceAlbedoPhases its options record');
     const held = groupArrays((await send('Y', { type: 'snapshot' }, 'snapshotData')).ocean);
     assert.equal(held.iceWater ? new Float64Array(held.iceWater).length : 0, C);
     const plain = await send('Z', { ...start, from: write('plain.bin', { ...saved, options: pageGroups }) }, 'ready');
     assert.deepEqual(plain.options.ocean, { ...options.ocean, iceExchange: 'instant' }, 'a save that records no exchange starts the instant one');
+    assert.equal(plain.options.ice.iceAlbedoPhases, false, 'and one that records no iceAlbedoPhases starts without the phases');
   } finally {
     globalThis.fetch = fetched;
     rmSync(dir, { recursive: true, force: true });

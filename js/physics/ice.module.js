@@ -54,7 +54,8 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * name or an object of them with a `mode`.
  */
 export const ICE_EXCHANGES = ['instant', 'turbulent'];
-export const DEFAULT_ICE_EXCHANGE = 'instant';
+export const DEFAULT_ICE_EXCHANGE = { mode: 'turbulent', frictionMinimum: 2e-2 };
+export const DEFAULT_ICE_ALBEDO_PHASES = true;
 export const ICE_EXCHANGE = { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66 };
 export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   const given = typeof option === 'string' ? { mode: option } : option;
@@ -72,8 +73,14 @@ export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   return resolved;
 }
 
-// A header that records no exchange is an instant save, whatever DEFAULT_ICE_EXCHANGE is; scripts/savedLand.mjs resumedIceExchange refuses one that holds ocean.iceWater.
-export const savedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange ?? 'instant';
+// A header that records no exchange, in its ocean group or, where that records none, its ice group, as a run without an ocean does, is an instant save, and one that records no iceAlbedoPhases ran without the phases, whatever the defaults are; scripts/savedLand.mjs resumedIceExchange refuses one that holds ocean.iceWater.
+export const savedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange ?? saved?.given?.ice?.iceExchange ?? saved?.options?.ice?.iceExchange ?? 'instant';
+export const savedIceAlbedoPhases = (saved) => saved?.given?.ice?.iceAlbedoPhases ?? saved?.options?.ice?.iceAlbedoPhases ?? false;
+export const frictionMinimumNote = (exchange) => {
+  if (exchange === undefined || iceExchangeOptions(exchange).mode !== 'turbulent' || (typeof exchange === 'object' && exchange.frictionMinimum !== undefined)) return null;
+  const standard = iceExchangeOptions(DEFAULT_ICE_EXCHANGE).frictionMinimum;
+  return ICE_EXCHANGE.frictionMinimum === standard ? null : `iceExchange turbulent takes frictionMinimum ${ICE_EXCHANGE.frictionMinimum.toExponential()}; the default is ${standard.toExponential()}`;
+};
 
 /*
  * The slab ocean and its sea ice, a zero-layer thermodynamic model: the
@@ -257,11 +264,11 @@ export function createSeaIce(mesh, options = {}) {
   leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, oceanCells = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
-  iceLight = false, brineReservoir = false, iceAlbedoPhases = false, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
+  iceLight = false, brineReservoir = false, iceAlbedoPhases = DEFAULT_ICE_ALBEDO_PHASES, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
   whiteIceAlbedo = ALBEDO_PHASES.whiteIceAlbedo, pondAlbedo = ALBEDO_PHASES.pondAlbedo, pondFraction = ALBEDO_PHASES.pondFraction,
   } = options;
   const unread = iceAlbedoPhases ? ['meltingIceAlbedo', 'iceSnowFloor', 'wetSnowRange'].filter((name) => options[name] !== undefined) : [];
-  if (unread.length) console.warn(`iceAlbedoPhases leaves ${unread.join(', ')} unread: the phases set the melting ice's albedo and age the snow on the ice their own way`);
+  if (unread.length) console.warn(`iceAlbedoPhases leaves ${unread.join(', ')} unread: the phases set the melting ice's albedo and age the snow on the ice their own way; give iceAlbedoPhases false to use them`);
   if (brineReservoir && !iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
   if (!LEAD_CLOSURES.includes(leadClosure)) throw new Error(`leadClosure is ${LEAD_CLOSURES.join(' or ')}, not ${leadClosure}`);
   const C = mesh.nCells;
@@ -473,7 +480,7 @@ export function createSeaIce(mesh, options = {}) {
 
   return {
     albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, removal, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration, brine, iceLight,
-    iceExchange: transfer, turbulent, waterHeat, conductance, waterTemperature, holdWater,
+    iceExchange: transfer, turbulent, iceAlbedoPhases, waterHeat, conductance, waterTemperature, holdWater,
     shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, snowAlbedo: snowAlbedo.buffer, concentration: concentration.buffer, waterHeat: waterHeat.buffer, conductance: conductance.buffer, ...(brine ? { brine: brine.buffer } : {}) },
   };
 }

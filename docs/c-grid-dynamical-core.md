@@ -1105,7 +1105,7 @@ the mixed layer. The surface energy — mixed-layer heat over the freezing
 point, skin heat, minus the ice's latent heat — changes by exactly the
 surface flux through every transition (`test/ice.test.mjs`).
 `surfaceT` is the skin temperature the atmosphere sees in both states.
-Bare ice reflects 0.62 (`iceAlbedo`) while its skin is colder than
+Without `iceAlbedoPhases`, bare ice reflects 0.62 (`iceAlbedo`) while its skin is colder than
 −1 °C, falling linearly to 0.48 (`meltingIceAlbedo`) at the melting
 point, and ice thinner than 0.5 m blends toward the water's albedo
 (the zenith-angle form of Briegleb et al. 1986, 0.06 diffuse). The 0.48
@@ -1122,6 +1122,12 @@ minimum. Under Maykut and Untersteiner's (1971) Table 1 as printed,
 light through the ice (i0 0.3) and a brine reservoir added, 0.55 keeps
 1.02 m on the table as the auditor recalled it (finding sea-ice-02)
 and 1.85 m on the printed one (its sea-ice verification).
+With `iceAlbedoPhases`, the default, melting bare ice is white ice
+(0.64) with melt ponds (0.2) over a quarter of it in place of
+`meltingIceAlbedo`, and the snow on the ice keeps its albedo while dry,
+ageing in the cold toward 0.84, and ages toward 0.77 only in a step in
+which its surface melts, the phases Perovich et al. (2002) observed on
+SHEBA's multiyear ice (`ALBEDO_PHASES`, js/physics/ice.module.js).
 Snow lies on the ice: precipitation that falls on an iced cell from air
 below the melting point accumulates in water equivalent in the ocean
 cells of the land surface's snow array (one field of snow on the
@@ -4049,7 +4055,10 @@ The work, in order:
      memory). The open
      sea 0–30° reads 0.102 at the top on that day against 0.08–0.10.
 
-   Defaults: sea ice `iceAlbedo` 0.62 (cold bare ice), `meltingIceAlbedo`
+   Defaults: sea ice `iceAlbedoPhases` true (`iceDrySnowFloor` 0.84,
+   `iceMeltingSnowFloor` 0.77, `whiteIceAlbedo` 0.64, `pondAlbedo` 0.2,
+   `pondFraction` 0.25; it leaves `meltingIceAlbedo`, `iceSnowFloor` and
+   `wetSnowRange` unread on the ice), `iceAlbedo` 0.62 (cold bare ice), `meltingIceAlbedo`
    0.48, `iceMeltingRange` 1 K, `fullAlbedoThickness` 0.5 m,
    `iceFullSnow` 20 kg/m², `snowAgeing` true, `iceSnowFloor` 0.70
    (`iceSnowAlbedo` 0.75 only without the ageing); the ageing shared by

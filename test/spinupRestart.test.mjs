@@ -13,6 +13,7 @@ import { loadSeaIceStart, SEA_ICE_START_FILE } from '../js/physics/seaIceStart.m
 import { stateGrid } from '../js/stateGrid.module.js';
 import { stateGeography, createGeography } from '../js/geography.module.js';
 import { seaCells, seaIceExtent, polarIcedCells } from '../js/seaIceExtent.module.js';
+import { DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES } from '../js/physics/ice.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -86,23 +87,23 @@ test('at N=32 spinup.mjs on the n1024 mask with FLake in its lakes, resumed insi
   }
 });
 
-test("at N=16 spinup.mjs records the default ice exchange in its header, and a run that resumes a save under another exchange says so and takes its own: an instant save resumed under OCEAN iceExchange turbulent, as confirm128 started, holds the water's heat by the end of day 1, and that save resumed under OCEAN iceExchange instant holds none", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test("at N=16 spinup.mjs records the default ice exchange in its header, and a run that resumes a save under another exchange says so and takes its own: the default save resumed under OCEAN iceExchange instant holds no water heat and keeps the save's iceAlbedoPhases, and that save resumed under OCEAN iceExchange turbulent, as confirm128 started, holds the water's heat by the end of day 2", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const out = mkdtempSync(join(tmpdir(), 'restart-switch-')), turbulent = { mode: 'turbulent', frictionMinimum: 2e-2 };
   try {
     const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: Object.fromEntries(Object.entries({ ...withoutOptionGroups(), N: '16', MINUTES: '100', OUT: out, TAG: 'switch', ...extra }).filter(([, value]) => value !== undefined)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     run({ DAYS: '1', STOP_AFTER_STEPS: '32' });
-    const instant = await decoded(join(out, 'switch_day0000_step0032.bin'));
-    assert.equal(instant.given.ocean.iceExchange, 'instant', 'the header records the default exchange');
-    assert.equal(instant.ocean.iceWater, undefined);
-    assert.match(run({ DAYS: '1', OCEAN: JSON.stringify({ iceExchange: turbulent }) }), /iceExchange \{"mode":"turbulent","frictionMinimum":0\.02\} where switch_day0000_step0032\.bin was made under "instant"/);
-    const day1 = await decoded(join(out, 'switch_day0001.bin')), C = day1.surfaceT.length;
-    assert.deepEqual(day1.given.ocean.iceExchange, turbulent);
-    const held = day1.ocean.iceWater?.length === C ? day1.ocean.iceWater.filter((x) => x > 0).length : 0;
-    assert.ok(held > 0, `the turbulent run holds the water's heat under its ice in ${held} cells`);
-    assert.match(run({ DAYS: '2', OCEAN: JSON.stringify({ iceExchange: 'instant' }) }), /iceExchange "instant" where switch_day0001\.bin was made under \{"mode":"turbulent","frictionMinimum":0\.02\}/);
+    const made = await decoded(join(out, 'switch_day0000_step0032.bin')), C = made.surfaceT.length;
+    assert.deepEqual([made.given.ocean.iceExchange, made.given.ice.iceAlbedoPhases], [DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES], 'the header records the default exchange and iceAlbedoPhases');
+    assert.equal(made.ocean.iceWater?.length, C);
+    assert.match(run({ DAYS: '1', OCEAN: JSON.stringify({ iceExchange: 'instant' }) }), /iceExchange "instant" where switch_day0000_step0032\.bin was made under \{"mode":"turbulent","frictionMinimum":0\.02\}/);
+    const day1 = await decoded(join(out, 'switch_day0001.bin'));
+    assert.deepEqual([day1.given.ocean.iceExchange, day1.given.ice.iceAlbedoPhases], ['instant', DEFAULT_ICE_ALBEDO_PHASES], "the resumed run takes its own exchange and its save's iceAlbedoPhases");
+    assert.equal(day1.ocean.iceWater, undefined, 'the instant run holds no water heat');
+    assert.match(run({ DAYS: '2', OCEAN: JSON.stringify({ iceExchange: turbulent }) }), /iceExchange \{"mode":"turbulent","frictionMinimum":0\.02\} where switch_day0001\.bin was made under "instant"/);
     const day2 = await decoded(join(out, 'switch_day0002.bin'));
-    assert.equal(day2.given.ocean.iceExchange, 'instant');
-    assert.equal(day2.ocean.iceWater, undefined, 'the instant run holds no water heat');
+    assert.deepEqual(day2.given.ocean.iceExchange, turbulent);
+    const held = day2.ocean.iceWater?.length === C ? day2.ocean.iceWater.filter((x) => x > 0).length : 0;
+    assert.ok(held > 0, `the turbulent run holds the water's heat under its ice in ${held} cells`);
     assert.ok(day2.surfaceT.every(Number.isFinite) && day2.ocean.T.every(Number.isFinite));
   } finally {
     rmSync(out, { recursive: true, force: true });

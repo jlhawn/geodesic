@@ -24,7 +24,7 @@ test('a meter of ice whose top is 20 K below freezing conducts 40 W/m² and grow
 
 test('seawater freezes at −1.8 °C, cools only a few thousandths of a kelvin below it before ice forms, and sits at it under the ice', () => {
   close(C(FREEZING_POINT), -1.8, 1e-9, 'the freezing point');
-  const sea = createSeaIce({ nCells: 1, areaCell: [1] }, { heatCapacity: Float64Array.of(50 * 1025 * 3985) });
+  const sea = createSeaIce({ nCells: 1, areaCell: [1] }, { heatCapacity: Float64Array.of(50 * 1025 * 3985), iceExchange: 'instant', iceAlbedoPhases: false });
   const T = Float64Array.of(FREEZING_POINT + 0.1), ice = new Float64Array(1), cooling = Float64Array.of(-100);
   let coldest = T[0], hours = 0;
   while (ice[0] === 0 && hours < 1000) { sea.update(T, ice, cooling, 0, 3600); hours++; if (ice[0] === 0) coldest = Math.min(coldest, T[0]); }

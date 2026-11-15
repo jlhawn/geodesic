@@ -8,7 +8,7 @@ import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { divergence } from '../js/dynamics/operators.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { withCadence } from '../js/cadence.module.js';
-import { FREEZING_POINT } from '../js/physics/ice.module.js';
+import { FREEZING_POINT, DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES, iceExchangeOptions } from '../js/physics/ice.module.js';
 import { geographyOptions, readTopography, topographyFromInt16, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { CLIMATOLOGY_FILE, loadClimatology } from '../js/ocean/climatology.module.js';
 import { FLAKE } from '../js/physics/lake.module.js';
@@ -129,10 +129,13 @@ function overOceanSkin() {
  * The same with sea ice that lets light through to the water and a brine
  * reservoir: a meter of ice at cover 0.9 poleward of 63 degrees, its skin
  * 3 K below freezing, and a centimeter at cover 0.0105 from 58 to 63 degrees,
- * just above the removal floors; the brine of both at 2×10⁵ J/m².
+ * just above the removal floors; the brine of both at 2×10⁵ J/m². Under a
+ * turbulent exchange the water under the ice holds 1 K over freezing, 4 K
+ * under the centimeter, at 500 W/m²/K, near what frictionMinimum 2×10⁻² gives
+ * in still water, so the centimeter melts away before the ocean steps.
  */
-function brineOcean() {
-  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: {}, ice: { iceLight: true, brineReservoir: true } });
+function brineOcean(ocean = { iceExchange: 'instant' }) {
+  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean, ice: { iceLight: true, brineReservoir: true } });
   slab.state.forEach((values, s) => model.state[s].set(values));
   const concentration = Float64Array.from(slab.seaIce.concentration);
   for (let i = 0; i < model.mesh.nCells; i++) {
@@ -142,6 +145,7 @@ function brineOcean() {
   model.seaIce.load(model.state[6], concentration);
   model.ocean.initialize(model.state[3], model.state[6]);
   for (let i = 0; i < model.mesh.nCells; i++) if (model.state[6][i] > 0) model.seaIce.brine[i] = 2e5;
+  if (model.seaIce.turbulent) for (let i = 0; i < model.mesh.nCells; i++) if (model.state[6][i] > 0) { model.seaIce.waterHeat[i] = model.ocean.capacity[i] * (model.state[6][i] < 0.1 ? 4 : 1); model.seaIce.conductance[i] = 500; }
   model.time = slab.time;
   return model;
 }
@@ -179,7 +183,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with iceExchange turbulent, the water under the ice holding heat', () => overOcean(undefined, { iceExchange: 'turbulent' })], ['over a layered ocean with surface.relativeWind and a moving sea, the work its stress does on the sea included', () => movingSea(overOcean({ relativeWind: true }))], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin], ['over a layered ocean whose sea ice lets light through to the water and a brine reservoir', brineOcean]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics to within 0.02 W/m² on average`, () => {
+for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with iceExchange turbulent, the water under the ice holding heat', () => overOcean(undefined, { iceExchange: 'turbulent' })], ['over a layered ocean with surface.relativeWind and a moving sea, the work its stress does on the sea included', () => movingSea(overOcean({ relativeWind: true }))], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin], ['over a layered ocean with iceExchange instant whose sea ice lets light through to the water and a brine reservoir', () => brineOcean()], ['over a layered ocean at the default exchange and iceAlbedoPhases whose sea ice lets light through to the water and a brine reservoir, the water under the ice holding heat', () => { const model = brineOcean({}); assert.deepEqual([model.seaIce.iceExchange, model.seaIce.iceAlbedoPhases], [iceExchangeOptions(DEFAULT_ICE_EXCHANGE), DEFAULT_ICE_ALBEDO_PHASES]); return model; }]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics to within 0.02 W/m² on average`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
@@ -192,7 +196,7 @@ for (const [label, build] of [['over a slab', spunUp], ['over a slab with berger
     let b = books(state);
     record.dynamics.push((b.H + b.Lq + b.KE + b.P - a.H - a.Lq - a.KE - a.P) / DT);
     const slabBefore = Float64Array.from(state[3]), iceBefore = Float64Array.from(state[6]), penBefore = model.ocean && model.ocean.penetrated ? Float64Array.from(model.ocean.penetrated) : null;
-    const surfaceOf = (i) => (model.ocean && !(state[6][i] > 0) ? model.ocean.capacity[i] * (state[3][i] - FREEZING_POINT) : model.seaIce.energy(state[3][i], state[6][i], model.seaIce.snow[i], model.seaIce.cover(i, state[6][i]), model.seaIce.brine ? model.seaIce.brine[i] : 0));
+    const surfaceOf = (i) => (model.ocean && !(state[6][i] > 0) ? model.ocean.capacity[i] * (state[3][i] - FREEZING_POINT) : model.seaIce.energy(state[3][i], state[6][i], model.seaIce.snow[i], model.seaIce.cover(i, state[6][i]), model.seaIce.brine ? model.seaIce.brine[i] : 0) + (model.seaIce.turbulent && state[6][i] > 0 ? model.seaIce.waterHeat[i] : 0));
     const iceEnergyBefore = model.seaIce.brine ? Float64Array.from(iceBefore, (h, i) => (h > 0 ? surfaceOf(i) : 0)) : null, brineBefore = model.seaIce.brine ? Float64Array.from(model.seaIce.brine) : null;
     const coverBefore = Float64Array.from(model.seaIce.concentration);
     phases.physics(0, C, DT, model.totals);
