@@ -146,6 +146,18 @@ export function iceExchangeOptions(option = 'instant') {
  * agedSnowAlbedo toward iceSnowFloor and refreshed by snowfall
  * (refreshedSnowAlbedo); without it the snow's albedo is iceSnowAlbedo.
  *
+ * With iceAlbedoPhases the ice follows the phases Perovich et al. (2002,
+ * JGR 107(C10) 8044; the sequence of Perovich et al. 2011, Ann. Glaciol.
+ * 52(57) 192) observed on SHEBA's multiyear ice: dry snow keeps its
+ * albedo until it melts, ageing in the cold toward iceDrySnowFloor, and
+ * ages wet toward iceMeltingSnowFloor only in a step in which its surface
+ * melts (phasedSnowAlbedo); neither ageing brightens snow. Melting bare ice
+ * is white ice with melt ponds over pondFraction of it (pondedIceAlbedo),
+ * in place of meltingIceAlbedo: white ice 0.64 (MOSAiC, Light et al. 2022),
+ * ponds 0.2 (0.1-0.3 observed), the fraction 0.25 the MODIS peak in July
+ * (Ding et al. 2019; Rösel et al. 2012); dry snow 0.84 and melting snow
+ * 0.77 as the HIRHAM scheme of Køltzow (2007) has them.
+ *
  * With `iceLight` the share i0 = 0.18 (1 - c) + 0.35 c (FMM97, with c the
  * diffuse share of the sunlight reaching the surface, `diffuse` in update)
  * of the sunlight the ice absorbs passes its surface, none under snow and
@@ -211,6 +223,15 @@ export function refreshedSnowAlbedo(albedo, fall, { freshSnowAlbedo, refreshSnow
   return albedo + Math.min(1, fall / refreshSnowfall) * (freshSnowAlbedo - albedo);
 }
 
+export const ALBEDO_PHASES = { iceDrySnowFloor: 0.84, iceMeltingSnowFloor: 0.77, whiteIceAlbedo: 0.64, pondAlbedo: 0.2, pondFraction: 0.25 };
+export function phasedSnowAlbedo(albedo, temperature, melting, dt, dryFloor, wetFloor, { coldSnowAgeing, meltingSnowAgeing, ageingActivation } = SNOW_AGEING) {
+  const days = dt / 86400;
+  if (melting) return Math.min(albedo, wetFloor + (albedo - wetFloor) * Math.exp(-meltingSnowAgeing * days));
+  const pace = ageingActivation > 0 ? Math.min(1, Math.exp(ageingActivation * (temperature - MELTING_POINT) / (MELTING_POINT * temperature))) : 1;
+  return Math.min(albedo, Math.max(dryFloor, albedo - coldSnowAgeing * pace * days));
+}
+export const pondedIceAlbedo = ({ whiteIceAlbedo, pondAlbedo, pondFraction } = ALBEDO_PHASES) => (1 - pondFraction) * whiteIceAlbedo + pondFraction * pondAlbedo;
+
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.62, meltingIceAlbedo = 0.48, iceMeltingRange = 1, fullAlbedoThickness = 0.5,
@@ -218,7 +239,8 @@ export function createSeaIce(mesh, {
   leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
-  iceLight = false, brineReservoir = false,
+  iceLight = false, brineReservoir = false, iceAlbedoPhases = false, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
+  whiteIceAlbedo = ALBEDO_PHASES.whiteIceAlbedo, pondAlbedo = ALBEDO_PHASES.pondAlbedo, pondFraction = ALBEDO_PHASES.pondFraction,
 } = {}) {
   if (brineReservoir && !iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
   if (!LEAD_CLOSURES.includes(leadClosure)) throw new Error(`leadClosure is ${LEAD_CLOSURES.join(' or ')}, not ${leadClosure}`);
@@ -238,7 +260,8 @@ export function createSeaIce(mesh, {
   const ageing = { freshSnowAlbedo, coldSnowAgeing, meltingSnowAgeing, refreshSnowfall, wetSnowRange, ageingActivation };
 
   const waterAlbedo = (mu) => oceanAlbedo ?? (mu === null ? diffuseWaterAlbedo : openWaterAlbedo(mu));
-  const bareIceAlbedo = (temperature) => iceAlbedo + (meltingIceAlbedo - iceAlbedo) * Math.min(1, Math.max(0, (temperature - MELTING_POINT + iceMeltingRange) / iceMeltingRange));
+  const meltingEnd = iceAlbedoPhases ? pondedIceAlbedo({ whiteIceAlbedo, pondAlbedo, pondFraction }) : meltingIceAlbedo;
+  const bareIceAlbedo = (temperature) => iceAlbedo + (meltingEnd - iceAlbedo) * Math.min(1, Math.max(0, (temperature - MELTING_POINT + iceMeltingRange) / iceMeltingRange));
   function coverAlbedo(thickness, water, snowCover, temperature, snowy) {
     if (thickness <= 0) return water;
     const bare = water + (bareIceAlbedo(temperature) - water) * Math.min(1, thickness / fullAlbedoThickness);
@@ -371,7 +394,8 @@ export function createSeaIce(mesh, {
       thickness -= dt * through * (1 - share) / latent;
       if (transmission) penetrated[i] += dt * A * through * share;
     }
-    if (T > MELTING_POINT) {
+    const melting = T > MELTING_POINT;
+    if (melting) {
       let excess = (T - MELTING_POINT) * skinHeatCapacity;
       T = MELTING_POINT;
       const fromSnow = Math.min(s, excess / latentHeatFusion);
@@ -419,7 +443,7 @@ export function createSeaIce(mesh, {
     if (turbulent) waterHeat[i] = excess;
     surfaceT[i] = skin;
     snow[i] = snowOnIce - flooded;
-    snowAlbedo[i] = snow[i] > 0 ? agedSnowAlbedo(snowAlbedo[i], skin, dt, iceSnowFloor, ageing) : freshSnowAlbedo;
+    snowAlbedo[i] = snow[i] > 0 ? (iceAlbedoPhases ? phasedSnowAlbedo(snowAlbedo[i], skin, melting, dt, iceDrySnowFloor, iceMeltingSnowFloor, ageing) : agedSnowAlbedo(snowAlbedo[i], skin, dt, iceSnowFloor, ageing)) : freshSnowAlbedo;
     budget.snowIce += cellArea * area * flooded;
     ice[i] = newThickness + flooded / iceDensity;
     concentration[i] = area;

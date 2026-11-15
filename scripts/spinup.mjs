@@ -179,6 +179,9 @@
 // budget' line, see createTopBudget in scripts/upperAtmosphere.mjs; with
 // BATCH 1 only), PERTURB (a replicate of a continued run: every θ of the
 // snapshot scaled by 1 + PERTURB·u, u uniform in ±1/2 from a fixed seed),
+// POLAR_LINES (1, or a file: each whole day's polar sea-ice and cloud
+// numbers of scripts/polarLines.mjs as a JSON line, in TAG_polar.jsonl
+// beside the log for 1),
 // SKIN_WATCH (a path prefix: the sea's daily skin and exchange record of
 // scripts/skinWatch.mjs, with its per-cell fields on the SKIN_FIELD_DAYS,
 // from the day SKIN_WATCH_FROM).
@@ -258,6 +261,7 @@ import { loadSavedLand, loadSavedLake } from './savedLand.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 import { startGeography } from './soilWater.mjs';
 import { indexCells, seaIceIndexCut } from '../js/seaIceIndex.module.js';
+import { polarLine } from './polarLines.mjs';
 
 refuseUnreadOptions(import.meta.url);
 const BOXES = {
@@ -471,7 +475,10 @@ const lowestCloudLine = async (day) => {
 const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); return [...seaIceExtent(mesh, seaCell, fields.concentration), fields.ice]; };
 await model.diagnostics();
 if (startStep && saved.rainTotal) model.writeFreshwater(saved);
+const MEANS_FIELDS_FOR_POLAR = ['concentration', 'ice', 'surfaceT', 'shortwave', 'cloud', 't2m'];
 const RECORD = process.env.RECORD;
+const POLAR_LINES = process.env.POLAR_LINES ? (process.env.POLAR_LINES === '1' ? `${OUT}/${TAG}_polar.jsonl` : process.env.POLAR_LINES) : null;
+if (POLAR_LINES && !(MEANS_FIELDS_FOR_POLAR.every((name) => meansFields(process.env.MEANS).includes(name)))) throw new Error(`POLAR_LINES reads the day means of ${MEANS_FIELDS_FOR_POLAR.join(', ')}`);
 if (RECORD) mkdirSync(RECORD, { recursive: true });
 const partOfDay = RECORD && startStep && saved.forcingSums ? { sums: saved.forcingSums, steps: saved.forcingSteps, oceanSteps: saved.forcingOceanSteps, seconds: saved.forcingSeconds, rain: saved.forcingRain, runoff: saved.forcingRunoff } : null;
 if (RECORD && startStep && !partOfDay) log(`the snapshot holds no recorded part of its day, so forcing day ${saved.day + 1} covers its last ${perDay - startStep} steps alone`);
@@ -545,6 +552,7 @@ const jumpLine = (day, r) => `land jump at the end of day ${day} (record ${r.age
 async function dayEnd(day, stepsToday, jump) {
   const time = model.time;
   const sums = readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.ABSSUM, length: C }, { offset: PH.ATMSUM, length: C }, { offset: PH.LWSFCSUM, length: C }]);
+  const polarRead = POLAR_LINES ? readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.SNOW, length: C }, { offset: PH.SNOWALB, length: C }, { offset: PH.ABSCLRSUM, length: C }]) : null;
   const diagnosed = model.diagnostics(), splitRead = readSplit(), sstDay = sstRecorder ? sstRecorder.day() : null;
   meansRecorder?.day();
   if (recorder) {
@@ -571,6 +579,7 @@ async function dayEnd(day, stepsToday, jump) {
     const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
     iceNorth += north; iceSouth += south;
     const iceDay = dayIce ? await dayIce : null, seaIceDay = iceDay ? seaIceCut(iceDay.values.concentration) : null;
+    if (polarRead && iceDay) { const [snow, snowAlbedo, clear] = await polarRead; appendFileSync(POLAR_LINES, JSON.stringify(polarLine({ mesh, land, day, steps: stepsToday, values: iceDay.values, snow, snowAlbedo, absorbed: absorbedSum, atmosphere: atmosphereSum, clear })) + '\n'); }
     const minutes = (performance.now() - start) / 60000;
     log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²${model.lake ? ', lakes left out' : ''}), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
     if (seaIceDay) log(`sea ice on day ${day}'s mean concentration, sea cells on the index's grids, 15 %: N extent ${seaIceDay.N.extent.toFixed(2)} area ${seaIceDay.N.area.toFixed(2)}, S extent ${seaIceDay.S.extent.toFixed(2)} area ${seaIceDay.S.area.toFixed(2)} Mkm²`);

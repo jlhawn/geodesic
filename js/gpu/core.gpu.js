@@ -7,7 +7,7 @@ import { physicsConstants, physicsFunctions, PHYSICS_KERNELS, physicsKernel, ADJ
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS, LATENT_HEAT } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, SURFACE_VERTICAL_SIGMA } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG, relativeWindOf } from '../physics/surface.module.js';
-import { SNOW_AGEING, iceExchangeOptions } from '../physics/ice.module.js';
+import { SNOW_AGEING, ALBEDO_PHASES, iceExchangeOptions } from '../physics/ice.module.js';
 import { DEEP_CAPACITY, FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
 import { orographyConstants, OROGRAPHY_KERNELS } from './orography.gpu.js';
 import { spongeGeometry, spongeRates as layerRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
@@ -914,7 +914,7 @@ export const PHYSICS_DEFAULTS = {
   rayleighBands: RAYLEIGH_BANDS, rayleighDepth: null, nearInfraredRayleigh: NEAR_INFRARED_RAYLEIGH, upwardAbsorption: true, visibleFraction: VISIBLE_FRACTION, landAerosol: LAND_AEROSOL, seaAerosol: SEA_AEROSOL, aerosolAlbedo: 0.95, aerosolAsymmetry: 0.7, aerosolHeight: 2000, aerosol: DEFAULT_AEROSOL, aerosolScale: 1,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadClosure: 'squared', leadExchange: 10, areaLossFactor: 1, keepSmallIce: false, iceLight: false, brineReservoir: false, iceExchange: 'instant',
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.62, meltingIceAlbedo: 0.48, iceMeltingRange: 1, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
-  snowAgeing: true, iceSnowFloor: 0.70, ...SNOW_AGEING,
+  snowAgeing: true, iceSnowFloor: 0.70, ...SNOW_AGEING, iceAlbedoPhases: false, ...ALBEDO_PHASES,
   ...MOIST_DEFAULTS,
   richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5, stability: true, turbulence: 'moist', cloudTop: {}, countergradient: 0, velocityScale: 'holtslagBoville',
   boundaryCover: 'variance', varianceFloor: 0.002, varianceScale: 5, mixingLength: 300, stableMixingLength: 30, varianceCover: 'water', buoyancyLength: 0.53, deckRegime: 'inversion', deckBypass: false,
