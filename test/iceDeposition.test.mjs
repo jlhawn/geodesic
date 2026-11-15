@@ -235,6 +235,18 @@ test("placeCloudIce places a saved glaciated fraction of the model's length, and
   assert.equal(plain.moist.cloudIceShare, null);
 });
 
+test('trace.ice tallies, in kg/m² a layer, the deposition and the ice the caps remove at each visit and at the store, and changes no step', () => {
+  const plain = build({ iceDeposition: true }), traced = build({ iceDeposition: true }), C = plain.mesh.nCells, K = plain.core.K;
+  for (const model of [plain, traced]) { randomState(model); placeCloudIce(model, null); }
+  traced.moist.trace.ice = { deposited: new Float64Array(K * C), visitCap: new Float64Array(K * C), storeCap: new Float64Array(K * C) };
+  for (const model of [plain, traced]) { model.moist.precipitation.fill(0); model.phases.adjust(0, C, 1350); }
+  plain.state.forEach((a, n) => assert.deepEqual(traced.state[n], a));
+  assert.deepEqual(traced.moist.cloudIceShare, plain.moist.cloudIceShare);
+  const t = traced.moist.trace.ice, sum = (a) => a.reduce((s, v) => s + v, 0);
+  console.log(`deposited ${sum(t.deposited).toExponential(2)} kg/m², capped ${sum(t.visitCap).toExponential(2)} at the visits and ${sum(t.storeCap).toExponential(2)} at the store, summed over the layers of ${C} columns`);
+  assert.ok(sum(t.deposited) > 0 && t.deposited.every((v) => v >= 0) && [t.visitCap, t.storeCap].every((a) => a.every(Number.isFinite)));
+});
+
 test('every script that restores subcloudVirtual places the glaciated fraction, and every encodeState that writes subcloudVirtual writes it', () => {
   const files = [join(root, 'js/model.worker.js'), ...readdirSync(join(root, 'scripts'), { recursive: true }).filter((f) => f.endsWith('.mjs')).map((f) => join(root, 'scripts', f))];
   const missing = [];

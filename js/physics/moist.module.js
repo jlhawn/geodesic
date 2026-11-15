@@ -849,7 +849,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const rememberedCover = new Float64Array(K), rememberedPath = new Float64Array(K);
   const falling = { evaporated: 0, convective: 0, frozen: 0, ice: 0, fog: 0, moved: false };
   const budget = { condensation: 0, convection: 0, fog: 0, lost: 0 };
-  const trace = { convection: null, largeScale: null };
+  const trace = { convection: null, largeScale: null, ice: null };
   const marked = new Float64Array(K);
   const ramp = (x) => Math.min(1, Math.max(0, x));
   function mark(i, theta) { for (let k = 0; k < K; k++) marked[k] = theta[k * C + i]; }
@@ -1019,7 +1019,12 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
             saturation(temperature, pressure);
             const cover = Math.max(CLEAR_AIR, uniformCover(qc[idx], halfWidth(pressure, pi[i])));
             let ice = share <= 0 ? qc[idx] : share >= 1 ? 0 : Math.min(Math.max(0, cloudIce[idx]), qc[idx]);
-            if (share > 0 && share < 1 && qc[idx] > ice) ice += depositionGrowth(temperature, pressure, ice, qc[idx] - ice, cover, dt, dzTop, R);
+            if (trace.ice && share > 0 && share < 1) trace.ice.visitCap[idx] += (cloudIce[idx] - ice) * mass;
+            if (share > 0 && share < 1 && qc[idx] > ice) {
+              const grown = depositionGrowth(temperature, pressure, ice, qc[idx] - ice, cover, dt, dzTop, R);
+              if (trace.ice) trace.ice.deposited[idx] += grown * mass;
+              ice += grown;
+            }
             if (ice > 0) {
               const speed = iceFall * Math.pow(pressure / (R * temperature) * ice / cover, iceFallExponent);
               const courant = speed * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]), leaving = ice * courant / (1 + courant);
@@ -1961,6 +1966,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       if (cloudIce) {
         for (let k = 0; k < K; k++) {
           const idx = k * C + i, water = qc[idx], temperature = theta[idx] * exnerLayer[idx];
+          if (trace.ice && water > CLEAR_AIR && temperature > iceTemperature && temperature < liquidTemperature) trace.ice.storeCap[idx] += (cloudIce[idx] - Math.min(Math.max(0, cloudIce[idx]), water)) * pi[i] * dSigma[k] / g;
           cloudIce[idx] = !(water > CLEAR_AIR) ? 0 : temperature <= iceTemperature ? 1 : temperature >= liquidTemperature ? 0 : Math.min(Math.max(0, cloudIce[idx]), water) / water;
         }
       }
