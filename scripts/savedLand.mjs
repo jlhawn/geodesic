@@ -9,13 +9,18 @@ export function loadSavedLand(model, saved) {
   model.land.load(saved.land, model.state[6], saved.time, model.state[3]);
 }
 
-export const savedIceOptions = (saved) => ({ ...(saved.given?.ice ?? {}) });
+export const savedIceOptions = (saved) => ({ ...(saved.given?.ocean?.iceExchange !== undefined ? { iceExchange: saved.given.ocean.iceExchange } : {}), ...(saved.given?.ice ?? {}) });
 
 export function restoreSurface(model, saved, report = (line) => console.error(line)) {
   const { state, seaIce, land } = model;
   seaIce.load(state[6], saved.concentration ?? null);
+  const exchange = seaIce.turbulent ? [['iceWater', seaIce.waterHeat], ['iceConductance', seaIce.conductance]].filter(([name, field]) => {
+    const held = saved.ocean?.[name];
+    if (held && held.length === field.length) field.set(held);
+    return !(held && held.length === field.length);
+  }).map(([name]) => `ocean.${name}`) : [];
   if (land && saved.land) land.load(saved.land, state[6], saved.time, state[3]);
-  const missing = [...(saved.concentration ? [] : ['concentration']), ...(land && !saved.land ? ['land'] : []),
+  const missing = [...(saved.concentration ? [] : ['concentration']), ...exchange, ...(land && !saved.land ? ['land'] : []),
     ...(land && saved.land ? Object.keys(land.serialize()).filter((name) => !name.startsWith('goal') && !(name in saved.land)).map((name) => `land.${name}`) : [])];
   if (missing.length) report(`restoreSurface: the save holds no ${missing.join(', ')}; the model's starting values stand in for them`);
   return missing;
