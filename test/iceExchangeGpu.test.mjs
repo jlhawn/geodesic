@@ -23,10 +23,11 @@ const N = 16, DT = 1350;
 test('the physics buffer, the surface kernel and the constants carry the turbulent exchange only when it is asked for', { skip: !gpuAvailable && 'webgpu not installed' }, () => {
   const mesh = buildMesh(new Grid(N));
   const plain = layoutFor(mesh, 8), asked = layoutFor(mesh, 8, ...new Array(22), true);
-  assert.ok(plain.PH.WHEAT === undefined && plain.PH.CONDUCT === undefined);
+  assert.ok(plain.PH.WHEAT === undefined && plain.PH.CONDUCT === undefined && plain.PH.WET === undefined);
   assert.equal(asked.PH.WHEAT, plain.PH.total);
   assert.equal(asked.PH.CONDUCT, plain.PH.total + mesh.nCells);
-  assert.equal(asked.PH.total, plain.PH.total + 2 * mesh.nCells);
+  assert.equal(asked.PH.WET, plain.PH.total + 2 * mesh.nCells);
+  assert.equal(asked.PH.total, plain.PH.total + 3 * mesh.nCells);
   const instant = { iceTransfer: iceExchangeOptions('instant') }, turbulent = { iceTransfer: iceExchangeOptions('turbulent') };
   assert.equal(seaSurfaceWgsl(instant), seaSurfaceWgsl({}));
   assert.equal(physicsSurfaceKernel(false), physicsSurfaceKernel(false, false, null, false, false, instant));
@@ -97,5 +98,38 @@ test('winter full pack over water held at the f32 freezing point keeps a cover o
   }
   console.log(`after 4 steps at N=${N}: ${held} packed cells over water at the f32 freezing point at exactly 1 on both engines; ${opened} over water 0.3 K warmer opened to as low as ${least.toFixed(6)}, the engines within ${gap.toExponential(1)}`);
   assert.ok(held > 0 && opened > 0 && gap < 1e-6, `${held} held, ${opened} opened, gap ${gap}`);
+  cpu.destroy?.(); gpu.destroy();
+});
+
+test('over cells with no ocean column under the ice the turbulent exchange holds no heat and the leads\' gain melts ice at once, alike on both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const mesh = buildMesh(new Grid(N)), C = mesh.nCells, polar = [];
+  for (let i = 0; i < C; i++) if (mesh.latCell[i] < -70 * Math.PI / 180) polar.push(i);
+  const dry = (i) => polar.indexOf(i) % 2 === 0, oceanCells = Uint8Array.from({ length: C }, (_, i) => (polar.includes(i) && dry(i) ? 0 : 1));
+  const cpu = createModel(new Grid(N), { ocean: false, ice: { iceExchange: 'turbulent', oceanCells } }), gpu = await createGpuModel(new Grid(N), { ocean: false, ice: { iceExchange: 'turbulent' } });
+  const init = initializeState(cpu, {});
+  for (const i of polar) { init[6][i] = 1; init[3][i] = 268; }
+  for (const a of init) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  const cover = Float64Array.from({ length: C }, (_, i) => (polar.includes(i) ? 0.8 : 0));
+  for (const m of [cpu, gpu]) { for (let a = 0; a < init.length; a++) m.state[a].set(init[a]); m.seaIce.load(m.state[6], cover); m.time = 270 * 86400; }
+  const conductance = Float32Array.from({ length: C }, (_, i) => (polar.includes(i) && !dry(i) ? 500 : 0));
+  cpu.seaIce.conductance.set(conductance);
+  gpu.load();
+  const { device, buffers, layout } = gpu.gpu;
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CONDUCT, conductance); device.queue.writeBuffer(buffers.PH, 4 * layout.PH.WET, Float32Array.from(oceanCells));
+  for (let n = 0; n < 4; n++) { cpu.step(DT); await gpu.step(DT); }
+  await gpu.sync();
+  const [conc, wheat] = await readRanges(device, buffers.PH, [{ offset: layout.PH.CONC, length: C }, { offset: layout.PH.WHEAT, length: C }]);
+  const [ice] = await readRanges(device, buffers.S, [{ offset: layout.S.ICE, length: C }]);
+  let held = 0, gap = 0, dryLoss = 0, wetLoss = 0, nDry = 0;
+  for (const i of polar) {
+    const loss = 0.8 - cpu.seaIce.concentration[i] * cpu.state[6][i];
+    if (!dry(i)) { if (cpu.seaIce.waterHeat[i] > 0 && wheat[i] > 0) held++; wetLoss += loss; continue; }
+    assert.equal(cpu.seaIce.waterHeat[i], 0, `cell ${i} holds heat on the CPU`); assert.equal(wheat[i], 0, `cell ${i} holds heat on the GPU`);
+    gap = Math.max(gap, Math.abs(cpu.seaIce.concentration[i] - conc[i]), Math.abs(cpu.seaIce.concentration[i] * cpu.state[6][i] - conc[i] * ice[i]));
+    dryLoss += loss; nDry++;
+  }
+  const wet = polar.length - nDry;
+  console.log(`after 4 steps at N=${N}: ${nDry} packed cells with no ocean under them hold no heat on either engine and lose ${(dryLoss / nDry).toExponential(2)} m of ice each, the engines within ${gap.toExponential(1)}; ${held} of ${wet} over the ocean hold the leads' gain and lose ${(wetLoss / wet).toExponential(2)} m`);
+  assert.ok(nDry > 0 && held > 0 && dryLoss / nDry > wetLoss / wet && gap < 1e-5, `${nDry} dry, ${held} holding, losses ${dryLoss / nDry} and ${wetLoss / wet}, gap ${gap}`);
   cpu.destroy?.(); gpu.destroy();
 });

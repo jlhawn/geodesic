@@ -192,7 +192,8 @@ export function iceExchangeOptions(option = 'instant') {
  * the ocean finds supercooled under ice freezes onto the base through
  * `oceanFlux`, as with the instant exchange, which then holds no heat for the
  * ice to melt. The ice's surface energy plus waterHeat changes by exactly the
- * surface flux plus `oceanFlux`.
+ * surface flux plus `oceanFlux`. Over a cell with no ocean column under it
+ * (`oceanCells` 0, a lake) nothing is held and the ice takes the instant exchange.
  */
 export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
 
@@ -239,7 +240,7 @@ export function createSeaIce(mesh, {
   iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10, areaLossFactor = 1, iceExchange = 'instant',
   leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
-  heatCapacity = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
+  heatCapacity = null, oceanCells = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
   iceLight = false, brineReservoir = false, iceAlbedoPhases = false, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
   whiteIceAlbedo = ALBEDO_PHASES.whiteIceAlbedo, pondAlbedo = ALBEDO_PHASES.pondAlbedo, pondFraction = ALBEDO_PHASES.pondFraction,
 } = {}) {
@@ -248,7 +249,7 @@ export function createSeaIce(mesh, {
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion, openShare = leadClosure === 'hibler' ? () => 1 : (A) => 1 - A;
   const removal = seaIceRemoval(keepSmallIce);
-  const transfer = iceExchangeOptions(iceExchange), turbulent = transfer.turbulent;
+  const transfer = iceExchangeOptions(iceExchange), turbulent = transfer.turbulent, holds = (i) => turbulent && (!oceanCells || oceanCells[i] > 0);
   const budget = { frozen: 0, melted: 0, snowfall: 0, snowMelted: 0, snowIce: 0, leadFrozen: 0, lateralMelted: 0 };
   const oceanFlux = new Float64Array(buffers && buffers.oceanFlux ? buffers.oceanFlux : new SharedArrayBuffer(8 * C));
   const waterHeat = new Float64Array(buffers && buffers.waterHeat ? buffers.waterHeat : new SharedArrayBuffer(8 * C));
@@ -326,7 +327,7 @@ export function createSeaIce(mesh, {
    * exchanges heat with the water as turbulence does.
    */
   const waterTemperature = (i) => (turbulent ? FREEZING_POINT + waterHeat[i] / capacityOf(i) : FREEZING_POINT);
-  const holdWater = (i, temperature) => { if (turbulent) waterHeat[i] = capacityOf(i) * (temperature - FREEZING_POINT); };
+  const holdWater = (i, temperature) => { if (holds(i)) waterHeat[i] = capacityOf(i) * (temperature - FREEZING_POINT); };
 
   function deposit(i, amount, airTemperature, ice, surfaceT) {
     if (airTemperature >= MELTING_POINT || amount <= 0) return false;
@@ -406,7 +407,7 @@ export function createSeaIce(mesh, {
       thickness -= excess / latent;
     }
     let leadHeat = (1 - A) * (waterFlux + ocean) * dt, excess = 0, side = 0, lost = 0;
-    if (turbulent) {
+    if (holds(i)) {
       const stored = waterHeat[i] + leadHeat, rise = Math.max(0, stored) / capacity;
       leadHeat = Math.min(0, stored);
       excess = Math.max(0, stored);

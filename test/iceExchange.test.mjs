@@ -18,7 +18,7 @@ const POLAR = 62 * Math.PI / 180;
 
 function rig(iceExchange, { thickness = 1.2, cover = 0.8, flux = 0, global = false, geography = null } = {}) {
   const r = hybridOcean({ iceExchange, everySteps: 1, ...(geography ? { geography } : {}) }, () => 4000, 290), { mesh, C, ocean, surfaceT, ice } = r;
-  r.seaIce = createSeaIce(mesh, { heatCapacity: ocean.capacity, iceExchange: ocean.iceExchange });
+  r.seaIce = createSeaIce(mesh, { heatCapacity: ocean.capacity, oceanCells: ocean.cellOcean, iceExchange: ocean.iceExchange });
   ocean.useSeaIce(r.seaIce.concentration, r.seaIce);
   for (let i = 0; i < C; i++) if (global || Math.abs(mesh.latCell[i]) > POLAR) { ice[i] = thickness; surfaceT[i] = FREEZING_POINT - 3; r.seaIce.concentration[i] = cover; }
   ocean.initialize(surfaceT, ice, { concentration: r.seaIce.concentration });
@@ -143,20 +143,22 @@ test('a restart carries what the exchange adds: the water\'s heat and the conduc
   assert.throws(() => compare(lost), /whole against/, 'dropping the water\'s heat changes the run');
 });
 
-test('ice on a cell with no ocean under it, as on a lake, leaves the ocean finite there and at freezing, as the instant exchange does', () => {
+test('ice on a cell with no ocean under it, as on a lake, holds no heat under the turbulent exchange and takes the leads\' gain as the instant exchange does, and the ocean stays finite there', () => {
   const { nCells, nEdges, latCell, cellsOnEdge } = oceanMesh, land = Uint8Array.from({ length: nCells }, (_, i) => (latCell[i] > POLAR && i % 4 === 0 ? 1 : 0));
   const geography = { land, elevation: Float64Array.from(land, (l) => (l ? 100 : -4000)), edgeOcean: Uint8Array.from({ length: nEdges }, (_, e) => (land[cellsOnEdge[2 * e]] || land[cellsOnEdge[2 * e + 1]] ? 0 : 1)) };
   const [instant, turbulent] = ['instant', 'turbulent'].map((mode) => {
-    const r = rig(mode, { geography }), { C, ocean, ice } = r;
-    for (let n = 0; n < 4; n++) r.step();
+    const r = rig(mode, { geography, flux: 40 }), { C, ocean, ice, surfaceT, seaIce } = r;
+    for (let n = 0; n < 8; n++) r.step();
     const dry = [];
-    for (let i = 0; i < C; i++) if (!ocean.cellOcean[i] && ice[i] > 0) dry.push(i);
+    let held = 0;
+    for (let i = 0; i < C; i++) if (ice[i] > 0) { if (!ocean.cellOcean[i]) dry.push(i); else if (seaIce.turbulent && seaIce.waterHeat[i] > 0) held++; }
     assert.ok(ocean.serialize().T.every(Number.isFinite), `${mode}: every layer's temperature is finite`);
-    return { dry, T0: dry.map((i) => ocean.T0[i]), Q: dry.map((i) => ocean.Q[i]) };
+    const at = (a) => dry.map((i) => a[i]);
+    return { held, dry: { cells: dry, ice: at(ice), cover: at(seaIce.concentration), surfaceT: at(surfaceT), snow: at(seaIce.snow), water: seaIce.turbulent ? at(seaIce.waterHeat) : dry.map(() => 0), T0: at(ocean.T0), Q: at(ocean.Q) } };
   });
-  assert.ok(turbulent.dry.length > 0, 'some iced cells have no ocean under them');
-  assert.deepEqual(turbulent, instant);
-  for (const t of turbulent.T0) assert.equal(t, FREEZING_POINT);
+  assert.ok(turbulent.dry.cells.length > 0 && turbulent.held > 0, `${turbulent.dry.cells.length} iced cells with no ocean under them; ${turbulent.held} over the ocean hold heat`);
+  assert.deepEqual(turbulent.dry, instant.dry);
+  for (const t of turbulent.dry.T0) assert.equal(t, FREEZING_POINT);
 });
 
 test('the ocean and the sea ice agree on the exchange, and the model builds the ice from the ocean\'s option', () => {

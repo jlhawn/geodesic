@@ -2251,7 +2251,7 @@ ${core.fieldConstants}
       return rhoCp * transfer.heatTransfer * Math.max(transfer.frictionMinimum, waterRoot * speed);
     };
     const iceConductance = turbulent ? kept('iceConductance') ?? Float64Array.from({ length: C }, (_, i) => stirred(i)) : null;
-    core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h) : null, penetrated: kept('penetrated'), waterHeat: iceWater, conductance: iceConductance });
+    core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h) : null, penetrated: kept('penetrated'), waterHeat: iceWater, conductance: iceConductance, oceanCells: cellOcean });
     if (regridOnDevice) regrid(Infinity);
   }
   function mixedDepthsOf(h, Q, W) {

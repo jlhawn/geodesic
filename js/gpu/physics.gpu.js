@@ -1204,9 +1204,10 @@ ${brine ? '    let filling = T >= MELTING || PH[PH_BRINE + i] > 0.0;\n' : ''}   
       snow -= fromSnow; excess -= fromSnow * LFUS;
       thickness -= excess / LATENT_ICE;
     }
-${turbulent ? `    let wStored = PH[PH_WHEAT + i] + (1.0 - cover) * (waterFlux + ocean) * dt;
-    let leadHeat = min(0.0, wStored);
-    var wHeat = max(0.0, wStored);
+${turbulent ? `    let wWet = PH[PH_WET + i] > 0.5;
+    let wStored = select(0.0, PH[PH_WHEAT + i], wWet) + (1.0 - cover) * (waterFlux + ocean) * dt;
+    let leadHeat = select(wStored, min(0.0, wStored), wWet);
+    var wHeat = select(0.0, max(0.0, wStored), wWet);
     let wRise = wHeat / capacity;
     let wBasal = PH[PH_CONDUCT + i] * wRise * dt;
     let wLateral = min(1.0, XFER_RATE * pow(max(wRise, 1.0e-30), XFER_EXP) * dt);
@@ -1217,8 +1218,8 @@ ${turbulent ? `    let wStored = PH[PH_WHEAT + i] + (1.0 - cover) * (waterFlux +
     thickness -= wShare * wBasal / LATENT_ICE;
     let wLost = wSide * cover * max(0.0, thickness);
     wHeat = max(0.0, wHeat - cover * wShare * wBasal - LATENT_ICE * wLost);
-    let leadIce = -leadHeat / LATENT_ICE;
-    let melted = max(0.0, -(cover * (thickness - h)));
+    let leadIce = max(0.0, -leadHeat / LATENT_ICE);
+    let melted = max(0.0, -(cover * (thickness - h))) + max(0.0, leadHeat / LATENT_ICE);
     var volume = cover * thickness - wLost - leadHeat / LATENT_ICE;
     let remaining = cover * SKINC * (T - FREEZING) - LATENT_ICE * volume - LFUS * cover * snow${brine ? ' + cover * reservoir' : ''};
 ` : `    let leadHeat = (1.0 - cover) * (waterFlux + ocean) * dt;
