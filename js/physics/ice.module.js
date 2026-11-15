@@ -117,7 +117,11 @@ export const savedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? s
  * evolves as above; the heat the leads gain or lose, with the ocean's
  * flux under them, melts ice or freezes new ice. Melting takes area as
  * Hibler (1979) does, half the relative loss of volume from the area,
- * times areaLossFactor;
+ * times areaLossFactor. The half assumes thickness spread evenly from 0
+ * to 2h: melting δ off the pack removes the ice thinner than δ, a share
+ * δ/(2h) of the ice's area, whether the heat comes through the ice's
+ * top, its base or the leads. A summer pack, whose leads do not refreeze,
+ * holds less thin ice than that, which areaLossFactor below 1 represents;
  * ice frozen in the leads closes them as (1 − A) of new ice leadClosing
  * thick, so the open area closes as its square, or with leadClosure
  * 'hibler' as all of it, Hibler's (1979) h₀ law with h₀ = leadClosing
