@@ -41,6 +41,10 @@
 //                P.step<n> (each array in its own type): the GPU half, a minute on the GPU at N=128
 //   --against P  builds only the CPU model and compares it at each count in STEPS with P.step<n> from a
 //                --gpu-dump run of the same state, options and STEPS: the CPU half, which needs no GPU
+//   --cpu-dump P writes the CPU's C-long mapped arrays, C-long state arrays and concentration at each count in
+//                STEPS to P.step<n>, laid out as a --gpu-dump file, so that the engines can be compared cell by cell
+//   --trace C1,C2,… --trace-out FILE  appends to FILE after every step one JSON line per engine built: the rows of
+//                TRACE_ROWS, Ts and the ice thickness at those cells
 //   --out FILE   also writes the report to FILE;  env FLAGS sets Dawn toggles for the GPU adapter,
 //                env OCEAN a JSON object of ocean options for both models (the iceExchange the save records
 //                where it names none), env BOUNDARY_LAYER one of
@@ -49,7 +53,7 @@
 //                one of sea-ice options and env LAND one of land options; env LAKE, lake options over those the save records (savedLakeOptions)
 //   The default runs the clear-sky pass, which the page does not: RADIATION='{"clearSkyPass":false}' compares the page's shader.
 // Run it with the GPU free (CLAUDE.md): one GPU model at a time.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { serialize, deserialize } from 'node:v8';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -59,11 +63,12 @@ import { refuseUnreadOptions } from './optionEnvironment.mjs';
 refuseUnreadOptions(import.meta.url);
 const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 const flagValue = (flag) => (process.argv.includes(flag) ? process.argv[process.argv.indexOf(flag) + 1] : null);
-const args = process.argv.slice(2).filter((a) => !a.startsWith('--') && !['--out', '--gpu-dump', '--against'].some((flag) => a === flagValue(flag)));
+const args = process.argv.slice(2).filter((a) => !a.startsWith('--') && !['--out', '--gpu-dump', '--against', '--cpu-dump', '--trace', '--trace-out'].some((flag) => a === flagValue(flag)));
 const FILE = args[0], STEPS = (args[1] ?? '1,2').split(',').map(Number), CPU_ONLY = process.argv.includes('--cpu-only');
-const GPU_DUMP = flagValue('--gpu-dump'), AGAINST = flagValue('--against'), NO_GPU = CPU_ONLY || !!AGAINST;
+const GPU_DUMP = flagValue('--gpu-dump'), AGAINST = flagValue('--against'), CPU_DUMP = flagValue('--cpu-dump'), TRACE = flagValue('--trace')?.split(',').map(Number), TRACE_OUT = flagValue('--trace-out'), NO_GPU = CPU_ONLY || !!AGAINST;
 const OUT = process.argv.includes('--out') ? process.argv[process.argv.indexOf('--out') + 1] : null, TOL = Number(process.env.TOL ?? 1e-3);
 if (!FILE) { console.error('usage: node scripts/compareEngines.mjs STATE.bin [STEPS=1,2] [--out FILE] [--cpu-only]'); process.exit(2); }
+if (TRACE && !TRACE_OUT) { console.error('--trace takes --trace-out FILE'); process.exit(2); }
 
 // PH region -> the CPU model's array ([tail]: the CPU array is K·C long and the region holds its last layers)
 export const PH_MAP = {
@@ -105,9 +110,9 @@ export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'O
 // f64 part at a few columns near the threshold, so these are judged by the share of cells that differ by more than TOL of
 // the row's largest CPU value and fail past their bound here, max(3 × the worst share measured on
 // runs/sixteen/sixteen128_day0730.bin through 17 steps, 1e-3), the rows from COND on measured on seventeen128 day 1095 and
-// combined128 day 1460, and the rms of the cells under that threshold stays within 3 TOL; env SHARE sets one bound for every row, env
+// combined128 day 1460 (from MLMGATE on, all three), and the rms of the cells under that threshold stays within 3 TOL; env SHARE sets one bound for every row, env
 // DECISION_EXTRA adds rows (comma separated) under it
-export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001, COND: 0.001, MIXH: 0.0078, STRESS: 0.0165, DRAG: 0.0066, HEATX: 0.0048, DECKF: 0.001, MLMCOVER: 0.001, MLMENT: 0.001, OBETA: 0.001, OBLOCK: 0.001, OLAUNCH: 0.00156, OSTRESS: 0.00126, CONC: 0.001, STRAT: 0.001, USTAR: 0.001 };
+export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001, COND: 0.001, MIXH: 0.0078, STRESS: 0.0165, DRAG: 0.0066, HEATX: 0.0048, DECKF: 0.001, MLMCOVER: 0.001, MLMENT: 0.001, OBETA: 0.001, OBLOCK: 0.001, OLAUNCH: 0.00156, OSTRESS: 0.00126, CONC: 0.001, STRAT: 0.001, USTAR: 0.001, MLMGATE: 0.001, MLMH: 0.00198, MLMTOP: 0.001, DECKFROM: 0.001 };
 // f32 rounding of the soil store: eight spacings at 300 kg/m²
 const ABSOLUTE_FLOOR = { RUNOFF: 2.5e-4, DISCHARGE: 2.5e-4 };
 const CARRIED = new Set(['PEN']), CARRY_GRAINS = 1.25;
@@ -290,6 +295,19 @@ function mappedReport(phNames, phArray, step, carry = null) {
   lines.push(`\n### decision divergence: share of cells\n\n| PH | CPU array | share > TOL | bound | rel rms | rel rms under TOL | rel max | max abs cpu | verdict |\n|---|---|---|---|---|---|---|---|---|`, ...decisions);
 }
 
+const TRACE_ROWS = ['REGIME', 'MLMGATE', 'MLMH', 'MLMSUB', 'MLMTOP', 'STRAT', 'DECK', 'DECKF', 'MLMCOVER', 'MLMWATER', 'DEPTH', 'MIXTOP', 'BUOY', 'SH', 'EVAP', 'CONC', 'CTCOOL', 'VRAD', 'ENTRAIN', 'USTAR'];
+async function traceStep(step) {
+  for (const model of [cpu, gpu].filter(Boolean)) {
+    let value = (name, i) => (PH_MAP[name] ? cpuArray(cpu, PH_MAP[name])?.array[i] : undefined);
+    if (model === gpu) {
+      await gpu.sync();
+      const ph = await readBuffer(gpu.gpu.device, gpu.gpu.buffers.PH, gpu.gpu.buffers.PH.size, Float32Array), at = gpu.gpu.layout.PH;
+      value = (name, i) => (at[name] === undefined ? undefined : ph[at[name] + i]);
+    }
+    const cells = Object.fromEntries(TRACE.map((i) => [i, { ...Object.fromEntries(TRACE_ROWS.map((name) => [name, value(name, i)]).filter(([, v]) => v !== undefined)), Ts: model.state[3][i], ice: model.state[6][i] }]));
+    appendFileSync(TRACE_OUT, JSON.stringify({ engine: model === gpu ? 'gpu' : 'cpu', step, cells }) + '\n');
+  }
+}
 const held = (v) => (typed(v) ? v.slice() : Array.isArray(v) && v.every((x) => typeof x === 'number') ? Float64Array.from(v) : v);
 const heldAll = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, held(v)]));
 async function gpuSnapshot() {
@@ -320,8 +338,9 @@ else if (savedLakes) {
 } else if (lakeCells.length) lines.push(`lake columns at load: the save holds none, so both engines start FLake's ${lakeCells.length} lake cells from fresh columns at the first step, which nothing here checks`);
 let done = 0;
 for (const target of STEPS) {
-  while (done < target) { const t0 = Date.now(); if (cpu) cpu.step(dt); const t1 = Date.now(); if (gpu) { await gpu.step(dt); await gpu.settle(); } done++; console.error(`step ${done}${cpu ? `: cpu ${((t1 - t0) / 1000).toFixed(1)} s` : ''}`); }
+  while (done < target) { const t0 = Date.now(); if (cpu) cpu.step(dt); const t1 = Date.now(); if (gpu) { await gpu.step(dt); await gpu.settle(); } done++; if (TRACE) await traceStep(done); console.error(`step ${done}${cpu ? `: cpu ${((t1 - t0) / 1000).toFixed(1)} s` : ''}`); }
   if (GPU_DUMP) { writeFileSync(`${GPU_DUMP}.step${done}`, serialize(await gpuSnapshot())); continue; }
+  if (CPU_DUMP && cpu) writeFileSync(`${CPU_DUMP}.step${done}`, serialize({ state: cpu.state.map((a) => (a.length === C ? Float64Array.from(a) : null)), concentration: Float64Array.from(cpu.seaIce.concentration), regions: Object.fromEntries(Object.entries(PH_MAP).map(([name, path]) => [name, cpuArray(cpu, path)?.array]).filter(([, a]) => a && a.length === C).map(([name, a]) => [name, Float64Array.from(a)])) }));
   lines.push(`\n## after ${done} step${done > 1 ? 's' : ''}`);
   if (CPU_ONLY) { mappedReport(Object.keys(PH_MAP), () => null, done); continue; }
   const g = await gpuAt(done);
