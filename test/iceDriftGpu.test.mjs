@@ -208,6 +208,30 @@ test('twenty coupled calls with the cavitating fluid: ice, ice velocity and the 
 test('twenty coupled calls with the cavitating fluid and iceExchange turbulent: the water\'s heat under the ice, the conductance of the ice\'s stirring, ice, ice velocity and the ocean follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mixedLayerRestratification: false, iceExchange: 'turbulent' }));
 test('twenty coupled calls with the cavitating fluid, mstarScheme rh18 and langmuirScheme rescale: ice, ice velocity and the ocean under it follow the CPU, its top layer in every cell to 0.1 K', { skip: !gpuAvailable && 'webgpu not installed' }, () => cavitating({ mstarScheme: 'rh18', langmuirScheme: 'rescale', mixedLayerRestratification: false }));
 
+test('loading a save made without iceExchange turbulent, the GPU starts the conductance as the CPU does: zero on land, from the ice\'s drift over the top layer elsewhere', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), stress = windStress(probe.mesh);
+  probe.destroy();
+  const made = await scenario({ rheology: 'cavitating' }, { stress });
+  for (let n = 0; n < 6; n++) made.stepCpu();
+  const saved = made.cpu.serialize({ restart: true });
+  made.gpuModel.destroy();
+  assert.ok(!('iceConductance' in saved) && saved.iceVelocity.some((v) => Math.abs(v) > 1e-3), 'a save made without the option, its ice moving');
+  const s = await scenario({ rheology: 'cavitating' }, { stress, ocean: { iceExchange: 'turbulent' } });
+  s.cpu.load(saved, s.surfaceT, s.ice, s.seaIce.concentration);
+  await s.ocean.upload(saved, s.surfaceT, s.ice, s.seaIce.concentration);
+  const [loaded] = await readRanges(s.gpu.device, s.gpu.buffers.PH, [{ offset: s.gpu.layout.PH.CONDUCT, length: s.C }]);
+  const want = s.seaIce.conductance, floor = Math.min(...Array.from(want).filter((k) => k > 0));
+  let dry = 0, stirred = 0, worst = 0;
+  for (let i = 0; i < s.C; i++) {
+    if (!s.cpu.cellOcean[i]) { dry++; assert.equal(want[i], 0); assert.equal(loaded[i], 0, `land cell ${i}`); continue; }
+    if (want[i] > 1.5 * floor) stirred++;
+    worst = Math.max(worst, Math.abs(loaded[i] - want[i]) / want[i]);
+  }
+  console.log(`loaded without the option: ${dry} land cells at zero, ${stirred} of ${s.C - dry} sea cells above 1.5 times the floor ${floor.toFixed(1)} W/m²/K, the device within ${worst.toExponential(2)} of the CPU`);
+  assert.ok(dry > 0 && stirred > 0 && worst < 1e-6, `${dry} land, ${stirred} stirred, worst ${worst}`);
+  s.gpuModel.destroy();
+});
+
 test('inside the model\'s own step every rheology takes the atmosphere\'s stress, validates on the device and keeps the ice finite and below the speed limit', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createModel } = await import('../js/model.module.js'), { initializeState } = await import('../js/physics/init.module.js');
   const cpuModel = createModel(new Grid(N), { topography }), init = initializeState(cpuModel, {});

@@ -2236,7 +2236,21 @@ ${core.fieldConstants}
     const kept = (name) => (restart && restart[name] && restart[name].length === C ? restart[name] : null);
     const rhoCp = o.density * o.specificHeat, topHeat = (i) => (Qref ? Qref[i] + HEAT_REFERENCE * h[i] : Q[i]);
     const iceWater = turbulent ? kept('iceWater') ?? Float64Array.from({ length: C }, (_, i) => (ice[i] > 0 && cellOcean[i] && !shelf[i] ? Math.max(0, rhoCp * (topHeat(i) - h[i] * FREEZING_POINT)) : 0)) : null;
-    const iceConductance = turbulent ? kept('iceConductance') ?? new Float64Array(C).fill(rhoCp * transfer.heatTransfer * transfer.frictionMinimum) : null;
+    const iceVelocity = driftOptions && restart && restart.iceVelocity && restart.iceVelocity.length === E ? restart.iceVelocity : null, waterRoot = driftOptions ? Math.sqrt(driftOptions.waterDrag) : 0;
+    const stirred = (i) => {
+      if (!cellOcean[i] || shelf[i]) return 0;
+      let speed = 0;
+      if (driftOptions) {
+        let x = 0, y = 0, z = 0;
+        for (let m = 0; m < mesh.nEdgesOnCell[i]; m++) {
+          const e = mesh.edgesOnCell[mesh.maxEdges * i + m], w = 0.5 * mesh.dcEdge[e] * mesh.dvEdge[e] * ((iceVelocity ? iceVelocity[e] : 0) - u[e]);
+          x += w * mesh.nEdge[3 * e]; y += w * mesh.nEdge[3 * e + 1]; z += w * mesh.nEdge[3 * e + 2];
+        }
+        speed = Math.hypot(x, y, z) / mesh.areaCell[i];
+      }
+      return rhoCp * transfer.heatTransfer * Math.max(transfer.frictionMinimum, waterRoot * speed);
+    };
+    const iceConductance = turbulent ? kept('iceConductance') ?? Float64Array.from({ length: C }, (_, i) => stirred(i)) : null;
     core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h) : null, penetrated: kept('penetrated'), waterHeat: iceWater, conductance: iceConductance });
     if (regridOnDevice) regrid(Infinity);
   }
