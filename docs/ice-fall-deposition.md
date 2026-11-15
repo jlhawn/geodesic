@@ -103,7 +103,7 @@ What I expect under the option:
 - The heat released by condensation or deposition is L, whatever the phase. L + (1 − α) L_f is the latent heat in the saturation slope only; see "Where the heat of fusion is" in docs/cloud-gas-overlap.md.
 - Deposition's L_f is not booked: about 0.1 K/day in a cloud layer and 2–4 W/m² over the column. The memory carries no enthalpy, so energy closes by construction.
 - Saturation stays on the ramp. A layer of mostly liquid cloud is held 1–10 % below water saturation, which inflates its held liquid at 253–263 K by roughly 0.05–0.1 g/kg. If the Arctic rows fall short, a saturation on the memory's share is the next lead.
-- The radiation's cloud phase stays on the ramp. Coupling it to the memory is a second switch.
+- The radiation's cloud phase stays on the ramp unless `radiation.cloudPhase` is 'memory' (see "Arm B: radiation on the memory").
 - The plumes keep their own ice.
 
 ## CPU (f64) and WGSL (f32)
@@ -144,3 +144,23 @@ What I expect under the option:
 - `test/spinupRestart.test.mjs`: under the option a split spin-up ends bit for bit on the whole one.
 - `test/atmosphereConservation.test.mjs`: the moist row "over a slab with iceDeposition".
 - CLAUDE.md's M5 checks: `test/boundaryLayer.test.mjs`, `test/gpuModel.test.mjs`, and compareEngines at the page state with and without the option.
+
+## Arm B: radiation on the memory
+
+`radiation.cloudPhase` is 'ramp' (the default) or 'memory'; 'memory' needs `moist.iceDeposition` and throws without it, in `createModel`, `createGpuCore` and at the first radiation column.
+
+The rule: a layer's resolved cloud water q_c has liquid share 1 − φ. Its cumulus water keeps the ramp's α(T). The optics per kilogram are linear in the liquid share, so the layer's combined water has the water-weighted mean share (q_c (1 − φ) + w_cu α) / (q_c + w_cu), with the masses and the clear-sky mask applied as the radiation applies them. The deck's water (the mixed-layer or stratus deck, its home layer's unit) stays on α(T).
+
+Sites that decide the radiation's cloud phase:
+
+| Site | CPU (`js/physics/radiation.module.js`) | GPU |
+|---|---|---|
+| Layer optics, solar depth and longwave absorption | `cloudOptics(T, continental, options, out, share)`, called a second time after the cumulus water is added; the ramp call stays | `cloudOpticsAt(T, continental, liquid)`, with `cloudOptics` its ramp wrapper; radiation kernel |
+| Layer optics in the deck's shading loop | same arrays | physics kernel, `MEMORY_SHADE` |
+| Layered shortwave's liquid share | `layerLiquid[k]` set from the mixed share | `liquid` in `layeredKernel`, `MEMORY_LAYERED` |
+| Deck unit at its home layer | `rampSolar`, in `shadowDeck` | `light.unit` already ramp; `unit` in the shading loop and `deckUnit` in the radiation kernel read the ramp optics |
+| Deck water over the layer's longwave and shortwave | `rampInfrared`, `rampSolar` at `deckK` | `rampOptics.y`, `deckUnit` |
+
+Under 'ramp' every kernel text, the shared functions and the PH layout are those of the default. Under 'memory' only the physics, radiation and layered kernels change, by string patches that each anchor exactly once, and the shared `cloudOptics` is split into `cloudOpticsAt` and its wrapper. The kernels read `PH_CICE`, which exists under `iceDeposition`.
+
+Tests are in `test/cloudPhaseOptics.test.mjs`: the defaults and throws, the CPU optics at 255 K with φ = 0.2 and with cumulus water, kernel identity, and an N=16 CPU against GPU row on bl34 and bl48 for both shortwave schemes.

@@ -723,10 +723,11 @@ export function iceRadius(T, { iceFitWarmest, iceFitColdest } = CLOUD_OPTICS) {
  * (cloudOptics(T, continental, options) with the options of CLOUD_OPTICS):
  * `liquid` the liquid share, `visible` its mid-visible extinction optical
  * depth, `solar` the two-stream's depth (1 − g) of it, `infrared` its
- * longwave absorption with the diffusivity factor (all m²/kg).
+ * longwave absorption with the diffusivity factor (all m²/kg). A `share`
+ * from 0 to 1 replaces the ramp's liquid share at T.
  */
-export function cloudOptics(T, continental, options = CLOUD_OPTICS, out = { liquid: 0, visible: 0, solar: 0, infrared: 0 }) {
-  const liquid = liquidShare(T, options), droplet = continental ? options.landDropletRadius : options.seaDropletRadius;
+export function cloudOptics(T, continental, options = CLOUD_OPTICS, out = { liquid: 0, visible: 0, solar: 0, infrared: 0 }, share = null) {
+  const liquid = share === null ? liquidShare(T, options) : share, droplet = continental ? options.landDropletRadius : options.seaDropletRadius;
   const crystal = iceRadius(T, options);
   const liquidVisible = 1500 / droplet, iceVisible = 1000 * (3.448e-3 + 2.431 / crystal);
   out.liquid = liquid;
@@ -753,7 +754,7 @@ export function createRadiation(mesh, core, {
   longwaveScheme = 'correlated', longwaveOverlap = 'exponentialRandom', traceCloudPath = null, longwaveLines = 'voigt', solarGases = 'clirad', nearInfrared = 'bands', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
   rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, nearInfraredRayleigh = NEAR_INFRARED_RAYLEIGH, upwardAbsorption = true, visibleFraction = VISIBLE_FRACTION, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, aerosol = DEFAULT_AEROSOL, aerosolScale = 1, aerosolFields = null, land = null, iceSheet = null, longwaveTable = null,
   liquidTemperature = CLOUD_OPTICS.liquidTemperature, iceTemperature = CLOUD_OPTICS.iceTemperature, seaDropletRadius = CLOUD_OPTICS.seaDropletRadius, landDropletRadius = CLOUD_OPTICS.landDropletRadius,
-  liquidInfrared = CLOUD_OPTICS.liquidInfrared, diffusivity = CLOUD_OPTICS.diffusivity, iceFitWarmest = CLOUD_OPTICS.iceFitWarmest, iceFitColdest = CLOUD_OPTICS.iceFitColdest, radiationEvery = 1,
+  liquidInfrared = CLOUD_OPTICS.liquidInfrared, diffusivity = CLOUD_OPTICS.diffusivity, iceFitWarmest = CLOUD_OPTICS.iceFitWarmest, iceFitColdest = CLOUD_OPTICS.iceFitColdest, radiationEvery = 1, cloudPhase = 'ramp',
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential, piSigmaDot, p0 } = core.diagnostics;
   const { thetaV } = core.arrays;
@@ -902,6 +903,10 @@ export function createRadiation(mesh, core, {
   const temperature = new Float64Array(K);
   const optics = { liquidTemperature, iceTemperature, seaDropletRadius, landDropletRadius, liquidInfrared, diffusivity, iceFitWarmest, iceFitColdest };
   const graySolar = cloudScattering !== null, grayInfrared = cloudAbsorption !== null;
+  if (cloudPhase !== 'ramp' && cloudPhase !== 'memory') throw new Error(`cloudPhase must be 'ramp' or 'memory', not ${cloudPhase}`);
+  const memory = cloudPhase === 'memory';
+  let cloudIce = null;
+  const rampSolar = new Float64Array(K), rampInfrared = new Float64Array(K);
   if (shortwaveScheme !== 'sequential' && shortwaveScheme !== 'layered') throw new Error(`shortwave must be 'sequential' or 'layered', not ${shortwaveScheme}`);
   const layering = shortwaveScheme === 'layered';
   if (layering && !(solarGases === 'clirad' && bands && scatters && !shielding && !graySolar && vaporAbsorption === 1)) throw new Error(`shortwave 'layered' needs solarGases 'clirad', nearInfrared 'bands', Rayleigh scattering or aerosol, vaporShielding 'none', no gray cloudScattering and vaporAbsorption 1`);
@@ -1288,7 +1293,7 @@ export function createRadiation(mesh, core, {
     if (deckAtTop) {
       if (reconstructed) home = reconstructed.share < 1 ? reconstructed.layer : reconstructed.layer + 1;
       else { home = K - 1; while (home > 1 && interfaceHeight(home) < h) home--; }
-      deckLight.layer = cloudWater[home]; deckLight.clear = deckLight.rate * cloudWater[home]; deckLight.unit = solarDepth[home];
+      deckLight.layer = cloudWater[home]; deckLight.clear = deckLight.rate * cloudWater[home]; deckLight.unit = (memory ? rampSolar : solarDepth)[home];
     }
     const forcing = { surfacePressure: pi, sensibleHeat: sensible, evaporation, radiation: shadowLongwave, subsidence: () => subsidence, absorbedSolar, thetaLAbove, qtAbove };
     const start = { h, thetaL: heat / weight, qt: water / weight };
@@ -1527,7 +1532,9 @@ export function createRadiation(mesh, core, {
         solarDepth[k] = graySolar ? cloudScattering : layerOptics.solar;
         infrared[k] = grayInfrared ? cloudAbsorption : layerOptics.infrared;
         if (layering) { layerLiquid[k] = layerOptics.liquid; layerIceRadius[k] = iceRadius(theta[idx] * exnerLayer[idx], optics); }
+        if (memory) { rampSolar[k] = layerOptics.solar; rampInfrared[k] = layerOptics.infrared; }
       }
+      const resolvedWater = cloudWater[k];
       layerCover[k] = 1;
       if (cloudCover === 'pdf' && q !== null && cloudWater[k] > 0 && boundaryCover === 'variance' && (geopotential[idx] - geopotential[bottom * C + i]) / g < mixingDepth) {
         layerCover[k] = Math.min(1, Math.max(coverFloor, turbulentCover(i, k, pi, theta, q, qc, mixingDepth, mixedDepth)));
@@ -1550,6 +1557,15 @@ export function createRadiation(mesh, core, {
         layerCover[k] = cloudWater[k] > 0 ? Math.max(layerCover[k], cumulusCover[idx]) : cumulusCover[idx];
         cloudWater[k] += cumulus;
         cloudPath += cumulus;
+      }
+      if (memory && cloudWater[k] > 0 && !(graySolar && grayInfrared)) {
+        if (cloudIce === null) throw new Error("cloudPhase 'memory' needs moist.iceDeposition and the model's cloudIceShare");
+        const temperatureK = theta[idx] * exnerLayer[idx], ramped = liquidShare(temperatureK, optics);
+        const share = (resolvedWater * (1 - cloudIce[idx]) + cumulus * ramped) / cloudWater[k];
+        cloudOptics(temperatureK, continental[i] === 1, optics, layerOptics, share);
+        solarDepth[k] = graySolar ? cloudScattering : layerOptics.solar;
+        infrared[k] = grayInfrared ? cloudAbsorption : layerOptics.infrared;
+        if (layering) layerLiquid[k] = layerOptics.liquid;
       }
       cloudDepth += solarDepth[k] * cloudWater[k];
       let seen = cloudCover === 'pdf' && cloudWater[k] > 0 ? layerCover[k] * -Math.expm1(-cloudWater[k] / VISIBLE_PATH) : 0;
@@ -1761,7 +1777,7 @@ export function createRadiation(mesh, core, {
       emissivity[k] = 1 - Math.exp(coupled ? -vaporCoupling * Math.max(0, q[k * C + i]) * mass : -tau0 * shape[k]);
       const water = cloudWater[k];
       cloudEmissivity[k] = water > 0 ? layerCover[k] * (1 - transmitted(infrared[k] * water / layerCover[k])) : 0;
-      if (deck > 0 && k === deckK) cloudEmissivity[k] = fraction * (1 - transmitted(infrared[k] * ((k >= replaced ? 0 : water) + deck))) + (1 - fraction) * cloudEmissivity[k];
+      if (deck > 0 && k === deckK) cloudEmissivity[k] = fraction * (1 - transmitted(memory ? infrared[k] * (k >= replaced ? 0 : water) + rampInfrared[k] * deck : infrared[k] * ((k >= replaced ? 0 : water) + deck))) + (1 - fraction) * cloudEmissivity[k];
       else if (k >= replaced) cloudEmissivity[k] *= 1 - fraction;
       const clear = 1 - cloudEmissivity[k];
       vaporEmissivity[k] = 1 - (1 - emissivity[k]) * clear;
@@ -1792,7 +1808,7 @@ export function createRadiation(mesh, core, {
       clearShare = 0;
     }
     if (deck > 0) {
-      const over = replaced < K, path = over ? abovePath[replaced] : cloudPath, total = path + deck, deckDepth = (graySolar ? cloudScattering : solarDepth[deckK]) * deck;
+      const over = replaced < K, path = over ? abovePath[replaced] : cloudPath, total = path + deck, deckDepth = (graySolar ? cloudScattering : (memory ? rampSolar : solarDepth)[deckK]) * deck;
       if (cloudColumns) {
         let resolved = columns ? columnCover : 0, depth = columnDepth, spread = columnVariance, water = columnPath;
         if (over) {
@@ -1807,7 +1823,7 @@ export function createRadiation(mesh, core, {
           const both = depth + deckDepth, variance = (spread * depth * depth + cloudSpread * cloudSpread * deckDepth * deckDepth) / (both * both);
           cloudyColumns(decked, lognormalNodes(variance), both, water + deck, mu, surfaceAlbedo, diffuseAlbedo, resolved, true);
         }
-      } else shortwave(decked, graySolar ? cloudScattering * total : (over ? aboveSolar[replaced] : cloudDepth) + solarDepth[deckK] * deck, Math.exp(-cloudSolarAbsorption * total), mu, surfaceAlbedo, diffuseAlbedo);
+      } else shortwave(decked, graySolar ? cloudScattering * total : (over ? aboveSolar[replaced] : cloudDepth) + (memory ? rampSolar : solarDepth)[deckK] * deck, Math.exp(-cloudSolarAbsorption * total), mu, surfaceAlbedo, diffuseAlbedo);
       deckShare = fraction * incident * decked.cloud / total;
       clearShare *= 1 - fraction;
       sky.absorbed = fraction * decked.absorbed + (1 - fraction) * sky.absorbed;
@@ -2196,6 +2212,11 @@ export function createRadiation(mesh, core, {
     condensing = settings;
   }
 
+  function useCloudIce(share) {
+    if (memory && !share) throw new Error("cloudPhase 'memory' needs moist.iceDeposition: the memory is the share of each layer's cloud that is ice");
+    cloudIce = share;
+  }
+
   function useCumulus(cover, water) {
     const on = cumulusCloud && cloudCover === 'pdf' && cover && water;
     cumulusCover = on ? cover : null;
@@ -2203,5 +2224,5 @@ export function createRadiation(mesh, core, {
   }
 
   const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, ceilingInversion: ceilingJump, gateMemory, deckRest, cumulusCeiling, deckRegime, deckBypass, stratusWaterMax };
-  return { setTime, aerosolFields: macFields, aerosolProfiles: mac ? { heights: macHeights, fine: macFine, coarse: macCoarse, visible: macProfileV, nearInfrared: macProfileN, optics: macOptics } : null, sun, cosZenith, callCosZenith, radiationEvery, shortwave: shortwaveScheme, held, insolation, column, apply, readMeans, restartSums, summed, clearSkyPass, useCloudMask, useCondensation, solarDepth, infrared, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, useCumulus, useBoundaryLayer, longwave, layerCover, lowCover, lowWater, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, surfaceSolar, evaporation, sensibleHeat, potentialEvaporation, surfaceBuoyancy, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, mlmLayer, mlmShare, deckLayer, deckFrom, deckInversion, deckCloud, deckResolved, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, surfaceSolar: solarBuffer, evaporation: evaporationBuffer, sensibleHeat: sensibleBuffer, surfaceBuoyancy: surfaceBuoyancyBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, mlmLayer: mlmLayerBuffer, mlmShare: mlmShareBuffer, deckLayer: deckLayerBuffer, deckFrom: deckFromBuffer, stratiform: stratiformBuffer, longwave: longwaveBuffer, summed: summedBuffers, held: heldBuffer } };
+  return { setTime, aerosolFields: macFields, aerosolProfiles: mac ? { heights: macHeights, fine: macFine, coarse: macCoarse, visible: macProfileV, nearInfrared: macProfileN, optics: macOptics } : null, sun, cosZenith, callCosZenith, radiationEvery, shortwave: shortwaveScheme, held, insolation, column, apply, readMeans, restartSums, summed, clearSkyPass, useCloudMask, useCondensation, solarDepth, infrared, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, useCumulus, useCloudIce, useBoundaryLayer, longwave, layerCover, lowCover, lowWater, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, surfaceSolar, evaporation, sensibleHeat, potentialEvaporation, surfaceBuoyancy, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, mlmLayer, mlmShare, deckLayer, deckFrom, deckInversion, deckCloud, deckResolved, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, surfaceSolar: solarBuffer, evaporation: evaporationBuffer, sensibleHeat: sensibleBuffer, surfaceBuoyancy: surfaceBuoyancyBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, mlmLayer: mlmLayerBuffer, mlmShare: mlmShareBuffer, deckLayer: deckLayerBuffer, deckFrom: deckFromBuffer, stratiform: stratiformBuffer, longwave: longwaveBuffer, summed: summedBuffers, held: heldBuffer } };
 }

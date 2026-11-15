@@ -113,6 +113,7 @@ export async function createGpuModel(gridOrMesh, {
   const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });
   const seaFlow = physics.relativeWind ? new Float64Array(mesh.nEdges) : null;
   const moistCpu = createMoistPhysics(mesh, core, { ...moist, stabilityLayer: radiationCpu.stabilityLayer });
+  if (moistCpu.cloudIceShare) radiationCpu.useCloudIce(moistCpu.cloudIceShare);
   const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { iceDrift: COUPLED_ICE_DRIFT, gustiness: surface.gustiness ?? 3, ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography: oceanGeography, packing, registers: { T: gpu.buffers.T, K1: gpu.buffers.K1, K2: gpu.buffers.K2, K3: gpu.buffers.K3, K4: gpu.buffers.K4 } });
   if (gpuOcean) gpuOcean.useSeaIce(seaIce.concentration);
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;

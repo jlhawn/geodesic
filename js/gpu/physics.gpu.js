@@ -230,6 +230,8 @@ ${nir ? nir.functions : `fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>,
 ${NIR_SHIELDED_STUB}`}`;
 
 export function physicsConstants(o) {
+  if (o.cloudPhase !== undefined && o.cloudPhase !== 'ramp' && o.cloudPhase !== 'memory') throw new Error(`cloudPhase must be 'ramp' or 'memory', not ${o.cloudPhase}`);
+  if (o.cloudPhase === 'memory' && !o.iceDeposition) throw new Error("cloudPhase 'memory' needs iceDeposition: the memory is the share of each layer's cloud that is ice");
   if (o.plumeEntrainmentLaw !== 'ifs' && o.plumeEntrainmentLaw !== 'gregory') throw new Error(`plumeEntrainmentLaw must be 'ifs' or 'gregory', not ${o.plumeEntrainmentLaw}`);
   if (o.plumeConversion !== 'sundqvist' && o.plumeConversion !== 'zhangMcFarlane') throw new Error(`plumeConversion must be 'sundqvist' or 'zhangMcFarlane', not ${o.plumeConversion}`);
   if (o.plumePhase !== 'mixed' && o.plumePhase !== 'liquid') throw new Error(`plumePhase must be 'mixed' or 'liquid', not ${o.plumePhase}`);
@@ -426,7 +428,15 @@ const HELD_SHARE: f32 = ${startPlaceholders(o).neutral.share}; const HELD_NEUTRA
 ${exchangeConstants(o)}${o.soilColumn ? `\n${soilConstants(o.soilColumn)}` : ''}${mac ? aerosolConstants(o) : ''}${o.deepCapacity > 0 ? `\nconst DEEPCAP: f32 = ${o.deepCapacity};` : ''}`;
 }
 
-export const physicsFunctions = (o) => (o.aerosol === 'mac' ? aerosolLight(PHYSICS_FUNCTIONS) : PHYSICS_FUNCTIONS);
+const MEMORY_OPTICS = [`fn cloudOptics(T: f32, continental: bool) -> vec2<f32> {
+  let liquid = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+`, `fn cloudOptics(T: f32, continental: bool) -> vec2<f32> { return cloudOpticsAt(T, continental, clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)); }
+fn cloudOpticsAt(T: f32, continental: bool, liquid: f32) -> vec2<f32> {
+`];
+export const physicsFunctions = (o) => {
+  const text = o.aerosol === 'mac' ? aerosolLight(PHYSICS_FUNCTIONS) : PHYSICS_FUNCTIONS;
+  return o.cloudPhase === 'memory' ? patchOnce(text, MEMORY_OPTICS, 'physics functions') : text;
+};
 export const PHYSICS_FUNCTIONS = `
 fn esat(T: f32) -> f32 { return 611.2 * exp(17.67 * (T - 273.15) / (T - 29.65)); }
 fn qsat(T: f32, p: f32) -> f32 { let es = esat(T); let dry = p - (1.0 - EPSILON) * es; return select(1.0, EPSILON * es / dry, dry > 0.0); }
@@ -3204,6 +3214,9 @@ export function bergeronRain(body) {
 export const PHYSICS_PASSES = ['physics', 'radiation', 'longwave', 'physicsSurface'];
 export const LAYERED_PASSES = ['physics', 'radiation', 'layered', 'longwave', 'physicsSurface'];
 export const layeredPass = (o, held) => layeredKernel(o, held, LONGWAVE_STASH);
+const MEMORY_LAYERED = [`          let liquid = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+`, `          let liquid = memoryShare(k * C + i, T, max(0.0, IN[S_QC + k * C + i]), max(0.0, cumulusCloud(k, i).y));
+`];
 export { LAYERED_SLOTS };
 export const PHYSICS_KERNELS = {
   physics: physicsKernel(false),
@@ -3819,3 +3832,37 @@ fn mixEdge(e: i32, a: i32, b: i32) {
 };
 
 export const omegaStore = (body) => replaceOnce([['    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);\n', '    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);\n    D[D_OMG + idx] = omega;\n']], body, 'omega store');
+
+const MEMORY_SHARE_WGSL = `fn memoryShare(idx: i32, T: f32, resolved: f32, cumulus: f32) -> f32 {
+  let total = resolved + cumulus;
+  if (!(total > 0.0)) { return 0.0; }
+  let ramped = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+  return (resolved * (1.0 - PH[PH_CICE + idx]) + cumulus * ramped) / total;
+}
+`;
+const MEMORY_SHADE = [`        let optics = cloudOptics(IN[S_TH + k * C + i] * D[D_EXM + k * C + i], continental);
+        depth += optics.x * water;
+        if (k == STRATUS_K) { layer = water; unit = optics.x; }
+`, `        let shadeT = IN[S_TH + k * C + i] * D[D_EXM + k * C + i];
+        let rampOptics = cloudOptics(shadeT, continental);
+        let optics = cloudOpticsAt(shadeT, continental, memoryShare(k * C + i, shadeT, max(0.0, IN[S_QC + k * C + i]), max(0.0, cu.y)));
+        depth += optics.x * water;
+        if (k == STRATUS_K) { layer = water; unit = rampOptics.x; }
+`];
+const MEMORY_COLUMN = [[`    let optics = cloudOptics(IN[S_TH + idx] * D[D_EXM + idx], continental);
+    cloudDepth += optics.x * water;
+    if (k == deckK) { deckUnit = optics.x; }
+`, `    let columnT = IN[S_TH + idx] * D[D_EXM + idx];
+    let rampOptics = cloudOptics(columnT, continental);
+    let optics = cloudOpticsAt(columnT, continental, memoryShare(idx, columnT, max(0.0, IN[S_QC + idx]), max(0.0, cu.y)));
+    cloudDepth += optics.x * water;
+    if (k == deckK) { deckUnit = rampOptics.x; }
+`], [`transmitted(optics.y * (select(water, 0.0, k >= replaced) + deck))`, `transmitted(optics.y * select(water, 0.0, k >= replaced) + rampOptics.y * deck)`]];
+export function cloudPhaseKernels({ physics, radiation, layered }) {
+  const out = {
+    physics: MEMORY_SHARE_WGSL + patchOnce(physics, MEMORY_SHADE, 'physics'),
+    radiation: MEMORY_SHARE_WGSL + MEMORY_COLUMN.reduce((text, pair) => patchOnce(text, pair, 'radiation'), radiation),
+  };
+  if (layered) out.layered = MEMORY_SHARE_WGSL + patchOnce(layered, MEMORY_LAYERED, 'layered');
+  return out;
+}

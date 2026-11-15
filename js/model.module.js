@@ -148,6 +148,8 @@ export function createModel(gridOrMesh, {
     ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in radiationOptions).map((key) => [key, radiationOptions[key]])), ...moistOptions,
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
+  if (radiationOptions.cloudPhase === 'memory' && !moistPhysics.cloudIceShare) throw new Error("radiation.cloudPhase 'memory' needs moist.iceDeposition");
+  if (moist && moistPhysics.cloudIceShare) radiation.useCloudIce(moistPhysics.cloudIceShare);
   if (moist) radiation.useCondensation(moistPhysics.condensation);
   const lake = physics && geography && lakeModelOf(geography, lakeOptions) !== 'off' ? createLake(mesh, geography, lakeOptions) : null, lakeCell = lake ? lake.isLake : null;
   const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography: lake ? lakeWater(mesh, geography) : geography, iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }) : null;
