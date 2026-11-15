@@ -475,6 +475,7 @@ const MEANS_FIELDS_FOR_POLAR = ['concentration', 'ice', 'surfaceT', 'shortwave',
 const RECORD = process.env.RECORD;
 const POLAR_LINES = process.env.POLAR_LINES ? (process.env.POLAR_LINES === '1' ? `${OUT}/${TAG}_polar.jsonl` : process.env.POLAR_LINES) : null;
 if (POLAR_LINES && !(MEANS_FIELDS_FOR_POLAR.every((name) => meansFields(process.env.MEANS).includes(name)))) throw new Error(`POLAR_LINES reads the day means of ${MEANS_FIELDS_FOR_POLAR.join(', ')}`);
+if (POLAR_LINES && !RADIATION.clearSkyPass) throw new Error('POLAR_LINES reads the clear-sky pass: leave RADIATION.clearSkyPass on');
 if (POLAR_LINES) mkdirSync(dirname(POLAR_LINES), { recursive: true });
 if (RECORD) mkdirSync(RECORD, { recursive: true });
 const partOfDay = RECORD && startStep && saved.forcingSums ? { sums: saved.forcingSums, steps: saved.forcingSteps, oceanSteps: saved.forcingOceanSteps, seconds: saved.forcingSeconds, rain: saved.forcingRain, runoff: saved.forcingRunoff } : null;
