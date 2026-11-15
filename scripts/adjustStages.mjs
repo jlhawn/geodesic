@@ -23,7 +23,9 @@ import { createGpuCore } from '../js/gpu/core.gpu.js';
 import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { stateGeography } from '../js/geography.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
+refuseUnreadOptions(import.meta.url);
 const BC = process.env.BC ?? 'uniform', DUMP = process.env.DUMP ? Number(process.env.DUMP) : -1;
 const saved = await decodeState(new Uint8Array(readFileSync(process.argv[2])));
 const levels = savedLevels(saved);

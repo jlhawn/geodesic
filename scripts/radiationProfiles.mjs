@@ -32,7 +32,7 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
 const stateMesh = stateGrid(saved, topography).mesh;
 function make(radiation, quiet = false) {
-  const model = createModel(stateMesh, { ice: savedIceOptions(saved), lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation });
+  const model = createModel(stateMesh, { lake: lakeOptionsFor(saved), ice: savedIceOptions(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation });
   STATE_NAMES.forEach((name, a) => model.state[a].set(saved[name]));
   for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
   restoreSurface(model, saved);

@@ -21,7 +21,7 @@ const out = process.argv[3] ?? new URL('../explain/data/surface_budget.json', im
 const saved = await readState(file);
 const dt = 1350 * 16 / saved.N, steps = Number(process.env.STEPS ?? Math.round(86400 / dt));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { ice: savedIceOptions(saved), lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography, geography: ground.geography, land: ground.land });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), ice: savedIceOptions(saved), terrain: stateTerrain(saved), ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography, geography: ground.geography, land: ground.land });
 const { moist, boundaryLayer, radiation, mesh, geography } = model, C = mesh.nCells;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => model.state[a].set(saved[name]));
 if (saved.boundaryDepth) boundaryLayer.depth.set(saved.boundaryDepth);

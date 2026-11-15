@@ -52,7 +52,7 @@ const RADIATION = env('RADIATION'), MOIST = env('MOIST'), EIS_SWITCH = MOIST.str
 const STEPS = Number(process.env.STEPS ?? 4);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { ice: savedIceOptions(saved), lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), ice: savedIceOptions(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land } = model;
 const { K, C, sigmaMid, R, g, cp, p0, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;

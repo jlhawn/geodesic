@@ -11,6 +11,7 @@ import { createModel } from '../js/model.module.js';
 import { syntheticTopography, geographyOptions, readTopography, decodeMask, maskUrl, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { messageState, toSnapshot, restoreMessage, exportState } from '../js/snapshots.module.js';
 import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
+import { DEFAULT_ICE_EXCHANGE } from '../js/physics/ice.module.js';
 
 const SEED = 'soilWater_seed.bin sha256:0123abcd';
 const OPTIONS = {
@@ -19,7 +20,7 @@ const OPTIONS = {
   surface: { relativeWind: true },
 };
 const TERRAIN = { conserveVolume: true };
-const FRESH = { boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, MADE = { ...OPTIONS, ...FRESH };
+const FRESH = { boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST }, ocean: { iceExchange: DEFAULT_ICE_EXCHANGE } }, MADE = { ...OPTIONS, ...FRESH, ocean: { iceExchange: 'instant' } };
 const WATER = ['runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen', 'lakeSeen', 'rainStep', 'rainTotal', 'rainSeen', 'lakePending'];
 
 function synthetic() {

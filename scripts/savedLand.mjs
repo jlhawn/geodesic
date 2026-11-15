@@ -1,4 +1,5 @@
 import { LAKE_FIELDS, holdsLake, savedLake, savedLakeOptions } from '../js/physics/lake.module.js';
+import { savedIceExchange } from '../js/physics/ice.module.js';
 
 /*
  * The land of a saved state onto a model whose arrays are loaded; the deep
@@ -9,13 +10,35 @@ export function loadSavedLand(model, saved) {
   model.land.load(saved.land, model.state[6], saved.time, model.state[3]);
 }
 
-export const savedIceOptions = (saved) => ({ ...(saved.given?.ice ?? {}) });
+export const recordedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange;
+export const savedIceOptions = (saved) => ({ iceExchange: savedIceExchange(saved), ...(saved.given?.ice ?? {}) });
+
+export function resumedIceExchange(saved, ocean = {}) {
+  if (!saved || ocean === false || ocean.iceExchange !== undefined) return undefined;
+  if (recordedIceExchange(saved) === undefined && saved.ocean?.iceWater) throw new Error('the save holds the heat of the water under its ice (ocean.iceWater) but records no iceExchange: give the ocean\'s iceExchange');
+  return savedIceExchange(saved);
+}
+
+export function resumedOcean(saved, ocean = {}) {
+  const exchange = resumedIceExchange(saved, ocean);
+  return exchange === undefined ? ocean : { ...ocean, iceExchange: exchange };
+}
+
+export function resumedIce(saved, ice = {}) {
+  const { iceExchange, ...recorded } = savedIceOptions(saved);
+  return { ...recorded, ...ice };
+}
 
 export function restoreSurface(model, saved, report = (line) => console.error(line)) {
   const { state, seaIce, land } = model;
   seaIce.load(state[6], saved.concentration ?? null);
+  const exchange = seaIce.turbulent ? [['iceWater', seaIce.waterHeat], ['iceConductance', seaIce.conductance]].filter(([name, field]) => {
+    const held = saved.ocean?.[name];
+    if (held && held.length === field.length) field.set(held);
+    return !(held && held.length === field.length);
+  }).map(([name]) => `ocean.${name}`) : [];
   if (land && saved.land) land.load(saved.land, state[6], saved.time, state[3]);
-  const missing = [...(saved.concentration ? [] : ['concentration']), ...(land && !saved.land ? ['land'] : []),
+  const missing = [...(saved.concentration ? [] : ['concentration']), ...exchange, ...(land && !saved.land ? ['land'] : []),
     ...(land && saved.land ? Object.keys(land.serialize()).filter((name) => !name.startsWith('goal') && !(name in saved.land)).map((name) => `land.${name}`) : [])];
   if (missing.length) report(`restoreSurface: the save holds no ${missing.join(', ')}; the model's starting values stand in for them`);
   return missing;
