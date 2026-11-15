@@ -1,6 +1,6 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../dynamics/operators.module.js';
 import { createIceDrift, coverOf } from './iceDrift.module.js';
-import { FREEZING_POINT, iceExchangeOptions } from '../physics/ice.module.js';
+import { FREEZING_POINT, iceExchangeOptions, DEFAULT_ICE_EXCHANGE } from '../physics/ice.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
 import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, MSTAR_SCHEMES, LANGMUIR_SCHEMES, surfaceBuoyancy, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities, INTERIOR_SHEARS, LMD94_VISCOSITY } from './column.module.js';
@@ -632,7 +632,7 @@ export function createOcean(mesh, {
   backgroundLatitude = 'uniform', equatorialDiffusivity = 1e-6,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, shearDiffusivityResolution = false, isoneutralDiffusion = false, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
   edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 20,
-  iceDrift = false, mixedLayerRestratification = true, eddyTracers = 'donor', iceExchange = 'instant',
+  iceDrift = false, mixedLayerRestratification = true, eddyTracers = 'donor', iceExchange = DEFAULT_ICE_EXCHANGE,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,

@@ -1,4 +1,5 @@
 import { LAKE_FIELDS, holdsLake, savedLake, savedLakeOptions } from '../js/physics/lake.module.js';
+import { savedIceExchange } from '../js/physics/ice.module.js';
 
 /*
  * The land of a saved state onto a model whose arrays are loaded; the deep
@@ -9,17 +10,13 @@ export function loadSavedLand(model, saved) {
   model.land.load(saved.land, model.state[6], saved.time, model.state[3]);
 }
 
-const recordedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange;
-export const savedIceOptions = (saved) => ({ ...(recordedIceExchange(saved) !== undefined ? { iceExchange: recordedIceExchange(saved) } : {}), ...(saved.given?.ice ?? {}) });
+export const recordedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange;
+export const savedIceOptions = (saved) => ({ iceExchange: savedIceExchange(saved), ...(saved.given?.ice ?? {}) });
 
-/*
- * The iceExchange a run resumed from a save takes when its ocean options name none: the one the save records.
- */
 export function resumedIceExchange(saved, ocean = {}) {
   if (!saved || ocean.iceExchange !== undefined) return undefined;
-  const recorded = recordedIceExchange(saved);
-  if (recorded === undefined && saved.ocean?.iceWater) throw new Error('the save holds the heat of the water under its ice (ocean.iceWater) but records no iceExchange: give the ocean\'s iceExchange');
-  return recorded;
+  if (recordedIceExchange(saved) === undefined && saved.ocean?.iceWater) throw new Error('the save holds the heat of the water under its ice (ocean.iceWater) but records no iceExchange: give the ocean\'s iceExchange');
+  return savedIceExchange(saved);
 }
 
 export function restoreSurface(model, saved, report = (line) => console.error(line)) {
