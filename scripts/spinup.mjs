@@ -276,6 +276,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, LAKE = JSON.parse(process.env.LAKE ?? '{}'), ICE = JSON.parse(process.env.ICE ?? '{}');
+if (OCEAN === false) throw new Error('OCEAN is false, and spinup.mjs runs no model without its ocean: give its options as JSON or leave it unset; fixedSst.mjs runs the atmosphere over a fixed sea');
 const GIVEN_RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), RADIATION = withCadence({ radiation: { clearSkyPass: true, ...GIVEN_RADIATION } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
 const OROGRAPHY = process.env.OROGRAPHY === undefined ? {} : { orography: JSON.parse(process.env.OROGRAPHY) };
@@ -298,11 +299,12 @@ const t0 = performance.now();
 const existing = snapshots(), file = existing[existing.length - 1];
 let saved = file ? await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`))) : null;
 if (saved && saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
+if (saved && (saved.given?.ocean === false || saved.options?.ocean === false)) throw new Error(`${file} records no ocean, and spinup.mjs runs no model without its ocean`);
 const RESUMED_EXCHANGE = resumedIceExchange(saved, OCEAN), RUN_OCEAN = RESUMED_EXCHANGE === undefined ? OCEAN : { ...OCEAN, iceExchange: RESUMED_EXCHANGE };
 const RUN_ICE = saved && ICE.iceAlbedoPhases === undefined ? { ...ICE, iceAlbedoPhases: savedIceAlbedoPhases(saved) } : ICE;
 if (RESUMED_EXCHANGE !== undefined) log(`iceExchange ${JSON.stringify(RESUMED_EXCHANGE)}, as ${file} ${recordedIceExchange(saved) === undefined ? 'was made under, recording none' : 'records'}`);
 if (RUN_ICE !== ICE) log(`iceAlbedoPhases ${RUN_ICE.iceAlbedoPhases}, as ${file} ${(saved.given?.ice?.iceAlbedoPhases ?? saved.options?.ice?.iceAlbedoPhases) === undefined ? 'was made with, recording none' : 'records'}`);
-const exchangeNote = frictionMinimumNote(RUN_OCEAN === false ? RUN_ICE.iceExchange : RUN_OCEAN.iceExchange);
+const exchangeNote = frictionMinimumNote(RUN_OCEAN.iceExchange);
 if (exchangeNote) log(exchangeNote);
 const PERTURB = Number(process.env.PERTURB ?? 0);
 if (saved && PERTURB) {
@@ -334,7 +336,7 @@ const { geography: startingGeography, soilSeed, soilNote } = startGeography(shee
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}, ${soilNote}`;
 const found = base ? stateGrid(base, topography) : null;
 requireOwnSubgrid(TERRAIN, OROGRAPHY.orography);
-const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(RUN_OCEAN === false ? {} : { ocean: { ...JSON.parse(process.env.OCEAN ?? '{}'), iceExchange: RUN_OCEAN.iceExchange ?? DEFAULT_ICE_EXCHANGE } }), ice: { ...RUN_ICE, iceAlbedoPhases: RUN_ICE.iceAlbedoPhases ?? DEFAULT_ICE_ALBEDO_PHASES }, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
+const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ocean: { ...JSON.parse(process.env.OCEAN ?? '{}'), iceExchange: RUN_OCEAN.iceExchange ?? DEFAULT_ICE_EXCHANGE }, ice: { ...RUN_ICE, iceAlbedoPhases: RUN_ICE.iceAlbedoPhases ?? DEFAULT_ICE_ALBEDO_PHASES }, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
 for (const note of resumeNotes(GIVEN, base, saved ? file : process.env.FROM)) log(note);
 const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: LAND.soilGoal === 'observed' ? { ...startingGeography, soilWaterMonthly: true } : startingGeography, ocean: climatology ? { ...RUN_OCEAN, climatology } : RUN_OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: RUN_ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
