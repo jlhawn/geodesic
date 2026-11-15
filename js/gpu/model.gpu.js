@@ -113,7 +113,7 @@ export async function createGpuModel(gridOrMesh, {
   const radiationCpu = createRadiation(mesh, core, { surfaceLayer: mode === 'roughness', ...(surface.gustiness !== undefined && !(exchange && exchange.gusty) ? { gustiness: surface.gustiness } : {}), ...radiation, radiationEvery: 1 });
   const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });
   const seaFlow = physics.relativeWind ? new Float64Array(mesh.nEdges) : null;
-  const moistCpu = createMoistPhysics(mesh, core, { ...moist, stabilityLayer: radiationCpu.stabilityLayer });
+  const moistCpu = createMoistPhysics(mesh, core, { ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => physics[key] !== undefined).map((key) => [key, physics[key]])), ...moist, stabilityLayer: radiationCpu.stabilityLayer });
   if (moistCpu.cloudIceShare) radiationCpu.useCloudIce(moistCpu.cloudIceShare);
   const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { iceDrift: COUPLED_ICE_DRIFT, gustiness: surface.gustiness ?? 3, ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography: oceanGeography, packing, registers: { T: gpu.buffers.T, K1: gpu.buffers.K1, K2: gpu.buffers.K2, K3: gpu.buffers.K3, K4: gpu.buffers.K4 } });
   if (gpuOcean) gpuOcean.useSeaIce(seaIce.concentration);

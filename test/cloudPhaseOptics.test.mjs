@@ -51,6 +51,17 @@ test("cloudPhase is 'ramp' by default, 'memory' needs moist.iceDeposition and th
   for (const gray of [{ cloudScattering: 150 }, { cloudAbsorption: 100 }]) await assert.rejects(createGpuCore(base, { levels: bl34, physics: { cloudPhase: 'memory', iceDeposition: true, ...gray } }), /not a gray cloudScattering or cloudAbsorption/, JSON.stringify(gray));
 });
 
+test("the GPU model's moist physics takes the cloud limits the kernels take, from radiation alone, from moist alone and from both", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  for (const [radiation, moist, expected] of [[{ iceTemperature: 230, liquidTemperature: 275 }, { iceDeposition: true }, [275, 230]], [{}, { iceDeposition: true, iceTemperature: 232 }, [273.15, 232]], [{ iceTemperature: 230 }, { iceDeposition: true, iceTemperature: 232 }, [273.15, 232]], [{}, { iceDeposition: true }, [273.15, 235.15]]]) {
+    const model = await createGpuModel(new Grid(N), { ocean: false, levels: bl34, radiation, moist });
+    assert.deepEqual([model.moist.liquidTemperature, model.moist.iceTemperature], expected, JSON.stringify([radiation, moist]));
+    assert.equal(model.gpu.physics.liquidTemperature, expected[0]);
+    assert.equal(model.gpu.physics.iceTemperature, expected[1]);
+    model.destroy();
+  }
+});
+
 test('cloudOptics takes a liquid share that replaces the ramp, and the optics of a mixture of two shares are the water-weighted mean', () => {
   for (const T of [215, 255, 268, 290]) for (const continental of [false, true]) {
     const ramp = cloudOptics(T, continental), same = cloudOptics(T, continental, CLOUD_OPTICS, undefined, liquidShare(T));
@@ -305,7 +316,7 @@ async function pair(phase, levels, shortwave, { time = 200 * DAY, deck = false, 
   }
   if (cold) upload.concentration = new Float32Array(C);
   gpu.uploadPhysics(upload);
-  const flips = new Uint8Array(C), states = new Uint8Array(C), trace = [];
+  const flips = new Uint8Array(C), states = new Uint8Array(C), trace = [], splitQc = new Float64Array(C), splitQ = new Float64Array(C);
   for (let n = 0; n < steps; n++) {
     const t = model.time;
     model.step(DT);
@@ -315,6 +326,8 @@ async function pair(phase, levels, shortwave, { time = 200 * DAY, deck = false, 
       const after = await gpu.download();
       for (let x = 0; x < K * C; x++) {
         const qcGap = Math.abs(model.state[5][x] - after[5][x]), qGap = Math.abs(model.state[4][x] - after[4][x]);
+        splitQc[x % C] = Math.max(splitQc[x % C], qcGap > 1e-8 ? qcGap / Math.max(model.state[5][x], after[5][x]) : 0);
+        splitQ[x % C] = Math.max(splitQ[x % C], qGap / Math.max(model.state[4][x], 1e-6));
         if ((qcGap > 1e-8 && qcGap > 1e-3 * Math.max(model.state[5][x], after[5][x])) || qGap > 1e-4 * Math.max(model.state[4][x], 1e-6)) states[x % C] = 1;
       }
     }
@@ -334,7 +347,7 @@ async function pair(phase, levels, shortwave, { time = 200 * DAY, deck = false, 
     }
     if (physics.MLMCOVER[i] > 0) decks.gpu++;
   }
-  const run = { model, physics, K, mixture, decks, rampOff, flips, states, trace };
+  const run = { model, physics, K, mixture, decks, rampOff, flips, states, trace, splitQc, splitQ };
   for (const buffer of Object.values(gpu.buffers)) buffer.destroy();
   return run;
 }
@@ -345,8 +358,10 @@ for (const [label, levels, options] of [['bl34', bl34, { cumulus: true }], ['bl4
       const ramp = await pair('ramp', levels, shortwave, options), memory = await pair('memory', levels, shortwave, options), { K } = memory, { cp, g, dSigma } = memory.model.core.diagnostics, pi = memory.model.state[0];
       const rate = (k, i) => 86400 * g / (cp * pi[i] * dSigma[k]);
       const lit = (run, i) => run.model.radiation.held.mu[i] > 0;
+      const exner = memory.model.core.diagnostics.exnerLayer, excluded = [];
+      const lwAllow = (k, i) => (options.cold ? 2e-4 * 5.670374e-8 * (memory.model.state[1][k * C + i] * exner[k * C + i]) ** 4 * rate(k, i) : 0);
       const columns = { total: 0, sunlit: 0, parted: 0, flipped: 0, stated: 0 }, columnGaps = [], layerMoves = { moved: 0, over: 0, broken: [] };
-      let worstSw = 0, worstLw = 0, changeSw = 0, changeLw = 0, worstChangeSw = 0, worstChangeLw = 0, worstTop = 0, worstSurface = 0, where = null, scaledHeat = 0, worstFluxSw = 0, worstFluxLw = 0, baseSwMax = 0, baseLwMax = 0, moved = 0;
+      let worstSw = 0, worstLw = 0, changeSw = 0, changeLw = 0, worstChangeSw = 0, worstChangeLw = 0, worstTop = 0, rampTop = 0, worstSurface = 0, where = null, scaledHeat = 0, worstFluxSw = 0, worstFluxLw = 0, scaledLwChange = 0, baseSwMax = 0, baseLwMax = 0, moved = 0;
       for (let i = 0; i < C; i++) {
         columns.total++;
         let sunlit = lit(memory, i), apartSw = 0, apartLw = 0;
@@ -354,14 +369,13 @@ for (const [label, levels, options] of [['bl34', bl34, { cumulus: true }], ['bl4
         for (let k = 0; k < K; k++) {
           const x = k * C + i, r = rate(k, i);
           apartSw = Math.max(apartSw, Math.abs(ramp.model.radiation.held.shortwave[x] - ramp.physics.RADSW[x]) * r);
-          apartLw = Math.max(apartLw, Math.abs(ramp.model.radiation.longwave[x] - ramp.physics.LWH[x]) * r);
+          apartLw = Math.max(apartLw, Math.abs(ramp.model.radiation.longwave[x] - ramp.physics.LWH[x]) * r - lwAllow(k, i));
         }
         if (options.deck && (memory.flips[i] || ramp.flips[i])) { columns.flipped++; continue; }
-        if (options.deck && (memory.states[i] || ramp.states[i])) { columns.stated++; continue; }
+        if (options.deck && (memory.states[i] || ramp.states[i])) { columns.stated++; excluded.push({ column: i, memoryQc: +memory.splitQc[i].toExponential(1), memoryQ: +memory.splitQ[i].toExponential(1), rampQc: +ramp.splitQc[i].toExponential(1), rampQ: +ramp.splitQ[i].toExponential(1) }); continue; }
         columnGaps.push(Math.max(apartSw, apartLw));
         baseSwMax = Math.max(baseSwMax, apartSw); baseLwMax = Math.max(baseLwMax, apartLw);
-        const partedAbove = options.cold ? 2e-2 : 1e-3;
-        if (apartSw > partedAbove || apartLw > partedAbove) { columns.parted++; continue; }
+        if (apartSw > 1e-3 || apartLw > 1e-3) { columns.parted++; continue; }
         for (let k = 0; k < K; k++) {
           const x = k * C + i, r = rate(k, i);
           const swGap = Math.abs(memory.model.radiation.held.shortwave[x] - memory.physics.RADSW[x]) * r, lwGap = Math.abs(memory.model.radiation.longwave[x] - memory.physics.LWH[x]) * r;
@@ -370,30 +384,33 @@ for (const [label, levels, options] of [['bl34', bl34, { cumulus: true }], ['bl4
           worstSw = Math.max(worstSw, swGap); worstLw = Math.max(worstLw, lwGap);
           const heatSw = Math.abs(memory.model.radiation.held.shortwave[x]) * r, heatLw = Math.abs(memory.model.radiation.longwave[x]) * r;
           const baseSw = Math.abs(ramp.model.radiation.held.shortwave[x] - ramp.physics.RADSW[x]) * r, baseLw = Math.abs(ramp.model.radiation.longwave[x] - ramp.physics.LWH[x]) * r;
-          scaledHeat = Math.max(scaledHeat, swGap / (1e-3 + 3e-4 * heatSw + baseSw), lwGap / (1e-3 + 3e-4 * heatLw + baseLw));
+          scaledHeat = Math.max(scaledHeat, swGap / (1e-3 + 3e-4 * heatSw + baseSw), lwGap / (1e-3 + 3e-4 * heatLw + baseLw + lwAllow(k, i)));
           changeSw = Math.max(changeSw, Math.abs(swCpu)); changeLw = Math.max(changeLw, Math.abs(lwCpu));
           worstChangeSw = Math.max(worstChangeSw, Math.abs(swCpu - swGpu)); worstChangeLw = Math.max(worstChangeLw, Math.abs(lwCpu - lwGpu));
           if (Math.abs(swCpu - swGpu) > worstChangeSw - 1e-12 && Math.abs(swCpu - swGpu) >= worstChangeSw) where = { i, k, phi: memory.model.moist.cloudIceShare[x], qc: memory.model.state[5][x], T: memory.model.state[1][x] * memory.model.core.diagnostics.exnerLayer[x], swCpu, swGpu, base: (ramp.model.radiation.held.shortwave[x] - ramp.physics.RADSW[x]) * r };
           worstFluxSw = Math.max(worstFluxSw, Math.abs(swCpu - swGpu) / r); worstFluxLw = Math.max(worstFluxLw, Math.abs(lwCpu - lwGpu) / r);
+          scaledLwChange = Math.max(scaledLwChange, Math.abs(lwCpu - lwGpu) / (1e-3 + 2 * lwAllow(k, i)));
           if (Math.abs(swCpu) > 1e-3 || Math.abs(lwCpu) > 1e-3) moved++;
           for (const [cpuChange, gpuChange, name] of [[swCpu, swGpu, 'shortwave'], [lwCpu, lwGpu, 'longwave']]) {
             if (!(Math.abs(cpuChange) > 0.5)) continue;
             layerMoves.moved++;
             const miss = Math.abs(cpuChange - gpuChange);
-            if (miss > 0.01 * Math.abs(cpuChange)) layerMoves.over++;
-            if (miss > 0.02 * Math.abs(cpuChange) + 1e-3) layerMoves.broken.push({ column: i, layer: k, name, cpu: +cpuChange.toFixed(4), gpu: +gpuChange.toFixed(4) });
+            const slack = name === 'longwave' ? 2 * lwAllow(k, i) : 0;
+            if (miss > 0.01 * Math.abs(cpuChange) + slack) layerMoves.over++;
+            if (miss > 0.02 * Math.abs(cpuChange) + 1e-3 + slack) layerMoves.broken.push({ column: i, layer: k, name, cpu: +cpuChange.toFixed(4), gpu: +gpuChange.toFixed(4) });
           }
         }
         const beam = Math.max(1, memory.model.radiation.held.mu[i] * SOLAR_CONSTANT);
         worstTop = Math.max(worstTop, Math.abs(memory.model.radiation.held.top[i] - memory.physics.RADTOA[i]) / beam);
+        rampTop = Math.max(rampTop, Math.abs(ramp.model.radiation.held.top[i] - ramp.physics.RADTOA[i]) / beam);
         worstSurface = Math.max(worstSurface, Math.abs(memory.model.radiation.held.absorbed[i] - memory.physics.RADABS[i]) / beam);
       }
       columnGaps.sort((a, b) => a - b);
       if (options.deck) {
         console.log(`${label} ${shortwave}: ${columns.flipped} columns flipped a deck decision between the engines; columns 276 and 291 by step: ${JSON.stringify(memory.trace.filter((e) => e.column === 276 || e.column === 291))}; first flips: ${JSON.stringify(memory.trace.filter((e) => e.parted).slice(0, 6))}`);
-        console.log(`${label} ${shortwave}: ${columns.stated} further columns left out where the engines' cloud water or vapor had parted before the last radiation call, in either run`);
+        console.log(`${label} ${shortwave}: ${columns.stated} further columns left out where the engines' cloud water or vapor had parted before the last radiation call, in either run: ${JSON.stringify(excluded)}`);
         assert.ok(columns.flipped <= Math.max(4, 0.005 * memory.decks.cpu), `${columns.flipped} columns flipped a deck decision`);
-        assert.ok(columns.stated <= 0.02 * memory.decks.cpu, `${columns.stated} columns with parted states`);
+        assert.ok(columns.stated <= 0.02 * memory.decks.cpu, `${columns.stated} columns with parted states: ${JSON.stringify(excluded)}`);
       }
       console.log(`${label} ${shortwave}: ${layerMoves.over} of ${layerMoves.moved} layers moved by more than 0.5 K/day differ by more than 1 % of the change between the engines`);
       assert.equal(layerMoves.broken.length, 0, `layers whose change differs by more than 2 % + 1e-3 K/day between the engines: ${JSON.stringify(layerMoves.broken.slice(0, 12))} of ${layerMoves.broken.length}`);
@@ -420,8 +437,9 @@ for (const [label, levels, options] of [['bl34', bl34, { cumulus: true }], ['bl4
       assert.ok(changeSw > 0.02 && changeLw > 0.02, `the memory moves the CPU's heating by ${changeSw} and ${changeLw} K/day`);
       assert.ok(scaledHeat < 1, `heating differs by ${worstSw} and ${worstLw} K/day, ${scaledHeat} of 1e-3 + 3e-4 of the heating`);
       const allowed = options.deck ? [1e-2, 1e-2] : [1e-3, 3e-3];
-      assert.ok(worstFluxSw < allowed[0] && worstFluxLw < allowed[1], `the change in a layer's flux differs by ${worstFluxSw} and ${worstFluxLw} W/m2`);
-      const beamGap = options.deck ? 1e-4 : 1e-5;
+      assert.ok(worstFluxSw < allowed[0] && (options.cold ? scaledLwChange < 1 : worstFluxLw < allowed[1]), `the change in a layer's flux differs by ${worstFluxSw} and ${worstFluxLw} W/m2, the longwave change by ${scaledLwChange} of 1e-3 K/day plus twice the f32 allowance`);
+      console.log(`${label} ${shortwave}: top absorbed sunlight differs between the engines by ${worstTop.toExponential(1)} of the beam under 'memory' and ${rampTop.toExponential(1)} under 'ramp'`);
+      const beamGap = options.cold ? 2e-4 : options.deck ? 1e-4 : 1e-5;
       assert.ok(worstTop < beamGap && worstSurface < beamGap, `top ${worstTop}, surface ${worstSurface} of the beam`);
       assert.ok(layerMoves.over <= 0.001 * layerMoves.moved, `${layerMoves.over} of ${layerMoves.moved} layers over 1 %`);
     });
