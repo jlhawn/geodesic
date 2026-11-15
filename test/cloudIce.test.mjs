@@ -5,23 +5,24 @@ import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
-import { R_VAPOR, saturationHumidity, cloudSaturation, iceVaporPressure, saturationVaporPressure, criticalHumidityAt, uniformCondensate, uniformCover, LATENT_HEAT, MOIST_DEFAULTS } from '../js/physics/moist.module.js';
+import { R_VAPOR, saturationHumidity, cloudSaturation, iceVaporPressure, saturationVaporPressure, criticalHumidityAt, uniformCondensate, uniformCover, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, depositionGrowth, placeCumulus } from '../js/physics/moist.module.js';
 
 const levels = sigmaInterfaces('bl34');
 const build = (moist = {}) => createModel(new Grid(16), { ocean: false, levels, moist: { bergeronAutoconversion: false, ...moist } });
 
 /*
  * Column 0 of the model at 1000 hPa under a 6.5 K/km atmosphere from
- * 300 K to a 210 K floor, humidity(k, T, p) of the layer's vapour.
+ * 300 K to a 210 K floor, or at temperature(p), humidity(k, T, p) of the
+ * layer's vapor.
  */
-function column(model, humidity) {
+function column(model, humidity, temperature = (p) => Math.max(210, 300 - 6.5e-3 * 7400 * Math.log(1e5 / p))) {
   const { K, C, sigmaMid, exnerLayer } = model.core.diagnostics;
   const [pi, theta, , , q, qc] = model.state;
   pi.fill(1e5);
   for (let pass = 0; pass < 3; pass++) {
     model.core.diagnose(pi, theta);
     for (let k = 0; k < K; k++) {
-      const idx = k * C, p = pi[0] * sigmaMid[k], T = Math.max(210, 300 - 6.5e-3 * 7400 * Math.log(1e5 / p));
+      const idx = k * C, p = pi[0] * sigmaMid[k], T = temperature(p);
       theta[idx] = T / exnerLayer[idx];
       q[idx] = humidity(k, T, p);
       qc[idx] = 0;
@@ -184,10 +185,80 @@ test('bergeronAutoconversion multiplies the liquid share\'s two conversion rates
   }
 });
 
+test('iceDeposition is off by default and needs iceFall; under it a column whose cloud is all colder than 235.15 K or all warmer than 273.15 K steps as without it, bit for bit, its cloud ice all of its cloud or none', () => {
+  assert.equal(MOIST_DEFAULTS.iceDeposition, false);
+  assert.equal(build().moist.cloudIce, null);
+  assert.throws(() => build({ iceDeposition: true, iceFall: null }), /needs iceFall/);
+  for (const T of [225, 285]) {
+    const run = (moist) => {
+      const model = build(moist), { K, C } = model.core.diagnostics;
+      const s = column(model, (j, Tj, pj) => (j % 3 === 0 ? 1 : 0.6) * cloudSaturation(Tj, pj, true, 273.15, 235.15, {}).qs, () => T);
+      for (let k = 0; k < K; k += 3) s.qc[k * C] = 5e-5 * (1 + k / K);
+      model.core.diagnoseColumn(0, s.pi, s.theta, s.q, s.qc);
+      const rain = model.moist.autoconvertColumn(0, s.pi, s.theta, s.q, s.qc, 600);
+      const layers = (a) => Array.from({ length: K }, (_, k) => a[k * C]);
+      return { rain, theta: layers(s.theta), q: layers(s.q), qc: layers(s.qc), ice: model.moist.cloudIce && layers(model.moist.cloudIce), moved: model.moist.falling.moved };
+    };
+    const plain = run({}), deposition = run({ iceDeposition: true });
+    assert.deepEqual({ ...deposition, ice: null }, { ...plain, ice: null });
+    assert.deepEqual(deposition.ice, T < 235.15 ? deposition.qc : deposition.qc.map(() => 0));
+    assert.equal(deposition.moved, T < 235.15);
+    console.log(`${T} K: ${(1e3 * deposition.qc.reduce((sum, x) => sum + x, 0)).toFixed(4)} g/kg of cloud summed over the layers and ${(1e3 * deposition.rain).toExponential(3)} g/m² of precipitation, both as without iceDeposition`);
+  }
+});
+
+test('in a layer between 235.15 and 273.15 K deposition grows the cloud ice from its seed by Rotstayn\'s form over the step, at cloud top by f_nuc + 0.1 (1 − f_nuc) of it; only that ice falls, the liquid converts without the Bergeron factor, and column water holds with the precipitation', () => {
+  const dt = 600, run = (moist) => {
+    const model = build(moist), { C, sigmaMid, exnerLayer } = model.core.diagnostics, k = layerAt(model, 4e4);
+    const s = column(model, (j, T, p) => (j === k ? 1 : 0.3) * cloudSaturation(T, p, true, 273.15, 235.15, {}).qs);
+    s.qc[k * C] = 1e-4;
+    model.core.diagnoseColumn(0, s.pi, s.theta, s.q, s.qc);
+    const before = totals(model), T = s.theta[k * C] * exnerLayer[k * C], p = s.pi[0] * sigmaMid[k];
+    const rain = model.moist.autoconvertColumn(0, s.pi, s.theta, s.q, s.qc, dt);
+    return { model, k, s, before, T, p, rain };
+  };
+  const { model, k, s, before, T, p, rain } = run({ iceDeposition: true, bergeronAutoconversion: true }), { C, sigmaMid, dSigma, g, R, cp } = model.core.diagnostics, ice = model.moist.cloudIce;
+  assert.ok(T > 235.15 && T < 268.16, `the cloud layer at ${T} K is mixed and under the Bergeron factor's range`);
+  const icePressure = iceVaporPressure(T), excess = (saturationVaporPressure(T) - icePressure) / icePressure, nuclei = 1000 * Math.exp(12.96 * excess - 0.639), density = p / (R * T), sublimation = LATENT_HEAT + FUSION_HEAT;
+  const growth = 7.8 * Math.pow(nuclei / density, 2 / 3) * excess / (Math.cbrt(700) * (sublimation / (0.024 * T) * (sublimation / (R_VAPOR * T) - 1) + R_VAPOR * T * p / (2.21 * icePressure)));
+  const out = cloudSaturation(T, p, true, 273.15, 235.15, {}), rhc = criticalHumidityAt(p, 1e5, 0.975, 0.75, 2), b = (1 - rhc) * out.qs / (1 + LATENT_HEAT * out.slope / cp);
+  const cover = uniformCover(1e-4, b), seed = 1e-12 * nuclei / density, active = Math.min(nuclei / 15000, 1);
+  const grown = (active + (1 - active) * 0.1) * Math.min(cover * (Math.pow(2 / 3 * growth * dt + Math.pow(seed, 2 / 3), 1.5) - seed), 1e-4);
+  const speed = MOIST_DEFAULTS.iceFall * Math.pow(density * grown / cover, MOIST_DEFAULTS.iceFallExponent), courant = speed * dt * sigmaMid[k] * g / (R * T * dSigma[k]), kept = grown / (1 + courant);
+  const liquid = 1e-4 - grown, left = kept + liquid * Math.exp(-dt / MOIST_DEFAULTS.cloudLifetime);
+  console.log(`${(p / 100).toFixed(0)} hPa, ${T.toFixed(1)} K, 0.1 g/kg of liquid over a cover of ${cover.toFixed(3)}: ${nuclei.toFixed(0)} nuclei/m³ (f_nuc ${active.toFixed(3)}) deposit ${(1e6 * grown).toFixed(3)} mg/kg of ice at cloud top in ${dt} s, which falls at ${speed.toFixed(3)} m/s and keeps ${(1e6 * kept).toFixed(3)} mg/kg; the layer keeps ${(1e3 * s.qc[k * C]).toFixed(5)} g/kg of cloud`);
+  assert.ok(Math.abs(ice[k * C] - kept) < 1e-12 * kept, `ice ${ice[k * C]} against ${kept}`);
+  assert.ok(Math.abs(s.qc[k * C] - left) < 1e-12 * left, `cloud ${s.qc[k * C]} against ${left}`);
+  assert.ok(s.qc[(k + 1) * C] > 0 && ice[(k + 1) * C] > 0 && ice[(k + 1) * C] <= s.qc[(k + 1) * C], 'the layer below takes the falling ice as its cloud ice');
+  assert.ok(Math.abs(totals(model).water + rain - before.water) < 1e-14 * before.water);
+  const plain = run({ iceDeposition: true, bergeronAutoconversion: false });
+  assert.deepEqual(Float64Array.from(plain.model.moist.cloudIce), Float64Array.from(ice));
+  assert.deepEqual([...plain.s.qc, ...plain.s.q, ...plain.s.theta, plain.rain], [...s.qc, ...s.q, ...s.theta, rain]);
+});
+
+test('from its seed, deposition grows 0.1 g/kg of cloud ice in about 2.8 h at 268 K, 37 min at 258 K, 23 min at 253 K and 5 min at 240 K', () => {
+  const { R } = build().core.diagnostics;
+  const minutes = (T, p) => { let ice = 0, t = 0; while (ice < 1e-4) { ice += depositionGrowth(T, p, ice, 1e-3 - ice, 1, 60, 1e4, R); t += 60; } return t / 60; };
+  const rows = [[268, 6e4, 171], [263, 6e4, 69], [258, 6e4, 37], [253, 6e4, 23], [248, 6e4, 16], [240, 4e4, 5]].map(([T, p, note]) => [T, p, note, minutes(T, p)]);
+  console.log(rows.map(([T, p, note, m]) => `${T} K at ${p / 100} hPa: ${m} min (the note's ${note})`).join('; '));
+  for (const [T, , note, m] of rows) assert.ok(Math.abs(m - note) <= 0.15 * note + 1, `${T} K: ${m} min against ${note}`);
+});
+
+test('placeCumulus places the cloud ice saved with a state, and starts it at zero for a state without it or no state', () => {
+  const model = build({ iceDeposition: true }), { K, C } = model.core.diagnostics, saved = Float64Array.from({ length: K * C }, (_, x) => 1e-6 * (x % 7));
+  placeCumulus(model, { cloudIce: saved });
+  assert.deepEqual(model.moist.cloudIce, saved);
+  placeCumulus(model, {});
+  assert.ok(model.moist.cloudIce.every((v) => v === 0));
+  model.moist.cloudIce.set(saved);
+  placeCumulus(model, null);
+  assert.ok(model.moist.cloudIce.every((v) => v === 0));
+});
+
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 
-async function gpuAdjustParity(previous, reference = null) {
+async function gpuAdjustParity(previous, reference = null, fasterRain = true) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const dt = 900, model = createModel(new Grid(16), { ocean: false, levels, moist: previous }), { core, mesh } = model, C = mesh.nCells, { K, sigmaMid, exnerLayer, dSigma, g, cp } = core.diagnostics;
   const [pi, theta, , surfaceT, q, qc] = model.state;
@@ -236,6 +307,17 @@ async function gpuAdjustParity(previous, reference = null) {
   assert.ok(cpuH < 1e-14 && cpuW < 1e-14, `CPU ${cpuH}, ${cpuW}`);
   assert.ok(worstH < 1e-6 && worstW < 2e-6, `GPU ${worstH}, ${worstW}`);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
+  if (previous.iceDeposition) {
+    let worstIce = 0, mixed = 0, both = 0;
+    for (let x = 0; x < K * C; x++) {
+      worstIce = Math.max(worstIce, Math.abs(model.moist.cloudIce[x] - ph.CICE[x]));
+      assert.ok(model.moist.cloudIce[x] >= 0 && model.moist.cloudIce[x] <= qc[x] && ph.CICE[x] >= 0 && ph.CICE[x] <= after[5][x], `layer ${x}: ice ${model.moist.cloudIce[x]} and ${ph.CICE[x]} in cloud ${qc[x]} and ${after[5][x]}`);
+      const T = theta[x] * exner[x];
+      if (T > 235.15 && T < 273.15 && qc[x] > 0) { mixed++; if (model.moist.cloudIce[x] > 0 && model.moist.cloudIce[x] < qc[x]) both++; }
+    }
+    console.log(`${both} of ${mixed} cloudy layers between 235.15 and 273.15 K hold both ice and liquid; the engines' cloud ice differs by ${worstIce.toExponential(1)} kg/kg at most`);
+    assert.ok(both > 0 && worstIce < 1e-7, `${both} mixed layers; ice differs by ${worstIce}`);
+  }
   if (!reference) return;
   const plain = createModel(new Grid(16), { ocean: false, levels, moist: reference });
   plain.state.forEach((a, n) => a.set(start[n]));
@@ -248,13 +330,15 @@ async function gpuAdjustParity(previous, reference = null) {
     if (Math.abs(change) > 1e-7) moved++;
     if (change < -1e-7) drier++; else if (change > 1e-7) wetter++;
   }
-  console.log(`against the CPU without the factor the GPU's cloud water differs by more than 1e-7 in ${moved} of ${K * C} layers (${drier} drier, ${wetter} wetter)`);
-  assert.ok(moved > 0 && drier > wetter, `the factor moved ${moved} layers, ${drier} drier and ${wetter} wetter`);
+  console.log(`against the CPU under ${JSON.stringify(reference)} the GPU's cloud water differs by more than 1e-7 in ${moved} of ${K * C} layers (${drier} drier, ${wetter} wetter)`);
+  assert.ok(moved > 0 && (!fasterRain || drier > wetter), `the option moved ${moved} layers, ${drier} drier and ${wetter} wetter`);
 }
 
 test('on the GPU the falling ice and the uniform condensation keep column water with the precipitation and moist enthalpy to single precision, and match the CPU column by column', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: false }));
 
 test('on the GPU bergeronAutoconversion converts the cold liquid faster and matches the CPU column by column to the same tolerances', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: true }, { plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: false }));
+
+test('on the GPU iceDeposition grows, keeps and passes down the cloud ice as the CPU does, without the Bergeron factor, and matches the CPU column by column to the same tolerances', { skip: !gpuAvailable && 'webgpu not installed' }, () => gpuAdjustParity({ plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: true, iceDeposition: true }, { plumeEntrainmentLaw: 'gregory', bergeronAutoconversion: false }, false));
 
 function coverColumn(radiation = {}) {
   const model = createModel(new Grid(16), { ocean: false, levels, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999], ...radiation } });

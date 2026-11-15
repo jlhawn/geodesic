@@ -85,6 +85,24 @@ export function liquidFraction(T, liquidTemperature = LIQUID_TEMPERATURE, iceTem
   return Math.min(1, Math.max(0, (T - iceTemperature) / (liquidTemperature - iceTemperature)));
 }
 
+export const DEPOSITION = { nuclei: 1000, initialMass: 1e-12, iceDensity: 700, conductivity: 2.4e-2, diffusivity: 2.21, topRate: 0.1, topDepth: 500, topCover: 0.01, activeNuclei: 15000 };
+
+/*
+ * The grid-mean deposition (kg/kg) over dt onto a layer's cloud ice `ice` from its liquid `liquid`
+ * at temperature T and pressure p under cloud cover `cover`, `topDistance` meters below the cloud's
+ * top layer, for dry-air gas constant R: IFS Documentation Cy41r2 Part IV eqs 7.33–7.43.
+ */
+export function depositionGrowth(T, p, ice, liquid, cover, dt, topDistance, R) {
+  const icePressure = iceVaporPressure(T), excess = (saturationVaporPressure(T) - icePressure) / icePressure;
+  const nuclei = DEPOSITION.nuclei * Math.exp(12.96 * excess - 0.639), density = p / (R * T), sublimation = LATENT_HEAT + FUSION_HEAT;
+  const conduction = sublimation / (DEPOSITION.conductivity * T) * (sublimation / (R_VAPOR * T) - 1), diffusion = R_VAPOR * T * p / (DEPOSITION.diffusivity * icePressure);
+  const rate = 7.8 * Math.pow(nuclei / density, 2 / 3) * excess / (Math.cbrt(DEPOSITION.iceDensity) * (conduction + diffusion));
+  const seed = Math.max(ice / cover, DEPOSITION.initialMass * nuclei / density);
+  const grown = Math.pow(2 / 3 * rate * dt + Math.pow(seed, 2 / 3), 1.5);
+  const active = Math.min(nuclei / DEPOSITION.activeNuclei, 1);
+  return Math.min(active + (1 - active) * (DEPOSITION.topRate + topDistance / DEPOSITION.topDepth), 1) * Math.min(Math.max(0, cover * (grown - seed)), liquid);
+}
+
 /*
  * The saturation humidity of cloud at temperature T and pressure p into
  * out.qs, with out.slope its Clausius–Clapeyron derivative q_s L/(R_v T²)
@@ -558,6 +576,14 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * the surface's rule. The column is then adjusted again, so that ice
  * falling into subsaturated layers sublimates, moistening and cooling
  * them. Only the liquid share α of the cloud converts to rain as below.
+ * With `iceDeposition` a layer between iceTemperature and liquidTemperature
+ * passes down only its cloud ice `cloudIce` (K·C, kg/kg), which the ice
+ * falling into it and deposition grow (depositionGrowth: Rotstayn et al.
+ * 2000's growth on Meyers et al. 1992's nuclei, slowed within 500 m of the
+ * cloud's top, as the IFS's eqs 7.33–7.43), and converts the rest of its
+ * cloud as liquid with no Bergeron–Findeisen factor; colder layers hold
+ * only ice and warmer ones only liquid, as without it. Every other change
+ * to the cloud changes its liquid: the cloud ice is capped at the cloud.
  * Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime
  * (`upperCloudLifetime` where the layer's pressure is below `shallowTop`,
@@ -666,7 +692,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * downdraftEntrainment 1e-4 /m, capeClosure 'bechtold' with pcapeBoundary
  * 'positive', pcapeMinimum 0.05 over 'all' columns and pcapeTimescale 'surface' (with 'threshold' plumeCape 120 J/kg and plumeRelaxation 1 h),
  * plumeMomentum, condensation 'uniform', boundaryCondensation 'uniform', iceSaturation true, no
- * iceNucleation, iceFall 2.5 m/s, iceFallExponent 0.16.
+ * iceNucleation, iceFall 2.5 m/s, iceFallExponent 0.16, no iceDeposition.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
@@ -676,7 +702,7 @@ export const MOIST_DEFAULTS = {
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', plumeDeparture: 'surface', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', pcapeMinimum: 0.05, pcapeMinimumOver: 'all', pcapeTimescale: 'surface', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: true, plumeConsumption: 'all', convectionRetype: false, midLevelConvection: false, shallowRetype: false,
-  condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
+  condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16, iceDeposition: false,
   liquidTemperature: LIQUID_TEMPERATURE, iceTemperature: ICE_TEMPERATURE, plumeTrace: false,
 };
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
@@ -690,7 +716,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusAscent, cumulusEntrainmentHeight, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeDeparture, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, pcapeMinimum, pcapeMinimumOver, pcapeTimescale, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption, convectionRetype, midLevelConvection, shallowRetype,
-    condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature, plumeTrace,
+    condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, iceDeposition, liquidTemperature, iceTemperature, plumeTrace,
   } = { ...MOIST_DEFAULTS, ...options };
   if (condensation !== 'uniform' && condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${condensation}`);
   if (boundaryCondensation !== 'cloudLayer' && boundaryCondensation !== 'uniform' && boundaryCondensation !== 'saturation') throw new Error(`boundaryCondensation must be 'cloudLayer', 'uniform' or 'saturation', not ${boundaryCondensation}`);
@@ -742,6 +768,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   if (rainCover !== 'overlap' && !(Number.isFinite(rainCover) && rainCover > 0 && rainCover <= 1)) throw new Error(`rainCover must be 'overlap' or a share above 0 and at most 1, not ${rainCover}`);
   if (rainEvaporationCeiling !== null && !(Number.isFinite(rainEvaporationCeiling) && rainEvaporationCeiling >= 0 && rainEvaporationCeiling <= 1)) throw new Error(`rainEvaporationCeiling must be null or a relative humidity from 0 to 1, not ${rainEvaporationCeiling}`);
   const rainScheme = { rainEvaporation, rainEvaporationLaw, rainCover, rainEvaporationCeiling };
+  if (typeof iceDeposition !== 'boolean') throw new Error(`iceDeposition must be true or false, not ${iceDeposition}`);
+  if (iceDeposition && iceFall === null) throw new Error('iceDeposition needs iceFall: the ice that deposition grows is the ice that falls');
   const rainShares = rainCover === 'overlap' && (rainEvaporationLaw !== 'deficit' || rainEvaporationCeiling !== null);
   if (cumulusOvershoot !== 'kinetic' && !(cumulusOvershoot >= 0 && cumulusOvershoot <= 1)) throw new Error(`cumulusOvershoot must be a share between 0 and 1 or 'kinetic', not ${cumulusOvershoot}`);
   if (cumulusAscent !== 'buoyant' && cumulusAscent !== 'kinetic') throw new Error(`cumulusAscent must be 'buoyant' or 'kinetic', not ${cumulusAscent}`);
@@ -769,6 +797,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const momentumBuffers = { up: shared('momentumUp', (momentumLayers + 1) * C), upKeep: shared('momentumUpKeep', momentumLayers * C), down: shared('momentumDown', (momentumLayers + 1) * C), downKeep: shared('momentumDownKeep', momentumLayers * C), source: shared('momentumSource', C) };
   const momentumUp = new Float64Array(momentumBuffers.up), momentumUpKeep = new Float64Array(momentumBuffers.upKeep), momentumDown = new Float64Array(momentumBuffers.down), momentumDownKeep = new Float64Array(momentumBuffers.downKeep), momentumSource = new Float64Array(momentumBuffers.source);
   const edgeUp = new Float64Array(K + 1), edgeDown = new Float64Array(K + 1), edgeKeep = new Float64Array(K), edgeDownKeep = new Float64Array(K), edgeFlux = new Float64Array(K + 1), edgeBefore = new Float64Array(K);
+  const cloudIceBuffer = iceDeposition ? shared('cloudIce', K * C) : null, cloudIce = cloudIceBuffer ? new Float64Array(cloudIceBuffer) : null;
   const cumulusCover = new Float64Array(cumulusCoverBuffer), cumulusWater = new Float64Array(cumulusWaterBuffer), cumulusBaseFlux = new Float64Array(baseFluxBuffer), cumulusTop = new Float64Array(cumulusTopBuffer);
   const cumulusOvershootShare = new Float64Array(C).fill(1);
   const precipitation = new Float64Array(precipBuffer), rain = new Float64Array(rainBuffer);
@@ -891,7 +920,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0, frozenStream = null) {
-    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0, rainShare = 0, coverAbove = 0, iceAbove = false;
+    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0, rainShare = 0, coverAbove = 0, iceAbove = false, iceCoverAbove = 0, topDistance = 0;
     falling.moved = false;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : autoconversionFloor === 'mixingTop' && (boundaryTop ?? boundaryDepth) ? (boundaryTop ?? boundaryDepth)[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
@@ -963,11 +992,33 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         if (descending > 0) {
           const melted = descending * liquidFraction(theta[idx] * exnerLayer[idx], liquidTemperature, iceTemperature);
           qc[idx] += (descending - melted) / mass;
+          if (cloudIce) cloudIce[idx] += (descending - melted) / mass;
           rain += melted;
           descending = 0;
         }
         liquid = qc[idx];
-        if (qc[idx] > 0) {
+        if (cloudIce) {
+          const temperature = theta[idx] * exnerLayer[idx], pressure = pi[i] * sigmaMid[k];
+          let layerCover = 0;
+          if (qc[idx] > 0) { saturation(temperature, pressure); layerCover = uniformCover(qc[idx], halfWidth(pressure, pi[i])); }
+          topDistance = iceCoverAbove < DEPOSITION.topCover && layerCover >= DEPOSITION.topCover ? 0 : topDistance + R * temperature * dSigma[k] / (g * sigmaMid[k]);
+          iceCoverAbove = layerCover;
+          if (qc[idx] > 0) {
+            const share = liquidFraction(temperature, liquidTemperature, iceTemperature), cover = Math.max(CLEAR_AIR, layerCover);
+            let ice = share <= 0 ? qc[idx] : share >= 1 ? 0 : Math.min(Math.max(0, cloudIce[idx]), qc[idx]);
+            if (share > 0 && share < 1 && qc[idx] > ice) ice += depositionGrowth(temperature, pressure, ice, qc[idx] - ice, cover, dt, topDistance, R);
+            liquid = qc[idx] - ice;
+            if (ice > 0) {
+              const speed = iceFall * Math.pow(pressure / (R * temperature) * ice / cover, iceFallExponent);
+              const courant = speed * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]), leaving = ice * courant / (1 + courant);
+              qc[idx] -= leaving;
+              ice -= leaving;
+              descending = leaving * mass;
+              falling.moved = true;
+            }
+            cloudIce[idx] = ice;
+          } else cloudIce[idx] = 0;
+        } else if (qc[idx] > 0) {
           const temperature = theta[idx] * exnerLayer[idx], pressure = pi[i] * sigmaMid[k];
           const share = liquidFraction(temperature, liquidTemperature, iceTemperature), ice = (1 - share) * qc[idx];
           liquid = share * qc[idx];
@@ -1019,7 +1070,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         }
         continue;
       }
-      const temperature = theta[idx] * exnerLayer[idx], bergeron = bergeronAutoconversion && temperature < IFS_PRECIPITATION.bergeron ? 1 + 0.5 * Math.sqrt(Math.min(IFS_PRECIPITATION.bergeron - temperature, IFS_PRECIPITATION.bergeron - IFS_PRECIPITATION.ice)) : 1;
+      const temperature = theta[idx] * exnerLayer[idx], bergeron = bergeronAutoconversion && !cloudIce && temperature < IFS_PRECIPITATION.bergeron ? 1 + 0.5 * Math.sqrt(Math.min(IFS_PRECIPITATION.bergeron - temperature, IFS_PRECIPITATION.bergeron - IFS_PRECIPITATION.ice)) : 1;
       const excess = Math.max(0, liquid - autoconversionThreshold / bergeron);
       let lifetime = upperCloudLifetime !== null && pi[i] * sigmaMid[k] < shallowTop ? upperCloudLifetime : cloudLifetime;
       if (stratiformLifetime !== null) lifetime += longCloudShare(i, k, pi, iced) * (stratiformLifetime - lifetime);
@@ -1893,6 +1944,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       fillColumn(i, pi, q);
       fillColumn(i, pi, qc);
+      if (cloudIce) for (let k = 0; k < K; k++) cloudIce[k * C + i] = Math.min(cloudIce[k * C + i], Math.max(0, qc[k * C + i]));
       if (bechtold) saveSubcloud(i, theta, q, qc);
       precipitation[i] += rained + convected;
       convectivePrecipitation[i] += convected;
@@ -1931,9 +1983,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     condensation: settings, plumeExits, adjust, useSeaIce, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
     plumeAir(energy, water, height, pressure, guess) { plumeState(energy, water, height, pressure, guess); return { ...plume }; },
     precipitation, rain, convectivePrecipitation, largeScalePrecipitation, fogPrecipitation, convectiveRain, largeScaleRain, fogRain, convectiveSnow, budget, latentHeat, trace, falling,
-    cumulus, cumulusCover, cumulusWater, cumulusCloudPath, cumulusBaseFlux, cumulusTop, cumulusOvershootShare, cumulusFlux, deep, subcloudVirtual, subcloudLayers: KL, saveSubcloud, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, convectiveFrozen, convectiveMelted, plumeFrozen, plumeCarried, plumeInterfaceT, plumeInterfaceExcess, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained, plumeDetrained, envHumidity, plumeCounted, resolutionScale,
+    cumulus, cumulusCover, cumulusWater, cumulusCloudPath, cumulusBaseFlux, cumulusTop, cumulusOvershootShare, cumulusFlux, deep, subcloudVirtual, cloudIce, subcloudLayers: KL, saveSubcloud, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, convectiveFrozen, convectiveMelted, plumeFrozen, plumeCarried, plumeInterfaceT, plumeInterfaceExcess, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained, plumeDetrained, envHumidity, plumeCounted, resolutionScale,
     momentum: { up: momentumUp, upKeep: momentumUpKeep, down: momentumDown, downKeep: momentumDownKeep, source: momentumSource },
-    shared: { momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, fogPrecipitation: fogBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer, subcloudVirtual: subcloudBuffer },
+    shared: { ...(cloudIceBuffer ? { cloudIce: cloudIceBuffer } : {}), momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, fogPrecipitation: fogBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer, subcloudVirtual: subcloudBuffer },
   };
 }
 
@@ -1943,7 +1995,8 @@ export const CUMULUS_FIELDS = ['cumulusCover', 'cumulusWater'];
  * The cumulus cloud's cover and water are K × C on the CPU and only the plume layers from
  * `cumulusK0` down, (K − K0) × C, on the GPU; a saved state holds either. placeCumulus puts a
  * saved run's fields into the model's arrays, whichever layout each has, layer for layer, and
- * leaves an array zero where the field was saved in neither layout or not at all.
+ * leaves an array zero where the field was saved in neither layout or not at all. It places
+ * iceDeposition's cloud ice, K × C on both engines, the same way.
  */
 export function placeCumulus(model, saved) {
   const C = model.mesh.nCells, K = model.core.K, K0 = model.moist.cumulusK0 ?? 0, whole = K * C, plume = (K - K0) * C;
@@ -1956,4 +2009,6 @@ export function placeCumulus(model, saved) {
     else if (values.length === plume && target.length === whole) target.set(values, K0 * C);
     else if (values.length === whole && target.length === plume) target.set(values.subarray(K0 * C));
   }
+  const ice = model.moist.cloudIce, savedIce = saved ? saved.cloudIce : null;
+  if (ice) { ice.fill(0); if (savedIce && savedIce.length === ice.length) ice.set(savedIce); }
 }

@@ -27,7 +27,7 @@
 // (T2M) are judged in their own units instead, by the rms gap and the share of cells past a gap, whatever
 // TOL is. A row reads n/a, and cannot fail, where the model does not compute it: ROW_NEEDS gives T2M n/a
 // without the roughness exchange, STRESS and SDRAG without the implicit drag, WARM without the warm
-// layer, COOL without the cool skin and UO without the relative wind, and the clear-sky, form-drag and
+// layer, COOL without the cool skin, UO without the relative wind and CICE without iceDeposition, and the clear-sky, form-drag and
 // held-radiation rows read n/a without the clear-sky pass, the form drag or the held radiation. The run
 // also exits 1 when the CPU model takes the raster sub-grid orography, which has no form drag and is not
 // the configuration a saved state runs; env NO_SUBGRID builds both models without sub-grid orography and
@@ -78,7 +78,7 @@ export const PH_MAP = {
   OLR: 'radiation.outgoing', OLRSUM: 'radiation.summed.outgoingLongwave', ATMSUM: 'radiation.summed.atmosphereSolar',
   INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.summed.clearOutgoingLongwave',
   ASRMEAN: 'radiation.meanAbsorbedSolar', OLRMEAN: 'radiation.meanOutgoingLongwave', ALBMEAN: 'radiation.meanPlanetaryAlbedo', SWCREMEAN: 'radiation.meanShortwaveCloudEffect', LWCREMEAN: 'radiation.meanLongwaveCloudEffect',
-  CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
+  CICE: 'moist.cloudIce', CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
   PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo',
   SURF: 'land.surface', SOIL: 'land.soil', RUNOFF: 'land.runoff', DISCHARGE: 'land.discharge', ICELOSS: 'land.iceLoss', MLMK: 'radiation.mlmLayer', MLMM: 'radiation.mlmShare', DECKK: 'radiation.deckLayer', DECKFROM: 'radiation.deckFrom', VEG: 'land.vegetation', CANOPY: 'land.canopy', SEASONL: 'land.seasonLength', SEASONW: 'land.seasonWarmth', DEMAND: 'land.demandMean', RAINMEAN: 'land.rainMean',
   LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4', DEEP: 'land.deepWater',
@@ -147,7 +147,7 @@ for (const name of (process.env.DECISION_EXTRA ?? '').split(',').filter(Boolean)
 export const DECISION_ROWS = new Set(Object.keys(DECISION_BOUNDS));
 const NO_CLEAR_SKY = JSON.parse(process.env.RADIATION ?? '{}').clearSkyPass === false, CLEAR_SKY_ROWS = new Set(['ABSCLRSUM', 'OLRCLRSUM', 'RADCLROLR', 'RADCLRSW', 'RADTC']);
 const drags = (model) => !!model.boundaryLayer?.implicitDrag;
-const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin], UO: ['no relative wind', (model) => !!model.seaFlow] };
+const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin], UO: ['no relative wind', (model) => !!model.seaFlow], CICE: ['no iceDeposition', (model) => !!model.moist?.cloudIce] };
 const decisionBound = (name) => (process.env.SHARE ? Number(process.env.SHARE) : DECISION_BOUNDS[name]);
 
 const typed = (v) => ArrayBuffer.isView(v) && !(v instanceof DataView);

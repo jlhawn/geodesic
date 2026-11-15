@@ -311,6 +311,7 @@ function savedCumulus(model) {
     const values = model.moist[name];
     if (values) out[name] = Float64Array.from(values.length === K * C ? values.subarray(K0 * C) : values).buffer;
   }
+  if (model.moist.cloudIce) out.cloudIce = Float64Array.from(model.moist.cloudIce).buffer;
   return out;
 }
 

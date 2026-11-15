@@ -12,12 +12,12 @@ const { readBuffer } = gpuAvailable ? await import('../js/gpu/device.module.js')
 
 const N = 16, DT = 1350 * 16 / N;
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const build = () => createGpuModel(new Grid(N), { topography, radiation: { radiationEvery: 2 }, dragEvery: 2 });
+const build = (moist) => createGpuModel(new Grid(N), { topography, radiation: { radiationEvery: 2 }, dragEvery: 2, ...(moist ? { moist } : {}) });
 
 const mirrors = (model) => Object.fromEntries(Object.entries({
   state: model.state, concentration: model.seaIce.concentration, windSpeed: model.surface.windSpeed,
   ...Object.fromEntries(['mlmSubsidence', 'mlmHeight', 'mlmGate', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'evaporation'].map((name) => [name, model.radiation[name]])),
-  ...Object.fromEntries(['convectiveRain', 'largeScaleRain', 'cumulusCover', 'cumulusWater', 'subcloudVirtual'].map((name) => [name, model.moist[name]])),
+  ...Object.fromEntries(['convectiveRain', 'largeScaleRain', 'cumulusCover', 'cumulusWater', 'subcloudVirtual', 'cloudIce'].map((name) => [name, model.moist[name]])),
   ...Object.fromEntries(['depth', 'mixingTop', 'regime', 'buoyancyFlux'].map((name) => [`boundary.${name}`, model.boundaryLayer[name]])),
   ...(model.exchange ? { exchangeWind: model.exchange.wind, ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }) } : {}),
 }).filter(([, value]) => value));
@@ -27,8 +27,8 @@ const copy = (arrays) => Object.fromEntries(Object.entries(arrays).map(([name, v
  * A saved state with every field a load sends to the device, taken from a
  * model that has stepped, so that none of them is a start's value.
  */
-async function savedState() {
-  const model = await build();
+async function savedState(moist) {
+  const model = await build(moist);
   initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => model.state[a].set(values));
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
   model.load();
@@ -71,9 +71,10 @@ function assertSame(label, reference, got) {
   }
 }
 
-test('a load leaves every device buffer as a fresh model\'s load does, after steps have dirtied them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const saved = await savedState();
-  const model = await build();
+for (const [label, moist] of [['', undefined], [' under iceDeposition, its cloud ice too', { iceDeposition: true }]]) test(`a load leaves every device buffer as a fresh model's load does, after steps have dirtied them${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const saved = await savedState(moist);
+  if (moist) assert.ok(saved.mirrors.cloudIce.some((v) => v > 0), 'nine steps grow cloud ice');
+  const model = await build(moist);
   place(model, saved, { ocean: false });
   const fresh = await dump(model);
   for (let n = 0; n < 6; n++) await model.step(DT);

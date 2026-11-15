@@ -4,7 +4,7 @@ import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders }
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, TRACE_CHAIN_FLOOR, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, MID_LEVEL, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, DEPOSITION, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, MID_LEVEL, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS, DIAGNOSE_FIRST } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, longwaveCores, LONGWAVE_CORES, CORE_EDGES, CORE_FACTOR_POINTS, coreFactors } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -2876,6 +2876,93 @@ export function boundaryLayerDiagnosis(body, { diagnoseFirst = DIAGNOSE_FIRST, s
 }
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
+const DEPOSITION_RAIN = [
+  [`  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
+`, `  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
+  var iceCoverAbove = 0.0; var topDistance = 0.0;
+`],
+  [`        IN[S_QC + idx] += (descending - melted) / mass;
+        rained += melted;
+`, `        IN[S_QC + idx] += (descending - melted) / mass;
+        PH[PH_CICE + idx] += (descending - melted) / mass;
+        rained += melted;
+`],
+  [`      liquid = IN[S_QC + idx];
+      if (liquid > 0.0) {
+        let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
+        let share = clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+        let iceWater = (1.0 - share) * liquid;
+        let total = liquid;
+        liquid = share * total;
+        if (iceWater > 0.0) {
+          let cover = max(CLEAR_AIR, uniformCover(total, uniformWidth(cloudSat(temperature, pressure), pressure, pi)));
+          let speed = FALL_C * pow(pressure / (RGAS * temperature) * iceWater / cover, FALL_EXP);
+          let courant = speed * dt * LV[L_SM + k] * GRAV / (RGAS * temperature * LV[L_DS + k]);
+          let leaving = iceWater * courant / (1.0 + courant);
+          IN[S_QC + idx] = total - leaving;
+          descending = leaving * mass;
+          moved = true;
+        }
+      }
+    }
+`, `      liquid = IN[S_QC + idx];
+      let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
+      var layerCover = 0.0;
+      if (liquid > 0.0) { layerCover = uniformCover(liquid, uniformWidth(cloudSat(temperature, pressure), pressure, pi)); }
+      if (iceCoverAbove < DEP_TOP_COVER && layerCover >= DEP_TOP_COVER) { topDistance = 0.0; } else { topDistance += RGAS * temperature * LV[L_DS + k] / (GRAV * LV[L_SM + k]); }
+      iceCoverAbove = layerCover;
+      if (liquid > 0.0) {
+        let share = clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+        let total = liquid;
+        let cover = max(CLEAR_AIR, layerCover);
+        var iceWater = 0.0;
+        if (share <= 0.0) { iceWater = total; } else if (share < 1.0) { iceWater = min(max(0.0, PH[PH_CICE + idx]), total); }
+        if (share > 0.0 && share < 1.0 && total > iceWater) { iceWater += deposition(temperature, pressure, iceWater, total - iceWater, cover, dt, topDistance); }
+        liquid = total - iceWater;
+        if (iceWater > 0.0) {
+          let speed = FALL_C * pow(pressure / (RGAS * temperature) * iceWater / cover, FALL_EXP);
+          let courant = speed * dt * LV[L_SM + k] * GRAV / (RGAS * temperature * LV[L_DS + k]);
+          let leaving = iceWater * courant / (1.0 + courant);
+          IN[S_QC + idx] = total - leaving;
+          iceWater -= leaving;
+          descending = leaving * mass;
+          moved = true;
+        }
+        PH[PH_CICE + idx] = iceWater;
+      } else { PH[PH_CICE + idx] = 0.0; }
+    }
+`],
+  [`    if (IN[off + bottom * C + i] < 0.0) { IN[off + bottom * C + i] = 0.0; }
+  }
+`, `    if (IN[off + bottom * C + i] < 0.0) { IN[off + bottom * C + i] = 0.0; }
+  }
+  for (var k = 0; k < K; k++) { let idx = k * C + i; PH[PH_CICE + idx] = min(PH[PH_CICE + idx], max(0.0, IN[S_QC + idx])); }
+`],
+];
+const DEPOSITION_WGSL = (d) => `const DEP_NUCLEI: f32 = ${d.nuclei}; const DEP_SEED: f32 = ${d.initialMass}; const DEP_ICE_ROOT: f32 = ${Math.cbrt(d.iceDensity)}; const DEP_KA: f32 = ${d.conductivity}; const DEP_CHI: f32 = ${d.diffusivity};
+const DEP_TOP_RATE: f32 = ${d.topRate}; const DEP_TOP_DEPTH: f32 = ${d.topDepth}; const DEP_TOP_COVER: f32 = ${d.topCover}; const DEP_ACTIVE: f32 = ${d.activeNuclei};
+fn deposition(T: f32, p: f32, ice: f32, liquid: f32, cover: f32, dt: f32, topDistance: f32) -> f32 {
+  let icePressure = 611.21 * exp(22.587 * (T - 273.16) / (T + 0.7));
+  let excess = (esat(T) - icePressure) / icePressure;
+  let nuclei = DEP_NUCLEI * exp(12.96 * excess - 0.639);
+  let density = p / (RGAS * T);
+  let sublimation = LHEAT + LFUSION;
+  let conduction = sublimation / (DEP_KA * T) * (sublimation / (RVAP * T) - 1.0);
+  let diffusion = RVAP * T * p / (DEP_CHI * icePressure);
+  let rate = 7.8 * pow(nuclei / density, 2.0 / 3.0) * excess / (DEP_ICE_ROOT * (conduction + diffusion));
+  let seed = max(ice / cover, DEP_SEED * nuclei / density);
+  let grown = pow(2.0 / 3.0 * rate * dt + pow(seed, 2.0 / 3.0), 1.5);
+  let nucleated = min(nuclei / DEP_ACTIVE, 1.0);
+  return min(nucleated + (1.0 - nucleated) * (DEP_TOP_RATE + topDistance / DEP_TOP_DEPTH), 1.0) * min(max(0.0, cover * (grown - seed)), liquid);
+}
+`;
+export function depositionRain(body) {
+  return DEPOSITION_WGSL(DEPOSITION) + DEPOSITION_RAIN.reduce((text, [from, to]) => {
+    const at = text.indexOf(from);
+    if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error('an iceDeposition anchor is not in the adjustRain kernel exactly once');
+    return text.slice(0, at) + to + text.slice(at + from.length);
+  }, body);
+}
 const BERGERON_RAIN = [
   ['    let excess = max(0.0, liquid - AUTO_T);\n', `    let temperature = IN[S_TH + idx] * D[D_EXM + idx];
     var bergeron = 1.0;
