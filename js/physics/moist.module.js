@@ -777,6 +777,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   if (iceDeposition && iceFall === null) throw new Error('iceDeposition needs iceFall: the ice that deposition grows is the ice that falls');
   if (detrainedPhase !== 'ramp' && detrainedPhase !== 'liquid') throw new Error(`detrainedPhase must be 'ramp' or 'liquid', not ${detrainedPhase}`);
   if (detrainedPhase === 'liquid' && !iceDeposition) throw new Error("detrainedPhase 'liquid' needs iceDeposition: without it the ramp splits every cloud");
+  if (iceDeposition && (rainEvaporationLaw !== 'deficit' || rainEvaporationCeiling != null)) throw new Error("iceDeposition runs only with rainEvaporationLaw 'deficit' and no rainEvaporationCeiling: under the others the engines part where ice falls into rain");
   const rainShares = rainCover === 'overlap' && (rainEvaporationLaw !== 'deficit' || rainEvaporationCeiling !== null);
   if (cumulusOvershoot !== 'kinetic' && !(cumulusOvershoot >= 0 && cumulusOvershoot <= 1)) throw new Error(`cumulusOvershoot must be a share between 0 and 1 or 'kinetic', not ${cumulusOvershoot}`);
   if (cumulusAscent !== 'buoyant' && cumulusAscent !== 'kinetic') throw new Error(`cumulusAscent must be 'buoyant' or 'kinetic', not ${cumulusAscent}`);
@@ -901,9 +902,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       if (change < 0) change = Math.max(change, -qc[idx]);
       if (change === 0) continue;
+      if (detrained && rampDetrainment && change > 0) cloudIce[idx] = Math.min(Math.max(0, cloudIce[idx]), qc[idx]) + (1 - liquidFraction(temperature, liquidTemperature, iceTemperature)) * change;
       q[idx] -= change;
       qc[idx] += change;
-      if (detrained && rampDetrainment && change > 0) cloudIce[idx] += (1 - liquidFraction(temperature, liquidTemperature, iceTemperature)) * change;
       theta[idx] += latentHeat * change / (cp * ex);
       formed += pi[i] * dSigma[k] / g * change;
     }
@@ -2046,9 +2047,9 @@ export function placeCloudIce(model, saved) {
   if (!share) return;
   const values = saved ? saved.cloudIceShare : null;
   if (values && values.length === share.length) { share.set(values); return; }
-  const { core } = model, C = model.mesh.nCells, K = core.K, [pi, theta, , , , qc] = model.state, { liquidTemperature, iceTemperature } = model.moist;
+  const { core } = model, C = model.mesh.nCells, K = core.K, [pi, theta, , , q, qc] = model.state, { liquidTemperature, iceTemperature } = model.moist;
   for (let i = 0; i < C; i++) {
-    core.diagnoseColumn(i, pi, theta);
+    core.diagnoseColumn(i, pi, theta, q, qc);
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
       share[idx] = qc[idx] > CLEAR_AIR ? 1 - liquidFraction(theta[idx] * core.diagnostics.exnerLayer[idx], liquidTemperature, iceTemperature) : 0;
