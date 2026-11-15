@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
+import { topographyFromInt16 } from '../js/geography.module.js';
+import { lakeArrays } from '../js/physics/lake.module.js';
+import { loadSavedLand, loadSavedLake } from '../scripts/savedLand.mjs';
 import { buildMesh } from '../js/mesh.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
@@ -132,4 +136,63 @@ test('over cells with no ocean column under the ice the turbulent exchange holds
   console.log(`after 4 steps at N=${N}: ${nDry} packed cells with no ocean under them hold no heat on either engine and lose ${(dryLoss / nDry).toExponential(2)} m of ice each, the engines within ${gap.toExponential(1)}; ${held} of ${wet} over the ocean hold the leads' gain and lose ${(wetLoss / wet).toExponential(2)} m`);
   assert.ok(nDry > 0 && held > 0 && dryLoss / nDry > wetLoss / wet && gap < 1e-5, `${nDry} dry, ${held} holding, losses ${dryLoss / nDry} and ${wetLoss / wet}, gap ${gap}`);
   cpu.destroy?.(); gpu.destroy();
+});
+
+test('a GPU run over land with iceExchange turbulent, saved by serialize({ restart: true }) on every cadence and loaded into a fresh model, steps on bit for bit with the run that did not stop: the state, the ice, the ocean with the water\'s heat and the conductance, and the land', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+  const options = { topography, ocean: { iceExchange: { mode: 'turbulent', frictionMinimum: 2e-2 } }, ice: { iceAlbedoPhases: true } };
+  const host = (model) => Object.entries({
+    ...Object.fromEntries(model.state.map((values, a) => [`state${a}`, values])),
+    concentration: model.seaIce.concentration, brine: model.seaIce.brine, windSpeed: model.surface.windSpeed, seaFlow: model.seaFlow,
+    ...Object.fromEntries(['mlmSubsidence', 'mlmHeight', 'mlmGate', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'evaporation'].map((name) => [name, model.radiation[name]])),
+    ...Object.fromEntries(['convectiveRain', 'largeScaleRain', 'cumulusCover', 'cumulusWater', 'subcloudVirtual'].map((name) => [name, model.moist[name]])),
+    ...Object.fromEntries(['depth', 'mixingTop', 'regime', 'buoyancyFlux'].map((name) => [`boundary.${name}`, model.boundaryLayer[name]])),
+    ...(model.exchange ? { exchangeWind: model.exchange.wind, ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }) } : {}),
+    ...(model.skin ? { warmLayer: model.skin.warm, coolSkin: model.skin.cool } : {}),
+  }).filter(([, values]) => values);
+  const begin = async () => {
+    const model = await createGpuModel(new Grid(N), options);
+    initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => model.state[a].set(values));
+    for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
+    model.load();
+    model.ocean.initialize(model.state[3], model.state[6]);
+    model.land.initialize();
+    return model;
+  };
+  const save = async (model) => {
+    await model.sync();
+    const saved = { time: model.time, host: Object.fromEntries(host(model).map(([name, values]) => [name, Float64Array.from(values)])), fresh: await model.readFreshwater(), ocean: await model.ocean.serialize({ restart: true }), land: await model.land.serialize(), lake: model.lake ? lakeArrays(await model.lake.serialize()) : {} };
+    model.destroy();
+    return saved;
+  };
+  const restore = async (saved) => {
+    const model = await createGpuModel(new Grid(N), options), { state } = model;
+    state.forEach((values, a) => values.set(saved.host[`state${a}`]));
+    model.seaIce.load(state[6], saved.host.concentration, saved.host.brine ?? null);
+    for (const [name, values] of host(model)) if (!/^state|^concentration$|^brine$/.test(name)) values.set(saved.host[name]);
+    model.time = saved.time;
+    model.load();
+    model.ocean.load(saved.ocean, state[3], state[6]);
+    loadSavedLand(model, saved);
+    if (model.lake) loadSavedLake(model, saved.lake, { quiet: true });
+    model.writeFreshwater(saved.fresh);
+    return model;
+  };
+  const fields = (value, prefix = '') => (ArrayBuffer.isView(value) || (Array.isArray(value) && typeof value[0] === 'number') ? [[prefix, value]] : value && typeof value === 'object' ? Object.entries(value).flatMap(([name, part]) => fields(part, prefix ? `${prefix}.${name}` : name)) : []);
+  const steps = async (model, n) => { for (let s = 0; s < n; s++) await model.step(DT); return model; };
+  const whole = await begin(), gcd = (a, b) => (b ? gcd(b, a % b) : a), { radiationEvery, dragEvery, oceanEvery } = whole.cadence;
+  const every = [radiationEvery, dragEvery, oceanEvery].reduce((a, b) => (a * b) / gcd(a, b)), n = every * Math.ceil(16 / every);
+  const ended = await save(await steps(whole, 2 * n)), saved = await save(await steps(await begin(), n));
+  const held = saved.ocean.iceWater.filter((x) => x > 0).length, stirred = saved.ocean.iceConductance.filter((x) => x > 0).length;
+  assert.ok(held > 0 && stirred > 0, `the save after ${n} steps holds the water's heat in ${held} cells and a conductance in ${stirred}`);
+  const after = await save(await steps(await restore(saved), n)), theirs = Object.fromEntries(fields(after)), differ = [];
+  for (const [name, values] of fields(ended)) {
+    const other = theirs[name];
+    if (!other || other.length !== values.length) { differ.push(`${name} missing`); continue; }
+    let count = 0, largest = 0;
+    for (let i = 0; i < values.length; i++) if (!Object.is(values[i], other[i])) { count++; largest = Math.max(largest, Math.abs(values[i] - other[i])); }
+    if (count) differ.push(`${name} in ${count} of ${values.length}, up to ${largest.toExponential(1)}`);
+  }
+  console.log(`N=${N}, ${2 * n} steps whole against ${n}, a save and a load, then ${n}: ${fields(ended).length} arrays compared; at the save ${held} cells hold the water's heat and ${stirred} a conductance`);
+  assert.deepEqual(differ, [], `whole against resumed: ${differ.join('; ')}`);
 });
