@@ -1507,7 +1507,7 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) {
       if (shelf[i]) { iced[i] = 0; continue; }
       iced[i] = ice[i] > 0 ? 1 : 0;
-      T0[i] = iced[i] ? (turbulent ? FREEZING_POINT + seaWater[i] / (rhoCp * h[i]) : drift && drift.arrived[i] ? drift.waterT[i] : FREEZING_POINT) : surfaceT[i];
+      T0[i] = iced[i] ? (turbulent ? FREEZING_POINT + (cellOcean[i] ? seaWater[i] / (rhoCp * h[i]) : 0) : drift && drift.arrived[i] ? drift.waterT[i] : FREEZING_POINT) : surfaceT[i];
       surfaceIn[i] = T0[i];
       Q[i] = h[i] * T0[i];
       lightIn[i] = penetrated[i];
