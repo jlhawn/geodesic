@@ -15,9 +15,10 @@
 // WET_ICE (JSON, Part 7's dark ice by default), OCEAN_OPTS (JSON merged
 // into the ocean options) and SURFACE_OPTS (JSON surface options, such as
 // warmLayer and coolSkin) set the options, over the checkpoint's on RESUME.
-// A fresh run's sea ice takes the exchange and iceAlbedoPhases the shipped
-// data was made with (explain/published.module.js PUBLISHED_ICE) where
-// OCEAN_OPTS and WET_ICE name none.
+// A fresh run's ocean takes the exchange the shipped data was made with
+// (explain/published.module.js PUBLISHED_ICE) unless OCEAN_OPTS names one,
+// and its sea ice that file's iceAlbedoPhases unless WET_ICE names it.
+// WET_ICE does not set the exchange.
 // SKIN_WATCH, SKIN_FIELD_DAYS and SKIN_WATCH_FROM keep scripts/skinWatch.mjs's
 // record.
 import { writeFileSync, readFileSync, mkdirSync, renameSync, unlinkSync, existsSync } from 'node:fs';

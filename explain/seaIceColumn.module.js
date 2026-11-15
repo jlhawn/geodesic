@@ -97,7 +97,7 @@ export function iceGrowth({ thickness = 1, below = 20, days = 1, depth = 50, dt 
     sea.update(T, ice, still, 0, dt);
     conduction ??= (ice[0] - before) * sea.latent / dt;
   }
-  return { conduction, grown: ice[0] - thickness, perDay: (ice[0] - thickness) / days, thickness: ice[0] };
+  return { conduction, grown: ice[0] - thickness, perDay: (ice[0] - thickness) / days, thickness: ice[0], sea };
 }
 
 export function seaIceColumn({
