@@ -173,3 +173,12 @@ Sites that decide the radiation's cloud phase:
 Under 'ramp' every kernel text, the shared functions and the PH layout are those of the default. Under 'memory' only the physics, radiation and layered kernels change, by string patches that each anchor exactly once, and the shared `cloudOptics` is split into `cloudOpticsAt` and its wrapper. The kernels read `PH_CICE`, which exists under `iceDeposition`.
 
 Tests are in `test/cloudPhaseOptics.test.mjs`: the defaults and throws (including a model without moisture), the CPU optics at 255 K with φ = 0.2, with cumulus water and outside the ramp's limits, the mixed-layer deck on both `deckCloud` modes (the deck takes the ramp, the resolved water above it 1 − φ), kernel identity, and N=16 CPU against GPU rows on bl34 and bl48 with cumulus water in layers that also hold resolved water, and on bl48 with the mixed-layer deck on (a deck on most columns on both engines). The parity rows bound the engines' gap on the change the memory makes at 5 % of that change.
+
+What I expect from arm B, against dep64 (iceDeposition on the ramp) from the same fresh start, written before the run:
+
+- On the first day of a CPU run under iceDeposition, the stored φ exceeds the ramp's ice share 1 − α in every latitude band and temperature bin. At 253–263 K it is 0.66–0.94 against 0.38–0.39; at 263–273 K, 0.42–0.76 against 0.12–0.15. So resolved cloud between the limits reads icier under 'memory' than under the ramp.
+- Per kilogram, ice has 0.4–0.7 of liquid's solar depth and 0.2–0.3 of its longwave absorption.
+- **255–273 K cloud:** its SWCRE weakens. Global SWCRE weakens by 1 to 4 W/m², toward CERES.
+- **Thin 235–255 K cloud:** its LWCRE weakens. Global LWCRE weakens by 0.3 to 1.5 W/m².
+- **Arctic:** the spring surface shortwave cloud effect weakens by 2 to 6 W/m², the wrong way for the melt-out rows. September extent ends below dep64's.
+- **Net TOA:** 1 to 3 W/m² more absorbed than in dep64.
