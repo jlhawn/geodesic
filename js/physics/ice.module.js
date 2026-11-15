@@ -322,6 +322,7 @@ export function createSeaIce(mesh, {
     snowAlbedo[i] = freshSnowAlbedo;
     concentration[i] = 0;
     if (brine) brine[i] = 0;
+    if (turbulent) waterHeat[i] = 0;
   }
 
   const capacityOf = (i) => (heatCapacity ? heatCapacity[i] : slabHeatCapacity);
@@ -330,7 +331,7 @@ export function createSeaIce(mesh, {
    * and above it by waterHeat over the layer's heat capacity when the ice
    * exchanges heat with the water as turbulence does.
    */
-  const waterTemperature = (i) => (turbulent ? FREEZING_POINT + waterHeat[i] / capacityOf(i) : FREEZING_POINT);
+  const waterTemperature = (i) => (holds(i) ? FREEZING_POINT + waterHeat[i] / capacityOf(i) : FREEZING_POINT);
   const holdWater = (i, temperature) => { if (holds(i)) waterHeat[i] = capacityOf(i) * (temperature - FREEZING_POINT); };
 
   function deposit(i, amount, airTemperature, ice, surfaceT) {

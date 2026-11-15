@@ -494,6 +494,17 @@ test('the leads\' net gain, sunlight included, warms the water under the ice and
   assert.ok(Math.abs(short.sea.budget.leadFrozen / model.mesh.areaCell[0] * short.sea.latent - 0.6 * loss) < 1e-6, `new ice in the leads took ${short.sea.budget.leadFrozen / model.mesh.areaCell[0] * short.sea.latent} J/m² of the ${0.6 * loss} the water could not give`);
 });
 
+test('ice that melts away over held heat under the turbulent exchange leaves the water no heat held, its heat in the open water; over a cell with no ocean column the water under the ice is at the freezing point whatever heat was loaded there', () => {
+  const sea = createSeaIce(model.mesh, TURBULENT()), surfaceT = new Float64Array([FREEZING_POINT]), ice = new Float64Array([0.004]);
+  sea.concentration[0] = 0.5; sea.conductance[0] = 2000; sea.waterHeat[0] = sea.slabHeatCapacity * 2;
+  sea.update(surfaceT, ice, new Float64Array(1), 0, 1350);
+  assert.deepEqual([ice[0], sea.concentration[0], sea.waterHeat[0], sea.waterTemperature(0)], [0, 0, 0, FREEZING_POINT]);
+  assert.ok(surfaceT[0] > FREEZING_POINT + 1.9, `the open water at ${surfaceT[0] - FREEZING_POINT} K above freezing`);
+  const dry = createSeaIce(model.mesh, { ...TURBULENT(), oceanCells: new Uint8Array(model.mesh.nCells) });
+  dry.waterHeat[0] = dry.slabHeatCapacity * 2;
+  assert.equal(dry.waterTemperature(0), FREEZING_POINT);
+});
+
 test('floes melt at their sides as Maykut and Perovich (1987) measured: w_lat = m1 (T_w − T_f)^m2 over the floe\'s perimeter, area and volume in proportion, the thickness kept, the heat from the water', () => {
   const dt = 900, ice0 = 1, A0 = 0.8, run = (rise, options = {}) => {
     const sea = createSeaIce(model.mesh, TURBULENT(options)), surfaceT = new Float64Array([FREEZING_POINT]), ice = new Float64Array([ice0]);

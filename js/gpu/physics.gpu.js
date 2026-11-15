@@ -1231,7 +1231,7 @@ ${turbulent ? `    let wWet = PH[PH_WET + i] > 0.5;
     if (area < cover) { volume += (cover - area) * (snow / RHOICE - ${brine ? '(SKINC * (T - FREEZING) + reservoir)' : 'SKINC * (T - FREEZING)'} / LATENT_ICE); }
     else if (area > cover) { T = FREEZING + cover * (T - FREEZING) / area; snow = cover * snow / area;${brine ? ' reservoir = cover * reservoir / area;' : ''} }
 ${brine ? `    if (area > 0.0) { let over = min(reservoir, max(0.0, reservoir - BRINE_SHARE * LATENT_ICE * max(0.0, volume) / area) / (1.0 - BRINE_SHARE)); reservoir -= over; volume -= area * over / LATENT_ICE; }
-` : ''}    if (area < GONE_CONC || volume < GONE_VOLUME) { T = FREEZING + ${turbulent ? '(wHeat + remaining)' : 'remaining'} / capacity; h = 0.0; snow = 0.0; PH[PH_CONC + i] = 0.0;${brine ? ' reservoir = 0.0;' : ''} } else {
+` : ''}    if (area < GONE_CONC || volume < GONE_VOLUME) { T = FREEZING + ${turbulent ? '(wHeat + remaining)' : 'remaining'} / capacity; h = 0.0; snow = 0.0; PH[PH_CONC + i] = 0.0;${brine ? ' reservoir = 0.0;' : ''}${turbulent ? ' PH[PH_WHEAT + i] = 0.0;' : ''} } else {
       let spread = volume / area;
       let flooded = max(0.0, snow - (RHOWATER - RHOICE) * spread) * RHOICE / RHOWATER;
       snow -= flooded; h = spread + flooded / RHOICE; PH[PH_CONC + i] = area;${turbulent ? ' PH[PH_WHEAT + i] = wHeat;' : ''}

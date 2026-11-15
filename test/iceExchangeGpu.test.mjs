@@ -140,6 +140,33 @@ test('over cells with no ocean column under the ice the turbulent exchange holds
   cpu.destroy?.(); gpu.destroy();
 });
 
+test('thin ice over held heat melts away in a step and leaves the water no heat held, its heat in the open water, alike on both engines (iceExchange turbulent)', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { ocean: false, ice: { iceExchange: 'turbulent', oceanCells: new Uint8Array(10 * N * N + 2).fill(1) } };
+  const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options), C = cpu.mesh.nCells, init = initializeState(cpu, {});
+  const thin = [...Array(C).keys()].filter((i) => cpu.mesh.latCell[i] < -70 * Math.PI / 180);
+  for (const i of thin) { init[6][i] = 0.004; init[3][i] = 268; }
+  for (const a of init) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  const cover = Float64Array.from({ length: C }, (_, i) => (thin.includes(i) ? 0.5 : 0));
+  for (const m of [cpu, gpu]) { for (let a = 0; a < init.length; a++) m.state[a].set(init[a]); m.seaIce.load(m.state[6], cover); m.time = 270 * 86400; }
+  for (const i of thin) cpu.seaIce.holdWater(i, FREEZING_POINT + 2);
+  const water = Float32Array.from(cpu.seaIce.waterHeat), conductance = Float32Array.from({ length: C }, (_, i) => (thin.includes(i) ? 2000 : 0));
+  cpu.seaIce.waterHeat.set(water); cpu.seaIce.conductance.set(conductance);
+  gpu.load();
+  const { device, buffers, layout } = gpu.gpu;
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.WHEAT, water); device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CONDUCT, conductance);
+  cpu.step(DT); await gpu.step(DT); await gpu.sync();
+  const [heat] = await readRanges(device, buffers.PH, [{ offset: layout.PH.WHEAT, length: C }]);
+  let gap = 0;
+  for (const i of thin) {
+    assert.deepEqual([cpu.state[6][i], cpu.seaIce.waterHeat[i], gpu.state[6][i], heat[i]], [0, 0, 0, 0], `cell ${i}: ice and held heat on the CPU, then on the GPU`);
+    assert.ok(cpu.state[3][i] > FREEZING_POINT + 1 && gpu.state[3][i] > FREEZING_POINT + 1, `cell ${i}: open water at ${cpu.state[3][i]} and ${gpu.state[3][i]} K`);
+    gap = Math.max(gap, Math.abs(cpu.state[3][i] - gpu.state[3][i]));
+  }
+  console.log(`${thin.length} cells of 4 mm ice over water 2 K above freezing melt away in a step on both engines, the store left empty, the open water within ${gap.toExponential(2)} K`);
+  assert.ok(gap < 1e-3, `the open water apart by ${gap} K`);
+  gpu.destroy();
+});
+
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer), TURBULENT = { mode: 'turbulent', frictionMinimum: 2e-2 };
 const host = (model) => Object.entries({
   ...Object.fromEntries(model.state.map((values, a) => [`state${a}`, values])),
