@@ -1,7 +1,7 @@
 import { buildMesh } from '../mesh.module.js';
 import { createEnergyRecord } from '../physics/energyRecord.module.js';
 import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, GRAVITY, dynamicsOptions } from '../dynamics/sigmaCore.module.js';
-import { createSeaIce, SNOW_AGEING, iceExchangeOptions } from '../physics/ice.module.js';
+import { createSeaIce, SNOW_AGEING, iceExchangeOptions, DEFAULT_ICE_EXCHANGE } from '../physics/ice.module.js';
 import { createSurface, relativeWindOf, SEA_DRAG, LAND_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { createRadiation } from '../physics/radiation.module.js';
@@ -100,7 +100,7 @@ export async function createGpuModel(gridOrMesh, {
     orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag, relativeWind: relativeWindOf(surface, implicitDrag), virtualDensity: surface.virtualDensity === true, exchangeOptions: exchangeOptions(surface),
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
     keepSmallIce: ice.keepSmallIce ?? (oceanOptions !== false && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift)),
-    iceExchange: oceanExchange ?? ice.iceExchange ?? 'instant',
+    iceExchange: oceanExchange ?? ice.iceExchange ?? DEFAULT_ICE_EXCHANGE,
     ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],
     landed: !!geography, soilColumn: geography ? soilColumn(landOptions) : null, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,

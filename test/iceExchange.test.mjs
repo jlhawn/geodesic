@@ -166,23 +166,25 @@ test('ice on a cell with no ocean under it, as on a lake, holds no heat under th
   for (const t of turbulent.dry.T0) assert.equal(t, FREEZING_POINT);
 });
 
-test('the ocean and the sea ice agree on the exchange, and the model builds the ice from the ocean\'s option', () => {
+test('the ocean and the sea ice agree on the exchange: the model builds the ice from the ocean\'s option, refuses an ice option of the other mode, and gives the ice the ocean\'s constants', () => {
   const grid = new Grid(16), model = createModel(grid, { ocean: { iceExchange: 'turbulent' } });
   assert.equal(model.seaIce.turbulent, true);
   assert.equal(model.ocean.iceExchange.mode, 'turbulent');
-  assert.equal(createModel(grid, { ocean: {} }).seaIce.turbulent, false);
-  assert.throws(() => createModel(grid, { ocean: { iceExchange: 'turbulent' }, ice: { iceExchange: 'instant' } }), /iceExchange/);
+  assert.equal(createModel(grid, { ocean: { iceExchange: 'instant' } }).seaIce.turbulent, false);
+  assert.throws(() => createModel(grid, { ocean: { iceExchange: 'turbulent' }, ice: { iceExchange: 'instant' } }), /the ocean's iceExchange is turbulent and the sea ice's is instant/);
   assert.throws(() => createModel(grid, { ocean: { iceExchange: 'gradual' } }), /iceExchange/);
+  const constants = createModel(grid, { ocean: { iceExchange: { mode: 'turbulent', frictionMinimum: 2e-2 } }, ice: { iceExchange: 'turbulent' } });
+  assert.deepEqual([constants.seaIce.iceExchange.frictionMinimum, constants.ocean.iceExchange.frictionMinimum], [2e-2, 2e-2]);
 });
 
-test('with the default exchange the coupled model over 48 steps and a 200-day ice column keep their pinned hashes', () => {
+test('with the instant exchange the coupled model over 48 steps and a 200-day ice column keep their pinned hashes', () => {
   const sha = (arrays) => { const h = createHash('sha256'); for (const a of arrays) h.update(Buffer.from(Float64Array.from(a).buffer)); return h.digest('hex').slice(0, 16); };
-  const m = createModel(new Grid(16), { ocean: { everySteps: 4 } });
+  const m = createModel(new Grid(16), { ocean: { everySteps: 4, iceExchange: 'instant' } });
   initializeState(m, {}).forEach((v, a) => m.state[a].set(v));
   m.ocean.initialize(m.state[3], m.state[6]);
   for (let n = 0; n < 48; n++) m.step(1350);
   const coupled = sha([m.state[3], m.state[6], m.seaIce.concentration, m.seaIce.snow, m.seaIce.snowAlbedo, m.seaIce.oceanFlux, m.ocean.Q, m.ocean.W, m.ocean.h, m.ocean.u]);
-  const sea = createSeaIce(m.mesh), surfaceT = new Float64Array([FREEZING_POINT - 5]), ice = new Float64Array([0.6]), flux = new Float64Array(1);
+  const sea = createSeaIce(m.mesh, { iceExchange: 'instant' }), surfaceT = new Float64Array([FREEZING_POINT - 5]), ice = new Float64Array([0.6]), flux = new Float64Array(1);
   sea.concentration[0] = 0.5; sea.snow[0] = 5; sea.oceanFlux[0] = 4;
   const seen = [];
   for (let n = 0; n < 200 * 96; n++) {

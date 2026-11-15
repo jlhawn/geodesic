@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { DEFAULT_ICE_EXCHANGE } from '../js/physics/ice.module.js';
 import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -102,7 +103,7 @@ test("the page's store keeps every array the worker's snapshot holds, and runs r
     const kept = stored(taken), restore = () => ({ type: 'restore', snapshot: restoreMessage(kept.meta, structuredClone(kept.data)) });
     await send('C', { ...start, options: { ocean: options.ocean } }, 'ready');
     const anew = await send('C', load(), 'ready');
-    assert.deepEqual(anew.options, { ...options, ocean: { ...options.ocean, iceExchange: 'instant' }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, 'the restore starts a new model with the options the snapshot records, and the boundary layer\'s order');
+    assert.deepEqual(anew.options, { ...options, ocean: { ...options.ocean, iceExchange: DEFAULT_ICE_EXCHANGE }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, 'the restore starts a new model with the options the snapshot records, and the boundary layer\'s order');
     await frame('C');
     const twelve = await send('C', { type: 'snapshot' }, 'snapshotData');
     assert.equal(stepOf(twelve), 12);
@@ -124,7 +125,7 @@ test("the page's store keeps every array the worker's snapshot holds, and runs r
     for (const i of LAKES) assert.notEqual(new Float64Array(lakeless.data.arrays.lakeSeen)[i], 0, `the save holds the water lake ${i} handed the sea`);
     const unlaked = () => ({ type: 'restore', snapshot: restoreMessage(lakeless.meta, structuredClone(lakeless.data)) });
     await send('E', { ...start, options: { ocean: options.ocean } }, 'ready');
-    assert.deepEqual((await send('E', unlaked(), 'ready')).options, { ...options, ocean: { ...options.ocean, iceExchange: 'instant' }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, 'the restore starts a new model');
+    assert.deepEqual((await send('E', unlaked(), 'ready')).options, { ...options, ocean: { ...options.ocean, iceExchange: DEFAULT_ICE_EXCHANGE }, boundaryLayer: { diagnoseFirst: DIAGNOSE_FIRST } }, 'the restore starts a new model');
     await send('F', start, 'ready');
     await send('F', unlaked(), 'ready');
     const unlakedLater = {};
