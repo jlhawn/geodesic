@@ -19,7 +19,7 @@ refuseUnreadOptions(import.meta.url);
 const FILE = process.argv[2];
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ground = stateGeography(saved), { topography } = ground;
-const model = createModel(stateGrid(saved, topography).mesh, { ice: savedIceOptions(saved), lake: lakeOptionsFor(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } });
+const model = createModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), ice: savedIceOptions(saved), terrain: stateTerrain(saved), topography, geography: ground.geography, land: ground.land, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } });
 const { mesh, core, state, radiation, boundaryLayer: bl, seaIce, land, geography } = model;
 const { K, C, g } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
