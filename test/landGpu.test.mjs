@@ -7,7 +7,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
-import { PREVIOUS_LEVELS, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_ICE } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
 import { distributionCheck, magnitude, hemispheres, S9_TIERS } from './helpers/distribution.mjs';
 
 let gpuAvailable = true;
@@ -81,8 +81,8 @@ const LAND_S9 = {
 
 for (const held of [true, false]) test(`eight GPU steps over a continent${held ? ', with the boundary layer diagnosed after the deposit,' : ' at the default order'} track the CPU model within the spread of its f32 twins under S9: the surface temperature over land and sea, soil water, snow and surface layer by their largest gap, a ladder of counts, and full and trimmed means per hemisphere, the vegetation and the coast-bound ocean`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
-  const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, ocean: { iceExchange: 'instant' }, ice: PREVIOUS_ICE, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
-  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, ocean: { iceExchange: 'instant' }, ice: PREVIOUS_ICE, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
+  const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
   const decisions = decisionTracker(cpu.core.K, cpu.mesh.nCells, { mix: true });
   for (let n = 0; n < 8; n++) {
     cpu.step(900); await gpu.step(900);
@@ -110,7 +110,8 @@ for (const held of [true, false]) test(`eight GPU steps over a continent${held ?
   const groups = { tsLand: [cpu.state[3], gpu.state[3], landCells], tsSea: [cpu.state[3], gpu.state[3], seaCells], soil: [cpu.land.soil, saved.soil, landCells], snow: [cpu.land.snow, saved.snow, landCells], surface: [cpu.land.surface, saved.surface, landCells] };
   const checks = Object.entries(groups).map(([name, [a, b, cells]]) => [name, distributionCheck(cells.map((i) => b[i] - a[i]), hemispheres(cpu.mesh, cells), LAND_S9[held ? 'held' : 'default'][name], magnitude(cells.map((i) => a[i])), { cells, require: S9_TIERS })]);
   console.log(`${held ? 'held' : 'default'} order:\n${checks.map(([name, check]) => `  ${name}: ${check.text}`).join('\n')}\n  complete mixes parted at ${[...decisions.kinds.mix].join(', ') || 'none'}; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
-  const seaWater = ['soil', 'snow', 'surface'].flatMap((name) => seaCells.filter((i) => !(cpu.land[name][i] === 0 && saved[name][i] === 0)).map((i) => `${name} at sea cell ${i}: ${cpu.land[name][i]}/${saved[name][i]}`));
+  const iced = (i) => cpu.state[6][i] > 0 || gpu.state[6][i] > 0;
+  const seaWater = ['soil', 'snow', 'surface'].flatMap((name) => seaCells.filter((i) => !(name === 'snow' && iced(i)) && !(cpu.land[name][i] === 0 && saved[name][i] === 0)).map((i) => `${name} at sea cell ${i}: ${cpu.land[name][i]}/${saved[name][i]}`));
   assert.deepEqual([...checks.flatMap(([name, check]) => check.failed.map((failure) => `${name}: ${failure}`)), ...seaWater], [], 'groups past the twins\x27 spread, or land water at sea');
   assert.ok(Math.abs(dc.landMeanT - d.landMeanT) < 0.01 && Math.abs(dc.soilWater - d.soilWater) < 0.01 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 0.2);
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) assert.equal(gpu.state[6][i], 0);

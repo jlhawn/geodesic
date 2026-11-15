@@ -73,9 +73,14 @@ export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   return resolved;
 }
 
-// A header that records no exchange is an instant save, and one that records no iceAlbedoPhases ran without the phases, whatever the defaults are; scripts/savedLand.mjs resumedIceExchange refuses one that holds ocean.iceWater.
-export const savedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange ?? 'instant';
+// A header that records no exchange, in its ocean group or, where that records none, its ice group, as a run without an ocean does, is an instant save, and one that records no iceAlbedoPhases ran without the phases, whatever the defaults are; scripts/savedLand.mjs resumedIceExchange refuses one that holds ocean.iceWater.
+export const savedIceExchange = (saved) => saved?.given?.ocean?.iceExchange ?? saved?.options?.ocean?.iceExchange ?? saved?.given?.ice?.iceExchange ?? saved?.options?.ice?.iceExchange ?? 'instant';
 export const savedIceAlbedoPhases = (saved) => saved?.given?.ice?.iceAlbedoPhases ?? saved?.options?.ice?.iceAlbedoPhases ?? false;
+export const frictionMinimumNote = (exchange) => {
+  if (exchange === undefined || iceExchangeOptions(exchange).mode !== 'turbulent' || (typeof exchange === 'object' && exchange.frictionMinimum !== undefined)) return null;
+  const standard = iceExchangeOptions(DEFAULT_ICE_EXCHANGE).frictionMinimum;
+  return ICE_EXCHANGE.frictionMinimum === standard ? null : `iceExchange turbulent takes frictionMinimum ${ICE_EXCHANGE.frictionMinimum.toExponential()}; the default is ${standard.toExponential()}`;
+};
 
 /*
  * The slab ocean and its sea ice, a zero-layer thermodynamic model: the

@@ -13,6 +13,7 @@ import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels, groupHeader, groupArrays, savedTerrain, stateTerrain } from './stateFile.module.js';
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore, startOptions, withIceRecords } from './snapshots.module.js';
+import { frictionMinimumNote } from './physics/ice.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
 import { RAIN_MEMORY, frameIsFinite } from './frames.module.js';
 import { cpuFrameFields } from './cpuFrame.module.js';
@@ -694,6 +695,8 @@ async function start(message) {
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const lakeGiven = saved ? savedLakeOptions(saved) : {};
   const given = withIceRecords(startOptions(saved ? { ...saved.options, ...(Object.keys(lakeGiven).length ? { lake: lakeGiven } : {}) } : null, message.options), saved), options = { ...given };
+  const exchangeNote = given.ocean ? frictionMinimumNote(given.ocean.iceExchange) : null;
+  if (exchangeNote) console.warn(exchangeNote);
   if (options.lake?.missingBed === 'hydrolakes') options.lake = { ...options.lake, lakeDepths: await loadLakeDepths() };
   const geography = message.land === false ? { ...LEGACY_GEOGRAPHY } : saved ? savedGeography(saved) : checkGeography({ ...FRESH_GEOGRAPHY, ...(message.geography ?? {}) });
   if (message.land !== false) {

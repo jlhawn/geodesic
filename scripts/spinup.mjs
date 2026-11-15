@@ -259,7 +259,7 @@ import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
 import { watchSkin } from './skinWatch.mjs';
 import { lakeArrays } from '../js/physics/lake.module.js';
 import { loadSavedLand, loadSavedLake, resumedIceExchange, recordedIceExchange } from './savedLand.mjs';
-import { savedIceAlbedoPhases, DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES } from '../js/physics/ice.module.js';
+import { savedIceAlbedoPhases, frictionMinimumNote, DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES } from '../js/physics/ice.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 import { startGeography } from './soilWater.mjs';
 import { indexCells, seaIceIndexCut } from '../js/seaIceIndex.module.js';
@@ -302,6 +302,8 @@ const RESUMED_EXCHANGE = resumedIceExchange(saved, OCEAN), RUN_OCEAN = RESUMED_E
 const RUN_ICE = saved && ICE.iceAlbedoPhases === undefined ? { ...ICE, iceAlbedoPhases: savedIceAlbedoPhases(saved) } : ICE;
 if (RESUMED_EXCHANGE !== undefined) log(`iceExchange ${JSON.stringify(RESUMED_EXCHANGE)}, as ${file} ${recordedIceExchange(saved) === undefined ? 'was made under, recording none' : 'records'}`);
 if (RUN_ICE !== ICE) log(`iceAlbedoPhases ${RUN_ICE.iceAlbedoPhases}, as ${file} ${(saved.given?.ice?.iceAlbedoPhases ?? saved.options?.ice?.iceAlbedoPhases) === undefined ? 'was made with, recording none' : 'records'}`);
+const exchangeNote = frictionMinimumNote(RUN_OCEAN === false ? RUN_ICE.iceExchange : RUN_OCEAN.iceExchange);
+if (exchangeNote) log(exchangeNote);
 const PERTURB = Number(process.env.PERTURB ?? 0);
 if (saved && PERTURB) {
   let seed = 12345;

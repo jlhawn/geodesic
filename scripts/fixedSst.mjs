@@ -13,6 +13,10 @@
 // for today's defaults) stands in for them, and GIVEN beside a header
 // that records them is refused unless it copies that record group for
 // group, with the defaults the header fills in and any ocean group.
+// The sea ice, without an ocean, runs the exchange and iceAlbedoPhases
+// the state was made under, as its header reads them (instant and none
+// for one that records neither) or as GIVEN names them, and the saves
+// record them in their ice group.
 // MOIST, BOUNDARY_LAYER, SURFACE, RADIATION, GRAVITY_WAVES and
 // OROGRAPHY (JSON, or false) and
 // DYNAMICS and LAND (JSON) go over the recorded groups key by key, and
@@ -44,9 +48,8 @@ import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 import { pressureColumns, residualCirculation, temSums, tropicalTable, temJson, TEM_PRESSURES } from './residualCirculation.mjs';
 import { upperWindLine } from './upperAtmosphere.mjs';
 import { loadSavedLand, loadSavedLake } from './savedLand.mjs';
-import { headerOptions, rebuiltOptions, savedTerrain, moveOntoTerrain, requireOwnSubgrid } from './stateOptions.mjs';
+import { headerOptions, fixedSeaRun, savedTerrain, moveOntoTerrain, requireOwnSubgrid } from './stateOptions.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
-import { savedIceAlbedoPhases } from '../js/physics/ice.module.js';
 
 refuseUnreadOptions(import.meta.url);
 const [FILE, OUT, TAG] = process.argv.slice(2);
@@ -55,8 +58,7 @@ const TEM_HOURS = Number(process.env.TEM_HOURS ?? 0), TEM_FROM = Number(process.
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const ENV_GROUPS = [['radiation', 'RADIATION'], ['moist', 'MOIST'], ['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY'], ['dynamics', 'DYNAMICS'], ['land', 'LAND'], ['lake', 'LAKE']].filter(([, name]) => process.env[name] !== undefined);
 if (process.env.BOUNDARY_LAYER !== undefined && JSON.parse(process.env.BOUNDARY_LAYER) === false) throw new Error('BOUNDARY_LAYER is false, and createGpuModel runs no model without the boundary layer: give its options as JSON or leave it unset');
-const rebuilt = rebuiltOptions(saved, Object.fromEntries(ENV_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), process.env.GIVEN === undefined ? undefined : JSON.parse(process.env.GIVEN));
-const RUN = { ...Object.fromEntries(Object.entries(rebuilt).filter(([group]) => group !== 'ocean' && group !== 'terrain')), ...(saved.given === undefined ? {} : { ice: { iceAlbedoPhases: savedIceAlbedoPhases(saved), ...rebuilt.ice } }) };
+const RUN = fixedSeaRun(saved, Object.fromEntries(ENV_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), process.env.GIVEN === undefined ? undefined : JSON.parse(process.env.GIVEN));
 console.log(`options: ${saved.given ? 'the header\'s given' : 'GIVEN, the header recording none'}${ENV_GROUPS.length ? `, ${ENV_GROUPS.map(([, name]) => name).join(', ')} over it` : ''}: ${JSON.stringify(RUN)}`);
 const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const mesh = stateGrid(saved, topography).mesh, dt = 1350 * 16 / saved.N, perDay = Math.round(86400 / dt);

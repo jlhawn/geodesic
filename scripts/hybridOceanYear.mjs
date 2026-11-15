@@ -104,9 +104,9 @@ function regrid(fields) {
 const climatologyPath = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, oceanOptions = { vertical: 'hybrid', everySteps: 1, penetration: 'IB', iceExchange: 'instant', ...OCEAN };
 const ENGINE = process.env.ENGINE ?? 'cpu';
 if (ENGINE !== 'cpu' && ENGINE !== 'gpu') throw new Error(`ENGINE is cpu or gpu, not ${ENGINE}`);
-const parallel = ENGINE === 'cpu' && WORKERS > 1 ? await createParallelModel(mesh, { topography, geography: geographyOptions, ocean: { climatology: climatologyPath, ...oceanOptions } }, WORKERS) : null;
+const parallel = ENGINE === 'cpu' && WORKERS > 1 ? await createParallelModel(mesh, { topography, geography: geographyOptions, ocean: { climatology: climatologyPath, ...oceanOptions }, ice: { iceAlbedoPhases: false } }, WORKERS) : null;
 if (parallel && parallel.mesh !== mesh) throw new Error('the parallel model built its own mesh');
-const gpuModel = ENGINE === 'gpu' ? await (await import('../js/gpu/model.gpu.js')).createGpuModel(mesh, { topography, geography: geographyOptions, ocean: { climatology: climatologyPath, ...oceanOptions } }) : null;
+const gpuModel = ENGINE === 'gpu' ? await (await import('../js/gpu/model.gpu.js')).createGpuModel(mesh, { topography, geography: geographyOptions, ocean: { climatology: climatologyPath, ...oceanOptions }, ice: { iceAlbedoPhases: false } }) : null;
 if (gpuModel && gpuModel.mesh !== mesh) throw new Error('the GPU model built its own mesh');
 const readRanges = gpuModel ? (await import('../js/gpu/device.module.js')).readRanges : null;
 const ocean = gpuModel ? gpuModel.oceanEngine : parallel ? parallel.ocean : createOcean(mesh, { geography, climatology: await loadClimatology(climatologyPath), ...oceanOptions });

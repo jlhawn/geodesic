@@ -120,6 +120,22 @@ export function rebuiltOptions(header, groups = {}, standIn) {
   }));
 }
 
+/*
+ * The option groups of a run over a fixed sea that rebuilds a saved state:
+ * rebuiltOptions' groups but the ocean and the terrain, the sea ice naming
+ * the exchange and iceAlbedoPhases the save was made under, as its header
+ * reads them; for a header without given options, as `standIn` names them
+ * where it does, the ocean's exchange before the ice's. A sea ice without
+ * an ocean that names neither takes the defaults.
+ */
+export function fixedSeaRun(saved, groups, standIn) {
+  const { ocean, terrain, ...run } = rebuiltOptions(saved, groups, standIn), ice = isGroup(run.ice) ? run.ice : {};
+  const own = { iceExchange: savedIceExchange(saved), iceAlbedoPhases: savedIceAlbedoPhases(saved) };
+  if (saved.given !== undefined) return { ...run, ice: { ...ice, ...own } };
+  const named = (isGroup(ocean) ? ocean.iceExchange : undefined) ?? ice.iceExchange;
+  return { ...run, ice: { ...own, ...ice, ...(named === undefined ? {} : { iceExchange: named }) } };
+}
+
 export { savedTerrain, stateTerrain };
 
 /*

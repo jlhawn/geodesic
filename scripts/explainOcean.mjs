@@ -15,6 +15,9 @@
 // WET_ICE (JSON, Part 7's dark ice by default), OCEAN_OPTS (JSON merged
 // into the ocean options) and SURFACE_OPTS (JSON surface options, such as
 // warmLayer and coolSkin) set the options, over the checkpoint's on RESUME.
+// A fresh run's sea ice takes the exchange and iceAlbedoPhases the shipped
+// data was made with (explain/published.module.js PUBLISHED_ICE) where
+// OCEAN_OPTS and WET_ICE name none.
 // SKIN_WATCH, SKIN_FIELD_DAYS and SKIN_WATCH_FROM keep scripts/skinWatch.mjs's
 // record.
 import { writeFileSync, readFileSync, mkdirSync, renameSync, unlinkSync, existsSync } from 'node:fs';
@@ -25,7 +28,7 @@ import { Grid } from '../js/grid.module.js';
 import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { createSigmaCore, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { FREEZING_POINT, MELTING_POINT, DEFAULT_ICE_EXCHANGE, savedIceExchange, savedIceAlbedoPhases, iceExchangeOptions } from '../js/physics/ice.module.js';
+import { FREEZING_POINT, MELTING_POINT, savedIceExchange, savedIceAlbedoPhases, iceExchangeOptions, frictionMinimumNote } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
@@ -38,7 +41,7 @@ import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { depthFields, HEAT_REFERENCE } from '../js/ocean/layered.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { placeCumulus } from '../js/physics/moist.module.js';
-import { PUBLISHED_RADIATION, PUBLISHED_MOIST } from '../explain/published.module.js';
+import { PUBLISHED_RADIATION, PUBLISHED_MOIST, PUBLISHED_ICE } from '../explain/published.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 import { loadSavedLake } from './savedLand.mjs';
 
@@ -89,10 +92,12 @@ if (resumed && !engineMatches) {
 if (resumed && !scriptMatches) console.error(`warning: ${process.env.RESUME} was written by ${savedEngine?.scriptSha256 ? `scripts/explainOcean.mjs ${savedEngine.scriptSha256}, this is ${engine.scriptSha256}` : 'a scripts/explainOcean.mjs that did not record its hash'}; resuming, and the header's resumeCheck.sameScript is false`);
 const base = resumed ? JSON.parse(resumed.optionsJson) : { ocean: { everySteps: 4 }, ice: DARK_ICE };
 const GIVEN_ICE = process.env.WET_ICE ? JSON.parse(process.env.WET_ICE) : base.ice;
-const ICE = resumed && GIVEN_ICE.iceAlbedoPhases === undefined ? { ...GIVEN_ICE, iceAlbedoPhases: savedIceAlbedoPhases({ options: base }) } : GIVEN_ICE;
-const madeUnder = resumed ? savedIceExchange({ options: base }) : DEFAULT_ICE_EXCHANGE;
+const ICE = GIVEN_ICE.iceAlbedoPhases === undefined ? { ...GIVEN_ICE, iceAlbedoPhases: resumed ? savedIceAlbedoPhases({ options: base }) : PUBLISHED_ICE.iceAlbedoPhases } : GIVEN_ICE;
+const madeUnder = resumed ? savedIceExchange({ options: base }) : PUBLISHED_ICE.iceExchange;
 const OCEAN = { iceExchange: madeUnder, ...base.ocean, ...JSON.parse(process.env.OCEAN_OPTS ?? '{}') };
 if (resumed && JSON.stringify(iceExchangeOptions(OCEAN.iceExchange)) !== JSON.stringify(iceExchangeOptions(madeUnder))) console.error(`iceExchange ${JSON.stringify(OCEAN.iceExchange)} where ${process.env.RESUME} was made under ${JSON.stringify(madeUnder)}`);
+const exchangeNote = frictionMinimumNote(OCEAN.iceExchange);
+if (exchangeNote) console.error(exchangeNote);
 const cadence = withCadence({ ocean: OCEAN }, STEP, N);
 const options = { ocean: cadence.ocean, levels: sigmaInterfaces(GRID), radiation: { ...cadence.radiation, clearSkyPass: true, orbit: PUBLISHED_RADIATION.orbit, shortwave: PUBLISHED_RADIATION.shortwave, aerosol: PUBLISHED_RADIATION.aerosol }, moist: { bergeronAutoconversion: PUBLISHED_MOIST.bergeronAutoconversion, pcapeMinimum: PUBLISHED_MOIST.pcapeMinimum }, dragEvery: cadence.dragEvery, ice: ICE, surface: JSON.parse(process.env.SURFACE_OPTS ?? '{}') };
 const runStartTime = resumed ? resumed.runStartTime : (Math.ceil(SPINUP_DAYS / 365) * 365 - SPINUP_DAYS) * DAY;

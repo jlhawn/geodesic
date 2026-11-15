@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createSeaIce, FREEZING_POINT, MELTING_POINT, COVER_GRAIN } from '../js/physics/ice.module.js';
+import { readFileSync } from 'node:fs';
+import { createSeaIce, FREEZING_POINT, MELTING_POINT, COVER_GRAIN, DEFAULT_ICE_EXCHANGE, frictionMinimumNote } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { DT, mesh as oceanMesh } from './helpers/layered.mjs';
 import { rig, POLAR } from './helpers/iceExchange.mjs';
@@ -128,7 +129,7 @@ test('a lean turbulent save, serialize() without the restart arrays, carries the
   assert.ok(!('iceWater' in plain.ocean.serialize()) && !('iceConductance' in plain.ocean.serialize()));
 });
 
-test('a turbulent save, restart or lean, loaded into an explicitly instant ocean books the water\'s heat under the ice into the top layer, logged, and steps on bit for bit as the same save without that heat and the conductance, booked by hand', () => {
+test('a turbulent save, restart or lean, loaded into an explicitly instant ocean books the water\'s heat under the ice into the top layer, logged, and its first read keeps that heat where an instant read sets the freezing point under ice; held heat over a cell without ice is dropped, logged', () => {
   const run = rig('turbulent', { flux: 40, global: true });
   for (let n = 0; n < 4; n++) run.cycle();
   for (const restart of [true, false]) {
@@ -137,24 +138,28 @@ test('a turbulent save, restart or lean, loaded into an explicitly instant ocean
     const [taken, plain] = [saved, without].map((given) => {
       const r = rig('instant', { flux: 40, global: true });
       r.ice.set(run.ice); r.surfaceT.set(run.surfaceT); r.seaIce.concentration.set(run.seaIce.concentration);
+      r.ice[[...Array(r.C).keys()].find((i) => r.ocean.cellOcean[i] && iceWater[i] > 0)] = 0;
       const notes = [], warn = console.warn, booked = [...Array(r.C).keys()].filter((i) => r.ocean.cellOcean[i] && r.ice[i] > 0);
       console.warn = (note) => notes.push(note);
       try { r.ocean.load(given, r.surfaceT, r.ice, r.seaIce.concentration); } finally { console.warn = warn; }
       if (given === saved) {
-        assert.equal(notes.length, 1, 'the booking is logged once');
+        assert.equal(notes.length, 2, 'the booking and the drop are logged once each');
         assert.match(notes[0], new RegExp(`under ${booked.length} iced cells`));
-        for (const i of booked) assert.equal(r.ocean.Q[i], r.ocean.h[i] * FREEZING_POINT + iceWater[i] / r.ocean.rhoCp);
-      } else {
-        assert.deepEqual(notes, [], 'a save without iceWater books nothing');
-        for (const i of booked) r.ocean.Q[i] = r.ocean.h[i] * FREEZING_POINT + iceWater[i] / r.ocean.rhoCp;
-      }
-      for (let n = 0; n < 4; n++) r.step();
-      return r;
+        assert.match(notes[1], /dropped \d+\.\d+ EJ of the saved ocean\.iceWater, held over 1 cells without ice over an ocean column/);
+        for (const i of booked) {
+          assert.equal(r.ocean.Q[i], r.ocean.h[i] * FREEZING_POINT + iceWater[i] / r.ocean.rhoCp);
+          assert.equal(r.ocean.T0[i], r.ocean.Q[i] / r.ocean.h[i]);
+        }
+      } else assert.deepEqual(notes, [], 'a save without iceWater books nothing');
+      r.ocean.readSurface(r.surfaceT, r.ice, r.seaIce.concentration);
+      return { r, booked };
     });
-    assert.equal(taken.seaIce.turbulent, false);
-    const unlike = (x, y) => [...x.keys()].filter((i) => !Object.is(x[i], y[i])).length;
-    for (const [name, x, y] of [['ice', taken.ice, plain.ice], ['surfaceT', taken.surfaceT, plain.surfaceT], ['concentration', taken.seaIce.concentration, plain.seaIce.concentration], ['Q', taken.ocean.Q, plain.ocean.Q], ['h', taken.ocean.h, plain.ocean.h], ['u', taken.ocean.u, plain.ocean.u]]) assert.equal(unlike(x, y), 0, `${name} from the ${restart ? 'restart' : 'lean'} save`);
-    assert.ok(!('iceWater' in taken.ocean.serialize({ restart })), 'the instant ocean saves no water heat');
+    const top = (r, i) => r.ocean.Q[i] - r.ocean.h[i] * FREEZING_POINT;
+    const kept = Math.max(...taken.booked.map((i) => Math.abs(top(taken.r, i) - iceWater[i] / taken.r.ocean.rhoCp) / Math.max(1, Math.abs(taken.r.ocean.Q[i])))), plainTop = Math.max(...plain.booked.map((i) => Math.abs(top(plain.r, i))));
+    assert.ok(kept < 1e-14 && plainTop === 0, `the first read keeps the booked heat to ${kept} of the layer's heat, and a load without it reads the freezing point to ${plainTop}`);
+    taken.r.ocean.readSurface(taken.r.surfaceT, taken.r.ice, taken.r.seaIce.concentration);
+    assert.equal(Math.max(...taken.booked.map((i) => Math.abs(top(taken.r, i)))), 0, 'a second read with no write between reads the freezing point: the booked heat is read once');
+    assert.ok(!('iceWater' in taken.r.ocean.serialize({ restart })), 'the instant ocean saves no water heat');
   }
 });
 
@@ -239,4 +244,11 @@ test('an instant save taken as its ocean hands the ice heat loads into the turbu
   console.log(`transit ${(transit / area).toExponential(3)} J/m², the heat closed to ${worst.toExponential(2)} of it over 9 steps; the turbulent ice keeps at least ${kept.toFixed(6)} of its volume at the save, at least ${ahead.toExponential(2)} m above the instant ice's in every cell`);
   assert.ok(worst < 1e-9, `the heat closes to ${worst} of the transit`);
   assert.ok(kept > 0.95 && ahead >= 0, `kept ${kept}, above the instant ice by ${ahead} m`);
+});
+
+test('a turbulent exchange given without its own frictionMinimum, as the bare string or an object, is noted while its 5e-4 is not the default\'s, and spinup, oceanSpinup, explainOcean and the page worker log that note', () => {
+  assert.equal(frictionMinimumNote('turbulent'), 'iceExchange turbulent takes frictionMinimum 5e-4; the default is 2e-2');
+  assert.equal(frictionMinimumNote({ mode: 'turbulent', heatTransfer: 0.006 }), frictionMinimumNote('turbulent'));
+  for (const exchange of [undefined, 'instant', { mode: 'turbulent', frictionMinimum: 5e-4 }, DEFAULT_ICE_EXCHANGE]) assert.equal(frictionMinimumNote(exchange), null, JSON.stringify(exchange));
+  for (const path of ['scripts/spinup.mjs', 'scripts/oceanSpinup.mjs', 'scripts/explainOcean.mjs', 'js/model.worker.js']) assert.match(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'), /frictionMinimumNote\(/, path);
 });

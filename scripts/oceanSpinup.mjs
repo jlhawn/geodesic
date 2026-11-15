@@ -54,7 +54,7 @@ import { savedDeckField, DECK_FIELDS, MOIST_FIELDS, RADIATION_FIELDS } from '../
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { withCadence } from '../js/cadence.module.js';
-import { FREEZING_POINT, savedIceExchange, iceExchangeOptions } from '../js/physics/ice.module.js';
+import { FREEZING_POINT, savedIceExchange, iceExchangeOptions, frictionMinimumNote } from '../js/physics/ice.module.js';
 import { createForcedOcean } from '../js/gpu/forcing.gpu.js';
 import { decodeForcing, forcingDay } from '../js/forcing.module.js';
 import { COUPLED_ICE_DRIFT } from '../js/ocean/iceDrift.module.js';
@@ -102,6 +102,8 @@ const RUN_OCEAN = resumedOcean(saved, OCEAN), RUN_ICE = resumedIce(saved), madeU
 if (OCEAN.iceExchange === undefined) log(`iceExchange ${JSON.stringify(RUN_OCEAN.iceExchange)}, as ${from} ${recordedIceExchange(saved) === undefined ? 'was made under, recording none' : 'records'}`);
 else if (JSON.stringify(iceExchangeOptions(OCEAN.iceExchange)) !== JSON.stringify(iceExchangeOptions(madeUnder))) log(`iceExchange ${JSON.stringify(OCEAN.iceExchange)} where ${from} was made under ${JSON.stringify(madeUnder)}`);
 log(`ice options ${JSON.stringify(RUN_ICE)}, as ${from} records them, iceAlbedoPhases false where it records none`);
+const exchangeNote = frictionMinimumNote(RUN_OCEAN.iceExchange);
+if (exchangeNote) log(exchangeNote);
 const model = await createGpuModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), topography, geography, land: landOptions, ocean: RUN_OCEAN, ice: RUN_ICE, radiation: RADIATION, levels: savedLevels(saved) });
 const RAN_EXCHANGE = model.oceanEngine.options.iceExchange, RAN_ICE = { ...RUN_ICE, iceAlbedoPhases: model.seaIce.iceAlbedoPhases };
 const replayGiven = ({ ocean, ...given }) => ({ ...given, ocean: { ...(process.env.OCEAN === undefined ? {} : givenOptions({ ocean: JSON.parse(process.env.OCEAN) }).ocean), iceExchange: RAN_EXCHANGE }, ice: RAN_ICE });

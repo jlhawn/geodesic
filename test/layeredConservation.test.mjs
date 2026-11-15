@@ -210,7 +210,7 @@ test('through every phase of the hybrid ocean\'s step, with the cavitating drift
   }
 });
 
-test('a turbulent save, restart or lean, loaded into an instant ocean keeps the ocean\'s heat: the water\'s heat under the ice is booked into the top layer in place of what the layer still held of the ice\'s draw', () => {
+test('a turbulent save, restart or lean, loaded into an instant ocean keeps the ocean\'s heat: the water\'s heat under the ice is booked into the top layer in place of what the layer still held of the ice\'s draw, and through the first full ocean interval the ocean and the ice close on it', () => {
   const run = rig('turbulent', { thickness: 0.2, cover: 0.85, water: FREEZING_POINT + 1.5 }), { C, mesh } = run;
   run.seed(0.5);
   for (let n = 0; n < 4; n++) run.cycle();
@@ -224,5 +224,19 @@ test('a turbulent save, restart or lean, loaded into an instant ocean keeps the 
     console.log(`${restart ? 'restart' : 'lean'} save: the turbulent ocean holds ${held.toExponential(6)} J with the water's heat under the ice, its layers ${(stale - held).toExponential(2)} J more of the ice's draw; the instant ocean holds ${booked.toExponential(6)} J`);
     assert.ok(stale !== held, 'the save\'s top layer still holds heat the ice has drawn');
     assert.ok(Math.abs(booked - held) <= 1e-12 * Math.abs(held), `the instant ocean holds ${booked} J against ${held} J`);
+    const { ocean, seaIce, ice, surfaceT } = r, P = ocean.phases, parts = Math.max(1, Math.ceil(DT / inertialStepLimit(mesh))), part = DT / parts;
+    const oceanHeat = () => { let s = 0; for (let i = 0; i < C; i++) for (let k = 0; k < ocean.layers; k++) s += mesh.areaCell[i] * ocean.rhoCp * (ocean.Q[k * C + i] - 272 * ocean.h[k * C + i]); return s; };
+    const energy = () => r.cellEnergy().reduce((s, x, i) => s + mesh.areaCell[i] * (x + (ice[i] > 0 && ocean.cellOcean[i] ? ocean.rhoCp * (ocean.Q[i] - ocean.h[i] * FREEZING_POINT) : 0)), 0);
+    const heldJoules = saved.iceWater.reduce((s, x, i) => s + (ice[i] > 0 && ocean.cellOcean[i] ? mesh.areaCell[i] * x : 0), 0), volume0 = r.volume();
+    const before = energy();
+    ocean.readSurface(surfaceT, ice, seaIce.concentration);
+    ocean.setStress(new Float64Array(mesh.nEdges), ice, seaIce.concentration);
+    let rescaled = 0;
+    for (let m = 0; m < parts; m++) { P.dynamics(part); const a = oceanHeat(); P.rescale(); rescaled += oceanHeat() - a; P.eddy(part); P.shift(); }
+    P.regrid(DT); P.column(DT); ocean.salt(); ocean.meltCalved(); ocean.writeSurface(surfaceT, seaIce.oceanFlux, DT);
+    for (let i = 0; i < C; i++) seaIce.update(surfaceT, ice, r.heat, i, DT);
+    const gap = energy() - before - rescaled;
+    console.log(`${restart ? 'restart' : 'lean'} save, one full interval of the instant ocean and its ice: ${heldJoules.toExponential(3)} J booked, the ice volume ${volume0.toExponential(4)} → ${r.volume().toExponential(4)} m³, ocean and ice close to ${(gap / heldJoules).toExponential(1)} of the booked heat beside a rescale correction of ${(rescaled / heldJoules).toExponential(1)}`);
+    assert.ok(heldJoules > 0 && Math.abs(gap) <= 1e-6 * heldJoules, `ocean and ice close to ${gap} J of ${heldJoules} J booked`);
   }
 });

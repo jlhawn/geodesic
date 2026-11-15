@@ -39,7 +39,7 @@ test('the physics buffer, the surface kernel and the constants carry the turbule
   assert.ok(!/PH_WHEAT|PH_CONDUCT|XFER_/.test(physicsSurfaceKernel(false)) && /PH_WHEAT/.test(physicsSurfaceKernel(false, false, null, false, false, turbulent)));
 });
 
-test('the GPU model at N=16 over the aquaplanet compiles its pinned WGSL, 85 modules each: under iceExchange \'instant\' of digest a2432b2c07f16c72 and under \'turbulent\' of digest 35bb61260615ba48 without iceAlbedoPhases, and at the defaults, the turbulent exchange with frictionMinimum 2e-2 and iceAlbedoPhases, of digest b60a561d91ae451f', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the GPU model at N=16 over the aquaplanet compiles its pinned WGSL, 85 modules each: under iceExchange \'instant\' of digest f99337a14076f86f and under \'turbulent\' of digest 35bb61260615ba48 without iceAlbedoPhases, and at the defaults, the turbulent exchange with frictionMinimum 2e-2 and iceAlbedoPhases, of digest b60a561d91ae451f', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const sha = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16), { device } = await getDevice(), compile = device.createShaderModule;
   const compiled = async (options) => {
     const modules = {};
@@ -51,7 +51,7 @@ test('the GPU model at N=16 over the aquaplanet compiles its pinned WGSL, 85 mod
   };
   const phasesOff = { iceAlbedoPhases: false };
   const pinned = { instant: await compiled({ ocean: { iceExchange: 'instant' }, ice: phasesOff }), turbulent: await compiled({ ocean: { iceExchange: 'turbulent' }, ice: phasesOff }), standard: await compiled({}) };
-  assert.deepEqual(pinned, { instant: { modules: 85, digest: 'a2432b2c07f16c72' }, turbulent: { modules: 85, digest: '35bb61260615ba48' }, standard: { modules: 85, digest: 'b60a561d91ae451f' } }, 'a change to a kernel updates its pin');
+  assert.deepEqual(pinned, { instant: { modules: 85, digest: 'f99337a14076f86f' }, turbulent: { modules: 85, digest: '35bb61260615ba48' }, standard: { modules: 85, digest: 'b60a561d91ae451f' } }, 'a change to a kernel updates its pin');
   assert.deepEqual(pinned.standard, await compiled({ ocean: { iceExchange: DEFAULT_ICE_EXCHANGE }, ice: { iceAlbedoPhases: DEFAULT_ICE_ALBEDO_PHASES } }));
 });
 
@@ -291,6 +291,66 @@ test('a turbulent save, restart or lean, loaded into an explicitly instant GPU m
     assert.ok(worst < 1e-4, `the top layer holds the booked heat to ${worst} of it`);
     taken.destroy(); plain.destroy();
   }
+});
+
+test('a turbulent save with ice loaded into the instant model on both engines: over the first ocean interval the first write hands the ice the booked heat alike on both engines, beyond what a load without that heat hands it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const source = await begin({ topography, ocean: { iceExchange: TURBULENT } }), { oceanEvery } = source.cadence, instant = { topography, ocean: { iceExchange: 'instant' } };
+  const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length, { iceWater, iceConductance, ...without } = saved.ocean;
+  assert.ok(iceWater.some((x) => x > 0), 'a turbulent save that holds heat under the ice');
+  const place = (model) => {
+    model.state.forEach((values, a) => values.set(saved.host[`state${a}`]));
+    model.seaIce.load(model.state[6], saved.host.concentration, null);
+    model.time = saved.time;
+  };
+  const handed = async (ocean) => {
+    const gpu = await createGpuModel(new Grid(N), instant), cpu = createModel(new Grid(N), instant), warn = console.warn;
+    console.warn = () => {};
+    try {
+      place(gpu); gpu.load(); gpu.ocean.load(ocean, gpu.state[3], gpu.state[6]); loadSavedLand(gpu, saved);
+      place(cpu); cpu.ocean.load(ocean, cpu.state[3], cpu.state[6], cpu.seaIce.concentration); loadSavedLand(cpu, saved);
+    } finally { console.warn = warn; }
+    for (let n = 0; n < oceanEvery; n++) { await gpu.step(DT); cpu.step(DT); }
+    await gpu.sync();
+    const [flux] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [{ offset: gpu.gpu.layout.PH.OFLUX, length: C }]), area = Float64Array.from(cpu.mesh.areaCell);
+    gpu.destroy();
+    return { cpu: Float64Array.from(cpu.seaIce.oceanFlux), gpu: Float64Array.from(flux), area };
+  };
+  const taken = await handed(saved.ocean), plain = await handed(without), { area } = taken, interval = oceanEvery * DT;
+  const iced = [...Array(C).keys()].filter((i) => saved.host.state6[i] > 0 && iceWater[i] !== 0);
+  const held = iced.reduce((s, i) => s + area[i] * iceWater[i], 0), beyond = (engine) => iced.reduce((s, i) => s + area[i] * (taken[engine][i] - plain[engine][i]), 0) * interval;
+  const extra = { cpu: beyond('cpu'), gpu: beyond('gpu') }, worst = Math.max(...iced.map((i) => Math.abs(taken.gpu[i] - taken.cpu[i]) / Math.max(1, Math.abs(taken.cpu[i]))));
+  console.log(`${iced.length} cells held ${held.toExponential(4)} J under their ice; over the first ocean interval the first write hands the ice ${extra.cpu.toExponential(4)} J beyond a load without it on the CPU, ${extra.gpu.toExponential(4)} J on the GPU; the flux to the ice differs by up to ${worst.toExponential(2)} of it`);
+  assert.ok(extra.cpu > 0 && extra.cpu <= 1.0001 * held, `the CPU hands the ice ${extra.cpu} J of the ${held} J booked`);
+  assert.ok(Math.abs(extra.gpu - extra.cpu) <= 1e-3 * extra.cpu && worst < 2e-3,`the GPU hands it ${extra.gpu} J against the CPU's ${extra.cpu} J, the flux apart by up to ${worst}`);
+});
+
+test('both engines built with no ice or ocean options step the defaults alike: from one state, over three ocean intervals the ice, the water\'s heat under it, the conductance and the surface temperature over the sea follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const source = await begin({ topography }), { oceanEvery } = source.cadence;
+  const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length;
+  const gpu = await createGpuModel(new Grid(N), { topography }), cpu = createModel(new Grid(N), { topography }), { device, buffers, layout } = gpu.gpu;
+  assert.ok(cpu.seaIce.turbulent && cpu.seaIce.iceAlbedoPhases === DEFAULT_ICE_ALBEDO_PHASES && layout.PH.WHEAT !== undefined, 'both engines take the default exchange and phases');
+  for (const model of [gpu, cpu]) {
+    model.state.forEach((values, a) => values.set(saved.host[`state${a}`]));
+    model.seaIce.load(model.state[6], saved.host.concentration, null);
+    model.time = saved.time;
+  }
+  gpu.load(); gpu.ocean.load(saved.ocean, gpu.state[3], gpu.state[6]); loadSavedLand(gpu, saved);
+  cpu.ocean.load(saved.ocean, cpu.state[3], cpu.state[6], cpu.seaIce.concentration); loadSavedLand(cpu, saved);
+  for (let n = 0; n < 3 * oceanEvery; n++) { await gpu.step(DT); cpu.step(DT); }
+  await gpu.sync();
+  const [heat, conductance] = await readRanges(device, buffers.PH, ['WHEAT', 'CONDUCT'].map((name) => ({ offset: layout.PH[name], length: C })));
+  const capacity = Float64Array.from(cpu.ocean.capacity), sea = [...Array(C).keys()].filter((i) => cpu.ocean.cellOcean[i]), iced = sea.filter((i) => cpu.state[6][i] > 0);
+  const volume = (model, i) => (model.state[6][i] > 0 ? model.state[6][i] * model.seaIce.concentration[i] : 0);
+  const apart = {
+    heat: Math.max(...iced.map((i) => Math.abs(heat[i] - cpu.seaIce.waterHeat[i]) / capacity[i])),
+    conductance: Math.max(...iced.map((i) => Math.abs(conductance[i] - cpu.seaIce.conductance[i]) / Math.max(1e-9, cpu.seaIce.conductance[i]))),
+    volume: Math.max(...sea.map((i) => Math.abs(volume(gpu, i) - volume(cpu, i)))),
+    surface: Math.max(...sea.map((i) => Math.abs(gpu.state[3][i] - cpu.state[3][i]))),
+  };
+  console.log(`${iced.length} iced cells of ${sea.length} sea cells after ${3 * oceanEvery} steps at the defaults; the engines differ by up to ${JSON.stringify(apart)}`);
+  assert.ok(iced.length > 10 && cpu.seaIce.waterHeat.some((x) => x > 0), `${iced.length} iced cells, some holding heat`);
+  assert.ok(apart.heat < 1e-3 && apart.conductance < 1e-5 && apart.volume < 1e-4 && apart.surface < 0.05, JSON.stringify(apart));
+  gpu.destroy();
 });
 
 test('an instant save with ice loaded into the turbulent model on both engines: the water under the ice starts within the f32 grain of the freezing point, as on the CPU, and over two ocean intervals the ice, the held heat and the conductance follow the CPU and no ice collapses', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

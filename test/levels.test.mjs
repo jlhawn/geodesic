@@ -14,6 +14,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { sigmaInterfaces, sigmaGridName, standardHeight, standardSigma, SIGMA_GRIDS, P0, R_DRY, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { encodeState, decodeState, savedLevels } from '../js/stateFile.module.js';
 import { withoutOptionGroups } from '../scripts/optionEnvironment.mjs';
+import { iceExchangeOptions, savedIceExchange, savedIceAlbedoPhases, DEFAULT_ICE_EXCHANGE } from '../js/physics/ice.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -438,7 +439,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   assert.throws(() => run({ N: '32', TAG: 'coarse' }), /is N=16, not 32/);
 });
 
-test('with LEVELS=bl48, spinup.mjs starts a fresh run on bl48 and carries a bl60 state onto it, and fixedSst.mjs runs a day on bl48 from that state', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+test('with LEVELS=bl48, spinup.mjs starts a fresh run on bl48 and carries a bl60 state onto it, and fixedSst.mjs runs a day on bl48 from that state and records the sea ice\'s exchange and iceAlbedoPhases the state was made with', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const root = new URL('..', import.meta.url).pathname, dir = mkdtempSync(join(tmpdir(), 'bl48-')), fine = sigmaInterfaces('bl48');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const node = (script, args, env) => execFileSync(process.execPath, [join(root, script), ...args], { cwd: root, env: { ...withoutOptionGroups(), ...env }, encoding: 'utf8', stdio: 'pipe' });
@@ -454,4 +455,6 @@ test('with LEVELS=bl48, spinup.mjs starts a fresh run on bl48 and carries a bl60
     assert.deepEqual(savedLevels(saved), fine, name);
     for (const field of ['pi', 'theta', 'u', 'surfaceT', 'q']) assert.ok(saved[field].every(Number.isFinite), `${name}: ${field}`);
   }
+  const arm = await decodeState(new Uint8Array(readFileSync(join(dir, 'arm_day0001.bin'))));
+  assert.deepEqual([iceExchangeOptions(savedIceExchange(arm)), savedIceAlbedoPhases(arm)], [iceExchangeOptions(DEFAULT_ICE_EXCHANGE), true]);
 });
