@@ -28,7 +28,7 @@ import { sunTrack, DAYS } from './insolation.module.js';
 export const DAY = 86400, STEP = 3600, RHO_CP = 1025 * 3985, ICE_SALINITY = 5, ICE_DENSITY = 917;
 export const DEEP_WATER = { T: 275.15, S: 34.7 };
 export const DEEP_DENSITY = seawaterDensity(DEEP_WATER.T, DEEP_WATER.S);
-export const DARK_ICE = { iceAlbedo: 0.07, meltingIceAlbedo: 0.07, iceSnowAlbedo: 0.07 };
+export const DARK_ICE = { iceAlbedo: 0.07, meltingIceAlbedo: 0.07, iceSnowAlbedo: 0.07, iceAlbedoPhases: false };
 export const TOY = { A: 200, B: 2.1, transmission: 0.7 };
 export const DEPTHS = { slab: 4.2e7 / RHO_CP, fifty: 50, deep: 200 };
 const unit = () => ({ nCells: 1, areaCell: [1] });
@@ -87,7 +87,7 @@ export function iceForDensity({ salinity = 34, depth = 50, density = DEEP_DENSIT
 }
 
 export function iceGrowth({ thickness = 1, below = 20, days = 1, depth = 50, dt = STEP } = {}) {
-  const sea = createSeaIce(unit(), { heatCapacity: Float64Array.of(RHO_CP * depth) });
+  const sea = createSeaIce(unit(), { heatCapacity: Float64Array.of(RHO_CP * depth), iceExchange: 'instant', iceAlbedoPhases: false });
   const T = new Float64Array(1), ice = Float64Array.of(thickness), still = new Float64Array(1);
   sea.load(ice);
   let conduction = null;
@@ -104,7 +104,7 @@ export function seaIceColumn({
   latitude = 75, depth = 50, ice: iceAlbedos = 'bright', convergence = 85, oceanHeat = 0, snowfall = 0, salinity = 34, years = 24,
   A = TOY.A, B = TOY.B, transmission = TOY.transmission, dt = STEP, start = FREEZING_POINT + 2, startDay = 0, startIce = 0, iceOptions = {},
 } = {}) {
-  const sea = createSeaIce(unit(), { heatCapacity: Float64Array.of(RHO_CP * depth), ...(iceAlbedos === 'dark' ? DARK_ICE : {}), ...iceOptions });
+  const sea = createSeaIce(unit(), { heatCapacity: Float64Array.of(RHO_CP * depth), iceExchange: 'instant', iceAlbedoPhases: false, ...(iceAlbedos === 'dark' ? DARK_ICE : {}), ...iceOptions });
   const light = dailySunlight(latitude), perDay = Math.round(DAY / dt), days = years * DAYS;
   const T = Float64Array.of(startIce > 0 ? FREEZING_POINT : start), ice = Float64Array.of(startIce), flux = new Float64Array(1);
   sea.load(ice);

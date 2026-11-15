@@ -10,7 +10,7 @@ import { decodeState, savedLevels, stateTerrain, stateName } from '../../js/stat
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../../js/physics/regrid.module.js';
 import { placeCumulus, placeCloudIce } from '../../js/physics/moist.module.js';
 import { stateGrid } from '../../js/stateGrid.module.js';
-import { loadSavedLand, loadSavedLake, lakeOptionsFor } from '../savedLand.mjs';
+import { loadSavedLand, loadSavedLake, lakeOptionsFor, resumedOcean, resumedIce } from '../savedLand.mjs';
 
 export const readGeography = (saved) => stateGeography(saved);
 export const readState = async (file) => decodeState(new Uint8Array(readFileSync(file)));
@@ -35,8 +35,9 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
 /*
  * A GPU model on the state's grid, level set, terrain and ice sheets with
  * the run's options
- * (OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND, LAKE as JSON in
- * the environment, LAKE over the save's lake options; the radiation's
+ * (OCEAN, ICE, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND, LAKE as
+ * JSON in the environment; LAKE over the save's lake options, ICE over its
+ * ice options, and its ice exchange unless OCEAN names one; the radiation's
  * clear-sky pass on unless RADIATION turns it off, and the cadences of
  * js/cadence.module.js at the state's dt, the drags' unless DRAG_EVERY
  * gives it in steps),
@@ -44,9 +45,11 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
  */
 export async function gpuModelFrom(saved) {
   const env = (name) => JSON.parse(process.env[name] ?? '{}'), { topography, geography, land } = stateGeography(saved);
+  const ocean = resumedOcean(saved, env('OCEAN')), ice = resumedIce(saved, env('ICE'));
+  console.error(`iceExchange ${JSON.stringify(ocean === false ? null : ocean.iceExchange)}, ice options ${JSON.stringify(ice)}`);
   const model = await createGpuModel(stateGrid(saved, topography).mesh, {
-    lake: lakeOptionsFor(saved), topography, geography, levels: savedLevels(saved), terrain: stateTerrain(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
-    moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: { ...land, ...env('LAND') },
+    lake: lakeOptionsFor(saved), topography, geography, levels: savedLevels(saved), terrain: stateTerrain(saved), ...withCadence({ ocean, radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
+    ice, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: { ...land, ...env('LAND') },
   });
   const { state } = model;
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));

@@ -73,7 +73,10 @@
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}';
-// everySteps by default from js/cadence.module.js),
+// everySteps by default from js/cadence.module.js; iceExchange, '"turbulent"' or an object of
+// the constants of js/physics/ice.module.js's ICE_EXCHANGE with a mode, is recorded in the state's header,
+// the default among them, and a resumed run whose OCEAN names none takes the one its save was made under:
+// the one its header records, or 'instant' where it records none),
 // RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}';
 // radiationEvery by default from js/cadence.module.js),
 // DRAG_EVERY (the steps the gravity-wave and orographic drags' profiles
@@ -123,8 +126,7 @@
 // cover (header goalSince, the window's first day, and goalOpen false) and
 // the next segment starts a new one, a save inside a day or at a stop
 // leaves it open and the next segment carries it on),
-// ICE (JSON options for the sea ice, e.g.
-// '{"leadClosure":"hibler"}'), LAND_JUMPS (the
+// LAND_JUMPS (the
 // model days at whose end land.jump() sets every land cell's topsoil
 // carbon, and the trees unless the start was observed, to the
 // equilibrium of its own record and ends a fresh
@@ -138,6 +140,9 @@
 // DYNAMICS (JSON options for the dynamical core, e.g.
 // '{"divergenceSurfaces":"hybrid"}' for the divergence damping along hybrid
 // σ–p surfaces; see dynamicsOptions in js/dynamics/sigmaCore.module.js),
+// ICE (JSON options for the sea ice of js/physics/ice.module.js, e.g.
+// '{"areaLossFactor":0.5}', recorded in the state's header with the iceAlbedoPhases the run took; a
+// resumed run whose ICE names none takes its save's, false where its header records none),
 // RECORD (a directory to write each day's ocean and sea-ice forcing into as
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
 // one at a time, and every eighth waits for the device to finish the eight
@@ -223,7 +228,7 @@
 // scripts/spinup.sh runs segments back to back, scripts/asyncSpinup.sh
 // alternates them with ocean-only spin-ups.
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { Grid } from '../js/grid.module.js';
 import { stateGrid, gridHeader, savedRelax, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
 import { createGeography, stateGeography, savedGeography, checkGeography, geographyHeader, readTopography, geographyOptions, FRESH_GEOGRAPHY, surfaceGeopotential, terrainOptions } from '../js/geography.module.js';
@@ -253,7 +258,8 @@ import { convectionLine, equatorLine } from '../js/audit.module.js';
 import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
 import { watchSkin } from './skinWatch.mjs';
 import { lakeArrays } from '../js/physics/lake.module.js';
-import { loadSavedLand, loadSavedLake } from './savedLand.mjs';
+import { loadSavedLand, loadSavedLake, resumedIceExchange, recordedIceExchange } from './savedLand.mjs';
+import { savedIceAlbedoPhases, frictionMinimumNote, DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES } from '../js/physics/ice.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 import { startGeography } from './soilWater.mjs';
 import { indexCells, seaIceIndexCut } from '../js/seaIceIndex.module.js';
@@ -270,6 +276,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, LAKE = JSON.parse(process.env.LAKE ?? '{}'), ICE = JSON.parse(process.env.ICE ?? '{}');
+if (OCEAN === false) throw new Error('OCEAN is false, and spinup.mjs runs no model without its ocean: give its options as JSON or leave it unset; fixedSst.mjs runs the atmosphere over a fixed sea');
 const GIVEN_RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), RADIATION = withCadence({ radiation: { clearSkyPass: true, ...GIVEN_RADIATION } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
 const OROGRAPHY = process.env.OROGRAPHY === undefined ? {} : { orography: JSON.parse(process.env.OROGRAPHY) };
@@ -292,6 +299,13 @@ const t0 = performance.now();
 const existing = snapshots(), file = existing[existing.length - 1];
 let saved = file ? await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`))) : null;
 if (saved && saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
+if (saved && (saved.given?.ocean === false || saved.options?.ocean === false)) throw new Error(`${file} records no ocean, and spinup.mjs runs no model without its ocean`);
+const RESUMED_EXCHANGE = resumedIceExchange(saved, OCEAN), RUN_OCEAN = RESUMED_EXCHANGE === undefined ? OCEAN : { ...OCEAN, iceExchange: RESUMED_EXCHANGE };
+const RUN_ICE = saved && ICE.iceAlbedoPhases === undefined ? { ...ICE, iceAlbedoPhases: savedIceAlbedoPhases(saved) } : ICE;
+if (RESUMED_EXCHANGE !== undefined) log(`iceExchange ${JSON.stringify(RESUMED_EXCHANGE)}, as ${file} ${recordedIceExchange(saved) === undefined ? 'was made under, recording none' : 'records'}`);
+if (RUN_ICE !== ICE) log(`iceAlbedoPhases ${RUN_ICE.iceAlbedoPhases}, as ${file} ${(saved.given?.ice?.iceAlbedoPhases ?? saved.options?.ice?.iceAlbedoPhases) === undefined ? 'was made with, recording none' : 'records'}`);
+const exchangeNote = frictionMinimumNote(RUN_OCEAN.iceExchange);
+if (exchangeNote) log(exchangeNote);
 const PERTURB = Number(process.env.PERTURB ?? 0);
 if (saved && PERTURB) {
   let seed = 12345;
@@ -316,15 +330,15 @@ const TERRAIN = runTerrain(GIVEN_TERRAIN, base);
 if (GIVEN_TERRAIN === undefined && TERRAIN !== undefined) log(`terrain ${JSON.stringify(TERRAIN)}, as ${saved ? file : process.env.FROM} records`);
 const GIVEN_GROUPS = [['boundaryLayer', 'BOUNDARY_LAYER'], ['surface', 'SURFACE'], ['ocean', 'OCEAN'], ['lake', 'LAKE'], ['ice', 'ICE'], ['dynamics', 'DYNAMICS'], ['gravityWaves', 'GRAVITY_WAVES'], ['orography', 'OROGRAPHY']].filter(([, name]) => process.env[name] !== undefined);
 if (process.env.BOUNDARY_LAYER !== undefined && JSON.parse(process.env.BOUNDARY_LAYER) === false) throw new Error('BOUNDARY_LAYER is false, and createGpuModel runs no model without the boundary layer: give its options as JSON or leave it unset');
-const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
-for (const note of resumeNotes(GIVEN, base, saved ? file : process.env.FROM)) log(note);
 const topography = readTopography(GEOGRAPHY.topography), sheets = geographyOptions(GEOGRAPHY);
 let landFromState = !saved && process.env.LAND_FROM ? await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM))) : null;
 const { geography: startingGeography, soilSeed, soilNote } = startGeography(sheets.geography, process.env, { saved, from: fromState, landFrom: landFromState });
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}, ${soilNote}`;
 const found = base ? stateGrid(base, topography) : null;
 requireOwnSubgrid(TERRAIN, OROGRAPHY.orography);
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: LAND.soilGoal === 'observed' ? { ...startingGeography, soilWaterMonthly: true } : startingGeography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
+const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ocean: { ...JSON.parse(process.env.OCEAN ?? '{}'), iceExchange: RUN_OCEAN.iceExchange ?? DEFAULT_ICE_EXCHANGE }, ice: { ...RUN_ICE, iceAlbedoPhases: RUN_ICE.iceAlbedoPhases ?? DEFAULT_ICE_ALBEDO_PHASES }, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
+for (const note of resumeNotes(GIVEN, base, saved ? file : process.env.FROM)) log(note);
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: LAND.soilGoal === 'observed' ? { ...startingGeography, soilWaterMonthly: true } : startingGeography, ocean: climatology ? { ...RUN_OCEAN, climatology } : RUN_OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: RUN_ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
@@ -477,6 +491,8 @@ const MEANS_FIELDS_FOR_POLAR = ['concentration', 'ice', 'surfaceT', 'shortwave',
 const RECORD = process.env.RECORD;
 const POLAR_LINES = process.env.POLAR_LINES ? (process.env.POLAR_LINES === '1' ? `${OUT}/${TAG}_polar.jsonl` : process.env.POLAR_LINES) : null;
 if (POLAR_LINES && !(MEANS_FIELDS_FOR_POLAR.every((name) => meansFields(process.env.MEANS).includes(name)))) throw new Error(`POLAR_LINES reads the day means of ${MEANS_FIELDS_FOR_POLAR.join(', ')}`);
+if (POLAR_LINES && !RADIATION.clearSkyPass) throw new Error('POLAR_LINES reads the clear-sky pass: leave RADIATION.clearSkyPass on');
+if (POLAR_LINES) mkdirSync(dirname(POLAR_LINES), { recursive: true });
 if (RECORD) mkdirSync(RECORD, { recursive: true });
 const partOfDay = RECORD && startStep && saved.forcingSums ? { sums: saved.forcingSums, steps: saved.forcingSteps, oceanSteps: saved.forcingOceanSteps, seconds: saved.forcingSeconds, rain: saved.forcingRain, runoff: saved.forcingRunoff } : null;
 if (RECORD && startStep && !partOfDay) log(`the snapshot holds no recorded part of its day, so forcing day ${saved.day + 1} covers its last ${perDay - startStep} steps alone`);

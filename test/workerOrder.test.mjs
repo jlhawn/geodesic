@@ -51,10 +51,12 @@ test('the page worker starts a state whose options record diagnoseFirst false in
     assert.deepEqual([inPlace(), again.diagnoseFirst], [true, false], 'the unchanged run restores in place');
     const back = await restore(fresh);
     assert.deepEqual([inPlace(), back.options.boundaryLayer, back.diagnoseFirst], [false, { diagnoseFirst: DIAGNOSE_FIRST }, DIAGNOSE_FIRST]);
-    const old = await restore({ ...fresh, options: {} });
+    const old = await restore({ ...fresh, options: { ocean: fresh.options.ocean, ice: fresh.options.ice } });
     assert.deepEqual([inPlace(), old.diagnoseFirst], [true, DIAGNOSE_FIRST], 'an old stored snapshot whose options hold no boundaryLayer group restores in place on a run at the default');
+    const older = await restore({ ...fresh, options: {} });
+    assert.deepEqual([inPlace(), older.options.ocean.iceExchange, older.options.ice.iceAlbedoPhases], [false, 'instant', false], 'one that records neither the exchange nor iceAlbedoPhases rebuilds into the model it was made with');
     const off = await start(file, { boundaryLayer: false }), on = await start(file, { boundaryLayer: { diagnoseFirst: true } });
     assert.deepEqual([off.options.boundaryLayer, off.diagnoseFirst, on.options.boundaryLayer, on.diagnoseFirst], [false, null, { diagnoseFirst: true }, true]);
-    assert.ok([first, plain, again, back, old, off, on].every((ready) => ready.workers === workers), `ready messages for ${workers} workers`);
+    assert.ok([first, plain, again, back, old, older, off, on].every((ready) => ready.workers === workers), `ready messages for ${workers} workers`);
   }
 });

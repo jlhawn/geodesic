@@ -6,6 +6,7 @@ import { createOcean } from '../js/ocean/layered.module.js';
 import { iceDriftMoves, ICE_REMNANT } from '../js/ocean/iceDrift.module.js';
 import { createSeaIce, seaIceRemoval, FREEZING_POINT, MINIMUM_CONCENTRATION, MINIMUM_VOLUME, NEGLIGIBLE_CONCENTRATION, NEGLIGIBLE_VOLUME } from '../js/physics/ice.module.js';
 import { DEG, meshOf, rig, northwardOn, nearestCell, windOn, unit, dot } from './helpers/iceDrift.mjs';
+import { PREVIOUS_SEA_ICE } from './helpers/previousDefaults.mjs';
 
 /*
  * Ice that the drift carries into open cells arrives a few thousandths of a
@@ -81,7 +82,7 @@ test('ice drifting into open water at a Courant number of 0.005 advances the edg
 test('the thermodynamics keep the arrived ice and freeze the leads around it, where the minimum floors remove ice below 1 percent cover in a step', () => {
   const m = meshOf(16), seed = nearestCell(m, -62 * DEG, 30 * DEG);
   const step = (keep, flux) => {
-    const s = createSeaIce(m, { keepSmallIce: keep }), surfaceT = new Float64Array(m.nCells).fill(FREEZING_POINT), h = new Float64Array(m.nCells), fluxes = new Float64Array(m.nCells).fill(flux);
+    const s = createSeaIce(m, { ...PREVIOUS_SEA_ICE, keepSmallIce: keep }), surfaceT = new Float64Array(m.nCells).fill(FREEZING_POINT), h = new Float64Array(m.nCells), fluxes = new Float64Array(m.nCells).fill(flux);
     h[seed] = 1; s.concentration[seed] = 0.005; s.snow[seed] = 8; surfaceT[seed] = FREEZING_POINT - 4;
     s.update(surfaceT, h, fluxes, seed, DT);
     return { h: h[seed], A: s.concentration[seed], snow: s.snow[seed] };
@@ -112,8 +113,8 @@ test('the thermodynamics keep the arrived ice and freeze the leads around it, wh
 
 function coupled(iceDrift, setup, iceOptions = {}, water = 2) {
   const m = meshOf(16), C = m.nCells, E = m.nEdges;
-  const ocean = createOcean(m, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, iceDrift });
-  const seaIce = createSeaIce(m, { heatCapacity: ocean.capacity, ...iceOptions });
+  const ocean = createOcean(m, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, iceDrift, iceExchange: iceOptions.iceExchange ?? 'instant' });
+  const seaIce = createSeaIce(m, { heatCapacity: ocean.capacity, ...PREVIOUS_SEA_ICE, ...iceOptions });
   ocean.useSeaIce(seaIce.concentration, seaIce);
   const surfaceT = new Float64Array(C).fill(FREEZING_POINT + water), ice = new Float64Array(C), o = { m, C, E, ocean, seaIce, surfaceT, ice, concentration: seaIce.concentration, calm: new Float64Array(E) };
   setup(o);
@@ -154,6 +155,31 @@ test('ice that drifts into water above freezing at a Courant number of 0.005 per
   const expected = water + inflow / capacity;
   console.log(`B arrives at ${(water - FREEZING_POINT).toFixed(1)} K above freezing with ${(volume / m.areaCell[B] * 1e3).toFixed(2)} mm of ice and ends ${(o.surfaceT[B] - expected).toExponential(2)} K from the water's heat less the ice's latent heat`);
   near(o.surfaceT[B], expected, 1e-8, 'the water cools by exactly the ice\'s energy');
+});
+
+test('with iceExchange turbulent, ice that drifts into water above freezing leaves the water its heat and draws on it at the pack\'s rate, ρ c_p c_h u* (T_w − T_f) on its own area, the water keeping the rest', () => {
+  const m = meshOf(16), A = nearestCell(m, -60 * DEG, 0), B = m.cellsOnCell[m.maxEdges * A], edge = m.edgesOnCell[m.maxEdges * A], sign = m.cellsOnEdge[2 * edge] === A ? 1 : -1;
+  const exchange = { mode: 'turbulent', lateralMelt: 0 };
+  const o = coupled({ rheology: 'frozen' }, (r) => { r.ice[A] = 1; r.concentration[A] = 0.9; r.seaIce.snow[A] = 10; r.surfaceT[A] = FREEZING_POINT - 5; }, { keepSmallIce: true, iceExchange: exchange }), { ocean, seaIce } = o, drift = ocean.iceDrift;
+  o.step();
+  assert.equal(o.ice[B], 0);
+  const water = o.surfaceT[B], capacity = ocean.capacity[B];
+  drift.velocity[edge] = sign * 0.005 * m.dcEdge[edge] / DT;
+  drift.transport(o.env(DT));
+  assert.ok(o.ice[B] > 0 && drift.arrived[B] === 1, `B holds ${o.concentration[B]}`);
+  near(seaIce.waterHeat[B], capacity * (water - FREEZING_POINT), 1e-9 * capacity, 'the arrival leaves the water the heat it holds above freezing');
+  ocean.readSurface(o.surfaceT, o.ice, o.concentration);
+  near(ocean.T0[B], water, 1e-12, 'the top layer keeps its temperature under the arrived ice');
+  ocean.writeSurface(o.surfaceT, seaIce.oceanFlux, DT);
+  assert.equal(seaIce.oceanFlux[B], 0, 'the ocean hands the arrived ice no heat at once');
+  const held = seaIce.waterHeat[B], conductance = seaIce.conductance[B], area = o.concentration[B];
+  assert.ok(conductance >= ocean.rhoCp * 0.006 * 5e-4 * (1 - 1e-12), `the conductance ${conductance} W/m²/K`);
+  const contrast = seaIce.leadExchange * (FREEZING_POINT - o.surfaceT[B]);
+  seaIce.update(o.surfaceT, o.ice, new Float64Array(o.C), B, DT, contrast);
+  const taken = held - seaIce.waterHeat[B], law = area * conductance * (held / capacity) * DT;
+  console.log(`B arrives at ${(water - FREEZING_POINT).toFixed(2)} K above freezing under cover ${area.toExponential(2)}: in one step the ice takes ${taken.toExponential(3)} J/m² of the ${held.toExponential(3)} the water holds`);
+  near(taken, law, 1e-9 * held, 'the ice takes the pack\'s flux on its own area for the step');
+  assert.ok(seaIce.waterHeat[B] > 0.99 * held, 'the water keeps the rest');
 });
 
 test('a cell below the minimum cover whose thickness, snow or skin temperature has left the bounds melts away with its energy and mass, a consistent one stays', () => {

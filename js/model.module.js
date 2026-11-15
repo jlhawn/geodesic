@@ -7,7 +7,7 @@ import { createRadiation, memoryLimitMismatch } from './physics/radiation.module
 import { createAerosolSampler, loadAerosol, climatologyOn } from './aerosol.module.js';
 import { createSurface, relativeWindOf, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
-import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
+import { createSeaIce, MELTING_POINT, FREEZING_POINT, iceExchangeOptions } from './physics/ice.module.js';
 import { createOcean, JERLOV } from './ocean/layered.module.js';
 import { COUPLED_ICE_DRIFT, iceDriftMoves, coverOf } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
@@ -173,12 +173,15 @@ export function createModel(gridOrMesh, {
   const landMask = geography ? geography.land : null;
   const orography = subgridFields ? createOrographicDrag(mesh, core, subgridFields, { buffers: buffers ? buffers.orography : null, ...dragConstants(subgridFields, dragOptions) }) : null;
   const sharedCapacity = !ocean && buffers && buffers.ocean ? new Float64Array(buffers.ocean.capacity) : null;
+  if (ocean && iceOptions.iceExchange !== undefined && iceExchangeOptions(iceOptions.iceExchange).mode !== ocean.iceExchange.mode) throw new Error(`the ocean's iceExchange is ${ocean.iceExchange.mode} and the sea ice's is ${iceExchangeOptions(iceOptions.iceExchange).mode}`);
   const seaIce = createSeaIce(mesh, {
     buffers: { ...(buffers && buffers.ice ? buffers.ice : {}), ...(land ? { snow: land.shared.snow, snowAlbedo: land.shared.snowAlbedo } : {}) },
+    ...(ocean ? { oceanCells: ocean.cellOcean } : { oceanCells: new Uint8Array(mesh.nCells) }),
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...(ocean && ocean.penetration ? { transmission: ocean.transmission, penetrated: ocean.penetrated } : {}),
     keepSmallIce: !!ocean && iceDriftMoves({ iceDrift: COUPLED_ICE_DRIFT, ...oceanOptions }.iceDrift),
     ...iceOptions,
+    ...(ocean ? { iceExchange: ocean.iceExchange } : {}),
   });
   const heatCapacity = ocean ? ocean.capacity : sharedCapacity, capacityOf = (i) => (heatCapacity ? heatCapacity[i] : seaIce.slabHeatCapacity);
   const seaSkin = physics && (skinSet.warmLayer || skinSet.coolSkin) ? createSkin(C, skinSet, { light: JERLOV[ocean && ocean.penetration ? ocean.penetration : 'IB'], buffers: buffers ? buffers.skin : null }) : null;

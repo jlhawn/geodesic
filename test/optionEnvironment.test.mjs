@@ -78,7 +78,7 @@ test('fixedSst.mjs refuses a state whose header records no given options, and an
   const line = standIn.stdout.split('\n').find((text) => text.startsWith('options: '));
   assert.ok(line, standIn.stdout + standIn.stderr);
   assert.match(line, /^options: GIVEN, the header recording none, MOIST, OROGRAPHY over it: /);
-  assert.deepEqual(JSON.parse(line.slice(line.indexOf('{'))), { moist: { pcapeMinimum: 0.05, bergeronAutoconversion: false }, orography: { constants: 'cy41r2' } });
+  assert.deepEqual(JSON.parse(line.slice(line.indexOf('{'))), { moist: { pcapeMinimum: 0.05, bergeronAutoconversion: false }, orography: { constants: 'cy41r2' }, ice: { iceExchange: 'instant', iceAlbedoPhases: false } });
   const recorded = join(dir, 'recorded_day0000.bin');
   writeFileSync(recorded, encodeState({ N: 16, ...gridHeader(mesh), ...FRESH_GEOGRAPHY, terrain: true, K: 48, day: 0, time: 0, ...headerOptions({ moist: { pcapeMinimum: 0 } }) }));
   const differing = fixed({ GIVEN: '{"moist":{"pcapeMinimum":0.05}}' }, recorded);
@@ -99,10 +99,21 @@ test('spinup.mjs and fixedSst.mjs refuse BOUNDARY_LAYER false before they build 
     assert.match(result.stderr, /BOUNDARY_LAYER is false, and createGpuModel runs no model without the boundary layer/);
   }
   assert.notEqual(given.status, 0);
-  assert.match(given.stdout, /^options: GIVEN, the header recording none: \{"boundaryLayer":false\}$/m);
+  assert.match(given.stdout, /^options: GIVEN, the header recording none: \{"boundaryLayer":false,"ice":\{"iceExchange":"instant","iceAlbedoPhases":false\}\}$/m);
   assert.match(given.stderr, /createGpuModel runs no model without the boundary layer: boundaryLayer is false/);
   assert.notEqual(control.status, 0);
   assert.doesNotMatch(control.stderr, /without the boundary layer/);
+});
+
+test('spinup.mjs, which runs no model without its ocean, refuses OCEAN false on a fresh start, and a save whose header records no ocean on a resume, before it builds anything', () => {
+  const mesh = new Grid(16), fresh = mkdtempSync(join(dir, 'fresh-')), resumed = mkdtempSync(join(dir, 'oceanless-'));
+  writeFileSync(join(resumed, 'oceanless_day0000.bin'), encodeState({ N: 16, ...gridHeader(mesh), ...FRESH_GEOGRAPHY, terrain: true, K: 48, day: 0, time: 0, ...headerOptions({ ocean: false }) }));
+  const spinup = (groups) => { const env = { ...withoutOptionGroups(), N: '16', ...groups }; delete env.GPU_QUEUE_HELD; return spawnSync(process.execPath, [join(scripts, 'spinup.mjs')], { env, encoding: 'utf8' }); };
+  const started = spinup({ OUT: fresh, TAG: 'fresh', OCEAN: 'false' }), resuming = spinup({ OUT: resumed, TAG: 'oceanless' });
+  assert.notEqual(started.status, 0);
+  assert.match(started.stderr, /OCEAN is false, and spinup\.mjs runs no model without its ocean/);
+  assert.notEqual(resuming.status, 0);
+  assert.match(resuming.stderr, /oceanless_day0000\.bin records no ocean, and spinup\.mjs runs no model without its ocean/);
 });
 
 test('createGpuModel, which always builds the moist scheme, refuses moist false before it opens the GPU', async () => {

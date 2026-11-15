@@ -5,6 +5,7 @@ import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
 import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 import { terrainKey, terrainOptions, terrainCache, surfaceGeopotential, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { savedTerrain, stateTerrain } from '../js/stateFile.module.js';
+import { iceExchangeOptions, savedIceExchange, savedIceAlbedoPhases } from '../js/physics/ice.module.js';
 
 const SOIL_OPTIONS = ['soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity'];
 export const soilOptions = (land = {}) => Object.fromEntries(SOIL_OPTIONS.filter((name) => land[name] !== undefined).map((name) => [name, land[name]]));
@@ -73,17 +74,28 @@ export function asMade(given) {
  * for a base without `given`, the boundary layer against the group its
  * `options` record, as a page export's do, or, where neither records it,
  * that the state's order cannot be told, with the order this run's
- * boundary layer runs.
+ * boundary layer runs; and, where this run's ice exchange is not the one
+ * base was made under (savedIceExchange), the two. A record whose ocean
+ * names no iceExchange counts as the instant exchange.
  */
 export function resumeNotes(given, base, name) {
   if (!base) return [];
+  const exchange = exchangeNotes(given, base, name);
   if (base.given === undefined) {
     const recorded = base.options?.boundaryLayer;
-    if (recorded !== undefined) return differingGroups({ boundaryLayer: given.boundaryLayer }, { boundaryLayer: recorded }).length ? [`options other than ${name}'s header records in its options: boundaryLayer`] : [];
-    return isGroup(given.boundaryLayer) ? [`${name} records no boundary-layer order, so the order it was made in cannot be told: this run's boundary layer runs ${(given.boundaryLayer.diagnoseFirst ?? DIAGNOSE_FIRST) ? 'diagnoseFirst' : 'in the plain order'}`] : [];
+    if (recorded !== undefined) return [...(differingGroups({ boundaryLayer: given.boundaryLayer }, { boundaryLayer: recorded }).length ? [`options other than ${name}'s header records in its options: boundaryLayer`] : []), ...exchange];
+    return [...(isGroup(given.boundaryLayer) ? [`${name} records no boundary-layer order, so the order it was made in cannot be told: this run's boundary layer runs ${(given.boundaryLayer.diagnoseFirst ?? DIAGNOSE_FIRST) ? 'diagnoseFirst' : 'in the plain order'}`] : []), ...exchange];
   }
-  const other = differingGroups(given, asMade(base.given));
-  return other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : [];
+  const other = differingGroups(withRecords(given), withRecords(asMade(base.given)));
+  return [...(other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : []), ...exchange];
+}
+
+const withRecords = (given) => (isGroup(given) ? { ...given, ...(given.ocean === false ? {} : { ocean: { ...(isGroup(given.ocean) ? given.ocean : {}), iceExchange: iceExchangeOptions(savedIceExchange({ given })) } }), ...(given.ice === false ? {} : { ice: { ...(isGroup(given.ice) ? given.ice : {}), iceAlbedoPhases: savedIceAlbedoPhases({ given }) } }) } : given);
+const resolvedExchange = (exchange) => canonical(iceExchangeOptions(exchange));
+
+function exchangeNotes(given, base, name) {
+  const before = savedIceExchange(base), after = savedIceExchange({ given });
+  return resolvedExchange(before) === resolvedExchange(after) ? [] : [`iceExchange ${JSON.stringify(after)} where ${name} was made under ${JSON.stringify(before)}`];
 }
 
 /*
@@ -106,6 +118,22 @@ export function rebuiltOptions(header, groups = {}, standIn) {
     const own = recorded[group], value = groups[group];
     return [group, value === undefined ? own : isGroup(value) && isGroup(own) ? { ...own, ...value } : value];
   }));
+}
+
+/*
+ * The option groups of a run over a fixed sea that rebuilds a saved state:
+ * rebuiltOptions' groups but the ocean and the terrain, the sea ice naming
+ * the exchange and iceAlbedoPhases the save was made under, as its header
+ * reads them; for a header without given options, as `standIn` names them
+ * where it does, the ocean's exchange before the ice's. A sea ice without
+ * an ocean that names neither takes the defaults.
+ */
+export function fixedSeaRun(saved, groups, standIn) {
+  const { ocean, terrain, ...run } = rebuiltOptions(saved, groups, standIn), ice = isGroup(run.ice) ? run.ice : {};
+  const own = { iceExchange: savedIceExchange(saved), iceAlbedoPhases: savedIceAlbedoPhases(saved) };
+  if (saved.given !== undefined) return { ...run, ice: { ...ice, ...own } };
+  const named = (isGroup(ocean) ? ocean.iceExchange : undefined) ?? ice.iceExchange;
+  return { ...run, ice: { ...own, ...ice, ...(named === undefined ? {} : { iceExchange: named }) } };
 }
 
 export { savedTerrain, stateTerrain };

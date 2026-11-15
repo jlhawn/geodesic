@@ -131,25 +131,39 @@ test('a recorded day\'s rain is the day\'s convective plus large-scale rain, cel
   model.destroy();
 });
 
-test('two recorded days replayed over the ocean alone, the ice drifting under the recorded air stress, keep its SST with the coupled run but for at most ten ice-edge cells whose ice came and went within the day, keep its ice concentration with it, and load back into the coupled model, and version-1 days without the air stress replay with the drift off, the year state carrying the loaded state\'s options and given with the ocean options it ran', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+test('two recorded days replayed over the ocean alone, the ice drifting under the recorded air stress, keep its SST with the coupled run but for at most ten ice-edge cells whose ice came and went within the day, keep its ice concentration with it, and load back into the coupled model, and version-1 days without the air stress replay with the drift off, the year state carrying the loaded state\'s options and given with the ocean options it ran and the ice options the loaded state records, and a state without given the exchange in its options', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'oceanSpinup-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const fresh = await freshModel();
+  const fresh = await freshModel({ ocean: { iceExchange: 'instant' } });
   const ocean = await fresh.ocean.serialize(), land = await fresh.land.serialize();
   const [pi, theta, u, surfaceT, q, qc, ice] = fresh.state;
   const records = headerOptions({ moist: { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 } });
-  writeFileSync(join(dir, 'rec_day0000.bin'), encodeState({ N, K: fresh.core.K, ...records, levels: fresh.core.levels, day: 0, time: 0, terrain: !!fresh.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: fresh.seaIce.concentration, mlmSubsidence: fresh.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
+  const stateWith = (header) => encodeState({ N, K: fresh.core.K, ...header, levels: fresh.core.levels, day: 0, time: 0, terrain: !!fresh.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration: fresh.seaIce.concentration, mlmSubsidence: fresh.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land });
+  writeFileSync(join(dir, 'rec_day0000.bin'), stateWith(records));
+  writeFileSync(join(dir, 'bare_day0000.bin'), stateWith({ options: records.options }));
+  writeFileSync(join(dir, 'iced_day0000.bin'), stateWith({ ...records, given: { ...records.given, ice: { iceAlbedoPhases: true } } }));
+  writeFileSync(join(dir, 'none_day0000.bin'), stateWith({}));
   fresh.destroy();
   const forcing = join(dir, 'forcing');
   const run = (script, env) => execFileSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), OUT: dir, ...env }, encoding: 'utf8' });
   run('spinup.mjs', { TAG: 'rec', RECORD: forcing, DAYS: '2', MINUTES: '100', MOIST: JSON.stringify({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 }), SURFACE: JSON.stringify(PREVIOUS_AIR_SEA) });
   assert.deepEqual(readdirSync(forcing).sort(), [forcingName(1), forcingName(2)]);
-  run('oceanSpinup.mjs', { TAG: 'alone', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
+  const aloneLog = run('oceanSpinup.mjs', { TAG: 'alone', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
+  assert.match(aloneLog, /iceExchange "instant", as \S+rec_day0000\.bin was made under, recording none/);
   run('oceanSpinup.mjs', { TAG: 'set', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2', OCEAN: JSON.stringify({ everySteps: 1 }) });
 
   const [alone, coupled, set] = await Promise.all(['alone_year0001.bin', 'rec_day0002.bin', 'set_year0001.bin'].map(async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))))));
-  assert.deepEqual([alone.options, alone.given], [records.options, records.given], 'the year state carries the loaded state\'s records, and no ocean group where OCEAN is unset');
-  assert.deepEqual([set.options, set.given], [records.options, { ...records.given, ocean: { everySteps: 1 } }], 'a replay given OCEAN records it as spin-up does, without the drift it derives');
+  assert.deepEqual([alone.options, alone.given], [records.options, { ...records.given, ocean: { iceExchange: 'instant' }, ice: { ...records.given.ice, iceAlbedoPhases: false } }], 'the year state carries the loaded state\'s records and, where OCEAN is unset, an ocean group of the exchange the loaded state was made under');
+  assert.deepEqual([set.options, set.given], [records.options, { ...records.given, ocean: { everySteps: 1, iceExchange: 'instant' }, ice: { ...records.given.ice, iceAlbedoPhases: false } }], 'a replay given OCEAN records it as spin-up does, with the exchange it ran under and without the drift it derives');
+  run('oceanSpinup.mjs', { TAG: 'bare', STATE: join(dir, 'bare_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
+  const icedLog = run('oceanSpinup.mjs', { TAG: 'iced', STATE: join(dir, 'iced_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
+  assert.match(icedLog, /ice options \{"iceAlbedoPhases":true\}, as \S+iced_day0000\.bin records/);
+  const [bare, iced] = await Promise.all(['bare_year0001.bin', 'iced_year0001.bin'].map(async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))))));
+  assert.deepEqual([bare.options, bare.given], [{ ...records.options, ocean: { iceExchange: 'instant' }, ice: { ...records.options.ice, iceAlbedoPhases: false } }, undefined], 'a state without given records the exchange and the ice options it ran in its options');
+  run('oceanSpinup.mjs', { TAG: 'none', STATE: join(dir, 'none_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
+  const none = await decodeState(new Uint8Array(readFileSync(join(dir, 'none_year0001.bin'))));
+  assert.deepEqual([none.options, none.given], [{ ocean: { iceExchange: 'instant' }, ice: { iceAlbedoPhases: false } }, undefined], 'and so does a state that records neither');
+  assert.deepEqual(iced.given, { ...records.given, ice: { iceAlbedoPhases: true }, ocean: { iceExchange: 'instant' } }, 'the year state records the ice options the loaded state records and the replay ran');
   const recorded = await decodeForcing(new Uint8Array(readFileSync(join(forcing, forcingName(2)))));
   assert.ok(recorded.fields.airStress && recorded.fields.airStress.some((x) => x !== 0), 'the drifting run records the air stress');
   const model = await createGpuModel(new Grid(N), { topography });

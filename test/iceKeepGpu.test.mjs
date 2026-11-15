@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { PREVIOUS_SEA_ICE } from './helpers/previousDefaults.mjs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
@@ -25,14 +26,14 @@ function meanTheta(model) {
 
 async function oneStep(keepSmallIce, cover, extra = {}, prepare = null, share = 0) {
   const grid = new Grid(N), transmission = share ? new Float64Array(grid.size).fill(share) : null, penetrated = share ? new Float64Array(grid.size) : null;
-  const model = createModel(grid, { ocean: false, radiation: { stratus: false }, surface: { exchange: 'roughness' }, ice: { keepSmallIce, ...extra, ...(share ? { transmission, penetrated } : {}) } });
+  const model = createModel(grid, { ocean: false, radiation: { stratus: false }, surface: { exchange: 'roughness' }, ice: { keepSmallIce, ...PREVIOUS_SEA_ICE, ...extra, ...(share ? { transmission, penetrated } : {}) } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const C = model.mesh.nCells, cells = [];
   for (let i = 0; i < C && cells.length < 12; i++) if (Math.abs(model.mesh.latCell[i]) > 62 * DEG && i % 7 === 0) cells.push(i);
   for (const i of cells) { model.state[6][i] = 0.8; model.seaIce.concentration[i] = cover; model.seaIce.snow[i] = 6; model.state[3][i] = FREEZING_POINT - 3; model.seaIce.snowAlbedo[i] = 0.8; }
   if (prepare) prepare(model, cells);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: false, dragEvery: 1, keepSmallIce, ...extra, ...(share ? { penetration: 'IB' } : {}) } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: false, dragEvery: 1, keepSmallIce, ...PREVIOUS_SEA_ICE, ...extra, ...(share ? { penetration: 'IB' } : {}) } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ concentration: model.seaIce.concentration, snow: model.seaIce.snow, snowAlbedo: model.seaIce.snowAlbedo, brine: model.seaIce.brine, ...(share ? { transmission } : {}) });
   const time = model.time;
@@ -74,6 +75,20 @@ test("one step of the whole model with leadClosure 'hibler': cover 0.6 under a c
   }
   console.log(`leadClosure 'hibler' on ${hibler.cells.length} cells: ${faster} closing, CPU cover ${hibler.cells.map((i) => hibler.model.seaIce.concentration[i].toFixed(6)).join(' ')}`);
   assert.ok(faster > 0, 'some leads close');
+});
+
+test('one step of the whole model with areaLossFactor 0.5: cover 0.6 on a melting skin opens less water than with the whole of Hibler\'s opening, as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const melting = (model, cells) => { for (const i of cells) { model.state[6][i] = 0.3; model.state[3][i] = MELTING_POINT + 8; model.seaIce.snow[i] = 0; } };
+  const whole = await oneStep(false, 0.6, {}, melting), half = await oneStep(false, 0.6, { areaLossFactor: 0.5 }, melting);
+  let opened = 0;
+  for (let n = 0; n < half.cells.length; n++) {
+    const i = half.cells[n], cpu = half.model.seaIce.concentration[i], gpu = half.concentration[i], cpuWhole = whole.model.seaIce.concentration[i], gpuWhole = whole.concentration[i];
+    assert.ok(Math.abs(cpu - gpu) < 1e-4 && Math.abs(cpuWhole - gpuWhole) < 1e-4, `cell ${i}: cover ${cpu} vs ${gpu}, with Hibler's whole opening ${cpuWhole} vs ${gpuWhole}`);
+    assert.ok(Math.abs(half.model.state[6][i] - half.thickness[i]) < 1e-3 * half.model.state[6][i], `cell ${i}: thickness ${half.model.state[6][i]} vs ${half.thickness[i]}`);
+    if (0.6 - cpuWhole > 1e-3) { assert.ok(cpu > cpuWhole && gpu > gpuWhole && Math.abs(cpu - cpuWhole - (gpu - gpuWhole)) < 1e-4, `cell ${i}: kept ${cpu - cpuWhole} on the CPU, ${gpu - gpuWhole} on the device`); opened++; }
+  }
+  console.log(`areaLossFactor 0.5 on ${half.cells.length} cells, ${opened} opening: CPU cover ${half.cells.map((i) => half.model.seaIce.concentration[i].toFixed(5)).join(' ')} | whole opening ${whole.cells.map((i) => whole.model.seaIce.concentration[i].toFixed(5)).join(' ')}`);
+  assert.ok(opened > 0, 'some cells open');
 });
 
 test('one step of the whole model with iceLight and brineReservoir: under a skin below the melting point the brine holds the upper half-layer there and warms the skin, at the melting point it keeps what light it holds, as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

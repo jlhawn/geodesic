@@ -20,6 +20,9 @@ import { basename, dirname, join } from 'node:path';
 import { createGeography } from '../js/geography.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { readState, readGeography } from './figures/figureState.mjs';
+import { refuseUnreadOptions } from './optionEnvironment.mjs';
+
+refuseUnreadOptions(import.meta.url);
 
 const DEG = 180 / Math.PI, YEAR = 365, FIELDS = ['goalAdded', 'goalRemoved', 'goalCover', 'goalTrees'];
 const BANDS = [[-60, -40], [-40, -20], [-20, 0], [0, 20], [20, 40], [40, 60], [60, 80], [80, 90]];

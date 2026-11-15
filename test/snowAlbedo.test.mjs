@@ -78,14 +78,14 @@ test('trees standing above the snow darken it linearly to forestSnowAlbedo at cl
   assert.equal(land.canopy[i], land.vegetation[i], 'regrowth past the standing cover carries it');
 });
 
-test('bare sea ice is 0.62 cold and darkens to 0.48 over the last kelvin below melting; the snow on it ages toward 0.70 and is refreshed by snowfall', () => {
-  const sea = createSeaIce(mesh);
+test('without iceAlbedoPhases bare sea ice is 0.62 cold and darkens to 0.48 over the last kelvin below melting; the snow on it ages toward 0.70 and is refreshed by snowfall', () => {
+  const sea = createSeaIce(mesh, { iceAlbedoPhases: false, iceExchange: 'instant' });
   for (const [T, bare] of [[MELTING_POINT - 10, 0.62], [MELTING_POINT - 1, 0.62], [MELTING_POINT - 0.5, 0.55], [MELTING_POINT, 0.48]]) {
     assert.ok(near(sea.albedo(1, null, 0, 1, T), bare), `T ${T}: ${sea.albedo(1, null, 0, 1, T)}`);
     assert.ok(near(sea.albedo(0.25, null, 0, 1, T), 0.06 + (bare - 0.06) * 0.5), 'thin ice keeps its ramp from the water');
     assert.ok(near(sea.albedo(1, null, 10, 1, T, 0.8), bare + 0.5 * (0.8 - bare)), 'the snow at its own albedo over 20 kg/m2');
   }
-  const fixed = createSeaIce(mesh, { snowAgeing: false });
+  const fixed = createSeaIce(mesh, { snowAgeing: false, iceAlbedoPhases: false, iceExchange: 'instant' });
   assert.ok(near(fixed.albedo(1, null, 20, 1, MELTING_POINT, 0.6), 0.75), 'without ageing the snow is iceSnowAlbedo');
   const surfaceT = new Float64Array([MELTING_POINT - 20]), ice = new Float64Array([1]), flux = new Float64Array([0]);
   sea.deposit(0, 30, MELTING_POINT - 20, ice, surfaceT);
@@ -201,8 +201,8 @@ test('both engines give land, ice and the snow on them the same albedo from rand
   assert.ok(landWorst < 1e-6 && iceWorst < 1e-5, `engines apart by ${landWorst} over land and ${iceWorst} over ice`);
 });
 
-test('over 24 GPU steps the snow albedo and the standing cover evolve as on the CPU, on land and on the ice', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const options = { land: { treeline: false, coldSnowAgeing: 2, meltingSnowAgeing: 12, canopyMemory: 6 * 3600, snowDeclineTime: 4 * 3600, refreshSnowfall: 0.5, wetSnowRange: 10 }, ice: { coldSnowAgeing: 2, meltingSnowAgeing: 12, refreshSnowfall: 0.5, wetSnowRange: 10 }, moist: { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06, convectionType: 'top', plumeEntrainmentLaw: 'gregory' } };
+test('over 24 GPU steps the snow albedo and the standing cover evolve as on the CPU, on land and on the ice without iceAlbedoPhases', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { land: { treeline: false, coldSnowAgeing: 2, meltingSnowAgeing: 12, canopyMemory: 6 * 3600, snowDeclineTime: 4 * 3600, refreshSnowfall: 0.5, wetSnowRange: 10 }, ice: { coldSnowAgeing: 2, meltingSnowAgeing: 12, refreshSnowfall: 0.5, wetSnowRange: 10, iceAlbedoPhases: false }, moist: { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06, convectionType: 'top', plumeEntrainmentLaw: 'gregory' } };
   const prepare = (model) => {
     const C = model.mesh.nCells, init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
@@ -304,3 +304,50 @@ test('with iceAlbedoPhases both engines give the ice the same albedo and age the
   assert.ok(ponded > 10 && cells > 20 && wet > cells / 10 && dry > cells / 10, `${ponded} ponded, ${cells} snowy, ${wet} wet, ${dry} dry`);
   assert.ok(iceWorst < 1e-5 && worst < 1e-4, `ice albedo apart by ${iceWorst}, snow albedo by ${worst}`);
 });
+
+test('iceAlbedoPhases, the default, warns of the options it leaves unread and how to use them, and only then', () => {
+  const warned = [], warn = console.warn;
+  console.warn = (message) => warned.push(message);
+  try {
+    createSeaIce(mesh, { iceAlbedoPhases: true, iceSnowFloor: 0.6, wetSnowRange: 10 });
+    createSeaIce(mesh, { iceAlbedoPhases: true, iceMeltingSnowFloor: 0.6 });
+    createSeaIce(mesh, { iceAlbedoPhases: false, meltingIceAlbedo: 0.5, iceSnowFloor: 0.6, wetSnowRange: 10 });
+    createSeaIce(mesh, { meltingIceAlbedo: 0.5 });
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(warned.length, 2);
+  assert.match(warned[0], /leaves iceSnowFloor, wetSnowRange unread.*give iceAlbedoPhases false to use them/);
+  assert.match(warned[1], /leaves meltingIceAlbedo unread/, 'the phases are on by default');
+});
+
+for (const iceAlbedoPhases of [true, false]) {
+  test(`with iceAlbedoPhases ${iceAlbedoPhases}, both engines give the ice the same albedo on skins at the melting plateau and below it`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+    const one = { topography, ice: { iceAlbedoPhases } };
+    const cpu = createModel(new Grid(16), one), gpu = await createGpuModel(new Grid(16), one);
+    const C = cpu.mesh.nCells, landMask = cpu.geography.land, init = initializeState(cpu, {});
+    let r = 11;
+    const rnd = () => { r = (r * 1664525 + 1013904223) >>> 0; return r / 4294967296; };
+    for (let i = 0; i < C; i++) { if (landMask[i]) init[6][i] = 0; else if (rnd() < 0.5) { init[6][i] = 0.1 + 2 * rnd(); init[3][i] = rnd() < 0.4 ? MELTING_POINT : MELTING_POINT - 3 + 3 * rnd(); } }
+    const snow = Float64Array.from({ length: C }, () => (rnd() < 0.5 ? 40 * rnd() : 0)), snowAlbedo = Float64Array.from({ length: C }, () => 0.7 + 0.15 * rnd());
+    for (const m of [cpu, gpu]) {
+      for (let a = 0; a < init.length; a++) m.state[a].set(init[a]);
+      m.seaIce.load(m.state[6], null);
+      m.land.load({ soil: new Float64Array(C).fill(60), snow, vegetation: new Float64Array(C).fill(0.6), snowAlbedo }, m.state[6]);
+    }
+    gpu.load();
+    const expected = Float64Array.from({ length: C }, (_, i) => cpu.seaIce.albedo(cpu.state[6][i], null, cpu.seaIce.snow[i], cpu.seaIce.cover(i, cpu.state[6][i]), cpu.state[3][i], cpu.seaIce.snowAlbedo[i]));
+    await gpu.step(900);
+    const { ADIF } = await gpu.gpu.downloadPhysics();
+    gpu.destroy();
+    let plateau = 0, worstPlateau = 0, worst = 0;
+    for (let i = 0; i < C; i++) {
+      if (landMask[i] || !(init[6][i] > 0)) continue;
+      const apart = Math.abs(ADIF[i] - expected[i]);
+      if (init[3][i] === MELTING_POINT) { plateau++; worstPlateau = Math.max(worstPlateau, apart); } else worst = Math.max(worst, apart);
+    }
+    console.log(`N=16, iceAlbedoPhases ${iceAlbedoPhases}: ${plateau} iced cells at the melting plateau, ice albedo engines apart by ${worstPlateau.toExponential(1)} there and ${worst.toExponential(1)} below it`);
+    assert.ok(plateau > 10, `${plateau} cells at the plateau`);
+    assert.ok(worstPlateau < 1e-5 && worst < 1e-5, `apart by ${worstPlateau} at the plateau, ${worst} below it`);
+  });
+}

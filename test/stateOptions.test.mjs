@@ -8,7 +8,8 @@ import { topographyFromInt16, surfaceGeopotential, terrainOptions, terrainKey, t
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { startOptions } from '../js/snapshots.module.js';
 import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
-import { recordedOptions, givenOptions, headerOptions, differingGroups, rebuiltOptions, resumeNotes, runTerrain, moveOntoTerrain, requireOwnSubgrid, stateTerrain } from '../scripts/stateOptions.mjs';
+import { iceExchangeOptions, savedIceExchange, savedIceAlbedoPhases, DEFAULT_ICE_EXCHANGE } from '../js/physics/ice.module.js';
+import { fixedSeaRun, recordedOptions, givenOptions, headerOptions, differingGroups, rebuiltOptions, resumeNotes, runTerrain, moveOntoTerrain, requireOwnSubgrid, stateTerrain } from '../scripts/stateOptions.mjs';
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 
@@ -167,6 +168,17 @@ test('a `given` without boundaryLayer.diagnoseFirst reads as the plain order: a 
   assert.deepEqual(resumeNotes(fresh.given, null, 'none'), []);
 });
 
+test('resumeNotes says when a run takes another ice exchange than its base was made under, a record whose ocean names none counting as the instant exchange and one exchange spelled two ways as one', () => {
+  const turbulent = { mode: 'turbulent', frictionMinimum: 2e-2 }, given = (ocean) => headerOptions(ocean === undefined ? {} : { ocean }).given;
+  assert.deepEqual(resumeNotes(given({ iceExchange: 'instant' }), { given: given() }, 'old'), []);
+  assert.deepEqual(resumeNotes(given({ iceExchange: turbulent }), { given: given() }, 'eighteen'), ["options other than eighteen's header records: ocean", 'iceExchange {"mode":"turbulent","frictionMinimum":0.02} where eighteen was made under "instant"']);
+  assert.deepEqual(resumeNotes(given({ iceExchange: 'instant' }), { given: given({ closureHours: 3, iceExchange: turbulent }) }, 'cand'), ["options other than cand's header records: ocean", 'iceExchange "instant" where cand was made under {"mode":"turbulent","frictionMinimum":0.02}']);
+  assert.deepEqual(resumeNotes(given({ iceExchange: { ...turbulent } }), { given: given({ iceExchange: turbulent }) }, 'same'), []);
+  assert.deepEqual(resumeNotes(given({ iceExchange: 'turbulent' }), { given: given({ iceExchange: { mode: 'turbulent' } }) }, 'spelled'), [], 'one exchange spelled two ways');
+  const own = given({ iceExchange: 'turbulent' });
+  assert.deepEqual(resumeNotes(own, { options: { boundaryLayer: own.boundaryLayer, ocean: { iceExchange: turbulent } } }, 'page'), ['iceExchange "turbulent" where page was made under {"mode":"turbulent","frictionMinimum":0.02}'], 'the constants count');
+});
+
 test('the page starts a state whose options record diagnoseFirst false in the plain order, one whose options record no boundaryLayer group at today\'s default, records the order it starts, and takes a start message\'s boundaryLayer false over the record', async () => {
   const save = blank();
   const plain = startOptions((await save(headerOptions({ boundaryLayer: { diagnoseFirst: false } }))).options, {}), bare = startOptions((await save({})).options, {});
@@ -174,4 +186,14 @@ test('the page starts a state whose options record diagnoseFirst false in the pl
   assert.equal(startOptions((await save(headerOptions({ boundaryLayer: { diagnoseFirst: false } }))).options, { boundaryLayer: false }).boundaryLayer, false);
   assert.equal(createModel(new Grid(16), { topography, ...plain }).boundaryLayer.diagnoseFirst, false);
   assert.equal(createModel(new Grid(16), { topography, ...bare }).boundaryLayer.diagnoseFirst, DIAGNOSE_FIRST);
+});
+
+test('a run over a fixed sea builds its sea ice, without an ocean, as the state was made and records it: a header that records no options, under GIVEN {}, or given options without the exchange and phases, runs instant without iceAlbedoPhases, one recording the default exchange and the phases runs those, and a GIVEN that names them runs its own', () => {
+  const made = { ocean: { iceExchange: DEFAULT_ICE_EXCHANGE }, ice: { iceAlbedoPhases: true } };
+  for (const [header, standIn, exchange, phases] of [[{}, {}, 'instant', false], [{ given: givenOptions({}) }, undefined, 'instant', false], [{ given: givenOptions(made) }, undefined, DEFAULT_ICE_EXCHANGE, true], [{}, { ocean: { iceExchange: 'turbulent' }, ice: { iceAlbedoPhases: true } }, 'turbulent', true]]) {
+    const run = fixedSeaRun(header, {}, standIn), model = createModel(new Grid(16), { ...run, ocean: false }), { given } = headerOptions(run);
+    assert.equal(run.ocean, undefined);
+    assert.deepEqual([model.seaIce.iceExchange, model.seaIce.iceAlbedoPhases], [iceExchangeOptions(exchange), phases]);
+    assert.deepEqual([iceExchangeOptions(savedIceExchange({ given })), savedIceAlbedoPhases({ given })], [iceExchangeOptions(exchange), phases]);
+  }
 });
