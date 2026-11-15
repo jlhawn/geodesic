@@ -73,7 +73,9 @@
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}';
-// everySteps by default from js/cadence.module.js),
+// everySteps by default from js/cadence.module.js; iceExchange, '"turbulent"' or an object of
+// the constants of js/physics/ice.module.js's ICE_EXCHANGE with a mode, is recorded in the state's header when
+// given),
 // RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}';
 // radiationEvery by default from js/cadence.module.js),
 // DRAG_EVERY (the steps the gravity-wave and orographic drags' profiles
@@ -138,6 +140,8 @@
 // DYNAMICS (JSON options for the dynamical core, e.g.
 // '{"divergenceSurfaces":"hybrid"}' for the divergence damping along hybrid
 // σ–p surfaces; see dynamicsOptions in js/dynamics/sigmaCore.module.js),
+// ICE (JSON options for the sea ice of js/physics/ice.module.js, e.g.
+// '{"areaLossFactor":0.5}', recorded in the state's header when given),
 // RECORD (a directory to write each day's ocean and sea-ice forcing into as
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
 // one at a time, and every eighth waits for the device to finish the eight
