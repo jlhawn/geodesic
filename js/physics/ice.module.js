@@ -197,7 +197,7 @@ export function iceExchangeOptions(option = 'instant') {
  * `oceanFlux`, as with the instant exchange, which then holds no heat for the
  * ice to melt. The ice's surface energy plus waterHeat changes by exactly the
  * surface flux plus `oceanFlux`. Over a cell with no ocean column under it
- * (`oceanCells` 0, a lake) nothing is held and the ice takes the instant exchange.
+ * (`oceanCells` 0: a lake, or any cell of a model without an ocean) nothing is held and the ice takes the instant exchange.
  */
 export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
 

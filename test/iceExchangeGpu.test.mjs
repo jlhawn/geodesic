@@ -78,7 +78,7 @@ test('the GPU model steps with ice over a turbulent exchange: the water under th
 });
 
 test('winter full pack over water held at the f32 freezing point keeps a cover of exactly 1 on both engines, and over water 0.3 K above freezing it opens alike on both (iceExchange turbulent)', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const options = { ocean: false, ice: { iceExchange: 'turbulent' } };
+  const options = { ocean: false, ice: { iceExchange: 'turbulent', oceanCells: new Uint8Array(10 * N * N + 2).fill(1) } };
   const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
   const C = cpu.mesh.nCells, init = initializeState(cpu, {}), packed = [];
   for (let i = 0; i < C; i++) if (cpu.mesh.latCell[i] > 70 * Math.PI / 180) { packed.push(i); init[6][i] = 2; init[3][i] = 250; }
@@ -109,7 +109,7 @@ test('over cells with no ocean column under the ice the turbulent exchange holds
   const mesh = buildMesh(new Grid(N)), C = mesh.nCells, polar = [];
   for (let i = 0; i < C; i++) if (mesh.latCell[i] < -70 * Math.PI / 180) polar.push(i);
   const dry = (i) => polar.indexOf(i) % 2 === 0, oceanCells = Uint8Array.from({ length: C }, (_, i) => (polar.includes(i) && dry(i) ? 0 : 1));
-  const cpu = createModel(new Grid(N), { ocean: false, ice: { iceExchange: 'turbulent', oceanCells } }), gpu = await createGpuModel(new Grid(N), { ocean: false, ice: { iceExchange: 'turbulent' } });
+  const cpu = createModel(new Grid(N), { ocean: false, ice: { iceExchange: 'turbulent', oceanCells } }), gpu = await createGpuModel(new Grid(N), { ocean: false, ice: { iceExchange: 'turbulent', oceanCells } });
   const init = initializeState(cpu, {});
   for (const i of polar) { init[6][i] = 1; init[3][i] = 268; }
   for (const a of init) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
@@ -119,7 +119,9 @@ test('over cells with no ocean column under the ice the turbulent exchange holds
   cpu.seaIce.conductance.set(conductance);
   gpu.load();
   const { device, buffers, layout } = gpu.gpu;
-  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CONDUCT, conductance); device.queue.writeBuffer(buffers.PH, 4 * layout.PH.WET, Float32Array.from(oceanCells));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CONDUCT, conductance);
+  const [onDevice] = await readRanges(device, buffers.PH, [{ offset: layout.PH.WET, length: C }]);
+  assert.deepEqual(Array.from(onDevice), Array.from(oceanCells), 'the device takes the ice\'s oceanCells as the cells with water under the ice');
   for (let n = 0; n < 4; n++) { cpu.step(DT); await gpu.step(DT); }
   await gpu.sync();
   const [conc, wheat] = await readRanges(device, buffers.PH, [{ offset: layout.PH.CONC, length: C }, { offset: layout.PH.WHEAT, length: C }]);
