@@ -182,3 +182,4 @@ What I expect from arm B, against dep64 (iceDeposition on the ramp) from the sam
 - **Thin 235–255 K cloud:** its LWCRE weakens. Global LWCRE weakens by 0.3 to 1.5 W/m².
 - **Arctic:** the spring surface shortwave cloud effect weakens by 2 to 6 W/m², the wrong way for the melt-out rows. September extent ends below dep64's.
 - **Net TOA:** 1 to 3 W/m² more absorbed than in dep64.
+- **Revised from day 5 of the same CPU run, before the launch:** φ still exceeds 1 − α in every band and bin. One bin moved by more than 0.1: 60–90N at 253–263 K fell from 0.70 to 0.48, against 0.38. Arctic cloud between 253 and 273 K now sits 0.10 and 0.24 above the ramp, against 0.31 and 0.32 on day 1, so the Arctic range drops to 1 to 4 W/m². The global ranges stand: no other bin’s day-5 φ is more than 0.08 from its day-1 value.
