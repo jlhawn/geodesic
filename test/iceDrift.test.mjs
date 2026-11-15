@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { ICE_DRIFT, iceDriftOptions } from '../js/ocean/iceDrift.module.js';
 import { createSeaIce, FREEZING_POINT } from '../js/physics/ice.module.js';
+import { PREVIOUS_SEA_ICE } from './helpers/previousDefaults.mjs';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { DEG, RHO_I, meshOf, rig, packRig, packSolve, packDifference, windOn, rotationOn, streamOn, nearestCell, localFrame, edgesNear, closedForm, unit, dot, cross } from './helpers/iceDrift.mjs';
 
@@ -173,8 +174,8 @@ test('cells filled past full cover keep their volume, snow mass and skin enthalp
 
 function oceanRig(iceDrift, setup = () => {}, options = {}) {
   const m = meshOf(16), C = m.nCells, E = m.nEdges;
-  const ocean = createOcean(m, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, iceDrift, ...options });
-  const seaIce = createSeaIce(m, { heatCapacity: ocean.capacity });
+  const ocean = createOcean(m, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, iceDrift, iceExchange: 'instant', ...options });
+  const seaIce = createSeaIce(m, { heatCapacity: ocean.capacity, ...PREVIOUS_SEA_ICE });
   ocean.useSeaIce(seaIce.concentration, seaIce);
   const surfaceT = new Float64Array(C).fill(FREEZING_POINT + 2), ice = new Float64Array(C), o = { m, C, E, ocean, seaIce, surfaceT, ice, concentration: seaIce.concentration, calm: new Float64Array(E) };
   setup(o);

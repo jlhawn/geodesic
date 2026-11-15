@@ -6,6 +6,7 @@ import { createOcean } from '../js/ocean/layered.module.js';
 import { iceDriftMoves, ICE_REMNANT } from '../js/ocean/iceDrift.module.js';
 import { createSeaIce, seaIceRemoval, FREEZING_POINT, MINIMUM_CONCENTRATION, MINIMUM_VOLUME, NEGLIGIBLE_CONCENTRATION, NEGLIGIBLE_VOLUME } from '../js/physics/ice.module.js';
 import { DEG, meshOf, rig, northwardOn, nearestCell, windOn, unit, dot } from './helpers/iceDrift.mjs';
+import { PREVIOUS_SEA_ICE } from './helpers/previousDefaults.mjs';
 
 /*
  * Ice that the drift carries into open cells arrives a few thousandths of a
@@ -81,7 +82,7 @@ test('ice drifting into open water at a Courant number of 0.005 advances the edg
 test('the thermodynamics keep the arrived ice and freeze the leads around it, where the minimum floors remove ice below 1 percent cover in a step', () => {
   const m = meshOf(16), seed = nearestCell(m, -62 * DEG, 30 * DEG);
   const step = (keep, flux) => {
-    const s = createSeaIce(m, { keepSmallIce: keep }), surfaceT = new Float64Array(m.nCells).fill(FREEZING_POINT), h = new Float64Array(m.nCells), fluxes = new Float64Array(m.nCells).fill(flux);
+    const s = createSeaIce(m, { ...PREVIOUS_SEA_ICE, keepSmallIce: keep }), surfaceT = new Float64Array(m.nCells).fill(FREEZING_POINT), h = new Float64Array(m.nCells), fluxes = new Float64Array(m.nCells).fill(flux);
     h[seed] = 1; s.concentration[seed] = 0.005; s.snow[seed] = 8; surfaceT[seed] = FREEZING_POINT - 4;
     s.update(surfaceT, h, fluxes, seed, DT);
     return { h: h[seed], A: s.concentration[seed], snow: s.snow[seed] };
@@ -112,8 +113,8 @@ test('the thermodynamics keep the arrived ice and freeze the leads around it, wh
 
 function coupled(iceDrift, setup, iceOptions = {}, water = 2) {
   const m = meshOf(16), C = m.nCells, E = m.nEdges;
-  const ocean = createOcean(m, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, iceDrift, ...(iceOptions.iceExchange ? { iceExchange: iceOptions.iceExchange } : {}) });
-  const seaIce = createSeaIce(m, { heatCapacity: ocean.capacity, ...iceOptions });
+  const ocean = createOcean(m, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, iceDrift, iceExchange: iceOptions.iceExchange ?? 'instant' });
+  const seaIce = createSeaIce(m, { heatCapacity: ocean.capacity, ...PREVIOUS_SEA_ICE, ...iceOptions });
   ocean.useSeaIce(seaIce.concentration, seaIce);
   const surfaceT = new Float64Array(C).fill(FREEZING_POINT + water), ice = new Float64Array(C), o = { m, C, E, ocean, seaIce, surfaceT, ice, concentration: seaIce.concentration, calm: new Float64Array(E) };
   setup(o);

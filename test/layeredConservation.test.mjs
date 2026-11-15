@@ -209,3 +209,20 @@ test('through every phase of the hybrid ocean\'s step, with the cavitating drift
     assert.ok(r.volume() < 0.05 * volume0 && held > 1 && (keepSmallIce ? arrived > 0 : heldGone > 0), `${arrived} arrivals, ${heldGone} cells melted away holding heat, ice volume ${volume0} → ${r.volume()}, held up to ${held} K`);
   }
 });
+
+test('a turbulent save, restart or lean, loaded into an instant ocean keeps the ocean\'s heat: the water\'s heat under the ice is booked into the top layer in place of what the layer still held of the ice\'s draw', () => {
+  const run = rig('turbulent', { thickness: 0.2, cover: 0.85, water: FREEZING_POINT + 1.5 }), { C, mesh } = run;
+  run.seed(0.5);
+  for (let n = 0; n < 4; n++) run.cycle();
+  const heat = (ocean, held) => { let s = 0; for (let i = 0; i < C; i++) for (let k = 0; k < ocean.layers; k++) { const n = k * C + i, q = k === 0 && held && ocean.cellOcean[i] && run.ice[i] > 0 ? ocean.h[i] * FREEZING_POINT + held[i] / ocean.rhoCp : ocean.Q[n]; s += mesh.areaCell[i] * ocean.rhoCp * (q - 272 * ocean.h[n]); } return s; };
+  for (const restart of [true, false]) {
+    const saved = run.ocean.serialize({ restart }), r = rig('instant', { thickness: 0.2, cover: 0.85, water: FREEZING_POINT + 1.5 }), warn = console.warn;
+    r.ice.set(run.ice); r.surfaceT.set(run.surfaceT); r.seaIce.concentration.set(run.seaIce.concentration);
+    console.warn = () => {};
+    try { r.ocean.load(saved, r.surfaceT, r.ice, r.seaIce.concentration); } finally { console.warn = warn; }
+    const held = heat(run.ocean, saved.iceWater), stale = heat(run.ocean, null), booked = heat(r.ocean, null);
+    console.log(`${restart ? 'restart' : 'lean'} save: the turbulent ocean holds ${held.toExponential(6)} J with the water's heat under the ice, its layers ${(stale - held).toExponential(2)} J more of the ice's draw; the instant ocean holds ${booked.toExponential(6)} J`);
+    assert.ok(stale !== held, 'the save\'s top layer still holds heat the ice has drawn');
+    assert.ok(Math.abs(booked - held) <= 1e-12 * Math.abs(held), `the instant ocean holds ${booked} J against ${held} J`);
+  }
+});

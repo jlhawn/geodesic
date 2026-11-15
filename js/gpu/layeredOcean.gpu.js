@@ -2,7 +2,7 @@ import { bufferKey, emptyBuffer, storageBuffer, readRanges, reductionKernel, fin
 import { meshSections, fillMeshTables, MAX_EDGES, MAX_EDGES_ON_EDGE } from './meshTables.gpu.js';
 import { oceanPacking } from './oceanPacking.gpu.js';
 import { LAKE_DRAIN_WGSL } from './lake.gpu.js';
-import { oceanCells, NEUTRAL_STRATIFICATION, HEAT_REFERENCE, SALT_REFERENCE, restingColumns, displacedWeight, wettedLayer, layerMeans, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, NEUTRAL_STRATIFICATION, HEAT_REFERENCE, heldWaterNote, SALT_REFERENCE, restingColumns, displacedWeight, wettedLayer, layerMeans, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, restratificationOptions, restratificationScale, EDDY_TRACERS, backgroundDiffusivities, shearResolutionOptions, shearResolution, isoneutralOptions, BACKGROUND_LATITUDES, RESTRATIFICATION_VON_KARMAN, RESTRATIFICATION_PI_SQUARED, RESTRATIFICATION_USTAR_MIN, RESTRATIFICATION_NEGLECT, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, ROTATION_LIMITS, RH18_NEUTRAL, MSTAR_SCHEMES, RH18_ENERGY, LANGMUIR_SCHEMES, LANGMUIR_RESCALE, LANGMUIR_ICE, ICE_WAVE_DAMPING, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare, INTERIOR_SHEARS, LMD94_RICHARDSON, LMD94_VISCOSITY } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -2167,13 +2167,25 @@ ${core.fieldConstants}
     stericSurface(h, Q, W, eta);
     return { h, u, Q, W, eta, T0, previousT0, filled: atlas ? filled : null };
   }
+  function bookHeldWater(heat, h, ice, held) {
+    const rhoCp = o.density * o.specificHeat;
+    let cells = 0, joules = 0;
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i] || shelf[i] || !(ice[i] > 0)) continue;
+      const booked = h[i] * (FREEZING_POINT - HEAT_REFERENCE) + held[i] / rhoCp;
+      joules += mesh.areaCell[i] * rhoCp * (booked - heat[i]); heat[i] = booked; cells++;
+    }
+    if (cells) console.warn(heldWaterNote(cells, joules));
+  }
   function uploadArrays({ h, u, Q, Qref, W, Wref, T, S, eta }, surfaceT, ice, restart = null, concentration = seaCover, regridOnDevice = !restart, held = restart) {
     edgesCurrent = false;
     upwellingFolds = 0; upwellingTime = NaN; upwellingSeen = upwellingSteps;
     for (const name of RETAINED) delete outside[name];
     const velocity = Float32Array.from(u);
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) velocity[k * E + e] = 0;
-    const heat = Qref ?? Float64Array.from(h, (hh, n) => (Q ? Q[n] : Math.max(EPS, hh) * T[n]) - HEAT_REFERENCE * hh), salt = Wref ?? Float64Array.from(h, (hh, n) => (W ? W[n] : Math.max(EPS, hh) * S[n]) - SALT_REFERENCE * hh);
+    const heldWater = !turbulent && held && held.iceWater && held.iceWater.length === C ? held.iceWater : null;
+    const heat = Qref ? (heldWater ? Float64Array.from(Qref) : Qref) : Float64Array.from(h, (hh, n) => (Q ? Q[n] : Math.max(EPS, hh) * T[n]) - HEAT_REFERENCE * hh), salt = Wref ?? Float64Array.from(h, (hh, n) => (W ? W[n] : Math.max(EPS, hh) * S[n]) - SALT_REFERENCE * hh);
+    if (heldWater) bookHeldWater(heat, h, ice, heldWater);
     const packed = new Float32Array(OS.total);
     packed.set(toCells(h, L), OS.OH); packed.set(toEdges(velocity, L), OS.OU); packed.set(toCells(heat, L), OS.OQ); packed.set(toCells(salt, L), OS.OW);
     writeInPieces(device, ob.S, 0, packed);

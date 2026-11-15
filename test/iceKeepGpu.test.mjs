@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { PREVIOUS_SEA_ICE } from './helpers/previousDefaults.mjs';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
@@ -25,14 +26,14 @@ function meanTheta(model) {
 
 async function oneStep(keepSmallIce, cover, extra = {}, prepare = null, share = 0) {
   const grid = new Grid(N), transmission = share ? new Float64Array(grid.size).fill(share) : null, penetrated = share ? new Float64Array(grid.size) : null;
-  const model = createModel(grid, { ocean: false, radiation: { stratus: false }, surface: { exchange: 'roughness' }, ice: { keepSmallIce, ...extra, ...(share ? { transmission, penetrated } : {}) } });
+  const model = createModel(grid, { ocean: false, radiation: { stratus: false }, surface: { exchange: 'roughness' }, ice: { keepSmallIce, ...PREVIOUS_SEA_ICE, ...extra, ...(share ? { transmission, penetrated } : {}) } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const C = model.mesh.nCells, cells = [];
   for (let i = 0; i < C && cells.length < 12; i++) if (Math.abs(model.mesh.latCell[i]) > 62 * DEG && i % 7 === 0) cells.push(i);
   for (const i of cells) { model.state[6][i] = 0.8; model.seaIce.concentration[i] = cover; model.seaIce.snow[i] = 6; model.state[3][i] = FREEZING_POINT - 3; model.seaIce.snowAlbedo[i] = 0.8; }
   if (prepare) prepare(model, cells);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: false, dragEvery: 1, keepSmallIce, ...extra, ...(share ? { penetration: 'IB' } : {}) } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus: false, dragEvery: 1, keepSmallIce, ...PREVIOUS_SEA_ICE, ...extra, ...(share ? { penetration: 'IB' } : {}) } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ concentration: model.seaIce.concentration, snow: model.seaIce.snow, snowAlbedo: model.seaIce.snowAlbedo, brine: model.seaIce.brine, ...(share ? { transmission } : {}) });
   const time = model.time;

@@ -25,7 +25,7 @@ import { Grid } from '../js/grid.module.js';
 import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { createSigmaCore, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { FREEZING_POINT, MELTING_POINT, DEFAULT_ICE_EXCHANGE, savedIceExchange, iceExchangeOptions } from '../js/physics/ice.module.js';
+import { FREEZING_POINT, MELTING_POINT, DEFAULT_ICE_EXCHANGE, savedIceExchange, savedIceAlbedoPhases, iceExchangeOptions } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
@@ -48,7 +48,7 @@ const N = 16, DAY = 86400, STEP = 450, GRID = 'bl36', FRAME_DAYS = 5, SPINUP_FRA
 const SPINUP_DAYS = Number(process.argv[2] ?? 3650), RECORD_DAYS = Number(process.argv[3] ?? 365);
 if (![SPINUP_DAYS, RECORD_DAYS].every((days) => Number.isInteger(days) && days >= 0) || SPINUP_DAYS + RECORD_DAYS === 0) { console.error('usage: node scripts/explainOcean.mjs [SPINUP_DAYS] [RECORD_DAYS] [OUT]'); process.exit(1); }
 const out = process.argv[4] ?? new URL(`../explain/data/ocean_N${N}.bin`, import.meta.url).pathname;
-const DARK_ICE = { iceAlbedo: 0.07, meltingIceAlbedo: 0.07, iceSnowAlbedo: 0.07, slabHeatCapacity: 4.2e7 };
+const DARK_ICE = { iceAlbedo: 0.07, meltingIceAlbedo: 0.07, iceSnowAlbedo: 0.07, slabHeatCapacity: 4.2e7, iceAlbedoPhases: false };
 const EQUINOX_DAY_OF_YEAR = 78;
 const MONTHS = [['January', 31], ['February', 28], ['March', 31], ['April', 30], ['May', 31], ['June', 30], ['July', 31], ['August', 31], ['September', 30], ['October', 31], ['November', 30], ['December', 31]];
 const monthStart = MONTHS.map((_, m) => MONTHS.slice(0, m).reduce((sum, [, days]) => sum + days, 0));
@@ -88,7 +88,8 @@ if (resumed && !engineMatches) {
 }
 if (resumed && !scriptMatches) console.error(`warning: ${process.env.RESUME} was written by ${savedEngine?.scriptSha256 ? `scripts/explainOcean.mjs ${savedEngine.scriptSha256}, this is ${engine.scriptSha256}` : 'a scripts/explainOcean.mjs that did not record its hash'}; resuming, and the header's resumeCheck.sameScript is false`);
 const base = resumed ? JSON.parse(resumed.optionsJson) : { ocean: { everySteps: 4 }, ice: DARK_ICE };
-const ICE = process.env.WET_ICE ? JSON.parse(process.env.WET_ICE) : base.ice;
+const GIVEN_ICE = process.env.WET_ICE ? JSON.parse(process.env.WET_ICE) : base.ice;
+const ICE = resumed && GIVEN_ICE.iceAlbedoPhases === undefined ? { ...GIVEN_ICE, iceAlbedoPhases: savedIceAlbedoPhases({ options: base }) } : GIVEN_ICE;
 const madeUnder = resumed ? savedIceExchange({ options: base }) : DEFAULT_ICE_EXCHANGE;
 const OCEAN = { iceExchange: madeUnder, ...base.ocean, ...JSON.parse(process.env.OCEAN_OPTS ?? '{}') };
 if (resumed && JSON.stringify(iceExchangeOptions(OCEAN.iceExchange)) !== JSON.stringify(iceExchangeOptions(madeUnder))) console.error(`iceExchange ${JSON.stringify(OCEAN.iceExchange)} where ${process.env.RESUME} was made under ${JSON.stringify(madeUnder)}`);
@@ -421,7 +422,7 @@ async function saveCheckpoint(path, cloud) {
   const dailyArrays = Object.fromEntries(DAILY.map((name) => [`daily_${name}`, Float64Array.from(daily[name], (v) => v ?? NaN)]));
   const bytes = encodeState({
     kind: 'explainOcean', N, ...gridHeader(mesh), K, day: Math.round((model.time - runStartTime) / DAY), time: model.time, terrain: false, levels: core.levels,
-    runStartTime, optionsJson: JSON.stringify({ ocean: OCEAN, ice: ICE }), segmentsJson: JSON.stringify(segments.map((s, n) => (n === segments.length - 1 ? { ...s, toTime: model.time } : s))), runJson: JSON.stringify(run), recentCount: kept.length,
+    runStartTime, optionsJson: JSON.stringify({ ocean: OCEAN, ice: { ...ICE, iceAlbedoPhases: seaIce.iceAlbedoPhases } }), segmentsJson: JSON.stringify(segments.map((s, n) => (n === segments.length - 1 ? { ...s, toTime: model.time } : s))), runJson: JSON.stringify(run), recentCount: kept.length,
     engineJson: JSON.stringify(engine), totalsJson: JSON.stringify(totals), countsJson: JSON.stringify({ spinup: spinup.counts }), eddyVolumeFlux: snap.eddy ? Float32Array.from(snap.eddy.volume) : new Float32Array(0), eddyHeatFlux: snap.eddy ? Float32Array.from(snap.eddy.heat) : new Float32Array(0), cloud: Float32Array.from(cloud),
     pi, theta, u, surfaceT, q, qc, ice, concentration: seaIce.concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate,
     convectiveRain: m.convectiveRain, largeScaleRain: m.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo,

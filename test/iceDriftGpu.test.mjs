@@ -211,7 +211,7 @@ test('twenty coupled calls with the cavitating fluid, mstarScheme rh18 and langm
 test('loading a save made without iceExchange turbulent, the GPU starts the conductance as the CPU does: zero on land, from the ice\'s drift over the top layer elsewhere', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const probe = await createGpuModel(new Grid(N), { topography, ocean: { vertical: 'hybrid', everySteps: 1 } }), stress = windStress(probe.mesh);
   probe.destroy();
-  const made = await scenario({ rheology: 'cavitating' }, { stress });
+  const made = await scenario({ rheology: 'cavitating' }, { stress, ocean: { iceExchange: 'instant' } });
   for (let n = 0; n < 6; n++) made.stepCpu();
   const saved = made.cpu.serialize({ restart: true });
   made.gpuModel.destroy();

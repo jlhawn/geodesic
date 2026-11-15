@@ -132,7 +132,7 @@ function overOceanSkin() {
  * just above the removal floors; the brine of both at 2×10⁵ J/m².
  */
 function brineOcean() {
-  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: {}, ice: { iceLight: true, brineReservoir: true } });
+  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: { iceExchange: 'instant' }, ice: { iceLight: true, brineReservoir: true } });
   slab.state.forEach((values, s) => model.state[s].set(values));
   const concentration = Float64Array.from(slab.seaIce.concentration);
   for (let i = 0; i < model.mesh.nCells; i++) {

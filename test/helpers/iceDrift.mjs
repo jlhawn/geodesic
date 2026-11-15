@@ -3,6 +3,7 @@ import { buildMesh } from '../../js/mesh.module.js';
 import { beyondCells, limitedEdgeValue } from '../../js/ocean/layered.module.js';
 import { createIceDrift } from '../../js/ocean/iceDrift.module.js';
 import { createSeaIce, FREEZING_POINT } from '../../js/physics/ice.module.js';
+import { PREVIOUS_SEA_ICE } from './previousDefaults.mjs';
 import { createGeography, syntheticTopography } from '../../js/geography.module.js';
 
 export const DEG = Math.PI / 180, RHO_W = 1025, RHO_I = 917;
@@ -99,7 +100,7 @@ export function rig(m, options, geography = null, extra = {}, iceOptions = {}) {
   const C = m.nCells, E = m.nEdges;
   const cellOpen = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
   const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
-  const previousVolume = new Float64Array(C), seaIce = createSeaIce(m, iceOptions);
+  const previousVolume = new Float64Array(C), seaIce = createSeaIce(m, { ...PREVIOUS_SEA_ICE, ...iceOptions });
   const drift = createIceDrift(m, options, { cellOpen, edgeOcean, waterDensity: RHO_W, iceDensity: RHO_I, gravity: 9.81, previousVolume, beyond: beyondCells(m), limited: limitedEdgeValue, ...extra });
   drift.attach(seaIce);
   const r = {

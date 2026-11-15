@@ -128,7 +128,7 @@ test('a lean turbulent save, serialize() without the restart arrays, carries the
   assert.ok(!('iceWater' in plain.ocean.serialize()) && !('iceConductance' in plain.ocean.serialize()));
 });
 
-test('a turbulent save, restart or lean, loaded into an explicitly instant ocean steps on bit for bit as the same save without the water\'s heat under the ice and the conductance', () => {
+test('a turbulent save, restart or lean, loaded into an explicitly instant ocean books the water\'s heat under the ice into the top layer, logged, and steps on bit for bit as the same save without that heat and the conductance, booked by hand', () => {
   const run = rig('turbulent', { flux: 40, global: true });
   for (let n = 0; n < 4; n++) run.cycle();
   for (const restart of [true, false]) {
@@ -137,7 +137,17 @@ test('a turbulent save, restart or lean, loaded into an explicitly instant ocean
     const [taken, plain] = [saved, without].map((given) => {
       const r = rig('instant', { flux: 40, global: true });
       r.ice.set(run.ice); r.surfaceT.set(run.surfaceT); r.seaIce.concentration.set(run.seaIce.concentration);
-      r.ocean.load(given, r.surfaceT, r.ice, r.seaIce.concentration);
+      const notes = [], warn = console.warn, booked = [...Array(r.C).keys()].filter((i) => r.ocean.cellOcean[i] && r.ice[i] > 0);
+      console.warn = (note) => notes.push(note);
+      try { r.ocean.load(given, r.surfaceT, r.ice, r.seaIce.concentration); } finally { console.warn = warn; }
+      if (given === saved) {
+        assert.equal(notes.length, 1, 'the booking is logged once');
+        assert.match(notes[0], new RegExp(`under ${booked.length} iced cells`));
+        for (const i of booked) assert.equal(r.ocean.Q[i], r.ocean.h[i] * FREEZING_POINT + iceWater[i] / r.ocean.rhoCp);
+      } else {
+        assert.deepEqual(notes, [], 'a save without iceWater books nothing');
+        for (const i of booked) r.ocean.Q[i] = r.ocean.h[i] * FREEZING_POINT + iceWater[i] / r.ocean.rhoCp;
+      }
       for (let n = 0; n < 4; n++) r.step();
       return r;
     });

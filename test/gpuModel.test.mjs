@@ -8,7 +8,7 @@ import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, DECISION_KINDS } from './helpers/decisions.mjs';
 import { distributionCheck, magnitude } from './helpers/distribution.mjs';
 import { groupLayout, bandLayers, spreadGroups, groupChecks } from './helpers/spreadGroups.mjs';
-import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_RADIATION, PREVIOUS_MOIST, PREVIOUS_SURFACE, PREVIOUS_AEROSOL, PREVIOUS_PCAPE_MINIMUM, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_AIR_SEA, PREVIOUS_SEA_ICE } from './helpers/previousDefaults.mjs';
 const CAPPED = { velocityScale: 'capped' };
 
 let gpuAvailable = true;
@@ -260,7 +260,7 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
 });
 
 test('the change the Rayleigh and aerosol scattering makes to the heating of each layer of the sunlit columns agrees between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const base = heatingState(UNSCATTERED), greyIce = { iceAlbedo: 0.5, meltingIceAlbedo: 0.5, snowAgeing: false };
+  const base = heatingState(UNSCATTERED), greyIce = { iceAlbedo: 0.5, meltingIceAlbedo: 0.5, snowAgeing: false, iceAlbedoPhases: false };
   const on = await physicsHeating(base, greyIce), off = await physicsHeating(base, { ...UNSCATTERED, ...greyIce });
   const { K, C } = on;
   let worst = 0, largest = 0, at = null, lit = 0;
@@ -1317,7 +1317,7 @@ async function meltingPolarCells(ice, { conducting = true, moves = [1e-3, 1e5] }
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
-  const dt = 1350 * 16 / N, steps = Math.ceil(8 * 3600 / dt), options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' }, boundaryLayer: { ...PREVIOUS_BOUNDARY_LAYER, ...CAPPED }, ice };
+  const dt = 1350 * 16 / N, steps = Math.ceil(8 * 3600 / dt), options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' }, boundaryLayer: { ...PREVIOUS_BOUNDARY_LAYER, ...CAPPED }, ice: { ...PREVIOUS_SEA_ICE, ...ice } };
   const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
   const C = cpu.mesh.nCells, K = cpu.core.K, init = initializeState(cpu, {});
   const iced = [];

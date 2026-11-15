@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createSeaIce, openWaterAlbedo, iceExchangeOptions, ICE_EXCHANGE, DEFAULT_ICE_EXCHANGE, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
+import { createSeaIce as defaultSeaIce, openWaterAlbedo, iceExchangeOptions, ICE_EXCHANGE, DEFAULT_ICE_EXCHANGE, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { PREVIOUS_SEA_ICE } from './helpers/previousDefaults.mjs';
 
+const createSeaIce = (mesh, options = {}) => defaultSeaIce(mesh, { ...PREVIOUS_SEA_ICE, ...options });
 const model = createModel(new Grid(16));
 const seaIce = createSeaIce(model.mesh);
 const energyOf = (sea, surfaceT, ice, i = 0) => sea.energy(surfaceT[i], ice[i], sea.snow[i], sea.cover(i, ice[i]));
@@ -459,7 +461,7 @@ test('a melting skin saved at single precision reloads into the same step: the b
 const TURBULENT = (extra = {}) => ({ iceExchange: { mode: 'turbulent', ...extra } });
 const volumeOf = (sea, ice) => sea.concentration[0] * ice[0];
 
-test('iceExchange is the mode name or an object of the exchange constants that names its mode, CICE\'s by default', () => {
+test('iceExchange is the mode name or an object of the exchange constants that names its mode, CICE\'s where it names none; the default is turbulent with a friction-velocity floor of 2 cm/s', () => {
   assert.equal(iceExchangeOptions('instant').mode, 'instant');
   assert.deepEqual(iceExchangeOptions(), iceExchangeOptions(DEFAULT_ICE_EXCHANGE));
   assert.equal(iceExchangeOptions('turbulent').turbulent, true);
@@ -470,7 +472,8 @@ test('iceExchange is the mode name or an object of the exchange constants that n
   assert.deepEqual(iceExchangeOptions(resolved), resolved, 'a resolved set resolves to itself');
   for (const bad of [{ frictionMinimum: 5e-3 }, {}, { ...resolved, mode: 'instant' }, { ...resolved, lateralRate: 2 * resolved.lateralRate }, { mode: 'instant', turbulent: true }]) assert.throws(() => iceExchangeOptions(bad), /iceExchange/, JSON.stringify(bad));
   for (const bad of ['gradual', { mode: 'turbulent', speed: 1 }, { heatTransfer: 0 }, { frictionMinimum: -1 }, null, 3]) assert.throws(() => iceExchangeOptions(bad), /iceExchange/, JSON.stringify(bad));
-  assert.equal(createSeaIce(model.mesh).turbulent, false);
+  assert.deepEqual(defaultSeaIce(model.mesh).iceExchange, iceExchangeOptions({ mode: 'turbulent', frictionMinimum: 2e-2 }));
+  assert.equal(defaultSeaIce(model.mesh, { iceExchange: 'instant' }).turbulent, false);
   assert.equal(createSeaIce(model.mesh, TURBULENT()).turbulent, true);
 });
 

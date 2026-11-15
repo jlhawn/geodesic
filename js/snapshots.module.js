@@ -12,7 +12,7 @@ import { DIAGNOSE_FIRST } from './physics/boundaryLayer.module.js';
 import { groupHeader, groupArrays, savedTerrain } from './stateFile.module.js';
 import { pickGeography } from './geography.module.js';
 import { savedLakeOptions } from './physics/lake.module.js';
-import { savedIceExchange, DEFAULT_ICE_EXCHANGE } from './physics/ice.module.js';
+import { savedIceExchange, savedIceAlbedoPhases, DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES } from './physics/ice.module.js';
 const DB_NAME = 'climate', VERSION = 2;
 export const RUN_STORE_LIMIT = 1024 * 1048576;
 const ORPHAN_AGE = 3600e3;
@@ -71,9 +71,9 @@ export const startOptions = (saved, given) => {
   return options;
 };
 
-export const withIceExchange = (options, saved = null) => (options.ocean === false ? options : { ...options, ocean: { iceExchange: saved ? savedIceExchange(saved) : DEFAULT_ICE_EXCHANGE, ...(options.ocean ?? {}) } });
+export const withIceRecords = (options, saved = null) => ({ ...options, ...(options.ocean === false ? {} : { ocean: { iceExchange: saved ? savedIceExchange(saved) : DEFAULT_ICE_EXCHANGE, ...(options.ocean ?? {}) } }), ice: { iceAlbedoPhases: saved ? savedIceAlbedoPhases(saved) : DEFAULT_ICE_ALBEDO_PHASES, ...(options.ice ?? {}) } });
 
-const savedPageOptions = (saved) => { const lake = savedLakeOptions(saved); return withIceExchange({ ...(saved.options ?? {}), ...(Object.keys(lake).length ? { lake } : {}) }, saved); };
+const savedPageOptions = (saved) => { const lake = savedLakeOptions(saved); return withIceRecords({ ...(saved.options ?? {}), ...(Object.keys(lake).length ? { lake } : {}) }, saved); };
 
 export function toSnapshot(saved, source = null) {
   const arrays = buffers(saved), ocean = saved.ocean ? { ...groupHeader(saved.ocean), ...buffers(saved.ocean) } : null, land = saved.land ? buffers(saved.land) : null;

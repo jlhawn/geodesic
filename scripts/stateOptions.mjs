@@ -5,7 +5,7 @@ import { DEFAULT_AEROSOL } from '../js/aerosol.module.js';
 import { DIAGNOSE_FIRST } from '../js/physics/boundaryLayer.module.js';
 import { terrainKey, terrainOptions, terrainCache, surfaceGeopotential, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { savedTerrain, stateTerrain } from '../js/stateFile.module.js';
-import { iceExchangeOptions, savedIceExchange } from '../js/physics/ice.module.js';
+import { iceExchangeOptions, savedIceExchange, savedIceAlbedoPhases } from '../js/physics/ice.module.js';
 
 const SOIL_OPTIONS = ['soil', 'soilDepths', 'soilHeatCapacity', 'soilConductivity', 'firnDensity'];
 export const soilOptions = (land = {}) => Object.fromEntries(SOIL_OPTIONS.filter((name) => land[name] !== undefined).map((name) => [name, land[name]]));
@@ -86,11 +86,11 @@ export function resumeNotes(given, base, name) {
     if (recorded !== undefined) return [...(differingGroups({ boundaryLayer: given.boundaryLayer }, { boundaryLayer: recorded }).length ? [`options other than ${name}'s header records in its options: boundaryLayer`] : []), ...exchange];
     return [...(isGroup(given.boundaryLayer) ? [`${name} records no boundary-layer order, so the order it was made in cannot be told: this run's boundary layer runs ${(given.boundaryLayer.diagnoseFirst ?? DIAGNOSE_FIRST) ? 'diagnoseFirst' : 'in the plain order'}`] : []), ...exchange];
   }
-  const other = differingGroups(withExchange(given), withExchange(asMade(base.given)));
+  const other = differingGroups(withRecords(given), withRecords(asMade(base.given)));
   return [...(other.length ? [`options other than ${name}'s header records: ${other.join(', ')}`] : []), ...exchange];
 }
 
-const withExchange = (given) => (isGroup(given) && given.ocean !== false ? { ...given, ocean: { ...(isGroup(given.ocean) ? given.ocean : {}), iceExchange: iceExchangeOptions(savedIceExchange({ given })) } } : given);
+const withRecords = (given) => (isGroup(given) ? { ...given, ...(given.ocean === false ? {} : { ocean: { ...(isGroup(given.ocean) ? given.ocean : {}), iceExchange: iceExchangeOptions(savedIceExchange({ given })) } }), ...(given.ice === false ? {} : { ice: { ...(isGroup(given.ice) ? given.ice : {}), iceAlbedoPhases: savedIceAlbedoPhases({ given }) } }) } : given);
 const resolvedExchange = (exchange) => canonical(iceExchangeOptions(exchange));
 
 function exchangeNotes(given, base, name) {

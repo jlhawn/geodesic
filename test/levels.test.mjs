@@ -427,7 +427,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   assert.ok(kept.water < 1.4 && started.water - kept.water > 0.4, `water ${kept.water} and ${started.water} of FROM's`);
   assert.ok(kept.gate > 0.7 && started.gate < 0.65, `sea gate ${kept.gate} and ${started.gate}`);
 
-  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere remapped from cam26 on bl48 \(48 layers\) and its deck; the clock at day 0/);
+  assert.match(run({ TAG: 'iced', ICE_FROM: '1', OCEAN: '{"iceExchange":"instant"}' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere remapped from cam26 on bl48 \(48 layers\) and its deck; the clock at day 0/);
   const iced = await read('iced_day0001.bin');
   assert.equal(iced.K, 48);
   assert.ok(iced.ice.subarray(0, C).every(Number.isFinite), 'a sea-ice thickness is not finite');

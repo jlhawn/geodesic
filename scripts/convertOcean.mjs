@@ -18,6 +18,7 @@ import { withoutSstRing } from '../js/sstMeans.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { createGeography, stateGeography } from '../js/geography.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
+import { resumedOcean, headerWithIceRecords } from './savedLand.mjs';
 import { GENERATORS } from '../js/ocean/column.module.js';
 
 const [input, output] = process.argv.slice(2), generator = process.env.GENERATOR ?? 'hybrid';
@@ -34,7 +35,7 @@ if (!saved.ocean || !saved.ocean.h) { console.error(`${input} holds no ocean`); 
 if (saved.ocean.vertical === 'hybrid') { console.error(`${input} is already on the hybrid layers`); process.exit(1); }
 const { mesh, relax } = stateGrid(saved), C = mesh.nCells;
 const ground = stateGeography(saved), geography = createGeography(mesh, ground.topography, ground.geography);
-const ocean = createOcean(mesh, { geography, vertical: 'hybrid', generator });
+const ocean = createOcean(mesh, resumedOcean(saved, { geography, vertical: 'hybrid', generator }));
 const surfaceT = Float64Array.from(saved.surfaceT), ice = Float64Array.from(saved.ice);
 if (saved.concentration) ocean.useSeaIce(Float64Array.from(saved.concentration));
 const slabLayers = saved.ocean.h.length / C;
@@ -44,6 +45,6 @@ const started = Date.now();
 ocean.load(saved.ocean, surfaceT, ice);
 const converted = ocean.serialize();
 const after = heatOf(converted.h, converted.T, ocean.layers);
-const bytes = encodeState({ ...withoutSstRing(saved), grid: { relax }, ocean: converted }, { f64: f64Names(saved) });
+const bytes = encodeState({ ...headerWithIceRecords(withoutSstRing(saved)), grid: { relax }, ocean: converted }, { f64: f64Names(saved) });
 writeFileSync(output, output.endsWith('.gz') ? gzipSync(bytes, { level: 9 }) : bytes);
 console.log(`${input} (N=${saved.N}, day ${saved.day}, ${slabLayers} slab layers) → ${output} (${ocean.layers} hybrid layers, ${generator} generator, ${((Date.now() - started) / 1000).toFixed(0)} s); the ocean's heat changed by ${((after - before) / Math.abs(before)).toExponential(2)} of itself in the conversion and regrid`);

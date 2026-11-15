@@ -141,7 +141,8 @@
 // '{"divergenceSurfaces":"hybrid"}' for the divergence damping along hybrid
 // σ–p surfaces; see dynamicsOptions in js/dynamics/sigmaCore.module.js),
 // ICE (JSON options for the sea ice of js/physics/ice.module.js, e.g.
-// '{"areaLossFactor":0.5}', recorded in the state's header when given),
+// '{"areaLossFactor":0.5}', recorded in the state's header with the iceAlbedoPhases the run took; a
+// resumed run whose ICE names none takes its save's, false where its header records none),
 // RECORD (a directory to write each day's ocean and sea-ice forcing into as
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
 // one at a time, and every eighth waits for the device to finish the eight
@@ -258,6 +259,7 @@ import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
 import { watchSkin } from './skinWatch.mjs';
 import { lakeArrays } from '../js/physics/lake.module.js';
 import { loadSavedLand, loadSavedLake, resumedIceExchange, recordedIceExchange } from './savedLand.mjs';
+import { savedIceAlbedoPhases, DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES } from '../js/physics/ice.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 import { startGeography } from './soilWater.mjs';
 import { indexCells, seaIceIndexCut } from '../js/seaIceIndex.module.js';
@@ -297,7 +299,9 @@ const existing = snapshots(), file = existing[existing.length - 1];
 let saved = file ? await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`))) : null;
 if (saved && saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
 const RESUMED_EXCHANGE = resumedIceExchange(saved, OCEAN), RUN_OCEAN = RESUMED_EXCHANGE === undefined ? OCEAN : { ...OCEAN, iceExchange: RESUMED_EXCHANGE };
+const RUN_ICE = saved && ICE.iceAlbedoPhases === undefined ? { ...ICE, iceAlbedoPhases: savedIceAlbedoPhases(saved) } : ICE;
 if (RESUMED_EXCHANGE !== undefined) log(`iceExchange ${JSON.stringify(RESUMED_EXCHANGE)}, as ${file} ${recordedIceExchange(saved) === undefined ? 'was made under, recording none' : 'records'}`);
+if (RUN_ICE !== ICE) log(`iceAlbedoPhases ${RUN_ICE.iceAlbedoPhases}, as ${file} ${(saved.given?.ice?.iceAlbedoPhases ?? saved.options?.ice?.iceAlbedoPhases) === undefined ? 'was made with, recording none' : 'records'}`);
 const PERTURB = Number(process.env.PERTURB ?? 0);
 if (saved && PERTURB) {
   let seed = 12345;
@@ -328,10 +332,10 @@ const { geography: startingGeography, soilSeed, soilNote } = startGeography(shee
 const geographyNote = `${GEOGRAPHY.topography}, ${GEOGRAPHY.iceSheets} ice sheets${GEOGRAPHY.iceShelves !== 'land' ? `, ice shelves at ${GEOGRAPHY.iceShelves}` : ''}, ${soilNote}`;
 const found = base ? stateGrid(base, topography) : null;
 requireOwnSubgrid(TERRAIN, OROGRAPHY.orography);
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: LAND.soilGoal === 'observed' ? { ...startingGeography, soilWaterMonthly: true } : startingGeography, ocean: climatology ? { ...RUN_OCEAN, climatology } : RUN_OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
-const { mesh, core, state } = model;
-const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(RUN_OCEAN === false ? {} : { ocean: { ...JSON.parse(process.env.OCEAN ?? '{}'), iceExchange: model.oceanEngine.options.iceExchange } }), ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
+const { options: OPTIONS, given: GIVEN } = headerOptions({ radiation: GIVEN_RADIATION, moist: MOIST, land: { coverGoal: 'observed', ...LAND }, ...Object.fromEntries(GIVEN_GROUPS.map(([group, name]) => [group, JSON.parse(process.env[name])])), ...(RUN_OCEAN === false ? {} : { ocean: { ...JSON.parse(process.env.OCEAN ?? '{}'), iceExchange: RUN_OCEAN.iceExchange ?? DEFAULT_ICE_EXCHANGE } }), ice: { ...RUN_ICE, iceAlbedoPhases: RUN_ICE.iceAlbedoPhases ?? DEFAULT_ICE_ALBEDO_PHASES }, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }) });
 for (const note of resumeNotes(GIVEN, base, saved ? file : process.env.FROM)) log(note);
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, geography: LAND.soilGoal === 'observed' ? { ...startingGeography, soilWaterMonthly: true } : startingGeography, ocean: climatology ? { ...RUN_OCEAN, climatology } : RUN_OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: { ...sheets.land, coverGoal: 'observed', ...LAND }, lake: LAKE, ice: RUN_ICE, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, ...OROGRAPHY, ...(TERRAIN === undefined ? {} : { terrain: TERRAIN }), dragEvery: DRAG_EVERY, levels });
+const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 const deepNote = (land) => (model.land.deepWater ? `deep store of ${model.land.deepCapacity} kg/m² under the trees, ${land && land.deep ? 'from the saved land.deep' : 'started at the root zone\'s fill'}` : '');
