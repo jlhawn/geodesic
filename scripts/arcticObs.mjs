@@ -12,7 +12,7 @@ const ERA = [
   ['tcc', 'e5.moda.an.sfc', '128_164'], ['lcc', 'e5.moda.an.sfc', '128_186'], ['tclw', 'e5.moda.an.sfc', '128_078'], ['tciw', 'e5.moda.an.sfc', '128_079'],
   ['tcwv', 'e5.moda.an.sfc', '128_137'], ['tco3', 'e5.moda.an.sfc', '128_206'], ['ci', 'e5.moda.an.sfc', '128_031'], ['fal', 'e5.moda.an.sfc', '128_243'],
 ];
-const YEARS = Array.from({ length: 20 }, (_, k) => 2001 + k), NX = 360, ROWS = 31;   // rows 90N..60N
+const YEARS = Array.from({ length: 20 }, (_, k) => 2001 + k), NX = 360, ROWS = 31;
 let bytes = 0;
 const get = async (url) => { for (let a = 1; ; a++) { try { const r = await fetch(url); if (!r.ok) throw new Error(`${r.status}`); return r; } catch (e) { if (a === 4) throw new Error(`${url}: ${e.message}`); await new Promise((s) => setTimeout(s, 5000 * a)); } } };
 const names = {};
