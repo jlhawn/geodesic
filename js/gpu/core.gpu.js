@@ -3,7 +3,7 @@ import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FAC
 import { sunDirection, sunDistance, DEFAULT_ORBIT, DEFAULT_SHORTWAVE, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { createAerosolSampler, loadAerosol, AEROSOL_FIELDS, DEFAULT_AEROSOL } from '../aerosol.module.js';
-import { physicsConstants, physicsFunctions, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, boundaryLayerDiagnosis, relativeWindKernels, virtualDensityKernels, bergeronRain, depositionRain, deepStoreRain, midLevelPlume, sentBackMidLevel, omegaStore, rainEvaporationOptions, plumeRetype, shallowPlumeRetype, PHYSICS_PASSES, LAYERED_PASSES, layeredPass, LAYERED_SLOTS, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
+import { physicsConstants, physicsFunctions, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, boundaryLayerDiagnosis, relativeWindKernels, virtualDensityKernels, bergeronRain, cloudIceRain, cloudIceMix, cloudIcePlume, deepStoreRain, midLevelPlume, sentBackMidLevel, omegaStore, rainEvaporationOptions, plumeRetype, shallowPlumeRetype, PHYSICS_PASSES, LAYERED_PASSES, layeredPass, LAYERED_SLOTS, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS, LATENT_HEAT } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, SURFACE_VERTICAL_SIGMA } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG, relativeWindOf } from '../physics/surface.module.js';
@@ -1068,7 +1068,7 @@ export async function createGpuCore(mesh, {
   if (phys.convectionRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = plumeRetype(kernelBodies[name]);
   if (phys.shallowRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = shallowPlumeRetype(kernelBodies[name]);
   if (phys.bergeronAutoconversion && !phys.iceDeposition) kernelBodies.adjustRain = bergeronRain(kernelBodies.adjustRain);
-  if (phys.iceDeposition) kernelBodies.adjustRain = depositionRain(kernelBodies.adjustRain);
+  if (phys.iceDeposition) kernelBodies.adjustRain = cloudIceRain(kernelBodies.adjustRain);
   if (phys.relativeWind && !(phys.surfaceExchange === 'roughness' && phys.implicitDrag)) throw new Error('relativeWind needs the implicit drag of the roughness exchange');
   if (phys.relativeWind) Object.assign(kernelBodies, relativeWindKernels(kernelBodies));
   if (phys.virtualDensity) Object.assign(kernelBodies, virtualDensityKernels(kernelBodies));
@@ -1077,6 +1077,8 @@ export async function createGpuCore(mesh, {
   if (phys.midLevelConvection && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = midLevelPlume(kernelBodies[name], !!phys.convectionRetype);
   if (phys.midLevelConvection && phys.shallowRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = sentBackMidLevel(kernelBodies[name], !!phys.convectionRetype);
   if (phys.midLevelConvection && phys.convectionType === 'testParcel') kernelBodies.cellTendency = omegaStore(kernelBodies.cellTendency);
+  if (phys.iceDeposition) kernelBodies.adjustMix = cloudIceMix(kernelBodies.adjustMix);
+  if (phys.iceDeposition && phys.detrainedPhase !== 'liquid') kernelBodies.adjustPlume = cloudIcePlume(kernelBodies.adjustPlume);
   if (lake) Object.assign(kernelBodies, lakeKernels(kernelBodies, { held: heldRadiation, skin: skinOn }));
   for (const [name, raw] of Object.entries(kernelBodies)) {
     const body = waveConstants(raw);
@@ -1280,9 +1282,9 @@ export async function createGpuCore(mesh, {
     });
   }
 
-  const retained = { treeCover: null, greenMax: null, orography: null, wind: null, land: null, drag: null, heat: null, reference: null, soil: null, snow: null, vegetation: null, snowAlbedo: null, canopy: null, seasonLength: null, seasonWarmth: null, rainMean: null, demandMean: null, soilCarbon: null, litterMean: null, decayMean: null, snowFreeCover: null, concentration: null, brine: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, meanShortwaveCloudEffect: null, meanLongwaveCloudEffect: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null, evaporation: null, cumulusCover: null, cumulusWater: null, subcloudVirtual: null, cloudIce: null, soilDeep: null, deepWater: null };
-  function uploadPhysics({ capacity = null, oceanFlux = null, transmission = null, penetrated = null, orography, wind, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, concentration, brine, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater, subcloudVirtual, cloudIce, warmLayer, coolSkin, soilDeep, treeCover, greenMax, deepWater, seaFlow, wetnessMonthly, goalAdded, goalRemoved, goalCover, goalTrees } = {}) {
-    for (const [name, value] of Object.entries({ orography, wind, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, concentration, brine, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater, subcloudVirtual, cloudIce, warmLayer, coolSkin, soilDeep, treeCover, greenMax, deepWater, seaFlow, wetnessMonthly, goalAdded, goalRemoved, goalCover, goalTrees })) if (value !== undefined) retained[name] = value;
+  const retained = { treeCover: null, greenMax: null, orography: null, wind: null, land: null, drag: null, heat: null, reference: null, soil: null, snow: null, vegetation: null, snowAlbedo: null, canopy: null, seasonLength: null, seasonWarmth: null, rainMean: null, demandMean: null, soilCarbon: null, litterMean: null, decayMean: null, snowFreeCover: null, concentration: null, brine: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, meanShortwaveCloudEffect: null, meanLongwaveCloudEffect: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null, evaporation: null, cumulusCover: null, cumulusWater: null, subcloudVirtual: null, cloudIceShare: null, soilDeep: null, deepWater: null };
+  function uploadPhysics({ capacity = null, oceanFlux = null, transmission = null, penetrated = null, orography, wind, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, concentration, brine, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater, subcloudVirtual, cloudIceShare, warmLayer, coolSkin, soilDeep, treeCover, greenMax, deepWater, seaFlow, wetnessMonthly, goalAdded, goalRemoved, goalCover, goalTrees } = {}) {
+    for (const [name, value] of Object.entries({ orography, wind, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, concentration, brine, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater, subcloudVirtual, cloudIceShare, warmLayer, coolSkin, soilDeep, treeCover, greenMax, deepWater, seaFlow, wetnessMonthly, goalAdded, goalRemoved, goalCover, goalTrees })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
@@ -1334,7 +1336,7 @@ export async function createGpuCore(mesh, {
     if (retained.cumulusCover) ph.set(retained.cumulusCover, L.PH.CUCOVER);
     if (retained.cumulusWater) ph.set(retained.cumulusWater, L.PH.CUWATER);
     if (retained.subcloudVirtual) ph.set(retained.subcloudVirtual, L.PH.SUBTV);
-    if (retained.cloudIce && L.PH.CICE !== undefined) ph.set(retained.cloudIce, L.PH.CICE);
+    if (retained.cloudIceShare && L.PH.CICE !== undefined) ph.set(retained.cloudIceShare, L.PH.CICE);
     if (L.PH.WARM !== undefined && retained.warmLayer) ph.set(retained.warmLayer, L.PH.WARM);
     if (L.PH.COOL !== undefined && retained.coolSkin) ph.set(retained.coolSkin, L.PH.COOL);
     if (L.PH.LAKE !== undefined && retained.lake) ph.set(retained.lake, L.PH.LAKE);
@@ -1535,5 +1537,5 @@ export async function createGpuCore(mesh, {
   function uploadLake(values) { retained.lake = values; device.queue.writeBuffer(buffers.PH, 4 * L.PH.LAKE, values); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, fieldConstants: sharedConstants, layout: L, buffers, kernels, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, uploadLake, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, sample, frameFields: Object.keys(FIELDS), clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys, aerosol, refreshAerosol };
+  return { device, mesh, meshSpacing, preludeConstants, fieldConstants: sharedConstants, layout: L, buffers, kernels, kernelBodies, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, uploadLake, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, sample, frameFields: Object.keys(FIELDS), clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys, aerosol, refreshAerosol };
 }

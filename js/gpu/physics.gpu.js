@@ -2876,14 +2876,26 @@ export function boundaryLayerDiagnosis(body, { diagnoseFirst = DIAGNOSE_FIRST, s
 }
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
-const DEPOSITION_RAIN = [
+const CLOUD_ICE_RAIN = [
   [`  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
 `, `  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
-  var iceCoverAbove = 0.0; var topDistance = 0.0;
+  var depCoverAbove = 0.0; var dzTop = 0.0;
 `],
-  [`        IN[S_QC + idx] += (descending - melted) / mass;
+  [`    let idx = k * C + i;
+    let mass = pi * LV[L_DS + k] / GRAV;
+`, `    let idx = k * C + i;
+    let mass = pi * LV[L_DS + k] / GRAV;
+    let depT = IN[S_TH + idx] * D[D_EXM + idx]; let depP = pi * LV[L_SM + k];
+    var depCover = 0.0;
+    if (IN[S_QC + idx] > 0.0) { depCover = uniformCover(IN[S_QC + idx], uniformWidth(cloudSat(depT, depP), depP, pi)); }
+    if (depCoverAbove < DEP_TOP_COVER && depCover >= DEP_TOP_COVER) { dzTop = 0.0; } else { dzTop += RGAS * depT * LV[L_DS + k] / (GRAV * LV[L_SM + k]); }
+    depCoverAbove = depCover;
+`],
+  [`        let melted = descending * clamp((IN[S_TH + idx] * D[D_EXM + idx] - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+        IN[S_QC + idx] += (descending - melted) / mass;
         rained += melted;
-`, `        IN[S_QC + idx] += (descending - melted) / mass;
+`, `        let melted = select(0.0, descending, IN[S_TH + idx] * D[D_EXM + idx] >= LIQUID_T);
+        IN[S_QC + idx] += (descending - melted) / mass;
         PH[PH_CICE + idx] += (descending - melted) / mass;
         rained += melted;
 `],
@@ -2906,19 +2918,14 @@ const DEPOSITION_RAIN = [
       }
     }
 `, `      liquid = IN[S_QC + idx];
-      let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
-      var layerCover = 0.0;
-      if (liquid > 0.0) { layerCover = uniformCover(liquid, uniformWidth(cloudSat(temperature, pressure), pressure, pi)); }
-      if (iceCoverAbove < DEP_TOP_COVER && layerCover >= DEP_TOP_COVER) { topDistance = 0.0; } else { topDistance += RGAS * temperature * LV[L_DS + k] / (GRAV * LV[L_SM + k]); }
-      iceCoverAbove = layerCover;
       if (liquid > 0.0) {
+        let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
         let share = clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
         let total = liquid;
-        let cover = max(CLEAR_AIR, layerCover);
+        let cover = max(CLEAR_AIR, uniformCover(total, uniformWidth(cloudSat(temperature, pressure), pressure, pi)));
         var iceWater = 0.0;
         if (share <= 0.0) { iceWater = total; } else if (share < 1.0) { iceWater = min(max(0.0, PH[PH_CICE + idx]), total); }
-        if (share > 0.0 && share < 1.0 && total > iceWater) { iceWater += deposition(temperature, pressure, iceWater, total - iceWater, cover, dt, topDistance); }
-        liquid = total - iceWater;
+        if (share > 0.0 && share < 1.0 && total > iceWater) { iceWater += deposition(temperature, pressure, iceWater, total - iceWater, cover, dt, dzTop); }
         if (iceWater > 0.0) {
           let speed = FALL_C * pow(pressure / (RGAS * temperature) * iceWater / cover, FALL_EXP);
           let courant = speed * dt * LV[L_SM + k] * GRAV / (RGAS * temperature * LV[L_DS + k]);
@@ -2928,6 +2935,7 @@ const DEPOSITION_RAIN = [
           descending = leaving * mass;
           moved = true;
         }
+        liquid = max(0.0, IN[S_QC + idx] - iceWater);
         PH[PH_CICE + idx] = iceWater;
       } else { PH[PH_CICE + idx] = 0.0; }
     }
@@ -2936,9 +2944,23 @@ const DEPOSITION_RAIN = [
   }
 `, `    if (IN[off + bottom * C + i] < 0.0) { IN[off + bottom * C + i] = 0.0; }
   }
-  for (var k = 0; k < K; k++) { let idx = k * C + i; PH[PH_CICE + idx] = min(PH[PH_CICE + idx], max(0.0, IN[S_QC + idx])); }
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let water = IN[S_QC + idx]; let temperature = IN[S_TH + idx] * D[D_EXM + idx];
+    var glaciated = 0.0;
+    if (water > CLEAR_AIR) { glaciated = select(select(min(1.0, min(max(0.0, PH[PH_CICE + idx]), water) / water), 0.0, temperature >= LIQUID_T), 1.0, temperature <= ICE_T); }
+    PH[PH_CICE + idx] = glaciated;
+  }
 `],
 ];
+const CLOUD_ICE_ABOVE = [`      iceAbove = condensate > 0.0 && IN[S_TH + idx] * D[D_EXM + idx] < LIQUID_T;
+`, `      iceAbove = condensate > 0.0 && IN[S_TH + idx] * D[D_EXM + idx] < LIQUID_T && (IN[S_TH + idx] * D[D_EXM + idx] <= ICE_T || PH[PH_CICE + idx] > 0.0);
+`];
+const CLOUD_ICE_MIX = [`  diagnoseColumn(i);
+  saturateColumn(i, pi);
+`, `  diagnoseColumn(i);
+  for (var k = 0; k < K; k++) { let idx = k * C + i; PH[PH_CICE + idx] = PH[PH_CICE + idx] * max(0.0, IN[S_QC + idx]); }
+  saturateColumn(i, pi);
+`];
 const DEPOSITION_WGSL = (d) => `const DEP_NUCLEI: f32 = ${d.nuclei}; const DEP_SEED: f32 = ${d.initialMass}; const DEP_ICE_ROOT: f32 = ${Math.cbrt(d.iceDensity)}; const DEP_KA: f32 = ${d.conductivity}; const DEP_CHI: f32 = ${d.diffusivity};
 const DEP_TOP_RATE: f32 = ${d.topRate}; const DEP_TOP_DEPTH: f32 = ${d.topDepth}; const DEP_TOP_COVER: f32 = ${d.topCover}; const DEP_ACTIVE: f32 = ${d.activeNuclei};
 fn deposition(T: f32, p: f32, ice: f32, liquid: f32, cover: f32, dt: f32, topDistance: f32) -> f32 {
@@ -2956,12 +2978,22 @@ fn deposition(T: f32, p: f32, ice: f32, liquid: f32, cover: f32, dt: f32, topDis
   return min(nucleated + (1.0 - nucleated) * (DEP_TOP_RATE + topDistance / DEP_TOP_DEPTH), 1.0) * min(max(0.0, cover * (grown - seed)), liquid);
 }
 `;
-export function depositionRain(body) {
-  return DEPOSITION_WGSL(DEPOSITION) + DEPOSITION_RAIN.reduce((text, [from, to]) => {
-    const at = text.indexOf(from);
-    if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error('an iceDeposition anchor is not in the adjustRain kernel exactly once');
-    return text.slice(0, at) + to + text.slice(at + from.length);
-  }, body);
+function patchOnce(text, [from, to], kernel) {
+  const at = text.indexOf(from);
+  if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error(`an iceDeposition anchor is not in the ${kernel} kernel exactly once`);
+  return text.slice(0, at) + to + text.slice(at + from.length);
+}
+export function cloudIceRain(body) {
+  const rained = CLOUD_ICE_RAIN.reduce((text, pair) => patchOnce(text, pair, 'adjustRain'), body);
+  return DEPOSITION_WGSL(DEPOSITION) + (rained.includes('var iceAbove = false;') ? patchOnce(rained, CLOUD_ICE_ABOVE, 'adjustRain') : rained);
+}
+export function cloudIceMix(body) { return patchOnce(body, CLOUD_ICE_MIX, 'adjustMix'); }
+export function cloudIcePlume(body) {
+  const head = 'fn saturateColumn(i: i32, pi: f32) {\n', update = '    IN[S_Q + idx] -= change; IN[S_QC + idx] += change;';
+  const start = body.indexOf(head), close = body.indexOf('\n}\n', start), source = body.slice(start, close + 3);
+  if (start < 0 || close < 0 || body.indexOf(head, start + 1) >= 0 || source.split(update).length !== 2) throw new Error('the saturation pass is not in the adjustPlume kernel exactly once');
+  const detrained = source.replace(head, 'fn saturateDetrained(i: i32, pi: f32) {\n').replace(update, `    if (change > 0.0) { PH[PH_CICE + idx] += (1.0 - clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)) * change; }\n${update}`);
+  return patchOnce(body.slice(0, close + 3) + detrained + body.slice(close + 3), ['  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n', '  if (PH[PH_CUMF + i] > 0.0) { saturateDetrained(i, pi); }\n'], 'adjustPlume');
 }
 const BERGERON_RAIN = [
   ['    let excess = max(0.0, liquid - AUTO_T);\n', `    let temperature = IN[S_TH + idx] * D[D_EXM + idx];

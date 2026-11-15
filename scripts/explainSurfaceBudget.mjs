@@ -9,7 +9,7 @@ import { createModel } from '../js/model.module.js';
 import { stateGeography } from '../js/geography.module.js';
 import { savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { withCadence } from '../js/cadence.module.js';
-import { LATENT_HEAT, placeCumulus } from '../js/physics/moist.module.js';
+import { LATENT_HEAT, placeCumulus, placeCloudIce } from '../js/physics/moist.module.js';
 import { readState, tagOf } from './figures/figureState.mjs';
 import { stateGrid } from '../js/stateGrid.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
@@ -34,6 +34,7 @@ if (saved.mlmGate) radiation.mlmGate.set(saved.mlmGate);
 if (saved.mlmHeight) radiation.mlmHeight.set(saved.mlmHeight);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === moist.subcloudVirtual.length) moist.subcloudVirtual.set(saved.subcloudVirtual);
 placeCumulus(model, saved);
+placeCloudIce(model, saved);
 
 const onLand = model.land ? geography.land : new Uint8Array(C);
 const net = new Float64Array(C), latent = new Float64Array(C), sensible = new Float64Array(C);

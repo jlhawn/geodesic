@@ -53,6 +53,7 @@ import { serialize, deserialize } from 'node:v8';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { stateTerrain } from '../js/stateFile.module.js';
+import { placeCloudIce } from '../js/physics/moist.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
 refuseUnreadOptions(import.meta.url);
@@ -78,7 +79,7 @@ export const PH_MAP = {
   OLR: 'radiation.outgoing', OLRSUM: 'radiation.summed.outgoingLongwave', ATMSUM: 'radiation.summed.atmosphereSolar',
   INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.summed.clearOutgoingLongwave',
   ASRMEAN: 'radiation.meanAbsorbedSolar', OLRMEAN: 'radiation.meanOutgoingLongwave', ALBMEAN: 'radiation.meanPlanetaryAlbedo', SWCREMEAN: 'radiation.meanShortwaveCloudEffect', LWCREMEAN: 'radiation.meanLongwaveCloudEffect',
-  CICE: 'moist.cloudIce', CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
+  CICE: 'moist.cloudIceShare', CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
   PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo',
   SURF: 'land.surface', SOIL: 'land.soil', RUNOFF: 'land.runoff', DISCHARGE: 'land.discharge', ICELOSS: 'land.iceLoss', MLMK: 'radiation.mlmLayer', MLMM: 'radiation.mlmShare', DECKK: 'radiation.deckLayer', DECKFROM: 'radiation.deckFrom', VEG: 'land.vegetation', CANOPY: 'land.canopy', SEASONL: 'land.seasonLength', SEASONW: 'land.seasonWarmth', DEMAND: 'land.demandMean', RAINMEAN: 'land.rainMean',
   LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4', DEEP: 'land.deepWater',
@@ -147,7 +148,7 @@ for (const name of (process.env.DECISION_EXTRA ?? '').split(',').filter(Boolean)
 export const DECISION_ROWS = new Set(Object.keys(DECISION_BOUNDS));
 const NO_CLEAR_SKY = JSON.parse(process.env.RADIATION ?? '{}').clearSkyPass === false, CLEAR_SKY_ROWS = new Set(['ABSCLRSUM', 'OLRCLRSUM', 'RADCLROLR', 'RADCLRSW', 'RADTC']);
 const drags = (model) => !!model.boundaryLayer?.implicitDrag;
-const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin], UO: ['no relative wind', (model) => !!model.seaFlow], CICE: ['no iceDeposition', (model) => !!model.moist?.cloudIce] };
+const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin], UO: ['no relative wind', (model) => !!model.seaFlow], CICE: ['no iceDeposition', (model) => !!model.moist?.cloudIceShare] };
 const decisionBound = (name) => (process.env.SHARE ? Number(process.env.SHARE) : DECISION_BOUNDS[name]);
 
 const typed = (v) => ArrayBuffer.isView(v) && !(v instanceof DataView);
@@ -207,6 +208,7 @@ async function build(file) {
     }
     const sv = model.moist.subcloudVirtual;
     if (saved.subcloudVirtual && saved.subcloudVirtual.length === sv.length) sv.set(saved.subcloudVirtual); else sv.fill(0);
+    placeCloudIce(model, saved);
     if (!model.gpu && model.surfaceGeopotential) for (let i = 0; i < C; i++) { const zs = model.surfaceGeopotential[i] / model.core.diagnostics.g; if (saved.boundaryDepth) model.boundaryLayer.depth[i] += zs; if (saved.mixingTop) model.boundaryLayer.mixingTop[i] += zs; }
     model.time = saved.time;
     if (model.load) model.load();

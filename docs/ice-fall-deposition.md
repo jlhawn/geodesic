@@ -3,89 +3,79 @@
 Under the ramp (the default), a cloud layer's ice share is 1 − α(T), linear from 0 at liquidTemperature (273.15 K) to 1 at iceTemperature (235.15 K). That share falls at the Heymsfield–Donner speed, and the liquid share α converts to rain.
 
 With `iceDeposition` (false by default; it needs `iceFall`), a layer between those temperatures handles its cloud differently:
-- What falls is the layer's cloud ice q_i. This is a per-layer memory that only deposition grows, following the Wegener–Bergeron–Findeisen process as the IFS models it.
+- What falls is the layer's cloud ice q_i, which only deposition, the ice falling in and the ice share of post-plume condensate grow, following the Wegener–Bergeron–Findeisen process as the IFS models it.
 - The liquid q_l = q_c − q_i converts to rain at the plain liquid rates.
 
-Saturation, latent heat and the radiation keep the ramp. The option changes only how a layer's condensate is split between the sink that falls and the sink that rains out.
+Saturation, latent heat and the radiation keep the ramp. The option changes how a layer's condensate is split between the sink that falls and the sink that rains out.
 
 ## Equations
 
-These follow IFS Documentation Cy41r2 Part IV §7.2.4(d), eqs 7.33–7.43 (after Rotstayn et al. 2000 and Meyers et al. 1992). Each step in every layer with iceTemperature < T < liquidTemperature and q_l > 0, after the ice falling in has been added:
+These follow IFS Documentation Cy41r2 Part IV §7.2.4(d), eqs 7.33–7.43 (after Rotstayn et al. 2000 and Meyers et al. 1992). Units are SI throughout: T in K, p and e in Pa, ρ in kg/m³, q in kg/kg, N_i in m⁻³, Δt in s, and ρ_i^(1/3) = 8.88 kg^(1/3)/m. The model's R is 287.06 J/(kg K) and R_v = R/0.622 = 461.5 J/(kg K).
+
+Each step, in every layer with iceTemperature < T < liquidTemperature and q_l > 0, after the ice falling in has been added:
 
 - Vapor pressures: e_sl is Bolton's (`saturationVaporPressure`) and e_si the IFS form (`iceVaporPressure`). The air density is ρ = p/(R T).
-- Active nuclei: N_i = 1000 exp[12.96 (e_sl − e_si)/e_si − 0.639] m⁻³ (7.40). The CLOUDSC code divides by e_sl. Eq. 7.40 and Meyers divide by e_si, which is what makes f_nuc reach 1 at −23 °C as the text says.
+- Active nuclei: N_i = 1000 exp[12.96 (e_sl − e_si)/e_si − 0.639] (7.40). This is the IFS text's and Meyers's form, and with it f_nuc reaches 1 at −23 °C as the text says.
+  - CLOUDSC divides by e_sl instead. The e_si form has 1.35× the nuclei at 258 K, 1.7× at 253 K and 2.25× at 248 K, so it glaciates 1.2–1.7× faster than the operational code at 248–258 K and lifts F_dep earlier.
+  - Bolton's e_sl over the IFS e_si stands in for CLOUDSC's min(Koop, e_l/e_i), which is e_l/e_i above about 238 K, to about 2 % in the supersaturation.
 - Conduction and diffusion terms:
   - A″ = (L_s/(K_a T)) (L_s/(R_v T) − 1)
   - B″ = R_v T p/(2.21 e_si)
   - L_s = L + L_f and K_a = 2.4e-2 W m⁻¹ K⁻¹ (7.34, 7.35).
-- Growth coefficient: c_svd = 7.8 (N_i/ρ)^(2/3) (e_sl − e_si)/(ρ_i^(1/3) (A″ + B″) e_si), with ρ_i = 700 kg m⁻³ (7.38).
-- In-cloud ice: a is the layer's cover, the uniform distribution's cover that the fall speed already uses. The in-cloud ice, with the seed as its floor, is q₀ = max(q_i/a, m₀ N_i/ρ), where m₀ = 1e-12 kg (7.41).
+- Growth coefficient: c_svd = 7.8 (N_i/ρ)^(2/3) (e_sl − e_si)/(ρ_i^(1/3) (A″ + B″) e_si), with ρ_i = 700 kg/m³ (7.38).
+- In-cloud ice: a is the layer's cover, the uniform distribution's cover that the fall speed also uses. The in-cloud ice, with the seed as its floor, is q₀ = max(q_i/a, m₀ N_i/ρ), where m₀ = 1e-12 kg (7.41).
 - New in-cloud ice: q₁ = ((2/3) c_svd Δt + q₀^(2/3))^(3/2). This is exact over the step for a constant c_svd (7.39).
-- Deposition: D = F_dep · min(a (q₁ − q₀), q_l). D moves from q_l to q_i; q_c is unchanged.
+- Deposition: D = F_dep · min(max(0, a (q₁ − q₀)), q_l). D moves from q_l to q_i; q_c is unchanged.
 - Cloud-top reduction:
   - F_dep = min[f_nuc + (1 − f_nuc)(0.1 + Δz_top/500 m), 1], with f_nuc = min(N_i/15000, 1) (7.42, 7.43).
-  - Δz_top is 0 in a cloud-top layer: one whose cover is at least 0.01 under a layer with less.
-  - Below that, Δz_top grows by each lower layer's thickness, as CLOUDSC's ZCLDTOPDIST does.
+  - The tracker's cover is the uniform distribution's cover of the layer's q_c at the start of its visit in the rain step, before the ice falling in.
+  - Δz_top is 0 in a cloud-top layer: one whose cover is at least 0.01 under a layer with less. The column's top layer is a top whenever its cover is at least 0.01.
+  - Below a top, Δz_top grows by each layer's own thickness R T Δσ/(g σ), as CLOUDSC's ZCLDTOPDIST does.
 
-Time to grow 0.1 g/kg from the seed (a = 1, F_dep = 1, 600 hPa):
+Time to grow 0.1 g/kg of in-cloud ice from the seed (a = 1, F_dep = 1, 600 hPa):
 
 | T | 268 K | 263 K | 258 K | 253 K | 248 K | 240 K (400 hPa) |
 |---|---|---|---|---|---|---|
 | N_i (m⁻³) | 1050 | 2110 | 4380 | 9410 | 20900 | 79300 |
-| Time | 2.8 h | 69 min | 37 min | 23 min | 16 min | 5 min |
+| Time | 171 min | 68 min | 37 min | 23 min | 15.6 min | 5.2 min |
 | F_dep in the top layer | 0.16 | 0.23 | 0.36 | 0.66 | 1 | 1 |
+
+- The times grow about as p^1.5: at 248 K they are 8.7, 11.9, 15.6 and 24.0 min at 400, 500, 600 and 800 hPa.
+- They grow as q^(2/3) of the target: a thin cloud of 0.02 g/kg glaciates 2.9× faster than the table, and one of 0.01 g/kg 4.6× faster, often within one step.
+- With F_dep < 1 they lengthen by about 1/F_dep.
 
 ## The memory
 
-`moist.cloudIce` is the cloud ice of each layer, K·C values in kg/kg. It is a Float64Array on the CPU (in a shared buffer for the workers) and PH region `CICE` (f32) on the GPU. It is allocated only with the option, so the option-off layout and saves are unchanged.
+`moist.cloudIceShare` is each layer's glaciated fraction φ = q_i/q_c, K·C values in [0, 1]. It is a Float64Array on the CPU (in a shared buffer for the workers) and PH region `CICE` (f32) on the GPU. It is allocated only with the option, so the option-off layout and saves are unchanged.
 
-Invariants:
-- 0 ≤ q_i ≤ q_c.
-- q_i = q_c at or below iceTemperature (homogeneous freezing).
-- q_i = 0 at or above liquidTemperature.
+Between steps the memory holds φ; within the moist step the same array holds the ice mass q_i:
 
-Only three things change q_i:
-- deposition;
-- the share of falling ice that a layer keeps as cloud;
-- the fall itself.
+1. **Start.** Before the first condensation pass, q_i = φ q_c. On the CPU this is the top of `adjust`; on the GPU it is `adjustMix`, after the mixing and before its saturation pass, the same point.
+2. **Condensation passes.** New large-scale condensate is liquid between 235.15 and 273.15 K and ice at or below 235.15 K, through the limits below. Condensate formed in the post-plume pass enters with the ramp's ice share (see Detrainment). A loss of cloud takes its liquid first: q_i is capped at q_c when it is next read.
+3. **Rain step**, top down, at each layer's visit:
+   - the limits: q_i = q_c at or below iceTemperature, q_i = 0 at or above liquidTemperature, and q_i ≤ q_c between;
+   - the ice falling in (see Arriving ice), deposition, the fall, and the liquid's conversion.
+4. **End.** After the third condensation pass and the filler, a single cap and the store: φ = 0 where q_c ≤ CLEAR_AIR (1e-7 kg/kg), 1 at or below iceTemperature, 0 at or above liquidTemperature, and min(q_i, q_c)/q_c between.
 
-Every other process that changes q_c changes its liquid: condensation, evaporation, mixing, transport, cumulus detrainment, conversion and the filler. q_i is capped at q_c when the rain step reads it, and again after the column's second adjustment and filler.
+Within the step only these change q_i: deposition, the ice kept from what falls in, the ice share of post-plume condensate, the fall, and the caps and limits.
 
-The memory is not advected:
-- In a steady cloud field each cell's q_c holds, so the local memory tracks that cloud's glaciation as if the cloud stood still.
-- Transients at cloud edges err toward liquid. Condensate that arrives is liquid, and ice left behind is capped away.
-- Advecting it would add a fourth moist tracer to both dynamical cores and their conservation rows.
+The memory is not advected. Cloud that moves keeps its share, because each step starts from q_i = φ q_c of the cell the cloud is in.
+- A memory of ice mass would err both ways: an arrival or growth of q_c would be all liquid, and a thinning would keep the ice until the cap.
+- With φ two errors remain. Old cloud that arrives in a clear cell (φ = 0) is liquid and restarts its glaciation, and φ has gradients across cell boundaries.
+- Neither touches a stationary Arctic deck. For storm-track and frontal cloud at 258–273 K, N=64 arms bound the error from below.
+- A fourth advected tracer would still need the cap, since independent limiters break q_i ≤ q_c, and would add layout, mixing, plume and conservation work on both engines.
 
-New condensate between the two temperatures is liquid, as in the IFS, and so is detrained cumulus condensate. The IFS detrains with its ramp. Here detrained condensate glaciates at the deposition rate: 16–37 min between 248 and 258 K.
+## Detrainment
 
-## Saves and restores
+The model has no detrained-condensate stream: the plume writes only θ and q, and the saturation pass after it (`condenseColumn`'s second call on the CPU, `adjustPlume`'s on the GPU, in columns where a plume ran) makes the condensate.
 
-- `scripts/spinup.mjs` writes `cloudIce` when the model has it and restores it on resume with the other moist memories.
-- The page saves it with the cumulus memories (`savedCumulus` in `js/model.worker.js`), and every restore places it through `placeCumulus`.
-- The GPU model mirrors `CICE` into `moist.cloudIce` when it reads back for a save, and uploads it with the retained physics on load.
-- A save without `cloudIce` restored under the option starts the memory at 0. All mixed-phase cloud then begins as liquid, as a fresh start does.
-- compareEngines maps `CICE` to `moist.cloudIce`.
+- `detrainedPhase: 'ramp'` (the default) gives that pass's positive change the ramp's ice share: q_i += (1 − α(T)) Δq_c, with T the layer's temperature after the plume. The plume's own ice is the same ramp share at its own temperature.
+- `detrainedPhase: 'liquid'` makes it liquid, for an attribution arm. It needs `iceDeposition`.
+- The model's ramp is linear over 235.15–273.15 K. The IFS's (eq 7.6) is quadratic over 250.16–273.16 K, so this entry is less icy than the IFS's at 250–268 K. Deposition makes up the difference within the times above.
 
-## CPU (f64) and WGSL (f32)
+## Arriving ice
 
-- Both engines use the same expressions. q₀ > 0 always, so f32 `pow` is defined. The subtraction q₁ − q₀ loses about 1e-7 of q₀, under 1e-11 kg/kg.
-- The GPU runs one thread per column with a top-down loop. It reads and writes the memory in the PH buffer at each layer and carries the cover above and Δz_top as scalars. There are no private arrays and no pointers, per CLAUDE.md's M5 and M1 rules.
-- Three decisions can split the engines at a few cells, so compareEngines will judge them where they show:
-  - the cloud-top test (cover 0.01);
-  - the two temperature limits;
-  - min(·, q_l).
-
-## Where it runs in the moist step
-
-The memory acts in `autoconvertColumn` (CPU) and the `adjustRain` kernel (GPU). It runs top down, per layer, inside the iceFall block, after the layer's rain evaporation and the plume's stream:
-
-1. **Ice falling in.** The receiving layer's share α melts into the rain, as now. The rest joins q_c and q_i.
-2. **Cloud top.** The tracker updates Δz_top for every layer, clear ones included.
-3. **Deposition.** The growth above.
-4. **The fall.** q_i falls at v = iceFall (ρ q_i/a)^iceFallExponent, implicit and in flux form, as now. The layer keeps 1/(1 + v Δt/Δz) of it and passes the rest down. The ice leaving the lowest layer is large-scale precipitation.
-5. **Conversion.** q_l converts by Kessler and the lifetime, with no Bergeron factor. In floored layers the fog scheme acts on q_l.
-
-Then come the second adjustment (the fallen ice sublimates in subsaturated layers), the filler and the cap.
+Ice falling into a layer below liquidTemperature joins its q_i, less what passes on through the implicit fall. It melts, into the precipitation, only at or above liquidTemperature, without heat in the column: the surface books L_f on the precipitation, as in the default. The ice leaving the lowest layer is large-scale precipitation.
 
 ## The liquid a layer holds back
 
@@ -94,35 +84,63 @@ Held liquid has three sinks:
 - Kessler autoconversion and the lifetime at the plain rates: threshold 2e-4, 1e-3 /s, 1 h, or 3 h for stratiform cloud;
 - evaporation.
 
-There is no Bergeron factor:
-- Cy41r2's large-scale liquid autoconversion has none (7.49–7.52). The factor survives only in its convection (6.37), because the deposition now is the Bergeron–Findeisen process.
-- Keeping `bergeronAutoconversion` under the option would count that process twice. The option therefore sets the factor to 1 in the layers it splits. The factor matters only between 235.15 and 268.16 K, so this is exactly those layers.
+There is no Bergeron factor under the option:
+- Cy41r2's large-scale liquid autoconversion has none (7.49–7.52); the factor survives only in its convection (6.36–6.38, where 6.38 defines it). Its default autoconversion is Khairoutdinov–Kogan; the model's Kessler stands in for the Sundqvist form.
+- Deposition is the Bergeron–Findeisen process here, so keeping `bergeronAutoconversion` would count it twice at 235–255 K.
+- `bergeronAutoconversion` therefore has no effect anywhere under the option, on both engines: the CPU gates it on `bergeronAutoconversion && !iceDeposition`, and the GPU kernel leaves out its patch.
+- From 258 to 268 K the factor converts faster than deposition glaciates (23–28 min against 37–68 min), so the liquid there lives 2–2.5× longer than in the default. That is intended: it is the Arctic gain, and also the SWCRE risk.
+- The model has no riming sink (IFS eq 7.56, S_rime in eqs 7.7 and 7.10). If the liquid overshoots, at 250–450 hPa or in the Arctic SWCRE, riming is the next lever, not the factor.
 
-coldfall64 (`iceFallColdOnly`) converted its held cloud with the factor:
-- Below 250 K the factor is 1 + 0.5 √18 = 3.1, so the 1 h lifetime became 19 min and the 3 h stratiform lifetime 58 min.
-- That fast conversion, rather than the missing fall, is the likely cause of its LWCRE loss. It is untested.
+coldfall64 (`iceFallColdOnly`) converted its held cloud with the factor: 1 + 0.5 √18 = 3.1 below 250 K, about 3.9 at its cap at 235.15 K, so the whole cloud decayed in about a third of the lifetime. That this caused its LWCRE loss is a lead, which the attribution arms bfoff64 and coldbf64 test.
 
 What I expect under the option:
-- **235–255 K:** deposition glaciates 0.1 g/kg within 5–30 min, so the ice falls much as in the default. Tropical mid-level cloud should stay near ctl64, which is the LWCRE guard.
-- **255–273 K:** the liquid lives longer than in the default, with no factor and slower glaciation. Boundary-layer mixed-phase cloud should hold more supercooled liquid, which is the Arctic rows.
+- **235–255 K:** deposition glaciates 0.1 g/kg within 5–30 min, so the ice falls much as in the default. Tropical mid-level cloud should stay near ctl64, which is the LWCRE guard. The 30S–30N 250–450 hPa liquid is the risk: 12.3 g/m² without the factor and 6.7 with it in six-hour uncoupled pairs, against ERA5's about 1.
+- **255–273 K:** the liquid lives longer than in the default. Boundary-layer mixed-phase cloud should hold more supercooled liquid, which is the Arctic rows.
 - **Risk:** global SWCRE gets stronger. It is already −51 W/m² against CERES's −45.
 
-An attribution arm, `bergeronAutoconversion: false` alone under the same protocol, would separate the factor from the deposition.
+## Thermodynamics and radiation
 
-## Unchanged
+- The heat released by condensation or deposition is L, whatever the phase. L + (1 − α) L_f is the latent heat in the saturation slope only; see "Where the heat of fusion is" in docs/cloud-gas-overlap.md.
+- Deposition's L_f is not booked: about 0.1 K/day in a cloud layer and 2–4 W/m² over the column. The memory carries no enthalpy, so energy closes by construction.
+- Saturation stays on the ramp. A layer of mostly liquid cloud is held 1–10 % below water saturation, which inflates its held liquid at 253–263 K by roughly 0.05–0.1 g/kg. If the Arctic rows fall short, a saturation on the memory's share is the next lead.
+- The radiation's cloud phase stays on the ramp. Coupling it to the memory is a second switch.
+- The plumes keep their own ice.
 
-- The radiation's cloud phase stays on the ramp. Coupling it to the memory would change both shortwave and longwave and is a separate step.
-- The thermodynamics: the saturation mix and the latent heat L + (1 − α) L_f.
-- The plumes' own ice.
+## CPU (f64) and WGSL (f32)
+
+- Both engines use the same expressions, with max(0, ·) on the growth. q₀ ≥ the seed > 0, so f32 `pow` is defined. The subtraction q₁ − q₀ loses about 6e-8 of q_i.
+- The GPU applies three string patches, only with the option. Each anchor must appear exactly once:
+  - `cloudIceRain` on `adjustRain`, in place of `bergeronRain` and before `deepStoreRain`;
+  - `cloudIceMix` on `adjustMix`;
+  - `cloudIcePlume` on `adjustPlume`, under 'ramp'.
+- With the option off the kernel texts and the PH layout are unchanged. `CICE` sits before `T2M`, which stays last.
+- The GPU runs one thread per column, top down. It carries the cover above and Δz_top as scalars, and reads and writes the memory in the PH buffer, so there are no private arrays or pointers (CLAUDE.md's M5 and M1 rules).
+- Four decisions can split the engines at a few cells: the cloud-top test (cover 0.01), the two temperature limits, min(·, q_l), and the CLEAR_AIR floor.
+
+## Saves and restores
+
+- `placeCloudIce(model, saved)` places a saved `cloudIceShare` of the model's length. Otherwise, as for a fresh start, it lays the ramp's share 1 − α(T) of the model's state, 0 where q_c ≤ CLEAR_AIR. It runs after the state is in place.
+- Callers: scripts/spinup.mjs (resume and fresh start), the page's `placeDeck`, explainOcean, fixedSst, figureState, deckGate, shortwaveBudget, explainSurfaceBudget, adjustStages, tropicalHeating and compareEngines.
+- Writers: spinup, explainOcean and fixedSst write `cloudIceShare` with the other moist memories, and the page saves it in `savedCumulus`.
+- remapState drops it, so a remapped state starts from the ramp.
+- The GPU model mirrors `CICE` into `moist.cloudIceShare` when it reads back, and uploads it with the retained physics on load. compareEngines maps `CICE` to it.
 
 ## Tests
 
-- `test/cloudIce.test.mjs`:
-  - The option is off by default and needs iceFall. A column whose cloud is all colder than 235.15 K or all warmer than 273.15 K steps under it as without it, bit for bit.
-  - A mixed-phase cloud-top layer's deposition, fall and liquid conversion match a hand computation. The Bergeron factor changes nothing under the option.
-  - The glaciation times of the table above.
-  - `placeCumulus` places a saved cloud ice and starts it at zero without one.
-  - A GPU parity row at N=16 at the file's tolerances; the engines' cloud ice agrees to 1e-7 kg/kg.
-- `test/gpuReload.test.mjs`: under the option, a load restores every device buffer word for word, the cloud ice included.
+- `test/iceDeposition.test.mjs`:
+  - the defaults and the option's checks;
+  - columns at the limits bit for bit;
+  - a hand-computed mixed-phase cloud-top layer;
+  - the cover step across 0.01 and a q_l-limited layer;
+  - the glaciation times;
+  - doubling q_c between steps doubles q_i;
+  - the Bergeron factor has no effect under the option;
+  - `placeCloudIce`;
+  - the option-off kernel text and layout;
+  - the source lint over restorers and writers;
+  - GPU parity at N=16 on bl34 and bl48, at two time steps, with `detrainedPhase` 'ramp' and 'liquid' and with `bergeronAutoconversion`.
+- `test/gpuReload.test.mjs`: under the option a load restores every device buffer word for word.
+- `test/pageRestore.test.mjs`: under the option a page save restores and steps on as the run that did not stop.
+- `test/spinupRestart.test.mjs`: under the option a split spin-up ends bit for bit on the whole one.
 - `test/atmosphereConservation.test.mjs`: the moist row "over a slab with iceDeposition".
-- CLAUDE.md's M5 checks: `test/boundaryLayer.test.mjs`, `test/gpuModel.test.mjs`, and compareEngines at the page state (combined128 day 1460) with and without the option.
+- CLAUDE.md's M5 checks: `test/boundaryLayer.test.mjs`, `test/gpuModel.test.mjs`, and compareEngines at the page state with and without the option.

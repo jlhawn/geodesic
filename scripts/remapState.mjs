@@ -17,6 +17,7 @@ const saved = await decodeState(new Uint8Array(readFileSync(input)));
 const from = savedLevels(saved), to = sigmaInterfaces(process.env.LEVELS);
 const { mesh, relax } = stateGrid(saved);
 const remapped = remapLevels(from, to, saved, mesh);
-const state = { ...withoutSstRing(saved), grid: { relax }, K: to.length - 1, levels: to, theta: remapped.theta, u: remapped.u, ...(saved.q ? { q: remapped.q } : {}), ...(saved.qc ? { qc: remapped.qc } : {}) };
+const { cloudIceShare, ...kept } = withoutSstRing(saved);
+const state = { ...kept, grid: { relax }, K: to.length - 1, levels: to, theta: remapped.theta, u: remapped.u, ...(saved.q ? { q: remapped.q } : {}), ...(saved.qc ? { qc: remapped.qc } : {}) };
 writeFileSync(output, encodeState(state, { f64: f64Names(saved) }));
 console.log(`${input} (${sigmaGridName(from) ?? 'a saved grid'}, ${from.length - 1} layers, day ${saved.day}) → ${output} (${process.env.LEVELS}, ${to.length - 1} layers)`);

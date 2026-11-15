@@ -96,6 +96,9 @@ function spunUpDeposition() {
   const model = createModel(new Grid(N), { ...OPTIONS, moist: { iceDeposition: true } });
   initializeState(model).forEach((values, s) => model.state[s].set(values));
   for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
+  const share = model.moist.cloudIceShare, mixed = share.filter((v) => v > 0 && v < 1).length;
+  console.log(`iceDeposition: after ${SPINUP_STEPS} steps ${mixed} of ${share.length} layers hold cloud that is part ice and part liquid`);
+  assert.ok(mixed > 0, 'the spin-up makes mixed-phase cloud');
   spunDeposition = model;
   return model;
 }

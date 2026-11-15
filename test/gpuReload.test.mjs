@@ -17,7 +17,7 @@ const build = (moist) => createGpuModel(new Grid(N), { topography, radiation: { 
 const mirrors = (model) => Object.fromEntries(Object.entries({
   state: model.state, concentration: model.seaIce.concentration, windSpeed: model.surface.windSpeed,
   ...Object.fromEntries(['mlmSubsidence', 'mlmHeight', 'mlmGate', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'evaporation'].map((name) => [name, model.radiation[name]])),
-  ...Object.fromEntries(['convectiveRain', 'largeScaleRain', 'cumulusCover', 'cumulusWater', 'subcloudVirtual', 'cloudIce'].map((name) => [name, model.moist[name]])),
+  ...Object.fromEntries(['convectiveRain', 'largeScaleRain', 'cumulusCover', 'cumulusWater', 'subcloudVirtual', 'cloudIceShare'].map((name) => [name, model.moist[name]])),
   ...Object.fromEntries(['depth', 'mixingTop', 'regime', 'buoyancyFlux'].map((name) => [`boundary.${name}`, model.boundaryLayer[name]])),
   ...(model.exchange ? { exchangeWind: model.exchange.wind, ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }) } : {}),
 }).filter(([, value]) => value));
@@ -71,9 +71,9 @@ function assertSame(label, reference, got) {
   }
 }
 
-for (const [label, moist] of [['', undefined], [' under iceDeposition, its cloud ice too', { iceDeposition: true }]]) test(`a load leaves every device buffer as a fresh model's load does, after steps have dirtied them${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const [label, moist] of [['', undefined], [' under iceDeposition, its glaciated fraction too', { iceDeposition: true }]]) test(`a load leaves every device buffer as a fresh model's load does, after steps have dirtied them${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const saved = await savedState(moist);
-  if (moist) assert.ok(saved.mirrors.cloudIce.some((v) => v > 0), 'nine steps grow cloud ice');
+  if (moist) assert.ok(saved.mirrors.cloudIceShare.some((v) => v > 0 && v < 1), 'nine steps leave layers part ice and part liquid');
   const model = await build(moist);
   place(model, saved, { ocean: false });
   const fresh = await dump(model);
