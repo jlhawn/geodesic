@@ -51,14 +51,13 @@ import { savedDeckField, DECK_FIELDS, MOIST_FIELDS, RADIATION_FIELDS } from '../
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { withCadence } from '../js/cadence.module.js';
-import { FREEZING_POINT } from '../js/physics/ice.module.js';
+import { FREEZING_POINT, DEFAULT_ICE_EXCHANGE, savedIceExchange, iceExchangeOptions } from '../js/physics/ice.module.js';
 import { createForcedOcean } from '../js/gpu/forcing.gpu.js';
 import { decodeForcing, forcingDay } from '../js/forcing.module.js';
 import { COUPLED_ICE_DRIFT } from '../js/ocean/iceDrift.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
-import { loadSavedLand, loadSavedLake, lakeOptionsFor, resumedOcean } from './savedLand.mjs';
-import { DEFAULT_ICE_EXCHANGE } from '../js/physics/ice.module.js';
+import { loadSavedLand, loadSavedLake, lakeOptionsFor, resumedOcean, recordedIceExchange } from './savedLand.mjs';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 import { givenOptions } from './stateOptions.mjs';
 
@@ -96,7 +95,9 @@ if (saved.N !== N) throw new Error(`${from} is N=${saved.N}`);
 const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const airStress = !!(await decodeForcing(new Uint8Array(readFileSync(`${FORCING}/${days[0]}`)))).fields.airStress;
 OCEAN.iceDrift = OCEAN.iceDrift !== false && airStress ? { ...(OCEAN.iceDrift || COUPLED_ICE_DRIFT), airStress: 'given' } : false;
-const RUN_OCEAN = resumedOcean(saved, OCEAN);
+const RUN_OCEAN = resumedOcean(saved, OCEAN), madeUnder = savedIceExchange(saved);
+if (OCEAN.iceExchange === undefined) log(`iceExchange ${JSON.stringify(RUN_OCEAN.iceExchange)}, as ${from} ${recordedIceExchange(saved) === undefined ? 'was made under, recording none' : 'records'}`);
+else if (JSON.stringify(iceExchangeOptions(OCEAN.iceExchange)) !== JSON.stringify(iceExchangeOptions(madeUnder))) log(`iceExchange ${JSON.stringify(OCEAN.iceExchange)} where ${from} was made under ${JSON.stringify(madeUnder)}`);
 const replayGiven = ({ ocean, ...given }) => ({ ...given, ocean: { ...(process.env.OCEAN === undefined ? {} : givenOptions({ ocean: JSON.parse(process.env.OCEAN) }).ocean), iceExchange: RUN_OCEAN.iceExchange ?? DEFAULT_ICE_EXCHANGE } });
 const model = await createGpuModel(stateGrid(saved, topography).mesh, { lake: lakeOptionsFor(saved), topography, geography, land: landOptions, ocean: RUN_OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
 const { mesh, core, state, gpu } = model;
