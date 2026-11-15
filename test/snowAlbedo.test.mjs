@@ -305,6 +305,20 @@ test('with iceAlbedoPhases both engines give the ice the same albedo and age the
   assert.ok(iceWorst < 1e-5 && worst < 1e-4, `ice albedo apart by ${iceWorst}, snow albedo by ${worst}`);
 });
 
+test('iceAlbedoPhases warns of the options it leaves unread, and only then', () => {
+  const warned = [], warn = console.warn;
+  console.warn = (message) => warned.push(message);
+  try {
+    createSeaIce(mesh, { iceAlbedoPhases: true, iceSnowFloor: 0.6, wetSnowRange: 10 });
+    createSeaIce(mesh, { iceAlbedoPhases: true, iceMeltingSnowFloor: 0.6 });
+    createSeaIce(mesh, { meltingIceAlbedo: 0.5, iceSnowFloor: 0.6, wetSnowRange: 10 });
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /leaves iceSnowFloor, wetSnowRange unread/);
+});
+
 for (const iceAlbedoPhases of [true, false]) {
   test(`with iceAlbedoPhases ${iceAlbedoPhases}, both engines give the ice the same albedo on skins at the melting plateau and below it`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const one = { topography, ice: { iceAlbedoPhases } };
