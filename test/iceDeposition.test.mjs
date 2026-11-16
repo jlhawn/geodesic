@@ -257,6 +257,36 @@ test("placeCloudIce places a saved glaciated fraction of the model's length, and
   assert.equal(plain.moist.cloudIceShare, null);
 });
 
+test("after a plume the post-plume saturation pass caps the stale cloud ice at the cloud the first pass left, then adds the ramp's share of the regrowth under 'ramp' and nothing under 'liquid'", () => {
+  const results = {};
+  for (const detrainedPhase of ['ramp', 'liquid']) {
+    const model = build({ iceDeposition: true, detrainedPhase }), { moist } = model, { K, C, cp, sigmaMid, exnerLayer } = model.core.diagnostics, [pi, theta, , , q, qc] = model.state;
+    pi.fill(1e5);
+    for (let pass = 0; pass < 3; pass++) {
+      model.core.diagnose(pi, theta);
+      for (let k = 0; k < K; k++) { const idx = k * C, p = pi[0] * sigmaMid[k]; theta[idx] = 254.15 / exnerLayer[idx]; q[idx] = 0.3 * saturated(254.15, p); qc[idx] = 0; }
+    }
+    model.core.diagnoseColumn(0, pi, theta, q, qc);
+    const k = layerAt(model, 5e4), idx = k * C, p = pi[0] * sigmaMid[k], ice = moist.cloudIceShare;
+    const vapor = (cloud, held) => {
+      const liquidT = theta[idx] * exnerLayer[idx] - LATENT_HEAT * cloud / cp, out = cloudSaturation(liquidT, p, true, 273.15, 235.15, {}), b = halfWidth(model, liquidT, p);
+      return (held >= b ? held : 2 * Math.sqrt(b * held) - b) * (1 + LATENT_HEAT * out.slope / cp) + out.qs - cloud;
+    };
+    qc[idx] = 1e-4; q[idx] = vapor(1e-4, 5e-5); ice.fill(0); ice[idx] = 1e-4;
+    moist.condenseColumn(0, pi, theta, q, qc);
+    const left = qc[idx];
+    theta[idx] = 254.15 / exnerLayer[idx];
+    q[idx] = vapor(left, left + 3e-5);
+    moist.condenseColumn(0, pi, theta, q, qc, true);
+    results[detrainedPhase] = { left, regrown: qc[idx], ice: ice[idx], alpha: liquidFraction(254.15, 273.15, 235.15) };
+  }
+  const { ramp, liquid } = results;
+  console.log(`the first pass leaves ${ramp.left.toExponential(3)} kg/kg under 1e-4 of ice and the plume's pass regrows it to ${ramp.regrown.toExponential(3)}: ice ${ramp.ice.toExponential(4)} under 'ramp', ${liquid.ice.toExponential(4)} under 'liquid'`);
+  assert.ok(ramp.left < 1e-4 && ramp.regrown > ramp.left, 'the first pass takes cloud below the stored ice and the plume regrows it');
+  assert.ok(Math.abs(ramp.ice - (ramp.left + (1 - ramp.alpha) * (ramp.regrown - ramp.left))) < 1e-12 * ramp.ice, `ramp ${ramp.ice}`);
+  assert.ok(Math.abs(liquid.ice - liquid.left) < 1e-12 * liquid.left, `liquid ${liquid.ice} against ${liquid.left}`);
+});
+
 test('trace.ice tallies, in kg/m² a layer, the deposition and the ice the caps remove at each visit and at the store, and changes no step', () => {
   const plain = build({ iceDeposition: true }), traced = build({ iceDeposition: true }), C = plain.mesh.nCells, K = plain.core.K;
   for (const model of [plain, traced]) { randomState(model); placeCloudIce(model, null); }
@@ -266,7 +296,22 @@ test('trace.ice tallies, in kg/m² a layer, the deposition and the ice the caps 
   assert.deepEqual(traced.moist.cloudIceShare, plain.moist.cloudIceShare);
   const t = traced.moist.trace.ice, sum = (a) => a.reduce((s, v) => s + v, 0);
   console.log(`deposited ${sum(t.deposited).toExponential(2)} kg/m², capped ${sum(t.visitCap).toExponential(2)} at the visits and ${sum(t.storeCap).toExponential(2)} at the store, summed over the layers of ${C} columns`);
-  assert.ok(sum(t.deposited) > 0 && t.deposited.every((v) => v >= 0) && [t.visitCap, t.storeCap].every((a) => a.every(Number.isFinite)));
+  assert.ok(sum(t.deposited) > 0 && t.deposited.every((v) => v >= 0) && [t.visitCap, t.storeCap].every((a) => a.every((v) => v >= 0)));
+  assert.ok(sum(t.visitCap) + sum(t.storeCap) > 0, 'the caps removed some ice');
+});
+
+test('trace.ice tallies the ice a visit caps at the cloud, in kg/m², by its hand value', () => {
+  const model = build({ iceDeposition: true }), { C, dSigma, g } = model.core.diagnostics, k = layerAt(model, 4e4);
+  const s = column(model, (j, T, p) => (j === k ? 1 : 0.3) * saturated(T, p));
+  s.qc[k * C] = 1e-4;
+  model.core.diagnoseColumn(0, s.pi, s.theta, s.q, s.qc);
+  model.moist.cloudIceShare.fill(0);
+  model.moist.cloudIceShare[k * C] = 1.6e-4;
+  model.moist.trace.ice = { deposited: new Float64Array(model.core.K * C), visitCap: new Float64Array(model.core.K * C), storeCap: new Float64Array(model.core.K * C) };
+  model.moist.autoconvertColumn(0, s.pi, s.theta, s.q, s.qc, 600);
+  const mass = s.pi[0] * dSigma[k] / g, expected = (1.6e-4 - 1e-4) * mass, t = model.moist.trace.ice;
+  assert.ok(Math.abs(t.visitCap[k * C] - expected) < 1e-12 * expected, `${t.visitCap[k * C]} kg/m² against ${expected}`);
+  for (let x = 0; x < t.visitCap.length; x++) if (x !== k * C) assert.equal(t.visitCap[x], 0, `layer ${Math.floor(x / C)}`);
 });
 
 test('every script that restores subcloudVirtual places the glaciated fraction, and every encodeState that writes subcloudVirtual writes it', () => {
@@ -288,8 +333,8 @@ test('every script that restores subcloudVirtual places the glaciated fraction, 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 
-test('with iceDeposition off the GPU kernels and the PH layout are those of the default; on, only the three adjust kernels change and CICE sits before T2M, which stays last', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { createGpuCore } = await import('../js/gpu/core.gpu.js'), { mesh } = createModel(new Grid(16), { ocean: false, levels: bl48 });
+test('with iceDeposition off the GPU kernels and the PH layout are those of the default; on, only the three adjust kernels change, CICE sits immediately before T2M, and every field from T2M on moves by K × C', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js'), { mesh, core } = createModel(new Grid(16), { ocean: false, levels: bl48 });
   const plain = await createGpuCore(mesh, { levels: bl48, physics: {} }), off = await createGpuCore(mesh, { levels: bl48, physics: { iceDeposition: false } }), on = await createGpuCore(mesh, { levels: bl48, physics: { iceDeposition: true } });
   assert.deepEqual(off.kernelBodies, plain.kernelBodies);
   assert.deepEqual(off.layout.PH, plain.layout.PH);
@@ -298,9 +343,13 @@ test('with iceDeposition off the GPU kernels and the PH layout are those of the 
   const changed = Object.keys(on.kernelBodies).filter((name) => on.kernelBodies[name] !== off.kernelBodies[name]);
   assert.deepEqual(changed.sort(), [...ADJUST_KERNELS].sort());
   const names = Object.keys(on.layout.PH).filter((name) => name !== 'total'), order = names.sort((a, b) => on.layout.PH[a] - on.layout.PH[b]);
-  assert.equal(order.at(-1), 'T2M');
-  assert.equal(order.at(-2), 'CICE');
-  for (const name of order.slice(0, -2)) assert.equal(on.layout.PH[name], off.layout.PH[name], name);
+  const at = order.indexOf('CICE'), length = core.diagnostics.K * mesh.nCells;
+  assert.ok(at > 0);
+  assert.equal(order[at + 1], 'T2M');
+  assert.equal(on.layout.PH.T2M - on.layout.PH.CICE, length);
+  for (const name of order.slice(0, at)) assert.equal(on.layout.PH[name], off.layout.PH[name], name);
+  for (const name of [...order.slice(at + 1), 'total']) assert.equal(on.layout.PH[name], off.layout.PH[name] + length, name);
+  assert.equal(off.layout.PH.CICE, undefined);
 });
 
 async function gpuParity(moist, { levels = bl34, dt = 1350, convective = false, reference = false, against = null } = {}) {
