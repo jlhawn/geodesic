@@ -314,22 +314,25 @@ test('trace.ice tallies the ice a visit caps at the cloud, in kg/m², by its han
   for (let x = 0; x < t.visitCap.length; x++) if (x !== k * C) assert.equal(t.visitCap[x], 0, `layer ${Math.floor(x / C)}`);
 });
 
-test('trace.ice tallies the ice the store caps at the cloud, in kg/m², by its hand value, and stores the share 1 there', () => {
-  const model = build({ iceDeposition: true }), { C, K, dSigma, g, exnerLayer } = model.core.diagnostics, k = layerAt(model, 4e4);
+test('trace.ice tallies the ice the store caps at the cloud, in kg/m², by its hand value inside the mixed-phase range only, and stores the shares 1, 1 and 0 in the layers colder, inside and warmer than it', () => {
+  const model = build({ iceDeposition: true }), { C, K, dSigma, g, exnerLayer } = model.core.diagnostics, k = layerAt(model, 4e4), cold = layerAt(model, 1e4), warm = layerAt(model, 9e4);
   const s = column(model, (j, T, p) => 0.3 * saturated(T, p));
-  s.qc[k * C] = 1e-4;
+  for (const at of [k, cold, warm]) s.qc[at * C] = 1e-4;
   model.core.diagnoseColumn(0, s.pi, s.theta, s.q, s.qc);
-  const T = s.theta[k * C] * exnerLayer[k * C];
-  assert.ok(T > 235.15 && T < 273.15, `the layer at ${T} K is inside the mixed-phase range`);
+  const T = (at) => s.theta[at * C] * exnerLayer[at * C];
+  assert.ok(T(k) > 235.15 && T(k) < 273.15, `the layer at ${T(k)} K is inside the mixed-phase range`);
+  assert.ok(T(cold) < 235.15 && T(warm) > 273.15, `the other two layers are at ${T(cold)} and ${T(warm)} K`);
   const ice = model.moist.cloudIceShare;
   ice.fill(0);
-  ice[k * C] = 1.6e-4;
+  for (const at of [k, cold, warm]) ice[at * C] = 1.6e-4;
   model.moist.trace.ice = { deposited: new Float64Array(K * C), visitCap: new Float64Array(K * C), storeCap: new Float64Array(K * C) };
   model.moist.storeIce(0, s.pi, s.theta, s.qc);
   const expected = (1.6e-4 - 1e-4) * (s.pi[0] * dSigma[k] / g), t = model.moist.trace.ice;
   assert.ok(Math.abs(t.storeCap[k * C] - expected) < 1e-12 * expected, `${t.storeCap[k * C]} kg/m² against ${expected}`);
   for (let x = 0; x < K * C; x++) if (x !== k * C) assert.equal(t.storeCap[x], 0, `layer ${Math.floor(x / C)} of column ${x % C}`);
   assert.equal(ice[k * C], 1);
+  assert.equal(ice[cold * C], 1);
+  assert.equal(ice[warm * C], 0);
   assert.deepEqual(t.visitCap, new Float64Array(K * C));
 });
 
@@ -339,6 +342,7 @@ test('every script that restores subcloudVirtual places the glaciated fraction, 
   for (const file of files) {
     const text = readFileSync(file, 'utf8'), name = file.slice(root.length);
     if ((/subcloudVirtual\.set\(/.test(text) || text.includes("['subcloudVirtual'")) && !text.includes('placeCloudIce(')) missing.push(`${name} restores subcloudVirtual without placeCloudIce`);
+    if (text.includes('placeCumulus(') && !text.includes('placeCloudIce(')) missing.push(`${name} places the cumulus without placeCloudIce`);
     for (let at = text.indexOf('encodeState('); at >= 0; at = text.indexOf('encodeState(', at + 1)) {
       let depth = 0, end = at + 'encodeState'.length;
       for (; end < text.length; end++) { if (text[end] === '(') depth++; else if (text[end] === ')' && --depth === 0) break; }
