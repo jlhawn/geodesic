@@ -267,6 +267,35 @@ test('a turbulent save loaded into an instant ocean and then re-initialized leav
   assert.ok(iced > 0 && worst === 0, `the first read differs by ${worst} K`);
 });
 
+test('a turbulent save loaded into an instant ocean and then an instant save with layers loaded over it leaves no held heat for the first read', () => {
+  const opts = { thickness: 0.2, cover: 0.85, water: FREEZING_POINT + 1.5 }, run = rig('turbulent', opts);
+  run.seed(0.5);
+  for (let n = 0; n < 4; n++) run.cycle();
+  const turbulentSave = run.ocean.serialize({ restart: true }), source = rig('instant', opts), warn = console.warn;
+  source.ice.set(run.ice); source.surfaceT.set(run.surfaceT); source.seaIce.concentration.set(run.seaIce.concentration);
+  for (let n = 0; n < 2; n++) source.cycle();
+  const instantSave = source.ocean.serialize({ restart: true });
+  assert.ok(instantSave.h && !('iceWater' in instantSave), 'the instant save has layers and no iceWater');
+  const read = (booking) => {
+    const r = rig('instant', opts);
+    r.ice.set(source.ice); r.surfaceT.set(source.surfaceT); r.seaIce.concentration.set(source.seaIce.concentration);
+    console.warn = () => {};
+    try {
+      if (booking) r.ocean.load(turbulentSave, r.surfaceT, r.ice, r.seaIce.concentration);
+      r.ocean.load(instantSave, r.surfaceT, r.ice, r.seaIce.concentration);
+    } finally { console.warn = warn; }
+    r.ocean.readSurface(r.surfaceT, r.ice, r.seaIce.concentration);
+    return r;
+  };
+  const booked = read(true), plain = read(false);
+  const iced = [...Array(booked.C).keys()].filter((i) => booked.ice[i] > 0 && booked.ocean.cellOcean[i]).length;
+  const differing = (a, b) => a.reduce((n, x, j) => n + (x === b[j] ? 0 : 1), 0);
+  const apart = { T0: differing(booked.ocean.T0, plain.ocean.T0), Q: differing(booked.ocean.Q, plain.ocean.Q) };
+  console.log(`a second load after a booking load, ${iced} iced ocean cells: the first read's T0 and the layers' Q differ from a plain load in ${JSON.stringify(apart)} entries`);
+  assert.ok(iced > 0, 'the instant save holds iced ocean cells');
+  assert.deepEqual(apart, { T0: 0, Q: 0 }, 'T0 and every layer\'s Q equal those of the same load without the booking');
+});
+
 test('a turbulent save loaded into an instant ocean keeps its heat when the booked cells are open water or drift-arrived at the first read: ocean plus ice close on the held heat through the first full ocean interval', () => {
   for (const drift of [false, true]) for (const restart of [true, false]) {
     const pre = 7, opts = { thickness: 0.2, cover: 0.85, water: FREEZING_POINT + 1.5, ...(drift ? { iceDrift: COUPLED_ICE_DRIFT, keepSmallIce: true } : {}) };

@@ -18,7 +18,7 @@ test('the published pins differ from the model defaults', () => {
   assert.notEqual(DEFAULT_ICE_ALBEDO_PHASES, false);
 });
 
-test('the explainer builds the objects it exposes as its shipped data and figures were made: the exchange instant, the albedo phases off', () => {
+test('the objects the explainer exposes, the seas of its one-cell sea-ice columns and the oceans of its ocean cases, are built as its shipped data and figures were made: the exchange instant, the albedo phases off', () => {
   assert.deepEqual(createOcean(buildMesh(new Grid(16)), PUBLISHED_OCEAN).iceExchange, instant);
   const model = createModel(new Grid(16), { ocean: false, ice: PUBLISHED_ICE });
   assert.deepEqual([model.seaIce.iceExchange, model.seaIce.iceAlbedoPhases], [instant, false]);
@@ -34,7 +34,7 @@ test('the explainer builds the objects it exposes as its shipped data and figure
   for (const [name, sim] of sims) assert.deepEqual([name, sim.ocean.iceExchange], [name, instant]);
 });
 
-test('the builders that run below N = 16, or that cannot be imported without running, take the pins in their source', () => {
+test('the builders whose objects the test cannot reach take the pins in their source: those on Grid(2), seaClasses, which keeps the ocean it builds at N = 16, and the scripts, which run when imported; so do seaIceColumn\'s two sea ices and the ocean cases\' shared start, and explainSurfaceBudget takes its saved state\'s ice options', () => {
   for (const [path, pattern, count] of [
     ['explain/oceanColumn.module.js', /createOcean\(m, \{ \.\.\.PUBLISHED_OCEAN, /, 1],
     ['explain/oceanCases.module.js', /const START = \{ \.\.\.PUBLISHED_OCEAN, /, 1],
@@ -47,10 +47,11 @@ test('the builders that run below N = 16, or that cannot be imported without run
     ['scripts/explainOcean.mjs', /const DARK_ICE = \{[^}]*iceAlbedoPhases: false \}/, 1],
     ['scripts/explainOcean.mjs', /\{ \.\.\.GIVEN_ICE, iceAlbedoPhases: resumed \? savedIceAlbedoPhases\(\{ options: base \}\) : PUBLISHED_ICE\.iceAlbedoPhases \}/, 1],
     ['scripts/explainOcean.mjs', /const OCEAN = \{ iceExchange: madeUnder, \.\.\.base\.ocean, /, 1],
+    ['scripts/explainSurfaceBudget.mjs', /createModel\([^;]*\{ [^;]*ice: savedIceOptions\(saved\), /, 1],
   ]) assert.equal(source(path).match(new RegExp(pattern.source, pattern.flags.replace('g', '') + 'g'))?.length ?? 0, count, `${path} ${pattern}`);
 });
 
-test('every call that builds a sea ice, ocean or model in the explainer is one the pins above cover', () => {
+test('every call that builds a sea ice, ocean or model in the explainer is one the checks above cover, by file and count', () => {
   const listed = {
     'explain/oceanCases.module.js': 3,
     'explain/oceanColumn.module.js': 1,

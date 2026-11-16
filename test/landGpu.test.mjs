@@ -58,17 +58,19 @@ function prepare(model, fog = false) {
  * after the first step and every carried array rounded to f32 each step,
  * and 10 with every carried array nudged by up to 4 f32 ulps each step.
  * LAND_S9 comes from twins at the instant exchange without albedo phases and
- * LAND_S9_DEFAULT_ICE from twins at the defaults, so each case is judged
+ * LAND_S9_DEFAULT_ICE from twins at the turbulent exchange, frictionMinimum
+ * 2e-2, with the albedo phases on (LAND_S9_DEFAULT_ICE_BUILT, which the
+ * default-ice cases require the defaults to equal), so each case is judged
  * against twins of its own configuration. The groups are Ts over land and
  * over the sea, and soil water, snow and the surface layer over land; at the
  * defaults also the snow of the sea cells that hold ice in both engines,
- * where the sea ice keeps its snow in the land's array. Sea cells that hold
- * no ice, and at the instant exchange every sea cell, hold exactly 0 soil
- * water, snow and surface layer in the CPU and in every twin, and must in
- * the GPU; a sea cell that holds ice in one engine only is left out of the
- * snow check. One tier of each table sits above twice the twins: the held
- * surface layer's northern trimmed signed mean, at 2.3 in LAND_S9 and 2.6
- * in LAND_S9_DEFAULT_ICE.
+ * where the sea ice keeps its snow in the land's array. Every sea cell holds
+ * exactly 0 soil water and surface layer, and at the instant exchange 0 snow,
+ * in the CPU and in every twin, and must in the GPU; at the defaults a sea
+ * cell's snow must be 0 only where it holds ice in neither engine, and a cell
+ * iced in one engine only is in neither snow check. One tier of each table
+ * sits above twice the twins: the held surface layer's northern trimmed
+ * signed mean, at 2.3 in LAND_S9 and 2.6 in LAND_S9_DEFAULT_ICE.
  */
 const LAND_S9 = {
   default: {
@@ -105,6 +107,7 @@ const LAND_S9_DEFAULT_ICE = {
     seaSnow: {largest: 1.48e-5, counts: [[7.37e-6, 4], [3.68e-6, 6], [1.84e-6, 6], [9.21e-7, 8], [4.6e-7, 8], [2.3e-7, 10], [1.15e-7, 10], [5.76e-8, 10], [2.88e-8, 10]], hemisphere: {north: 2.82e-7}, bulk: {north: {trimmed: 5.66e-10, signed: 5.66e-10}}},
   },
 };
+const LAND_S9_DEFAULT_ICE_BUILT = { iceExchange: { mode: 'turbulent', frictionMinimum: 2e-2 }, iceAlbedoPhases: true };
 
 const ICE_CASES = [
   { label: ' at the instant exchange without albedo phases', options: { ocean: { iceExchange: 'instant' }, ice: PREVIOUS_ICE }, tiers: LAND_S9, defaults: false },
@@ -112,6 +115,7 @@ const ICE_CASES = [
 ];
 
 for (const ice of ICE_CASES) for (const held of [true, false]) test(`eight GPU steps over a continent${ice.label}${held ? ', with the boundary layer diagnosed after the deposit,' : ' at the default order'} track the CPU model within the spread of its f32 twins under S9: the surface temperature over land and sea, soil water, snow and surface layer by their largest gap, a ladder of counts, and full and trimmed means per hemisphere, the vegetation and the coast-bound ocean`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  if (ice.defaults) assert.deepEqual({ iceExchange: DEFAULT_ICE_EXCHANGE, iceAlbedoPhases: DEFAULT_ICE_ALBEDO_PHASES }, LAND_S9_DEFAULT_ICE_BUILT, 'the defaults are the configuration LAND_S9_DEFAULT_ICE was built at; new defaults need its tiers rebuilt from twins at them');
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
   const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, ...ice.options, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
   const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, ...ice.options, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
