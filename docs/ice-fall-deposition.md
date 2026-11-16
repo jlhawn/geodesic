@@ -142,6 +142,7 @@ What I expect under the option:
   - the option-off kernel text and layout;
   - the source lint over restorers and writers;
   - GPU parity at N=16 on bl34 and bl48, at two time steps, with `detrainedPhase` 'ramp' and 'liquid' and with `bergeronAutoconversion`;
+  - a CPU row for the post-plume cap under 'ramp' and 'liquid', and a GPU row with every mixed-phase cloud fully glaciated at the start. Neither GPU row separates the kernel with the cap from the one without it, because the random states never regrow cloud under stale ice in a plume column; the GPU side of the cap is checked by the WGSL following the CPU line.
   - the refusal of other rain-evaporation laws and of a ceiling, on each engine;
   - a GPU core's refusal of a glaciated fraction whose length is not K × C.
 - `test/gpuReload.test.mjs`: under the option a load restores every device buffer word for word.
