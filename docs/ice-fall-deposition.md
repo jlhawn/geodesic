@@ -89,7 +89,7 @@ There is no Bergeron factor under the option:
 - Cy41r2's large-scale liquid autoconversion has none (7.49–7.52); the factor survives only in its convection (6.36–6.38, where 6.38 defines it). Its default autoconversion is Khairoutdinov–Kogan; the model's Kessler stands in for the Sundqvist form.
 - Deposition is the Bergeron–Findeisen process here, so keeping `bergeronAutoconversion` would count it twice at 235–255 K.
 - `bergeronAutoconversion` therefore has no effect anywhere under the option, on both engines: the CPU gates it on `bergeronAutoconversion && !iceDeposition`, and the GPU kernel leaves out its patch.
-- From 258 to 263 K the factor (2.6 to 2.1) converts faster than deposition glaciates (23–28 min against 37–68 min), so the liquid there lives 2.1–2.6× longer than in the default. At 268 K the factor is 1.2: conversion takes 50 min with it and 60 without, against 171 for glaciation, and the liquid lives 1.2× longer. That is intended: it is the Arctic gain, and also the SWCRE risk.
+- From 258 to 263 K the factor (2.6 to 2.1) converts faster than deposition glaciates (23–28 min against 37–68 min), so the liquid there lives 2.1–2.6× longer than in the default. At 268 K the factor is 1.2: conversion takes 50 min with it and 60 without, against 171 for glaciation, and the liquid lives 1.2× longer. The "2.1–2.6× longer" compares conversion times only, so where deposition also takes up the liquid (F_dep near 1) it is an upper bound. Over sea ice, `longCloudShare` stretches the lifetime toward 3 h with the ice cover: at 268 K over full ice, conversion takes 150 min with the factor and 180 without, against 171 for glaciation. At cloud tops F_dep is 0.36, 0.23 and 0.16, and deposition takes 102, 302 and 1045 min at 258, 263 and 268 K. That is intended: it is the Arctic gain, and also the SWCRE risk.
 - The model has no riming sink (IFS eq 7.56, S_rime in eqs 7.7 and 7.10). If the liquid overshoots, at 250–450 hPa or in the Arctic SWCRE, riming is the next lever, not the factor.
 
 coldfall64 (`iceFallColdOnly`) converted its held cloud with the factor: 1 + 0.5 √18 = 3.1 at and below 250 K, its cap, so the whole cloud decayed in about a third of the lifetime. That this caused its LWCRE loss is a lead, which the attribution arms bfoff64 and coldbf64 test.
@@ -211,6 +211,8 @@ The rows these are scored on, added on Nov 15 before the run. Δ is arm B minus 
 | Inert | | | | \|ΔSWCRE\| < 0.3 and \|ΔLWCRE\| < 0.1 W/m² globally: the coupling did nothing, and the pair says nothing about it |
 
 Amendment, Nov 15, written at 06:42 (dacee882) and restated in c21f2603 at 07:28, before the run, not a measurement. It comes from a CPU probe of dep64's configuration, not arm B's, started from ctl64's day-30 save. Its days 1–6 therefore fall in the Apr 19–May 19 window that the Arctic row scores. Its 60–90N φ at 253–263 K went 0.696, 0.606, 0.518, 0.511, 0.477 and 0.420 over days 1–6, against a ramp of 0.38, and was still falling. From that gap I would put the Arctic row at +1 to +4 W/m², but that conversion is a judgment, and a gap that keeps closing would lower it further. The registered +2 to +6 stays the prediction to score.
+
+[Clerical, Nov 15: this window is model days 32–61, Apr 21–May 20, as in the table.]
 
 The 06:42 revision (dacee882) set the Arctic row at +1 to +4 W/m²; the 07:28 table scores the registered +2 to +6 on purpose, because the falsifier (Δ ≤ 0) is the same in both. The outcome will be reported against both ranges. The day-6 φ of 0.420 is newer than the 06:42 revision.
 
