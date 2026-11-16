@@ -1111,7 +1111,8 @@ default `iceExchange`, `{ mode: 'turbulent', frictionMinimum: 2e-2 }`
 lets the water under the ice keep its heat above the freezing point, and
 the ice draws it through its base at McPhee's rate ρ c_p c_h u*, u* at
 least `frictionMinimum`, and through its sides. On the slab the sea ice
-has no ocean to hold that heat and makes the hand-off in either mode.
+has no ocean to hold that heat, and it makes the hand-off in either mode
+unless its `oceanCells` marks a cell as having water under it.
 Without `iceAlbedoPhases`, bare ice reflects 0.62 (`iceAlbedo`) while its skin is colder than
 −1 °C, falling linearly to 0.48 (`meltingIceAlbedo`) at the melting
 point, and ice thinner than 0.5 m blends toward the water's albedo

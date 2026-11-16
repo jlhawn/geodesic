@@ -277,21 +277,23 @@ test('a turbulent save loaded into an instant ocean and then an instant save wit
   const instantSave = source.ocean.serialize({ restart: true });
   assert.ok(instantSave.h && !('iceWater' in instantSave), 'the instant save has layers and no iceWater');
   const read = (booking) => {
-    const r = rig('instant', opts);
+    const r = rig('instant', opts), notes = [];
     r.ice.set(source.ice); r.surfaceT.set(source.surfaceT); r.seaIce.concentration.set(source.seaIce.concentration);
-    console.warn = () => {};
+    console.warn = (note) => notes.push(String(note));
     try {
       if (booking) r.ocean.load(turbulentSave, r.surfaceT, r.ice, r.seaIce.concentration);
       r.ocean.load(instantSave, r.surfaceT, r.ice, r.seaIce.concentration);
     } finally { console.warn = warn; }
     r.ocean.readSurface(r.surfaceT, r.ice, r.seaIce.concentration);
-    return r;
+    const counts = notes.map((note) => note.match(/booked the saved ocean\.iceWater, the heat the water holds above freezing under (\d+) iced cells/)).filter(Boolean).map((match) => Number(match[1]));
+    return { r, counts };
   };
-  const booked = read(true), plain = read(false);
+  const { r: booked, counts } = read(true), { r: plain, counts: none } = read(false);
   const iced = [...Array(booked.C).keys()].filter((i) => booked.ice[i] > 0 && booked.ocean.cellOcean[i]).length;
   const differing = (a, b) => a.reduce((n, x, j) => n + (x === b[j] ? 0 : 1), 0);
   const apart = { T0: differing(booked.ocean.T0, plain.ocean.T0), Q: differing(booked.ocean.Q, plain.ocean.Q) };
-  console.log(`a second load after a booking load, ${iced} iced ocean cells: the first read's T0 and the layers' Q differ from a plain load in ${JSON.stringify(apart)} entries`);
+  console.log(`a second load after a booking load that booked ${JSON.stringify(counts)} cells, ${iced} iced ocean cells: the first read's T0 and the layers' Q differ from a plain load in ${JSON.stringify(apart)} entries`);
+  assert.ok(counts.length === 1 && counts[0] > 0 && none.length === 0, `the booking load booked ${JSON.stringify(counts)} cells, the plain load ${JSON.stringify(none)}`);
   assert.ok(iced > 0, 'the instant save holds iced ocean cells');
   assert.deepEqual(apart, { T0: 0, Q: 0 }, 'T0 and every layer\'s Q equal those of the same load without the booking');
 });
