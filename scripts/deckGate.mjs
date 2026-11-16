@@ -37,7 +37,7 @@ import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.j
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, ringMean } from '../js/physics/radiation.module.js';
-import { LATENT_HEAT, saturationHumidity, placeCumulus } from '../js/physics/moist.module.js';
+import { LATENT_HEAT, saturationHumidity, placeCumulus, placeCloudIce } from '../js/physics/moist.module.js';
 import { inLongitudes } from '../js/audit.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
@@ -61,6 +61,7 @@ for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckFiel
 restoreSurface(model, saved);
 loadSavedLake(model, saved);
 placeCumulus(model, saved);
+placeCloudIce(model, saved);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === moist.subcloudVirtual.length) moist.subcloudVirtual.set(saved.subcloudVirtual);
 model.time = saved.time;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));

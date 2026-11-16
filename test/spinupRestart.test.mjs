@@ -22,6 +22,8 @@ const root = fileURLToPath(new URL('..', import.meta.url)), N = 16;
 const arms = {
   cavity: { ICE_SHELVES: 'cavity', OCEAN: JSON.stringify({ iceDrift: false }) },
   drift: { ICE_SHELVES: 'land', OCEAN: JSON.stringify({ iceDrift: { rheology: 'cavitating', hemisphere: 'both' } }) },
+  deposition: { MOIST: JSON.stringify({ iceDeposition: true }) },
+  memory: { MOIST: JSON.stringify({ iceDeposition: true }), RADIATION: JSON.stringify({ cloudPhase: 'memory' }) },
 };
 
 const decoded = (file) => decodeState(new Uint8Array(readFileSync(file)));
@@ -42,7 +44,7 @@ function apart(whole, split, except = [], gapDays = []) {
 }
 
 for (const [arm, env] of Object.entries(arms)) {
-  test(`at N=${N} spinup.mjs with ${arm === 'cavity' ? 'the ice-shelf cavities' : 'the cavitating ice drift'} run 2 days whole and run 1 day, saved, then resumed for the second, ends on the same state bit for bit`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  test(`at N=${N} spinup.mjs with ${{ cavity: 'the ice-shelf cavities', drift: 'the cavitating ice drift', deposition: 'the deposition-limited ice fall', memory: "the deposition-limited ice fall under cloudPhase 'memory'" }[arm]} run 2 days whole and run 1 day, saved, then resumed for the second, ends on the same state bit for bit`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
     const out = mkdtempSync(join(tmpdir(), `restart-${arm}-`));
     try {
       const run = (extra) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...withoutOptionGroups(), N: String(N), MINUTES: '100', OUT: out, ...env, ...extra }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -51,6 +53,7 @@ for (const [arm, env] of Object.entries(arms)) {
       run({ TAG: 'split', DAYS: '2' });
       const [whole, split] = await Promise.all(['whole', 'split'].map((tag) => decoded(join(out, `${tag}_day0002.bin`))));
       assert.deepEqual([whole.means.days, whole.means.samples, split.means.days, split.means.samples], [2, 128, 1, 64], 'each save\'s means cover its own segment');
+      if (arm === 'deposition' || arm === 'memory') assert.ok(whole.cloudIceShare && split.cloudIceShare && whole.cloudIceShare.some((v) => v > 0 && v < 1), 'both saves hold a glaciated fraction with mixed layers');
       const parted = apart(whole, split);
       assert.deepEqual(parted, [], `day 2, whole against split: ${parted.join(', ')}`);
     } finally {

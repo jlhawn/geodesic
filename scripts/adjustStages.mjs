@@ -17,6 +17,7 @@
 import { readFileSync } from 'node:fs';
 import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { createModel } from '../js/model.module.js';
+import { placeCloudIce } from '../js/physics/moist.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { getDevice } from '../js/gpu/device.module.js';
 import { createGpuCore } from '../js/gpu/core.gpu.js';
@@ -61,12 +62,13 @@ if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchange
 if (saved.mlmGate) radiation.mlmGate.set(saved.mlmGate);
 if (saved.mlmHeight) radiation.mlmHeight.set(saved.mlmHeight);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === moist.subcloudVirtual.length) moist.subcloudVirtual.set(saved.subcloudVirtual);
+placeCloudIce(model, saved);
 for (let i = 0; i < C; i++) core.diagnoseColumn(i, model.state[0], model.state[1], model.state[4], model.state[5]);
 model.phases.physics(0, C, dt, model.totals);
 const single = (a) => { for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]); };
 model.state.forEach(single);
 [bl.cloudLayer, bl.mixing, bl.mixingTop, bl.depth, bl.regime, bl.buoyancyFlux, bl.friction, radiation.stratiform, radiation.mlmGate, radiation.sensibleHeat, radiation.evaporation, moist.subcloudVirtual, model.seaIce.concentration].forEach(single);
-const start = model.state.map((a) => Float64Array.from(a)), startSub = Float64Array.from(moist.subcloudVirtual), startGeo = Float64Array.from(geopotential);
+const start = model.state.map((a) => Float64Array.from(a)), startSub = Float64Array.from(moist.subcloudVirtual), startIce = moist.cloudIceShare ? Float64Array.from(moist.cloudIceShare) : null, startGeo = Float64Array.from(geopotential);
 const lift = (i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0);
 const ground = (a) => Float64Array.from(a, (v, i) => v - lift(i));
 const mixed = (k, i) => startGeo[k * C + i] / g < bl.mixingTop[i];
@@ -88,7 +90,7 @@ async function gpuCore() {
 
 const names = ['after the mixing', 'after the condensation', 'after the plumes', 'after the whole adjust step'];
 for (stage = 0; stage < 4; stage++) {
-  model.state.forEach((a, n) => a.set(start[n])); moist.subcloudVirtual.set(startSub);
+  model.state.forEach((a, n) => a.set(start[n])); moist.subcloudVirtual.set(startSub); if (startIce) moist.cloudIceShare.set(startIce);
   const [pi, theta, u, , q, qc] = model.state;
   if (stage === 3) model.phases.adjust(0, C, dt);
   else {

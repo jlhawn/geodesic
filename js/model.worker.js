@@ -5,7 +5,7 @@ import { createGpuModel } from './gpu/model.gpu.js';
 import { withCadence } from './cadence.module.js';
 import { initializeState } from './physics/init.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, regridIceField, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
-import { CUMULUS_FIELDS, placeCumulus } from './physics/moist.module.js';
+import { CUMULUS_FIELDS, placeCumulus, placeCloudIce } from './physics/moist.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, terrainKey, terrainOptions, decodeSubgrid, subgridUrl, maskUrl, missingMask, decodeMask, decodeLandIce, landIceUrl, decodeLandCover, landCoverUrl, decodeSoilWater, soilWaterUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
@@ -289,6 +289,7 @@ function placeDeck(model, saved, N) {
   for (const name of Object.keys(MOIST_FIELDS)) model.moist[name].set(savedMoistField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   for (const name of Object.keys(RADIATION_FIELDS)) model.radiation[name].set(savedRadiationField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   placeCumulus(model, saved && saved.N === N ? saved : null);
+  placeCloudIce(model, saved && saved.N === N ? saved : null);
   if (model.skin) model.skin.load(saved && saved.N === N ? saved : null);
   placeCarried(model, saved && saved.N === N ? saved : null);
   if (model.seaFlow) { const flow = saved && saved.N === N ? saved.seaFlow : null; if (flow && flow.length === model.seaFlow.length) model.seaFlow.set(flow); else model.seaFlow.fill(0); }
@@ -312,6 +313,7 @@ function savedCumulus(model) {
     const values = model.moist[name];
     if (values) out[name] = Float64Array.from(values.length === K * C ? values.subarray(K0 * C) : values).buffer;
   }
+  if (model.moist.cloudIceShare) out.cloudIceShare = Float64Array.from(model.moist.cloudIceShare).buffer;
   return out;
 }
 

@@ -4,7 +4,7 @@ import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders }
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DEFAULT_SHORTWAVE, DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, TRACE_CHAIN_FLOOR, REFERENCE_PRESSURE, REFERENCE_RESISTANCE, lognormalNodes } from '../physics/radiation.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, MID_LEVEL, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, DEPARTURE, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, DEPOSITION, BECHTOLD, SOURCE_EXCESS, KESSLER_EVAPORATION, MID_LEVEL, RAIN_COVER_FLOOR, fogConstants, rainCeilingHumidity } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS, DIAGNOSE_FIRST } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, longwaveCores, LONGWAVE_CORES, CORE_EDGES, CORE_FACTOR_POINTS, coreFactors } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -230,6 +230,9 @@ ${nir ? nir.functions : `fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>,
 ${NIR_SHIELDED_STUB}`}`;
 
 export function physicsConstants(o) {
+  if (o.cloudPhase !== undefined && o.cloudPhase !== 'ramp' && o.cloudPhase !== 'memory') throw new Error(`cloudPhase must be 'ramp' or 'memory', not ${o.cloudPhase}`);
+  if (o.cloudPhase === 'memory' && (o.cloudScattering != null || o.cloudAbsorption != null)) throw new Error("cloudPhase 'memory' needs the optics of cloudOptics, not a gray cloudScattering or cloudAbsorption");
+  if (o.cloudPhase === 'memory' && !o.iceDeposition) throw new Error("cloudPhase 'memory' needs iceDeposition: the memory is the share of each layer's cloud that is ice");
   if (o.plumeEntrainmentLaw !== 'ifs' && o.plumeEntrainmentLaw !== 'gregory') throw new Error(`plumeEntrainmentLaw must be 'ifs' or 'gregory', not ${o.plumeEntrainmentLaw}`);
   if (o.plumeConversion !== 'sundqvist' && o.plumeConversion !== 'zhangMcFarlane') throw new Error(`plumeConversion must be 'sundqvist' or 'zhangMcFarlane', not ${o.plumeConversion}`);
   if (o.plumePhase !== 'mixed' && o.plumePhase !== 'liquid') throw new Error(`plumePhase must be 'mixed' or 'liquid', not ${o.plumePhase}`);
@@ -426,7 +429,15 @@ const HELD_SHARE: f32 = ${startPlaceholders(o).neutral.share}; const HELD_NEUTRA
 ${exchangeConstants(o)}${o.soilColumn ? `\n${soilConstants(o.soilColumn)}` : ''}${mac ? aerosolConstants(o) : ''}${o.deepCapacity > 0 ? `\nconst DEEPCAP: f32 = ${o.deepCapacity};` : ''}`;
 }
 
-export const physicsFunctions = (o) => (o.aerosol === 'mac' ? aerosolLight(PHYSICS_FUNCTIONS) : PHYSICS_FUNCTIONS);
+const MEMORY_OPTICS = [`fn cloudOptics(T: f32, continental: bool) -> vec2<f32> {
+  let liquid = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+`, `fn cloudOptics(T: f32, continental: bool) -> vec2<f32> { return cloudOpticsAt(T, continental, clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)); }
+fn cloudOpticsAt(T: f32, continental: bool, liquid: f32) -> vec2<f32> {
+`];
+export const physicsFunctions = (o) => {
+  const text = o.aerosol === 'mac' ? aerosolLight(PHYSICS_FUNCTIONS) : PHYSICS_FUNCTIONS;
+  return o.cloudPhase === 'memory' ? patchOnce(text, MEMORY_OPTICS, 'physics functions') : text;
+};
 export const PHYSICS_FUNCTIONS = `
 fn esat(T: f32) -> f32 { return 611.2 * exp(17.67 * (T - 273.15) / (T - 29.65)); }
 fn qsat(T: f32, p: f32) -> f32 { let es = esat(T); let dry = p - (1.0 - EPSILON) * es; return select(1.0, EPSILON * es / dry, dry > 0.0); }
@@ -2899,6 +2910,123 @@ export function boundaryLayerDiagnosis(body, { diagnoseFirst = DIAGNOSE_FIRST, s
 }
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
+const CLOUD_ICE_RAIN = [
+  ['var fogged = 0.0;', 'var fogged = 0.0; var depCoverAbove = 0.0; var dzTop = 0.0;'],
+  [`    let idx = k * C + i;
+    let mass = pi * LV[L_DS + k] / GRAV;
+`, `    let idx = k * C + i;
+    let mass = pi * LV[L_DS + k] / GRAV;
+    let depT = IN[S_TH + idx] * D[D_EXM + idx]; let depP = pi * LV[L_SM + k];
+    var depCover = 0.0;
+    if (IN[S_QC + idx] > 0.0) { depCover = uniformCover(IN[S_QC + idx], uniformWidth(cloudSat(depT, depP), depP, pi)); }
+    if (depCoverAbove < DEP_TOP_COVER && depCover >= DEP_TOP_COVER) { dzTop = 0.0; } else { dzTop += RGAS * depT * LV[L_DS + k] / (GRAV * LV[L_SM + k]); }
+    depCoverAbove = depCover;
+`],
+  [`        let melted = descending * clamp((IN[S_TH + idx] * D[D_EXM + idx] - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+        IN[S_QC + idx] += (descending - melted) / mass;
+        rained += melted;
+`, `        let melted = select(0.0, descending, IN[S_TH + idx] * D[D_EXM + idx] >= LIQUID_T);
+        IN[S_QC + idx] += (descending - melted) / mass;
+        PH[PH_CICE + idx] += (descending - melted) / mass;
+        rained += melted;
+`],
+  [`      liquid = IN[S_QC + idx];
+      if (liquid > 0.0) {
+        let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
+        let share = clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+        let iceWater = (1.0 - share) * liquid;
+        let total = liquid;
+        liquid = share * total;
+        if (iceWater > 0.0) {
+          let cover = max(CLEAR_AIR, uniformCover(total, uniformWidth(cloudSat(temperature, pressure), pressure, pi)));
+          let speed = FALL_C * pow(pressure / (RGAS * temperature) * iceWater / cover, FALL_EXP);
+          let courant = speed * dt * LV[L_SM + k] * GRAV / (RGAS * temperature * LV[L_DS + k]);
+          let leaving = iceWater * courant / (1.0 + courant);
+          IN[S_QC + idx] = total - leaving;
+          descending = leaving * mass;
+          moved = true;
+        }
+      }
+    }
+`, `      liquid = IN[S_QC + idx];
+      if (liquid > 0.0) {
+        let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
+        let share = clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+        let total = liquid;
+        let cover = max(CLEAR_AIR, uniformCover(total, uniformWidth(cloudSat(temperature, pressure), pressure, pi)));
+        var iceWater = 0.0;
+        if (share <= 0.0) { iceWater = total; } else if (share < 1.0) { iceWater = min(max(0.0, PH[PH_CICE + idx]), total); }
+        if (share > 0.0 && share < 1.0 && total > iceWater) { iceWater += deposition(temperature, pressure, iceWater, total - iceWater, cover, dt, dzTop); }
+        if (iceWater > 0.0) {
+          let speed = FALL_C * pow(pressure / (RGAS * temperature) * iceWater / cover, FALL_EXP);
+          let courant = speed * dt * LV[L_SM + k] * GRAV / (RGAS * temperature * LV[L_DS + k]);
+          let leaving = iceWater * courant / (1.0 + courant);
+          IN[S_QC + idx] = total - leaving;
+          iceWater -= leaving;
+          descending = leaving * mass;
+          moved = true;
+        }
+        liquid = max(0.0, IN[S_QC + idx] - iceWater);
+        PH[PH_CICE + idx] = iceWater;
+      } else { PH[PH_CICE + idx] = 0.0; }
+    }
+`],
+  [`    if (IN[off + bottom * C + i] < 0.0) { IN[off + bottom * C + i] = 0.0; }
+  }
+`, `    if (IN[off + bottom * C + i] < 0.0) { IN[off + bottom * C + i] = 0.0; }
+  }
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let water = IN[S_QC + idx]; let temperature = IN[S_TH + idx] * D[D_EXM + idx];
+    var glaciated = 0.0;
+    if (water > CLEAR_AIR) { glaciated = select(select(min(1.0, min(max(0.0, PH[PH_CICE + idx]), water) / water), 0.0, temperature >= LIQUID_T), 1.0, temperature <= ICE_T); }
+    PH[PH_CICE + idx] = glaciated;
+  }
+`],
+];
+const CLOUD_ICE_ABOVE = [`      iceAbove = condensate > 0.0 && IN[S_TH + idx] * D[D_EXM + idx] < LIQUID_T;
+`, `      iceAbove = condensate > 0.0 && IN[S_TH + idx] * D[D_EXM + idx] < LIQUID_T && (IN[S_TH + idx] * D[D_EXM + idx] <= ICE_T || PH[PH_CICE + idx] > 0.0);
+`];
+const CLOUD_ICE_MIX = [`  diagnoseColumn(i);
+  saturateColumn(i, pi);
+`, `  diagnoseColumn(i);
+  for (var k = 0; k < K; k++) { let idx = k * C + i; PH[PH_CICE + idx] = PH[PH_CICE + idx] * max(0.0, IN[S_QC + idx]); }
+  saturateColumn(i, pi);
+`];
+const DEPOSITION_WGSL = (d) => `const DEP_NUCLEI: f32 = ${d.nuclei}; const DEP_SEED: f32 = ${d.initialMass}; const DEP_ICE_ROOT: f32 = ${Math.cbrt(d.iceDensity)}; const DEP_KA: f32 = ${d.conductivity}; const DEP_CHI: f32 = ${d.diffusivity};
+const DEP_TOP_RATE: f32 = ${d.topRate}; const DEP_TOP_DEPTH: f32 = ${d.topDepth}; const DEP_TOP_COVER: f32 = ${d.topCover}; const DEP_ACTIVE: f32 = ${d.activeNuclei};
+fn deposition(T: f32, p: f32, ice: f32, liquid: f32, cover: f32, dt: f32, topDistance: f32) -> f32 {
+  let icePressure = 611.21 * exp(22.587 * (T - 273.16) / (T + 0.7));
+  let excess = (esat(T) - icePressure) / icePressure;
+  let nuclei = DEP_NUCLEI * exp(12.96 * excess - 0.639);
+  let density = p / (RGAS * T);
+  let sublimation = LHEAT + LFUSION;
+  let conduction = sublimation / (DEP_KA * T) * (sublimation / (RVAP * T) - 1.0);
+  let diffusion = RVAP * T * p / (DEP_CHI * icePressure);
+  let rate = 7.8 * pow(nuclei / density, 2.0 / 3.0) * excess / (DEP_ICE_ROOT * (conduction + diffusion));
+  let seed = max(ice / cover, DEP_SEED * nuclei / density);
+  let grown = pow(2.0 / 3.0 * rate * dt + pow(seed, 2.0 / 3.0), 1.5);
+  let nucleated = min(nuclei / DEP_ACTIVE, 1.0);
+  return min(nucleated + (1.0 - nucleated) * (DEP_TOP_RATE + topDistance / DEP_TOP_DEPTH), 1.0) * min(max(0.0, cover * (grown - seed)), liquid);
+}
+`;
+function patchOnce(text, [from, to], kernel) {
+  const at = text.indexOf(from);
+  if (at < 0 || text.indexOf(from, at + 1) >= 0) throw new Error(`an iceDeposition anchor is not in the ${kernel} kernel exactly once`);
+  return text.slice(0, at) + to + text.slice(at + from.length);
+}
+export function cloudIceRain(body) {
+  const rained = CLOUD_ICE_RAIN.reduce((text, pair) => patchOnce(text, pair, 'adjustRain'), body);
+  return DEPOSITION_WGSL(DEPOSITION) + (rained.includes('var iceAbove = false;') ? patchOnce(rained, CLOUD_ICE_ABOVE, 'adjustRain') : rained);
+}
+export function cloudIceMix(body) { return patchOnce(body, CLOUD_ICE_MIX, 'adjustMix'); }
+export function cloudIcePlume(body, ramp = true) {
+  const head = 'fn saturateColumn(i: i32, pi: f32) {\n', update = '    IN[S_Q + idx] -= change; IN[S_QC + idx] += change;';
+  const start = body.indexOf(head), close = body.indexOf('\n}\n', start), source = body.slice(start, close + 3);
+  if (start < 0 || close < 0 || body.indexOf(head, start + 1) >= 0 || source.split(update).length !== 2) throw new Error('the saturation pass is not in the adjustPlume kernel exactly once');
+  const detrained = source.replace(head, 'fn saturateDetrained(i: i32, pi: f32) {\n').replace(update, `    if (change > 0.0) { PH[PH_CICE + idx] = min(max(0.0, PH[PH_CICE + idx]), IN[S_QC + idx])${ramp ? ' + (1.0 - clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)) * change' : ''}; }\n${update}`);
+  const live = patchOnce(body.slice(0, close + 3) + detrained + body.slice(close + 3), ['  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n', '  if (PH[PH_CUMF + i] > 0.0) { saturateDetrained(i, pi); }\n'], 'adjustPlume');
+  return patchOnce(live, ['  saturateOutOfLine(i, pi, dt);\n', '  saturateOutOfLine(i, pi, dt);\n  if (dt < 0.0) { saturateDetrained(i, pi); saturateDetrained(i, pi + 1.0); }\n'], 'adjustPlume');
+}
 const BERGERON_RAIN = [
   ['    let excess = max(0.0, liquid - AUTO_T);\n', `    let temperature = IN[S_TH + idx] * D[D_EXM + idx];
     var bergeron = 1.0;
@@ -3108,6 +3236,9 @@ export function bergeronRain(body) {
 export const PHYSICS_PASSES = ['physics', 'radiation', 'longwave', 'physicsSurface'];
 export const LAYERED_PASSES = ['physics', 'radiation', 'layered', 'longwave', 'physicsSurface'];
 export const layeredPass = (o, held) => layeredKernel(o, held, LONGWAVE_STASH);
+const MEMORY_LAYERED = [`          let liquid = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+`, `          let liquid = memoryShare(k * C + i, T, max(0.0, IN[S_QC + k * C + i]), max(0.0, cumulusCloud(k, i).y));
+`];
 export { LAYERED_SLOTS };
 export const PHYSICS_KERNELS = {
   physics: physicsKernel(false),
@@ -3723,3 +3854,38 @@ fn mixEdge(e: i32, a: i32, b: i32) {
 };
 
 export const omegaStore = (body) => replaceOnce([['    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);\n', '    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);\n    D[D_OMG + idx] = omega;\n']], body, 'omega store');
+
+const MEMORY_SHARE_WGSL = `fn memoryShare(idx: i32, T: f32, resolved: f32, cumulus: f32) -> f32 {
+  let total = resolved + cumulus;
+  if (!(total > 0.0)) { return 0.0; }
+  let ramped = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+  let own = select(1.0 - PH[PH_CICE + idx], ramped, ramped <= 0.0 || ramped >= 1.0);
+  return (resolved * own + cumulus * ramped) / total;
+}
+`;
+const MEMORY_SHADE = [`        let optics = cloudOptics(IN[S_TH + k * C + i] * D[D_EXM + k * C + i], continental);
+        depth += optics.x * water;
+        if (k == STRATUS_K) { layer = water; unit = optics.x; }
+`, `        let shadeT = IN[S_TH + k * C + i] * D[D_EXM + k * C + i];
+        let rampOptics = cloudOptics(shadeT, continental);
+        let optics = cloudOpticsAt(shadeT, continental, memoryShare(k * C + i, shadeT, max(0.0, IN[S_QC + k * C + i]), max(0.0, cu.y)));
+        depth += optics.x * water;
+        if (k == STRATUS_K) { layer = water; unit = rampOptics.x; }
+`];
+const MEMORY_COLUMN = [[`    let optics = cloudOptics(IN[S_TH + idx] * D[D_EXM + idx], continental);
+    cloudDepth += optics.x * water;
+    if (k == deckK) { deckUnit = optics.x; }
+`, `    let columnT = IN[S_TH + idx] * D[D_EXM + idx];
+    let rampOptics = cloudOptics(columnT, continental);
+    let optics = cloudOpticsAt(columnT, continental, memoryShare(idx, columnT, max(0.0, IN[S_QC + idx]), max(0.0, cu.y)));
+    cloudDepth += optics.x * water;
+    if (k == deckK) { deckUnit = rampOptics.x; }
+`], [`transmitted(optics.y * (select(water, 0.0, k >= replaced) + deck))`, `transmitted(optics.y * select(water, 0.0, k >= replaced) + rampOptics.y * deck)`]];
+export function cloudPhaseKernels({ physics, radiation, layered }) {
+  const out = {
+    physics: MEMORY_SHARE_WGSL + patchOnce(physics, MEMORY_SHADE, 'physics'),
+    radiation: MEMORY_SHARE_WGSL + MEMORY_COLUMN.reduce((text, pair) => patchOnce(text, pair, 'radiation'), radiation),
+  };
+  if (layered) out.layered = MEMORY_SHARE_WGSL + patchOnce(layered, MEMORY_LAYERED, 'layered');
+  return out;
+}

@@ -27,7 +27,7 @@
 // (T2M) are judged in their own units instead, by the rms gap and the share of cells past a gap, whatever
 // TOL is. A row reads n/a, and cannot fail, where the model does not compute it: ROW_NEEDS gives T2M n/a
 // without the roughness exchange, STRESS and SDRAG without the implicit drag, WARM without the warm
-// layer, COOL without the cool skin and UO without the relative wind, and the clear-sky, form-drag and
+// layer, COOL without the cool skin, UO without the relative wind and CICE without iceDeposition, and the clear-sky, form-drag and
 // held-radiation rows read n/a without the clear-sky pass, the form drag or the held radiation. The run
 // also exits 1 when the CPU model takes the raster sub-grid orography, which has no form drag and is not
 // the configuration a saved state runs; env NO_SUBGRID builds both models without sub-grid orography and
@@ -58,6 +58,7 @@ import { serialize, deserialize } from 'node:v8';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { stateTerrain } from '../js/stateFile.module.js';
+import { placeCloudIce } from '../js/physics/moist.module.js';
 import { refuseUnreadOptions } from './optionEnvironment.mjs';
 
 refuseUnreadOptions(import.meta.url);
@@ -85,7 +86,7 @@ export const PH_MAP = {
   OLR: 'radiation.outgoing', OLRSUM: 'radiation.summed.outgoingLongwave', ATMSUM: 'radiation.summed.atmosphereSolar',
   INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.summed.clearOutgoingLongwave',
   ASRMEAN: 'radiation.meanAbsorbedSolar', OLRMEAN: 'radiation.meanOutgoingLongwave', ALBMEAN: 'radiation.meanPlanetaryAlbedo', SWCREMEAN: 'radiation.meanShortwaveCloudEffect', LWCREMEAN: 'radiation.meanLongwaveCloudEffect',
-  CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
+  CICE: 'moist.cloudIceShare', CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
   PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo', WHEAT: 'seaIce.waterHeat', CONDUCT: 'seaIce.conductance',
   SURF: 'land.surface', SOIL: 'land.soil', RUNOFF: 'land.runoff', DISCHARGE: 'land.discharge', ICELOSS: 'land.iceLoss', MLMK: 'radiation.mlmLayer', MLMM: 'radiation.mlmShare', DECKK: 'radiation.deckLayer', DECKFROM: 'radiation.deckFrom', VEG: 'land.vegetation', CANOPY: 'land.canopy', SEASONL: 'land.seasonLength', SEASONW: 'land.seasonWarmth', DEMAND: 'land.demandMean', RAINMEAN: 'land.rainMean',
   LITTERM: 'land.litterMean', DECAYM: 'land.decayMean', SOILC: 'land.soilCarbon', SNOWFREEV: 'land.snowFreeCover', SOILT2: 'land.soilT2', SOILT3: 'land.soilT3', SOILT4: 'land.soilT4', DEEP: 'land.deepWater',
@@ -110,10 +111,11 @@ export const MAY_BE_ZERO = new Set(['UO', 'OFLUX', 'FSTRESS', 'TOFD', 'OFLT', 'O
 // mapped regions set by a threshold decision in each column (mixing regime, cumulus trigger, rain, fog, launch): f32 and
 // f64 part at a few columns near the threshold, so these are judged by the share of cells that differ by more than TOL of
 // the row's largest CPU value and fail past their bound here, max(3 × the worst share measured on
-// runs/sixteen/sixteen128_day0730.bin through 17 steps, 1e-3), the rows from COND on measured on seventeen128 day 1095 and
-// combined128 day 1460 (from MLMGATE on, all three), and the rms of the cells under that threshold stays within 3 TOL; env SHARE sets one bound for every row, env
+// runs/sixteen/sixteen128_day0730.bin through 17 steps, 1e-3), the rows from COND to DECKFROM measured on seventeen128 day 1095 and
+// combined128 day 1460 (from MLMGATE on, all three), CICE (under moist.iceDeposition) on sixteen128 day 730 and seventeen64 day 365,
+// and the rms of the cells under that threshold stays within 3 TOL; env SHARE sets one bound for every row, env
 // DECISION_EXTRA adds rows (comma separated) under it
-export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001, COND: 0.001, MIXH: 0.0078, STRESS: 0.0165, DRAG: 0.0066, HEATX: 0.0048, DECKF: 0.001, MLMCOVER: 0.001, MLMENT: 0.001, OBETA: 0.001, OBLOCK: 0.001, OLAUNCH: 0.00156, OSTRESS: 0.00126, CONC: 0.001, STRAT: 0.001, USTAR: 0.001, MLMGATE: 0.001, MLMH: 0.00198, MLMTOP: 0.001, DECKFROM: 0.001 };
+export const DECISION_BOUNDS = { MIX: 0.016, DEPTH: 0.048, MIXTOP: 0.048, ENTRAIN: 0.21, REGIME: 0.03, VRAD: 0.15, CTCOOL: 0.14, RAIN: 0.001, STEPRAIN: 0.026, CONV: 0.02, FOG: 0.0033, CUMF: 0.22, CUTOP: 0.072, CUCOVER: 0.051, CUWATER: 0.036, GWE: 0.001, GWN: 0.001, OWAVE: 0.001, COND: 0.001, MIXH: 0.0078, STRESS: 0.0165, DRAG: 0.0066, HEATX: 0.0048, DECKF: 0.001, MLMCOVER: 0.001, MLMENT: 0.001, OBETA: 0.001, OBLOCK: 0.001, OLAUNCH: 0.00156, OSTRESS: 0.00126, CONC: 0.001, STRAT: 0.001, USTAR: 0.001, MLMGATE: 0.001, MLMH: 0.00198, MLMTOP: 0.001, DECKFROM: 0.001, CICE: 0.0039 };
 // f32 rounding of the soil store: eight spacings at 300 kg/m²
 const ABSOLUTE_FLOOR = { RUNOFF: 2.5e-4, DISCHARGE: 2.5e-4 };
 const CARRIED = new Set(['PEN']), CARRY_GRAINS = 1.25;
@@ -154,7 +156,7 @@ for (const name of (process.env.DECISION_EXTRA ?? '').split(',').filter(Boolean)
 export const DECISION_ROWS = new Set(Object.keys(DECISION_BOUNDS));
 const NO_CLEAR_SKY = JSON.parse(process.env.RADIATION ?? '{}').clearSkyPass === false, CLEAR_SKY_ROWS = new Set(['ABSCLRSUM', 'OLRCLRSUM', 'RADCLROLR', 'RADCLRSW', 'RADTC']);
 const drags = (model) => !!model.boundaryLayer?.implicitDrag;
-const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin], UO: ['no relative wind', (model) => !!model.seaFlow] };
+const ROW_NEEDS = { T2M: ['no roughness exchange', (model) => model.exchange?.mode === 'roughness'], STRESS: ['no implicit drag', drags], SDRAG: ['no implicit drag', drags], WARM: ['no warm layer', (model) => !!model.skin?.options.warmLayer], COOL: ['no cool skin', (model) => !!model.skin?.options.coolSkin], UO: ['no relative wind', (model) => !!model.seaFlow], CICE: ['no iceDeposition', (model) => !!model.moist?.cloudIceShare] };
 const decisionBound = (name) => (process.env.SHARE ? Number(process.env.SHARE) : DECISION_BOUNDS[name]);
 
 const typed = (v) => ArrayBuffer.isView(v) && !(v instanceof DataView);
@@ -219,6 +221,7 @@ async function build(file) {
     }
     const sv = model.moist.subcloudVirtual;
     if (saved.subcloudVirtual && saved.subcloudVirtual.length === sv.length) sv.set(saved.subcloudVirtual); else sv.fill(0);
+    placeCloudIce(model, saved);
     if (!model.gpu && model.surfaceGeopotential) for (let i = 0; i < C; i++) { const zs = model.surfaceGeopotential[i] / model.core.diagnostics.g; if (saved.boundaryDepth) model.boundaryLayer.depth[i] += zs; if (saved.mixingTop) model.boundaryLayer.mixingTop[i] += zs; }
     model.time = saved.time;
     if (model.load) model.load();

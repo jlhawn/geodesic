@@ -90,6 +90,19 @@ function spunUpBergeron() {
   return model;
 }
 
+let spunDeposition = null;
+function spunUpDeposition() {
+  if (spunDeposition) return spunDeposition;
+  const model = createModel(new Grid(N), { ...OPTIONS, moist: { iceDeposition: true } });
+  initializeState(model).forEach((values, s) => model.state[s].set(values));
+  for (let n = 0; n < SPINUP_STEPS; n++) model.step(DT);
+  const share = model.moist.cloudIceShare, mixed = share.filter((v) => v > 0 && v < 1).length;
+  console.log(`iceDeposition: after ${SPINUP_STEPS} steps ${mixed} of ${share.length} layers hold cloud that is part ice and part liquid`);
+  assert.ok(mixed > 0, 'the spin-up makes mixed-phase cloud');
+  spunDeposition = model;
+  return model;
+}
+
 /*
  * The spun-up air over a layered ocean started under it.
  */
@@ -183,7 +196,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with iceExchange turbulent, the water under the ice holding heat', () => overOcean(undefined, { iceExchange: 'turbulent' })], ['over a layered ocean with surface.relativeWind and a moving sea, the work its stress does on the sea included', () => movingSea(overOcean({ relativeWind: true }))], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin], ['over a layered ocean with iceExchange instant whose sea ice lets light through to the water and a brine reservoir', () => brineOcean()], ['over a layered ocean at the default exchange and iceAlbedoPhases whose sea ice lets light through to the water and a brine reservoir, the water under the ice holding heat', () => { const model = brineOcean({}); assert.deepEqual([model.seaIce.iceExchange, model.seaIce.iceAlbedoPhases], [iceExchangeOptions(DEFAULT_ICE_EXCHANGE), DEFAULT_ICE_ALBEDO_PHASES]); return model; }]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics to within 0.02 W/m² on average`, () => {
+for (const [label, build] of [['over a slab', spunUp], ['over a slab with bergeronAutoconversion', spunUpBergeron], ['over a slab with iceDeposition', spunUpDeposition], ["over a slab with dynamics.temperatureClosure 'standard'", spunUpStandard], ["over a slab with dynamics.verticalAdvection 'vanLeerWater'", () => spunUpVerticalAdvection('vanLeerWater')], ['over a slab with boundaryLayer.countergradient 7.2', spunUpCountergradient], ["over a slab with boundaryLayer.velocityScale 'capped' and countergradient 7.2", spunUpCapped], ['over a layered ocean', () => overOcean()], ['over a layered ocean with iceExchange turbulent, the water under the ice holding heat', () => overOcean(undefined, { iceExchange: 'turbulent' })], ['over a layered ocean with surface.relativeWind and a moving sea, the work its stress does on the sea included', () => movingSea(overOcean({ relativeWind: true }))], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin], ['over a layered ocean with iceExchange instant whose sea ice lets light through to the water and a brine reservoir', () => brineOcean()], ['over a layered ocean at the default exchange and iceAlbedoPhases whose sea ice lets light through to the water and a brine reservoir, the water under the ice holding heat', () => { const model = brineOcean({}); assert.deepEqual([model.seaIce.iceExchange, model.seaIce.iceAlbedoPhases], [iceExchangeOptions(DEFAULT_ICE_EXCHANGE), DEFAULT_ICE_ALBEDO_PHASES]); return model; }]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics to within 0.02 W/m² on average`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));

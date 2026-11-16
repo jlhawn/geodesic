@@ -60,7 +60,7 @@ import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, FUSION_HEAT, IFS_PRECIPITATION, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, fogConstants, liquidFraction, liftingCondensationLevel, stratiformRainEvaporation, rainShareBelow, RAIN_COVER_FLOOR } from '../js/physics/moist.module.js';
+import { createMoistPhysics, placeCloudIce, MOIST_DEFAULTS, SOURCE_EXCESS, FUSION_HEAT, IFS_PRECIPITATION, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, fogConstants, liquidFraction, liftingCondensationLevel, stratiformRainEvaporation, rainShareBelow, RAIN_COVER_FLOOR } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -96,6 +96,7 @@ if (saved.mixingTop) bl.mixingTop.set(Float64Array.from(saved.mixingTop, (z, i) 
 if (saved.boundaryRegime) bl.regime.set(saved.boundaryRegime);
 if (saved.boundaryBuoyancy) bl.buoyancyFlux.set(saved.boundaryBuoyancy);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === moist.subcloudVirtual.length) moist.subcloudVirtual.set(saved.subcloudVirtual);
+placeCloudIce(model, saved);
 
 const O = { ...MOIST_DEFAULTS, ...MOIST }, bechtold = O.capeClosure === 'bechtold', mixedPlume = O.plumePhase === 'mixed';
 if (O.plumeClosure === 'maximum') throw new Error('the deep and shallow split needs plumeClosure separate or cape');
@@ -380,7 +381,7 @@ function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
       continue;
     }
     const airTemperature = th[idx] * exnerLayer[idx];
-    const bergeron = O.bergeronAutoconversion && airTemperature < IFS_PRECIPITATION.bergeron ? 1 + 0.5 * Math.sqrt(Math.min(IFS_PRECIPITATION.bergeron - airTemperature, IFS_PRECIPITATION.bergeron - IFS_PRECIPITATION.ice)) : 1;
+    const bergeron = O.bergeronAutoconversion && !O.iceDeposition && airTemperature < IFS_PRECIPITATION.bergeron ? 1 + 0.5 * Math.sqrt(Math.min(IFS_PRECIPITATION.bergeron - airTemperature, IFS_PRECIPITATION.bergeron - IFS_PRECIPITATION.ice)) : 1;
     const excess = Math.max(0, liquid - O.autoconversionThreshold / bergeron);
     let lifetime = O.upperCloudLifetime !== null && pi[i] * sigmaMid[k] < O.shallowTop ? O.upperCloudLifetime : O.cloudLifetime;
     if (O.stratiformLifetime !== null) lifetime += longCloudShare(twin, i, k, iced) * (O.stratiformLifetime - lifetime);

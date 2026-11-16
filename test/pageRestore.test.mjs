@@ -9,13 +9,13 @@ let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
-test("on the GPU, a page save waits for the step that ends an ocean step, a held radiation interval and a held drag interval, and a model that has run 3 steps, restored from it through encodeState, decodeState and the page's restore, steps on frame by frame as the run that did not stop over two ocean cadences and a step, with runoff and discharge pending at the save; and so again from the step-8 save of a run that loaded that save relabeled to step 6, off the ocean's cadence", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+for (const [label, moist] of [['', null], ['; under iceDeposition the glaciated fraction too', { iceDeposition: true }]]) test(`on the GPU, a page save waits for the step that ends an ocean step, a held radiation interval and a held drag interval, and a model that has run 3 steps, restored from it through encodeState, decodeState and the page's restore, steps on frame by frame as the run that did not stop over two ocean cadences and a step, with runoff and discharge pending at the save; and so again from the step-8 save of a run that loaded that save relabeled to step 6, off the ocean's cadence${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const stand = !globalThis.self;
   if (stand) globalThis.self = { postMessage() {} };
   try {
     const { snapshotArrays, placeSaved, stepsToCadence } = await import('../js/model.worker.js');
     const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 1500 + 1000 * Math.cos(lat) : -4000));
-    const options = { topography, radiation: { radiationEvery: 4 }, dragEvery: 2, ocean: { everySteps: 4 } };
+    const options = { topography, radiation: { radiationEvery: 4 }, dragEvery: 2, ocean: { everySteps: 4 }, ...(moist ? { moist } : {}) };
     const dt = 1350, names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'], subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false };
     const frame = async (model, steps) => { const capturing = model.beginFrame(subscription); await model.stepBatch(steps, dt, null, false); await capturing; };
     const run = await createGpuModel(new Grid(16), options);
@@ -40,6 +40,7 @@ test("on the GPU, a page save waits for the step that ends an ocean step, a held
     const back = await save(run);
     for (const key of ['windSpeed', 'evaporation', 'exchangeWind', 'rainTotal', 'runoffTotal', 'rainSeen', 'runoffSeen']) assert.ok(back[key] && back[key].length > 0, `the snapshot carries ${key}`);
     for (const key of ['runoffTotal', 'dischargeTotal', 'runoffSeen', 'dischargeSeen']) assert.ok(Math.max(...back[key]) > 0, `${key} is not 0 at the save`);
+    if (moist) assert.ok(back.cloudIceShare && back.cloudIceShare.some((v) => v > 0 && v < 1), 'the snapshot carries a glaciated fraction with mixed layers');
     for (const key of ['previousT0', 'fresh', 'flux', 'boundaryDepths']) assert.ok(back.ocean[key] && back.ocean[key].length > 0, `the snapshot carries the ocean's restart array ${key}`);
     const twin = await createGpuModel(new Grid(16), options);
     await placeSaved(twin, start, 16, dt);
