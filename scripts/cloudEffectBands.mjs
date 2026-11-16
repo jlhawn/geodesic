@@ -1,7 +1,7 @@
-// The top-of-atmosphere cloud radiative effect of saved states by latitude band, from the saves' 30-day means:
+// The top-of-atmosphere cloud radiative effect of saved states by latitude band, from the saves' day means, the day each save closes:
 //   node scripts/cloudEffectBands.mjs STATE.bin...
 // Each save's meanShortwaveCloudEffect and meanLongwaveCloudEffect (absorbed minus clear-sky absorbed sunlight, and the clear-sky minus
-// all-sky outgoing longwave) are weighted by mesh.areaCell. The bands go by cell-center latitude: global; 30S-30N is |lat| < 30;
+// all-sky outgoing longwave) are weighted by mesh.areaCell. Over several saves the mean of these rows estimates the mean over their span, one day every save. The bands go by cell-center latitude: global; 30S-30N is |lat| < 30;
 // 30-60 is 30 <= |lat| < 60, both hemispheres pooled; 60-90 is |lat| >= 60. One row a save, then the mean of the saves.
 import { readFileSync } from 'node:fs';
 import { decodeState } from '../js/stateFile.module.js';
