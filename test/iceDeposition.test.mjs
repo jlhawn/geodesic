@@ -352,14 +352,14 @@ test('with iceDeposition off the GPU kernels and the PH layout are those of the 
   assert.equal(off.layout.PH.CICE, undefined);
 });
 
-async function gpuParity(moist, { levels = bl34, dt = 1350, convective = false, reference = false, against = null } = {}) {
+async function gpuParity(moist, { levels = bl34, dt = 1350, convective = false, reference = false, against = null, glaciated = false, exact = false } = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const options = { plumeEntrainmentLaw: 'gregory', iceDeposition: true, ...moist };
   const model = createModel(new Grid(16), { ocean: false, levels, moist: options }), { core, mesh } = model, C = mesh.nCells, { K, exnerLayer } = core.diagnostics;
   const random = randomState(model, 4242, convective), [, theta, , , , qc] = model.state;
   placeCloudIce(model, null);
   const on = !!model.moist.cloudIceShare, share = model.moist.cloudIceShare ?? new Float64Array(K * C);
-  if (on) for (let x = 0; x < K * C; x++) if (share[x] > 0 && share[x] < 1) share[x] = Math.fround(Math.min(1, Math.max(0, share[x] + 0.4 * (random() - 0.5))));
+  if (on) for (let x = 0; x < K * C; x++) if (share[x] > 0 && share[x] < 1) share[x] = glaciated ? 1 : Math.fround(Math.min(1, Math.max(0, share[x] + 0.4 * (random() - 0.5))));
   const start = model.state.map((a) => Float64Array.from(a)), startShare = Float64Array.from(share), exner = Float64Array.from(exnerLayer);
   const gpu = await createGpuCore(mesh, { levels, physics: options });
   const { device, buffers, kernels } = gpu;
@@ -392,7 +392,7 @@ async function gpuParity(moist, { levels = bl34, dt = 1350, convective = false, 
     if (gap > 1e-7) split++; else worstIce = Math.max(worstIce, gap);
   }
   console.log(`${JSON.stringify(moist)} at K=${K}, dt ${dt} s: ${plumes} of ${C} columns ran a plume, ${mixed} layers part ice; the engines' cloud ice differs by ${worstIce.toExponential(1)} kg/kg at most${split ? ` outside ${split} layers` : ''}; θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, q_c by ${worstQc.toExponential(1)}`);
-  if (on) assert.ok(mixed > 0 && split <= Math.max(1, 0.01 * mixed), `${mixed} mixed layers; ${split} split`);
+  if (on) assert.ok(mixed > 0 && split <= (exact ? 0 : Math.max(1, 0.01 * mixed)), `${mixed} mixed layers; ${split} split`);
   if (against) {
     const moved = ['theta', 'q', 'qc'].map((name) => gaps[name].reduce((m, v, x) => Math.max(m, Math.abs(v - against.gaps[name][x])), 0));
     console.log(`beside the engines' gaps without the option, theirs with it move by θ ${moved[0].toExponential(1)} K, q ${moved[1].toExponential(1)}, q_c ${moved[2].toExponential(1)}`);
@@ -408,6 +408,10 @@ test('on the GPU iceDeposition matches the CPU column by column at N=16 on bl48,
   await gpuParity({}, { levels: bl48, against: off });
 });
 test('on the GPU iceDeposition matches the CPU column by column at a 300 s step', GPU, () => gpuParity({}, { dt: 300 }));
+test("on the GPU, with every mixed-phase cloud fully glaciated at the start, detrainedPhase 'liquid' matches the CPU's ice layer for layer in the plume columns", GPU, async () => {
+  const run = await gpuParity({ detrainedPhase: 'liquid' }, { convective: true, glaciated: true, exact: true });
+  assert.ok(run.plumes > 0, `${run.plumes} plumes`);
+});
 test("on the GPU iceDeposition with detrainedPhase 'liquid' matches the CPU, and the plumes' condensate is all liquid where 'ramp' gives it ice", GPU, async () => {
   const ramp = await gpuParity({}, { convective: true }), liquid = await gpuParity({ detrainedPhase: 'liquid' }, { convective: true });
   let more = 0;

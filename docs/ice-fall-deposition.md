@@ -149,6 +149,7 @@ What I expect under the option:
 - `test/spinupRestart.test.mjs`: under the option a split spin-up ends bit for bit on the whole one.
 - `test/atmosphereConservation.test.mjs`: the moist row "over a slab with iceDeposition".
 - CLAUDE.md's M5 checks: `test/boundaryLayer.test.mjs`, `test/gpuModel.test.mjs`, and compareEngines at the page state with and without the option.
+  - compareEngines on arm B's day-335 save (N=64, layered shortwave and 'mac', 17 steps) at 84f3e8cd, under MOIST iceDeposition and RADIATION cloudPhase 'memory' with CICE in the decision bounds: the GPU half passes and the CPU half reports 70 failures (rows over the 0.001 bound at later steps, logs ~/.cache/webgcm-scratch/icedep/armB/u1/cmp-armB). The same save under iceDeposition on the ramp reports 77 (u1/cmp-armB-ramp), with the same radiation rows over the bound (LWH, OLR, SWDN, RADABS, RADATM, RADBACK, RADDF, RADDIR, RADOLR, RADREFL, RADSW, RADSWDN, RADT, RADTOA) and the same counts. CICE is within its bound at every step. So 'memory' adds no row over the bound beside the ramp's.
 
 ## Open items
 
