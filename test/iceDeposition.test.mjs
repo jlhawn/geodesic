@@ -343,6 +343,7 @@ test('every script that restores subcloudVirtual or places the cumulus places th
     const text = readFileSync(file, 'utf8'), name = file.slice(root.length);
     if ((/subcloudVirtual\.set\(/.test(text) || text.includes("['subcloudVirtual'")) && !text.includes('placeCloudIce(')) missing.push(`${name} restores subcloudVirtual without placeCloudIce`);
     if (text.includes('placeCumulus(') && !text.includes('placeCloudIce(')) missing.push(`${name} places the cumulus without placeCloudIce`);
+    if (/restoreSurface\(/.test(text) && /\.(step|adjust)\(/.test(text) && /\bMOIST\b/.test(text) && !text.includes('placeCloudIce(')) missing.push(`${name} builds a model from a save with MOIST and steps it without placeCloudIce`);
     for (let at = text.indexOf('encodeState('); at >= 0; at = text.indexOf('encodeState(', at + 1)) {
       let depth = 0, end = at + 'encodeState'.length;
       for (; end < text.length; end++) { if (text[end] === '(') depth++; else if (text[end] === ')' && --depth === 0) break; }

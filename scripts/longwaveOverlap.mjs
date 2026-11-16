@@ -26,6 +26,7 @@ import { readFileSync } from 'node:fs';
 import { restoreSurface, savedIceOptions } from './savedLand.mjs';
 import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
+import { placeCloudIce } from '../js/physics/moist.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, STEFAN_BOLTZMANN, YEAR, TRACE_CHAIN_FLOOR } from '../js/physics/radiation.module.js';
@@ -55,6 +56,7 @@ const { K, C, levels, sigmaMid, dSigma, g, exnerLayer, geopotential } = core.dia
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 restoreSurface(model, saved);
+placeCloudIce(model, saved);
 loadSavedLake(model, saved);
 model.time = saved.time;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));

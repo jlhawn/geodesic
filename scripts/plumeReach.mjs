@@ -27,7 +27,7 @@ import { stateGeography } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels, stateTerrain } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { liftingCondensationLevel, MOIST_DEFAULTS } from '../js/physics/moist.module.js';
+import { placeCloudIce, liftingCondensationLevel, MOIST_DEFAULTS } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { inLongitudes } from '../js/audit.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
@@ -45,6 +45,7 @@ const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, ge
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
 restoreSurface(model, saved);
+placeCloudIce(model, saved);
 loadSavedLake(model, saved);
 model.time = saved.time;
 const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, geopotential } = core.diagnostics;
