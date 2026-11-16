@@ -203,7 +203,7 @@ for (const deckCloud of ['sigma', 'top']) for (const shortwave of ['sequential',
     const ice = deckRun({ phase: 'memory', share: 1, deckCloud, shortwave, layer, resolved: trace, limits });
     const gapIce = (name) => Math.abs(ice[name] - ramp[name]) / Math.max(Math.abs(ramp[name]), 1e-30);
     console.log(`${shortwave}, deckCloud '${deckCloud}', at φ = 1: outgoing longwave gap ${gapIce('outgoingLongwave').toExponential(2)}, deck layer longwave gap ${gapIce('deckLongwave').toExponential(2)} (${ice.deckLongwave} against ${ramp.deckLongwave} W/m²)`);
-    assert.ok(gapIce('outgoingLongwave') <= 1e-8 && gapIce('deckLongwave') <= 1e-7, `outgoing longwave gap ${gapIce('outgoingLongwave')}, the deck layer's longwave heating ${ice.deckLongwave} against ${ramp.deckLongwave}`);
+    assert.ok(gapIce('outgoingLongwave') <= 1e-11 && gapIce('deckLongwave') <= 1e-10, `outgoing longwave gap ${gapIce('outgoingLongwave')} (bound 1e-11; clean 1.99e-14, all-liquid unit 3.84e-10, ice unit dropped 5.3e-4), the deck layer's longwave heating ${ice.deckLongwave} against ${ramp.deckLongwave} (gap ${gapIce('deckLongwave')}, bound 1e-10; clean 3.41e-13, all-liquid unit 6.61e-9, ice unit dropped 9.1e-3)`);
     assert.ok(probe.T > limits[0] && probe.T < limits[1] && ramp.mlmWater > 0.03);
     assert.ok(gap('mlmWater') <= 1e-7 && gap('mlmSolar') <= 1e-6 && gap('reflectedSolar') <= 1e-5, `gaps ${gap('mlmWater')}, ${gap('mlmSolar')}, ${gap('reflectedSolar')}`);
   });
