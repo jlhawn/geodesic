@@ -352,7 +352,7 @@ test('with iceDeposition off the GPU kernels and the PH layout are those of the 
   assert.equal(off.layout.PH.CICE, undefined);
 });
 
-test("under iceDeposition the adjustPlume kernel caps the stored ice at the cloud after a plume, and adds the ramp's share of the regrowth only under detrainedPhase 'ramp'", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test("under iceDeposition the GPU's adjustPlume kernel caps the stored ice at the cloud after a plume, and adds the ramp's share of the regrowth only under detrainedPhase 'ramp'", { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js'), { mesh } = createModel(new Grid(16), { ocean: false, levels: bl48 });
   const cap = 'PH[PH_CICE + idx] = min(max(0.0, PH[PH_CICE + idx]), IN[S_QC + idx])', share = ' + (1.0 - clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)) * change';
   const [ramp, liquid] = [await createGpuCore(mesh, { levels: bl48, physics: { iceDeposition: true, detrainedPhase: 'ramp' } }), await createGpuCore(mesh, { levels: bl48, physics: { iceDeposition: true, detrainedPhase: 'liquid' } })];
