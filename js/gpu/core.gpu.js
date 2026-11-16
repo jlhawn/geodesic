@@ -1080,7 +1080,7 @@ export async function createGpuCore(mesh, {
   if (phys.midLevelConvection && phys.shallowRetype && phys.convectionType === 'testParcel') for (const name of ADJUST_KERNELS) kernelBodies[name] = sentBackMidLevel(kernelBodies[name], !!phys.convectionRetype);
   if (phys.midLevelConvection && phys.convectionType === 'testParcel') kernelBodies.cellTendency = omegaStore(kernelBodies.cellTendency);
   if (phys.iceDeposition) kernelBodies.adjustMix = cloudIceMix(kernelBodies.adjustMix);
-  if (phys.iceDeposition && phys.detrainedPhase !== 'liquid') kernelBodies.adjustPlume = cloudIcePlume(kernelBodies.adjustPlume);
+  if (phys.iceDeposition) kernelBodies.adjustPlume = cloudIcePlume(kernelBodies.adjustPlume, phys.detrainedPhase !== 'liquid');
   if (phys.cloudPhase === 'memory') Object.assign(kernelBodies, cloudPhaseKernels(kernelBodies));
   if (lake) Object.assign(kernelBodies, lakeKernels(kernelBodies, { held: heldRadiation, skin: skinOn }));
   for (const [name, raw] of Object.entries(kernelBodies)) {

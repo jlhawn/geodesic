@@ -3019,11 +3019,11 @@ export function cloudIceRain(body) {
   return DEPOSITION_WGSL(DEPOSITION) + (rained.includes('var iceAbove = false;') ? patchOnce(rained, CLOUD_ICE_ABOVE, 'adjustRain') : rained);
 }
 export function cloudIceMix(body) { return patchOnce(body, CLOUD_ICE_MIX, 'adjustMix'); }
-export function cloudIcePlume(body) {
+export function cloudIcePlume(body, ramp = true) {
   const head = 'fn saturateColumn(i: i32, pi: f32) {\n', update = '    IN[S_Q + idx] -= change; IN[S_QC + idx] += change;';
   const start = body.indexOf(head), close = body.indexOf('\n}\n', start), source = body.slice(start, close + 3);
   if (start < 0 || close < 0 || body.indexOf(head, start + 1) >= 0 || source.split(update).length !== 2) throw new Error('the saturation pass is not in the adjustPlume kernel exactly once');
-  const detrained = source.replace(head, 'fn saturateDetrained(i: i32, pi: f32) {\n').replace(update, `    if (change > 0.0) { PH[PH_CICE + idx] = min(max(0.0, PH[PH_CICE + idx]), IN[S_QC + idx]) + (1.0 - clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)) * change; }\n${update}`);
+  const detrained = source.replace(head, 'fn saturateDetrained(i: i32, pi: f32) {\n').replace(update, `    if (change > 0.0) { PH[PH_CICE + idx] = min(max(0.0, PH[PH_CICE + idx]), IN[S_QC + idx])${ramp ? ' + (1.0 - clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0)) * change' : ''}; }\n${update}`);
   const live = patchOnce(body.slice(0, close + 3) + detrained + body.slice(close + 3), ['  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n', '  if (PH[PH_CUMF + i] > 0.0) { saturateDetrained(i, pi); }\n'], 'adjustPlume');
   return patchOnce(live, ['  saturateOutOfLine(i, pi, dt);\n', '  saturateOutOfLine(i, pi, dt);\n  if (dt < 0.0) { saturateDetrained(i, pi); saturateDetrained(i, pi + 1.0); }\n'], 'adjustPlume');
 }

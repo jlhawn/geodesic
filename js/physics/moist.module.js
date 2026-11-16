@@ -902,7 +902,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       if (change < 0) change = Math.max(change, -qc[idx]);
       if (change === 0) continue;
-      if (detrained && rampDetrainment && change > 0) cloudIce[idx] = Math.min(Math.max(0, cloudIce[idx]), qc[idx]) + (1 - liquidFraction(temperature, liquidTemperature, iceTemperature)) * change;
+      if (detrained && cloudIce && change > 0) cloudIce[idx] = Math.min(Math.max(0, cloudIce[idx]), qc[idx]) + (rampDetrainment ? (1 - liquidFraction(temperature, liquidTemperature, iceTemperature)) * change : 0);
       q[idx] -= change;
       qc[idx] += change;
       theta[idx] += latentHeat * change / (cp * ex);
