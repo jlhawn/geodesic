@@ -336,7 +336,7 @@ test('trace.ice tallies the ice the store caps at the cloud, in kg/m², by its h
   assert.deepEqual(t.visitCap, new Float64Array(K * C));
 });
 
-test('every script that restores subcloudVirtual or places the cumulus places the glaciated fraction, and every encodeState that writes subcloudVirtual writes it', () => {
+test('every script that restores subcloudVirtual, places the cumulus, or steps a model it built from a save under MOIST places the glaciated fraction, and every encodeState that writes subcloudVirtual writes it', () => {
   const files = [join(root, 'js/model.worker.js'), ...readdirSync(join(root, 'scripts'), { recursive: true }).filter((f) => f.endsWith('.mjs')).map((f) => join(root, 'scripts', f))];
   const missing = [];
   for (const file of files) {
