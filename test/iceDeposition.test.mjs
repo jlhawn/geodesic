@@ -314,6 +314,25 @@ test('trace.ice tallies the ice a visit caps at the cloud, in kg/m², by its han
   for (let x = 0; x < t.visitCap.length; x++) if (x !== k * C) assert.equal(t.visitCap[x], 0, `layer ${Math.floor(x / C)}`);
 });
 
+test('trace.ice tallies the ice the store caps at the cloud, in kg/m², by its hand value, and stores the share 1 there', () => {
+  const model = build({ iceDeposition: true }), { C, K, dSigma, g, exnerLayer } = model.core.diagnostics, k = layerAt(model, 4e4);
+  const s = column(model, (j, T, p) => 0.3 * saturated(T, p));
+  s.qc[k * C] = 1e-4;
+  model.core.diagnoseColumn(0, s.pi, s.theta, s.q, s.qc);
+  const T = s.theta[k * C] * exnerLayer[k * C];
+  assert.ok(T > 235.15 && T < 273.15, `the layer at ${T} K is inside the mixed-phase range`);
+  const ice = model.moist.cloudIceShare;
+  ice.fill(0);
+  ice[k * C] = 1.6e-4;
+  model.moist.trace.ice = { deposited: new Float64Array(K * C), visitCap: new Float64Array(K * C), storeCap: new Float64Array(K * C) };
+  model.moist.storeIce(0, s.pi, s.theta, s.qc);
+  const expected = (1.6e-4 - 1e-4) * (s.pi[0] * dSigma[k] / g), t = model.moist.trace.ice;
+  assert.ok(Math.abs(t.storeCap[k * C] - expected) < 1e-12 * expected, `${t.storeCap[k * C]} kg/m² against ${expected}`);
+  for (let x = 0; x < K * C; x++) if (x !== k * C) assert.equal(t.storeCap[x], 0, `layer ${Math.floor(x / C)} of column ${x % C}`);
+  assert.equal(ice[k * C], 1);
+  assert.deepEqual(t.visitCap, new Float64Array(K * C));
+});
+
 test('every script that restores subcloudVirtual places the glaciated fraction, and every encodeState that writes subcloudVirtual writes it', () => {
   const files = [join(root, 'js/model.worker.js'), ...readdirSync(join(root, 'scripts'), { recursive: true }).filter((f) => f.endsWith('.mjs')).map((f) => join(root, 'scripts', f))];
   const missing = [];

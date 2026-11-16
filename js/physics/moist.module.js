@@ -1935,6 +1935,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   let iceConcentration = null;
   function useSeaIce(concentration) { iceConcentration = concentration; }
 
+  function storeIce(i, pi, theta, qc) {
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i, water = qc[idx], temperature = theta[idx] * exnerLayer[idx];
+      if (trace.ice && water > CLEAR_AIR && temperature > iceTemperature && temperature < liquidTemperature) trace.ice.storeCap[idx] += (cloudIce[idx] - Math.min(Math.max(0, cloudIce[idx]), water)) * pi[i] * dSigma[k] / g;
+      cloudIce[idx] = !(water > CLEAR_AIR) ? 0 : temperature <= iceTemperature ? 1 : temperature >= liquidTemperature ? 0 : Math.min(Math.max(0, cloudIce[idx]), water) / water;
+    }
+  }
+
   function adjust(state, iFrom, iTo, dt) {
     const [pi, theta, u, , q, qc, ice = null] = state;
     for (let i = iFrom; i < iTo; i++) {
@@ -1964,13 +1972,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       fillColumn(i, pi, q);
       fillColumn(i, pi, qc);
-      if (cloudIce) {
-        for (let k = 0; k < K; k++) {
-          const idx = k * C + i, water = qc[idx], temperature = theta[idx] * exnerLayer[idx];
-          if (trace.ice && water > CLEAR_AIR && temperature > iceTemperature && temperature < liquidTemperature) trace.ice.storeCap[idx] += (cloudIce[idx] - Math.min(Math.max(0, cloudIce[idx]), water)) * pi[i] * dSigma[k] / g;
-          cloudIce[idx] = !(water > CLEAR_AIR) ? 0 : temperature <= iceTemperature ? 1 : temperature >= liquidTemperature ? 0 : Math.min(Math.max(0, cloudIce[idx]), water) / water;
-        }
-      }
+      if (cloudIce) storeIce(i, pi, theta, qc);
       if (bechtold) saveSubcloud(i, theta, q, qc);
       precipitation[i] += rained + convected;
       convectivePrecipitation[i] += convected;
@@ -2006,7 +2008,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
 
   const settings = { uniform, iceSaturation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, liquidTemperature, iceTemperature };
   return {
-    condensation: settings, plumeExits, adjust, useSeaIce, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
+    condensation: settings, plumeExits, adjust, useSeaIce, condenseColumn, autoconvertColumn, storeIce, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
     plumeAir(energy, water, height, pressure, guess) { plumeState(energy, water, height, pressure, guess); return { ...plume }; },
     precipitation, rain, convectivePrecipitation, largeScalePrecipitation, fogPrecipitation, convectiveRain, largeScaleRain, fogRain, convectiveSnow, budget, latentHeat, trace, falling,
     cumulus, cumulusCover, cumulusWater, cumulusCloudPath, cumulusBaseFlux, cumulusTop, cumulusOvershootShare, cumulusFlux, deep, subcloudVirtual, cloudIceShare: cloudIce, liquidTemperature, iceTemperature, subcloudLayers: KL, saveSubcloud, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, convectiveFrozen, convectiveMelted, plumeFrozen, plumeCarried, plumeInterfaceT, plumeInterfaceExcess, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained, plumeDetrained, envHumidity, plumeCounted, resolutionScale,
