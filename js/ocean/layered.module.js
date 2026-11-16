@@ -1717,6 +1717,7 @@ export function createOcean(mesh, {
   }
   function build(surfaceT, ice, atlas, concentration = seaCover) {
     restartUpwelling();
+    pendingHeld = null;
     u.fill(0); eta.fill(0); fresh.fill(0); calved.fill(0); buoyancyLoss.fill(0);
     if (restrat) mleDepths.fill(0);
     if (drift) drift.reset();
@@ -1926,6 +1927,7 @@ export function createOcean(mesh, {
   let surfaceTAt = () => 288;
   function load(saved, surfaceT, ice, concentration = seaCover, phase = 0) {
     restartUpwelling();
+    pendingHeld = null;
     if (!saved || !saved.h) { build(surfaceT, ice, climatology, concentration); return; }
     surfaceTAt = (i) => (ice[i] > 0 ? FREEZING_POINT : surfaceT[i]);
     const classes = savedDensities(saved, C), own = classes && sameDensities(classes, labels) && saved.h.length === L * C;
@@ -1973,7 +1975,6 @@ export function createOcean(mesh, {
         if (saved.iceConductance && saved.iceConductance.length === C) seaConductance.set(saved.iceConductance);
       }
     } else {
-      pendingHeld = null;
       if (saved.iceWater && saved.iceWater.length === C && own) bookHeldWater(saved.iceWater, ice);
       else if (saved.iceWater && saved.iceWater.length === C) {
         let cells = 0, joules = 0;

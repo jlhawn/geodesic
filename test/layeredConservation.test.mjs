@@ -240,3 +240,103 @@ test('a turbulent save, restart or lean, loaded into an instant ocean keeps the 
     assert.ok(heldJoules > 0 && Math.abs(gap) <= 1e-6 * heldJoules, `ocean and ice close to ${gap} J of ${heldJoules} J booked`);
   }
 });
+
+test('a turbulent save loaded into an instant ocean and then re-initialized leaves no held heat for the first read', () => {
+  const opts = { thickness: 0.2, cover: 0.85, water: FREEZING_POINT + 1.5 }, run = rig('turbulent', opts);
+  run.seed(0.5);
+  for (let n = 0; n < 4; n++) run.cycle();
+  const saved = run.ocean.serialize({ restart: true }), warn = console.warn;
+  const read = (booking) => {
+    const r = rig('instant', opts);
+    r.ice.set(run.ice); r.surfaceT.set(run.surfaceT); r.seaIce.concentration.set(run.seaIce.concentration);
+    if (booking) {
+      console.warn = () => {};
+      try { r.ocean.load(saved, r.surfaceT, r.ice, r.seaIce.concentration); } finally { console.warn = warn; }
+    }
+    r.ocean.initialize(r.surfaceT, r.ice, { concentration: r.seaIce.concentration });
+    r.ocean.readSurface(r.surfaceT, r.ice, r.seaIce.concentration);
+    return r;
+  };
+  const booked = read(true), plain = read(false);
+  let worst = 0, iced = 0;
+  for (let i = 0; i < booked.C; i++) {
+    if (booked.ice[i] > 0 && booked.ocean.cellOcean[i]) iced++;
+    worst = Math.max(worst, Math.abs(booked.ocean.T0[i] - plain.ocean.T0[i]), Math.abs(booked.ocean.Q[i] - plain.ocean.Q[i]) / booked.ocean.h[i]);
+  }
+  console.log(`initialize after a booking load, ${iced} iced ocean cells: the first read differs from a plain initialize by ${worst.toExponential(1)} K`);
+  assert.ok(iced > 0 && worst === 0, `the first read differs by ${worst} K`);
+});
+
+test('a turbulent save loaded into an instant ocean and then an instant save with layers loaded over it leaves no held heat for the first read', () => {
+  const opts = { thickness: 0.2, cover: 0.85, water: FREEZING_POINT + 1.5 }, run = rig('turbulent', opts);
+  run.seed(0.5);
+  for (let n = 0; n < 4; n++) run.cycle();
+  const turbulentSave = run.ocean.serialize({ restart: true }), source = rig('instant', opts), warn = console.warn;
+  source.ice.set(run.ice); source.surfaceT.set(run.surfaceT); source.seaIce.concentration.set(run.seaIce.concentration);
+  for (let n = 0; n < 2; n++) source.cycle();
+  const instantSave = source.ocean.serialize({ restart: true });
+  assert.ok(instantSave.h && !('iceWater' in instantSave), 'the instant save has layers and no iceWater');
+  const read = (booking) => {
+    const r = rig('instant', opts), notes = [];
+    r.ice.set(source.ice); r.surfaceT.set(source.surfaceT); r.seaIce.concentration.set(source.seaIce.concentration);
+    console.warn = (note) => notes.push(String(note));
+    try {
+      if (booking) r.ocean.load(turbulentSave, r.surfaceT, r.ice, r.seaIce.concentration);
+      r.ocean.load(instantSave, r.surfaceT, r.ice, r.seaIce.concentration);
+    } finally { console.warn = warn; }
+    r.ocean.readSurface(r.surfaceT, r.ice, r.seaIce.concentration);
+    const counts = notes.map((note) => note.match(/booked the saved ocean\.iceWater, the heat the water holds above freezing under (\d+) iced cells/)).filter(Boolean).map((match) => Number(match[1]));
+    return { r, counts };
+  };
+  const { r: booked, counts } = read(true), { r: plain, counts: none } = read(false);
+  const iced = [...Array(booked.C).keys()].filter((i) => booked.ice[i] > 0 && booked.ocean.cellOcean[i]).length;
+  const differing = (a, b) => a.reduce((n, x, j) => n + (x === b[j] ? 0 : 1), 0);
+  const apart = { T0: differing(booked.ocean.T0, plain.ocean.T0), Q: differing(booked.ocean.Q, plain.ocean.Q) };
+  console.log(`a second load after a booking load that booked ${JSON.stringify(counts)} cells, ${iced} iced ocean cells: the first read's T0 and the layers' Q differ from a plain load in ${JSON.stringify(apart)} entries`);
+  assert.ok(counts.length === 1 && counts[0] > 0 && none.length === 0, `the booking load booked ${JSON.stringify(counts)} cells, the plain load ${JSON.stringify(none)}`);
+  assert.ok(iced > 0, 'the instant save holds iced ocean cells');
+  assert.deepEqual(apart, { T0: 0, Q: 0 }, 'T0 and every layer\'s Q equal those of the same load without the booking');
+});
+
+test('a turbulent save loaded into an instant ocean keeps its heat when the booked cells are open water or drift-arrived at the first read: ocean plus ice close on the held heat through the first full ocean interval', () => {
+  for (const drift of [false, true]) for (const restart of [true, false]) {
+    const pre = 7, opts = { thickness: 0.2, cover: 0.85, water: FREEZING_POINT + 1.5, ...(drift ? { iceDrift: COUPLED_ICE_DRIFT, keepSmallIce: true } : {}) };
+    const run = rig('turbulent', opts), spin = zonalWindOnEdges(run.mesh, () => 0.3);
+    run.seed(0.5);
+    for (let n = 0; n < (drift ? 8 : 4); n++) {
+      if (drift) run.ocean.iceDrift.advance({ surfaceT: run.surfaceT, ice: run.ice, concentration: run.seaIce.concentration, stress: spin, waterU: run.ocean.u, eta: run.ocean.eta, dt: DT });
+      run.cycle();
+    }
+    const saved = run.ocean.serialize({ restart }), r = rig('instant', opts), { C, mesh, ocean, seaIce, ice, surfaceT } = r, warn = console.warn;
+    r.ice.set(run.ice); r.surfaceT.set(run.surfaceT); seaIce.concentration.set(run.seaIce.concentration);
+    console.warn = () => {};
+    try { ocean.load(saved, surfaceT, ice, seaIce.concentration); } finally { console.warn = warn; }
+    seaIce.oceanFlux.fill(0);
+    const booked = Uint8Array.from({ length: C }, (_, i) => (ocean.cellOcean[i] && ice[i] > 0 ? 1 : 0));
+    let k = 0;
+    for (let i = 0; i < C; i++) if (booked[i] && saved.iceWater[i] > 0 && k++ % 3 === 0) ice[i] = 0.004;
+    const heldJoules = saved.iceWater.reduce((s, x, i) => s + (booked[i] ? mesh.areaCell[i] * x : 0), 0);
+    const P = ocean.phases, parts = Math.max(1, Math.ceil(DT / inertialStepLimit(mesh))), part = DT / parts;
+    const area = mesh.areaCell.reduce((s, a) => s + a, 0), westerly = zonalWindOnEdges(mesh, () => (drift ? 0.3 : 0)), flux = 300;
+    const oceanHeat = () => { let s = 0; for (let i = 0; i < C; i++) for (let m = 0; m < ocean.layers; m++) s += mesh.areaCell[i] * ocean.rhoCp * (ocean.Q[m * C + i] - 272 * ocean.h[m * C + i]); return s; };
+    const energy = () => r.cellEnergy().reduce((s, x, i) => s + mesh.areaCell[i] * (x + (ice[i] > 0 && ocean.cellOcean[i] ? ocean.rhoCp * (ocean.Q[i] - ocean.h[i] * FREEZING_POINT) : 0)), 0);
+    r.heat.fill(flux);
+    const before = energy();
+    let input = 0;
+    for (let s = 0; s < pre; s++) { for (let i = 0; i < C; i++) seaIce.update(surfaceT, ice, r.heat, i, DT); input += flux * DT * area; }
+    if (drift) ocean.iceDrift.advance({ surfaceT, ice, concentration: seaIce.concentration, stress: westerly, waterU: ocean.u, eta: ocean.eta, dt: DT });
+    let open = 0, arrived = 0;
+    for (let i = 0; i < C; i++) if (booked[i] && saved.iceWater[i] > 0) { if (!(ice[i] > 0)) open++; if (drift && ocean.iceDrift.arrived[i]) arrived++; }
+    ocean.readSurface(surfaceT, ice, seaIce.concentration);
+    ocean.setStress(westerly, ice, seaIce.concentration);
+    let rescaled = 0;
+    for (let m = 0; m < parts; m++) { P.dynamics(part); const a = oceanHeat(); P.rescale(); rescaled += oceanHeat() - a; P.eddy(part); P.shift(); }
+    P.regrid(DT); P.column(DT); ocean.salt(); ocean.meltCalved(); ocean.writeSurface(surfaceT, seaIce.oceanFlux, DT);
+    for (let i = 0; i < C; i++) seaIce.update(surfaceT, ice, r.heat, i, DT);
+    input += flux * DT * area;
+    const gap = energy() - before - rescaled - input;
+    console.log(`${drift ? 'drifting' : 'static'} ice, ${restart ? 'restart' : 'lean'} save: ${open} booked cells open and ${arrived} arrived at the first read, ocean and ice close to ${(gap / heldJoules).toExponential(1)} of the ${heldJoules.toExponential(3)} J booked`);
+    assert.ok(heldJoules > 0 && open > 0 && (!drift || arrived > 0), `${open} booked cells open, ${arrived} arrived`);
+    assert.ok(Math.abs(gap) <= 1e-6 * heldJoules, `ocean and ice close to ${gap} J of ${heldJoules} J booked`);
+  }
+});

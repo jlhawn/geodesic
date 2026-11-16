@@ -67,6 +67,7 @@ const args = process.argv.slice(2).filter((a) => !a.startsWith('--') && !['--out
 const FILE = args[0], STEPS = (args[1] ?? '1,2').split(',').map(Number), CPU_ONLY = process.argv.includes('--cpu-only');
 const GPU_DUMP = flagValue('--gpu-dump'), AGAINST = flagValue('--against'), CPU_DUMP = flagValue('--cpu-dump'), TRACE = flagValue('--trace')?.split(',').map(Number), TRACE_OUT = flagValue('--trace-out'), NO_GPU = CPU_ONLY || !!AGAINST;
 const OUT = process.argv.includes('--out') ? process.argv[process.argv.indexOf('--out') + 1] : null, TOL = Number(process.env.TOL ?? 1e-3);
+if (JSON.parse(process.env.OCEAN ?? '{}') === false) throw new Error('OCEAN is false, and compareEngines.mjs loads the save\'s ocean into both models: give its options as JSON or leave it unset');
 if (!FILE) { console.error('usage: node scripts/compareEngines.mjs STATE.bin [STEPS=1,2] [--out FILE] [--cpu-only]'); process.exit(2); }
 if (TRACE && !TRACE_OUT) { console.error('--trace takes --trace-out FILE'); process.exit(2); }
 

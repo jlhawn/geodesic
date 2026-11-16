@@ -1105,6 +1105,14 @@ the mixed layer. The surface energy — mixed-layer heat over the freezing
 point, skin heat, minus the ice's latent heat — changes by exactly the
 surface flux through every transition (`test/ice.test.mjs`).
 `surfaceT` is the skin temperature the atmosphere sees in both states.
+That hand-off is the `'instant'` exchange. Over the layered ocean the
+default `iceExchange`, `{ mode: 'turbulent', frictionMinimum: 2e-2 }`
+(`DEFAULT_ICE_EXCHANGE` and `ICE_EXCHANGE` in `js/physics/ice.module.js`),
+lets the water under the ice keep its heat above the freezing point, and
+the ice draws it through its base at McPhee's rate ρ c_p c_h u*, u* at
+least `frictionMinimum`, and through its sides. On the slab the sea ice
+has no ocean to hold that heat, and it makes the hand-off in either mode
+unless its `oceanCells` marks a cell as having water under it.
 Without `iceAlbedoPhases`, bare ice reflects 0.62 (`iceAlbedo`) while its skin is colder than
 −1 °C, falling linearly to 0.48 (`meltingIceAlbedo`) at the melting
 point, and ice thinner than 0.5 m blends toward the water's albedo
@@ -4055,7 +4063,9 @@ The work, in order:
      memory). The open
      sea 0–30° reads 0.102 at the top on that day against 0.08–0.10.
 
-   Defaults: sea ice `iceAlbedoPhases` true (`iceDrySnowFloor` 0.84,
+   Defaults: the ocean's `iceExchange` `{ mode: 'turbulent',
+   frictionMinimum: 2e-2 }`, which the sea ice takes (M9; `'instant'` is
+   M9's hand-off); sea ice `iceAlbedoPhases` true (`iceDrySnowFloor` 0.84,
    `iceMeltingSnowFloor` 0.77, `whiteIceAlbedo` 0.64, `pondAlbedo` 0.2,
    `pondFraction` 0.25; it leaves `meltingIceAlbedo`, `iceSnowFloor` and
    `wetSnowRange` unread on the ice), `iceAlbedo` 0.62 (cold bare ice), `meltingIceAlbedo`

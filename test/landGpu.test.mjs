@@ -7,7 +7,8 @@ import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
-import { PREVIOUS_LEVELS, PREVIOUS_BOUNDARY_LAYER } from './helpers/previousDefaults.mjs';
+import { PREVIOUS_LEVELS, PREVIOUS_BOUNDARY_LAYER, PREVIOUS_ICE } from './helpers/previousDefaults.mjs';
+import { iceExchangeOptions, DEFAULT_ICE_EXCHANGE, DEFAULT_ICE_ALBEDO_PHASES } from '../js/physics/ice.module.js';
 import { distributionCheck, magnitude, hemispheres, S9_TIERS } from './helpers/distribution.mjs';
 
 let gpuAvailable = true;
@@ -56,11 +57,19 @@ function prepare(model, fog = false) {
  * (test/helpers/distribution.mjs): 20 with U4 and U8 nudges at the start or
  * after the first step and every carried array rounded to f32 each step,
  * and 10 with every carried array nudged by up to 4 f32 ulps each step.
- * The groups are Ts over land and over the sea, and soil water, snow and the
- * surface layer over land; over the sea, where the CPU and every twin hold
- * exactly 0, soil water, snow and the surface layer must be exactly 0. One
- * tier sits above twice the twins: the held surface layer's northern
- * trimmed signed mean, at 2.3.
+ * LAND_S9 comes from twins at the instant exchange without albedo phases and
+ * LAND_S9_DEFAULT_ICE from twins at the sea-ice options that
+ * LAND_S9_DEFAULT_ICE_BUILT names, so each case is judged against twins of
+ * its own configuration. The groups are Ts over land and over the sea, and
+ * soil water, snow and the surface layer over land; at the defaults also the
+ * snow of the sea cells that hold ice in both engines, where the sea ice
+ * keeps its snow in the land's array. Every sea cell holds exactly 0 soil
+ * water and surface layer, and at the instant exchange 0 snow, in the CPU and
+ * in every twin, and must in the GPU; at the defaults a sea cell's snow must
+ * be 0 only where it holds ice in neither engine, and a cell iced in one
+ * engine only is in neither snow check. One tier of each table sits above
+ * twice the twins: the held surface layer's northern trimmed signed mean, at
+ * 2.3 in LAND_S9 and 2.6 in LAND_S9_DEFAULT_ICE.
  */
 const LAND_S9 = {
   default: {
@@ -79,10 +88,41 @@ const LAND_S9 = {
   },
 };
 
-for (const held of [true, false]) test(`eight GPU steps over a continent${held ? ', with the boundary layer diagnosed after the deposit,' : ' at the default order'} track the CPU model within the spread of its f32 twins under S9: the surface temperature over land and sea, soil water, snow and surface layer by their largest gap, a ladder of counts, and full and trimmed means per hemisphere, the vegetation and the coast-bound ocean`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+const LAND_S9_DEFAULT_ICE = {
+  default: {
+    tsLand: {largest: 0.541, counts: [[0.27, 4], [0.135, 6], [0.0675, 8], [0.0337, 8], [0.0168, 14], [0.00844, 18], [0.00422, 30], [0.00211, 44]], hemisphere: {north: 0.00107, south: 0.00224}, bulk: {north: {trimmed: 0.000267, signed: 0.000267}, south: {trimmed: 0.000267, signed: 0.000267}}},
+    tsSea: {largest: 0.015, counts: [[0.00747, 4], [0.00373, 6], [0.00186, 14]], hemisphere: {north: 0.0003, south: 0.00033}, bulk: {north: {trimmed: 0.000277, signed: 0.000277}, south: {trimmed: 0.000277, signed: 0.000277}}},
+    soil: {largest: 0.0548, counts: [[0.0273, 4], [0.0136, 4], [0.00684, 4], [0.00342, 8], [0.00171, 12], [0.000855, 14], [0.000427, 26], [0.000213, 48]], hemisphere: {north: 0.000121, south: 0.000142}, bulk: {north: {trimmed: 5.81e-5, signed: 3.82e-5}, south: {trimmed: 5.57e-5, signed: 3.82e-5}}},
+    snow: {largest: 9.87e-5, counts: [[4.93e-5, 4], [2.46e-5, 4]], hemisphere: {north: 1.15e-6, south: 9.53e-7}, bulk: {north: {trimmed: 9.53e-7, signed: 9.53e-7}, south: {trimmed: 9.53e-7, signed: 9.53e-7}}},
+    surface: {largest: 0.076, counts: [[0.0379, 4], [0.0189, 6], [0.00949, 6], [0.00474, 6], [0.00237, 8], [0.00118, 12], [0.000593, 24], [0.000296, 32], [0.000148, 48], [7.41e-5, 58], [3.7e-5, 78]], hemisphere: {north: 1.64e-5, south: 0.000227}, bulk: {north: {trimmed: 2.9e-7, signed: 6.61e-8}, south: {trimmed: 1.77e-7, signed: 2.3e-8}}},
+    seaSnow: {largest: 5.7e-5, counts: [[2.84e-5, 4], [1.42e-5, 4], [7.12e-6, 4], [3.56e-6, 6], [1.78e-6, 6], [8.9e-7, 8], [4.45e-7, 10], [2.22e-7, 10], [1.11e-7, 10], [5.56e-8, 12]], hemisphere: {north: 6.62e-7}, bulk: {north: {trimmed: 1.12e-9, signed: 1.12e-9}}},
+  },
+  held: {
+    tsLand: {largest: 0.697, counts: [[0.348, 4], [0.174, 4], [0.087, 4], [0.0435, 6], [0.0217, 8], [0.0108, 8], [0.00544, 10], [0.00272, 16], [0.00136, 38]], hemisphere: {north: 0.00152, south: 0.000531}, bulk: {north: {trimmed: 0.000267, signed: 0.000267}, south: {trimmed: 0.000267, signed: 0.000267}}},
+    tsSea: {largest: 0.0162, counts: [[0.00808, 4], [0.00404, 6], [0.00202, 8]], hemisphere: {north: 0.000313, south: 0.000308}, bulk: {north: {trimmed: 0.000277, signed: 0.000277}, south: {trimmed: 0.000277, signed: 0.000277}}},
+    soil: {largest: 0.0563, counts: [[0.0281, 4], [0.014, 4], [0.00703, 4], [0.00351, 4], [0.00175, 6], [0.000879, 8], [0.000439, 20], [0.000219, 52]], hemisphere: {north: 0.000108, south: 7.52e-5}, bulk: {north: {trimmed: 5.66e-5, signed: 3.82e-5}, south: {trimmed: 5.62e-5, signed: 3.82e-5}}},
+    snow: {largest: 9.29e-5, counts: [[4.64e-5, 4], [2.32e-5, 6]], hemisphere: {north: 1.19e-6, south: 9.52e-7}, bulk: {north: {trimmed: 9.52e-7, signed: 9.52e-7}, south: {trimmed: 9.52e-7, signed: 9.52e-7}}},
+    surface: {largest: 0.0288, counts: [[0.0143, 4], [0.00719, 4], [0.00359, 4], [0.00179, 4], [0.000899, 4], [0.000449, 10], [0.000224, 22], [0.000112, 36], [5.62e-5, 46], [2.81e-5, 68], [1.4e-5, 84]], hemisphere: {north: 5.49e-5, south: 1.1e-5}, bulk: {north: {trimmed: 2.49e-7, signed: 5.18e-8}, south: {trimmed: 1.99e-7, signed: 3.1e-8}}},
+    seaSnow: {largest: 1.48e-5, counts: [[7.37e-6, 4], [3.68e-6, 6], [1.84e-6, 6], [9.21e-7, 8], [4.6e-7, 8], [2.3e-7, 10], [1.15e-7, 10], [5.76e-8, 10], [2.88e-8, 10]], hemisphere: {north: 2.82e-7}, bulk: {north: {trimmed: 5.66e-10, signed: 5.66e-10}}},
+  },
+};
+const LAND_S9_DEFAULT_ICE_BUILT = {
+  iceExchange: { mode: 'turbulent', turbulent: true, heatTransfer: 0.006, frictionMinimum: 2e-2, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66, lateralRate: 1.6e-6 * Math.PI / (0.66 * 300) },
+  areaLossFactor: 1, iceAlbedoPhases: true,
+};
+
+const ICE_CASES = [
+  { label: ' at the instant exchange without albedo phases', options: { ocean: { iceExchange: 'instant' }, ice: PREVIOUS_ICE }, tiers: LAND_S9, defaults: false },
+  { label: ' at the default ice', options: {}, tiers: LAND_S9_DEFAULT_ICE, defaults: true },
+];
+
+for (const ice of ICE_CASES) for (const held of [true, false]) test(`eight GPU steps over a continent${ice.label}${held ? ', with the boundary layer diagnosed after the deposit,' : ' at the default order'} track the CPU model within the spread of its f32 twins under S9: the surface temperature over land and sea, soil water, snow and surface layer by their largest gap, a ladder of counts, and full and trimmed means per hemisphere, the vegetation and the coast-bound ocean`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
-  const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
-  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
+  const cpu = prepare(createModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, ...ice.options, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, levels: PREVIOUS_LEVELS, surface: PREVIOUS_AIR_SEA, ...ice.options, boundaryLayer: { ...(held ? PREVIOUS_BOUNDARY_LAYER : {}), velocityScale: 'capped' } }), true);
+  const resolved = iceExchangeOptions(DEFAULT_ICE_EXCHANGE);
+  if (ice.defaults) assert.deepEqual({ cpuOcean: cpu.ocean.iceExchange, cpuIce: cpu.seaIce.iceExchange, gpuOcean: gpu.oceanEngine.options.iceExchange, gpuIce: gpu.seaIce.iceExchange, cpuPhases: cpu.seaIce.iceAlbedoPhases, gpuPhases: gpu.seaIce.iceAlbedoPhases }, { cpuOcean: resolved, cpuIce: resolved, gpuOcean: DEFAULT_ICE_EXCHANGE, gpuIce: resolved, cpuPhases: DEFAULT_ICE_ALBEDO_PHASES, gpuPhases: DEFAULT_ICE_ALBEDO_PHASES });
+  if (ice.defaults) assert.deepEqual({ iceExchange: resolved, areaLossFactor: gpu.gpu.physics.areaLossFactor, iceAlbedoPhases: DEFAULT_ICE_ALBEDO_PHASES }, LAND_S9_DEFAULT_ICE_BUILT, 'the sea-ice options this case runs at, the resolved exchange and the phases that both engines take and the GPU\'s areaLossFactor, are those LAND_S9_DEFAULT_ICE was built at; other options need its tiers rebuilt from twins at them');
   const decisions = decisionTracker(cpu.core.K, cpu.mesh.nCells, { mix: true });
   for (let n = 0; n < 8; n++) {
     cpu.step(900); await gpu.step(900);
@@ -107,10 +147,11 @@ for (const held of [true, false]) test(`eight GPU steps over a continent${held ?
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
   const landCells = [...cpu.geography.land.keys()].filter((i) => cpu.geography.land[i]);
   const seaCells = [...cpu.geography.land.keys()].filter((i) => !cpu.geography.land[i]);
-  const groups = { tsLand: [cpu.state[3], gpu.state[3], landCells], tsSea: [cpu.state[3], gpu.state[3], seaCells], soil: [cpu.land.soil, saved.soil, landCells], snow: [cpu.land.snow, saved.snow, landCells], surface: [cpu.land.surface, saved.surface, landCells] };
-  const checks = Object.entries(groups).map(([name, [a, b, cells]]) => [name, distributionCheck(cells.map((i) => b[i] - a[i]), hemispheres(cpu.mesh, cells), LAND_S9[held ? 'held' : 'default'][name], magnitude(cells.map((i) => a[i])), { cells, require: S9_TIERS })]);
+  const icedBoth = seaCells.filter((i) => cpu.state[6][i] > 0 && gpu.state[6][i] > 0);
+  const groups = { tsLand: [cpu.state[3], gpu.state[3], landCells], tsSea: [cpu.state[3], gpu.state[3], seaCells], soil: [cpu.land.soil, saved.soil, landCells], snow: [cpu.land.snow, saved.snow, landCells], surface: [cpu.land.surface, saved.surface, landCells], ...(ice.defaults ? { seaSnow: [cpu.land.snow, saved.snow, icedBoth] } : {}) };
+  const checks = Object.entries(groups).map(([name, [a, b, cells]]) => [name, distributionCheck(cells.map((i) => b[i] - a[i]), hemispheres(cpu.mesh, cells), ice.tiers[held ? 'held' : 'default'][name], magnitude(cells.map((i) => a[i])), { cells, require: S9_TIERS })]);
   console.log(`${held ? 'held' : 'default'} order:\n${checks.map(([name, check]) => `  ${name}: ${check.text}`).join('\n')}\n  complete mixes parted at ${[...decisions.kinds.mix].join(', ') || 'none'}; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
-  const iced = (i) => cpu.state[6][i] > 0 || gpu.state[6][i] > 0;
+  const iced = (i) => ice.defaults && (cpu.state[6][i] > 0 || gpu.state[6][i] > 0);
   const seaWater = ['soil', 'snow', 'surface'].flatMap((name) => seaCells.filter((i) => !(name === 'snow' && iced(i)) && !(cpu.land[name][i] === 0 && saved[name][i] === 0)).map((i) => `${name} at sea cell ${i}: ${cpu.land[name][i]}/${saved[name][i]}`));
   assert.deepEqual([...checks.flatMap(([name, check]) => check.failed.map((failure) => `${name}: ${failure}`)), ...seaWater], [], 'groups past the twins\x27 spread, or land water at sea');
   assert.ok(Math.abs(dc.landMeanT - d.landMeanT) < 0.01 && Math.abs(dc.soilWater - d.soilWater) < 0.01 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 0.2);

@@ -44,6 +44,7 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
  * loaded with everything a whole-day snapshot carries.
  */
 export async function gpuModelFrom(saved) {
+  if (JSON.parse(process.env.OCEAN ?? '{}') === false) throw new Error('OCEAN is false, and gpuModelFrom loads the save\'s ocean: give its options as JSON or leave it unset');
   const env = (name) => JSON.parse(process.env[name] ?? '{}'), { topography, geography, land } = stateGeography(saved);
   const ocean = resumedOcean(saved, env('OCEAN')), ice = resumedIce(saved, env('ICE'));
   console.error(`iceExchange ${JSON.stringify(ocean === false ? null : ocean.iceExchange)}, ice options ${JSON.stringify(ice)}`);

@@ -74,9 +74,10 @@ export function asMade(given) {
  * for a base without `given`, the boundary layer against the group its
  * `options` record, as a page export's do, or, where neither records it,
  * that the state's order cannot be told, with the order this run's
- * boundary layer runs; and, where this run's ice exchange is not the one
- * base was made under (savedIceExchange), the two. A record whose ocean
- * names no iceExchange counts as the instant exchange.
+ * boundary layer runs; and, where this run's ice exchange or iceAlbedoPhases
+ * is not the one base was made under (savedIceExchange, savedIceAlbedoPhases),
+ * the two. A record naming no iceExchange counts as the instant exchange,
+ * and one naming no iceAlbedoPhases as the phases off.
  */
 export function resumeNotes(given, base, name) {
   if (!base) return [];
@@ -94,8 +95,11 @@ const withRecords = (given) => (isGroup(given) ? { ...given, ...(given.ocean ===
 const resolvedExchange = (exchange) => canonical(iceExchangeOptions(exchange));
 
 function exchangeNotes(given, base, name) {
-  const before = savedIceExchange(base), after = savedIceExchange({ given });
-  return resolvedExchange(before) === resolvedExchange(after) ? [] : [`iceExchange ${JSON.stringify(after)} where ${name} was made under ${JSON.stringify(before)}`];
+  const before = savedIceExchange(base), after = savedIceExchange({ given }), phasesBefore = savedIceAlbedoPhases(base), phasesAfter = savedIceAlbedoPhases({ given });
+  return [
+    ...(resolvedExchange(before) === resolvedExchange(after) ? [] : [`iceExchange ${JSON.stringify(after)} where ${name} was made under ${JSON.stringify(before)}`]),
+    ...(phasesBefore === phasesAfter ? [] : [`iceAlbedoPhases ${phasesAfter} where ${name} was made with ${phasesBefore}`]),
+  ];
 }
 
 /*
@@ -113,7 +117,7 @@ export function rebuiltOptions(header, groups = {}, standIn) {
     if (differing.length) throw new Error(`GIVEN stands in for the given options only where the state's header records none; this header records them, and GIVEN differs from them in ${differing.join(', ')}: unset GIVEN, and give the groups to change in their own variables`);
   }
   const recorded = header.given === undefined ? standIn : asMade(header.given);
-  if (!isGroup(recorded)) throw new Error('the state\'s header records no given options (no state saved before Nov 7, 2026 does), so its run cannot be rebuilt as it was made: GIVEN (JSON, {} for today\'s defaults) stands in for them');
+  if (!isGroup(recorded)) throw new Error('the state\'s header records no given options (no state saved before Nov 7, 2026 does), so its run cannot be rebuilt as it was made: GIVEN (JSON, {} for today\'s defaults but the sea ice\'s exchange and iceAlbedoPhases, taken as the header reads them) stands in for them');
   return Object.fromEntries([...new Set([...Object.keys(recorded), ...Object.keys(groups)])].map((group) => {
     const own = recorded[group], value = groups[group];
     return [group, value === undefined ? own : isGroup(value) && isGroup(own) ? { ...own, ...value } : value];
@@ -125,8 +129,9 @@ export function rebuiltOptions(header, groups = {}, standIn) {
  * rebuiltOptions' groups but the ocean and the terrain, the sea ice naming
  * the exchange and iceAlbedoPhases the save was made under, as its header
  * reads them; for a header without given options, as `standIn` names them
- * where it does, the ocean's exchange before the ice's. A sea ice without
- * an ocean that names neither takes the defaults.
+ * where it does, the ocean's exchange before the ice's. It names both
+ * because createGpuModel's oceanless sea ice would otherwise take the
+ * defaults.
  */
 export function fixedSeaRun(saved, groups, standIn) {
   const { ocean, terrain, ...run } = rebuiltOptions(saved, groups, standIn), ice = isGroup(run.ice) ? run.ice : {};
