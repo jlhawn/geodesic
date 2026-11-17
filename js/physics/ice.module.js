@@ -123,7 +123,7 @@ export const frictionMinimumNote = (exchange) => {
  *
  * Ice covers the fraction `concentration` of its cell (A), with the
  * thickness `ice` over that part, so the volume per cell area is A·h;
- * the open part, the leads, is water held at the freezing point. The
+ * the open part, the leads, is water. The
  * atmosphere sees the area-weighted albedo and, for its fluxes, the
  * area-weighted surface temperature. The cell's net flux is split
  * between the parts by the sunlight the leads absorb beyond the ice
