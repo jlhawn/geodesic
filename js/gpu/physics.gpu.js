@@ -1171,6 +1171,7 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
  */
 export const seaSurfaceWgsl = (o) => {
   const light = !!o.iceLight, brine = !!o.brineReservoir, hibler = o.leadClosure === 'hibler', turbulent = !!(o.iceTransfer && o.iceTransfer.turbulent), phases = !!o.iceAlbedoPhases;
+  const lead = turbulent && o.iceTransfer.leadTemperature === 'water' ? 'select(FREEZING, FREEZING + PH[PH_WHEAT + i] / capacity, PH[PH_WET + i] > 0.5)' : 'FREEZING';
   const areaLoss = o.areaLossFactor === undefined || o.areaLossFactor === 1 ? '' : 'AREA_LOSS * ';
   return `if (h <= 0.0) {
     if (snow0 > 0.0) { T -= LFUS * snow0 / capacity; PH[PH_SNOW + i] = 0.0; }
@@ -1186,7 +1187,7 @@ export const seaSurfaceWgsl = (o) => {
     PH[PH_SNOWALB + i] = ALB_FRESH;
   } else {
     var snow = snow0;
-    let split = contrast - LEADX * (FREEZING - T);
+    let split = contrast - LEADX * (${lead} - T);
     ${light ? 'var' : 'let'} iceFlux = net - (1.0 - cover) * split; let waterFlux = net + cover * split;
 ${light ? `    let passed = max(0.0, absorbed - (1.0 - cover) * contrast) * (I0_CLEAR + (I0_CLOUDY - I0_CLEAR) * diffuse) * max(0.0, 1.0 - snow / FULLSNOW_ICE);
     let through = passed * exp(-ICE_EXT * max(0.0, h - ICE_TOP));
@@ -1496,7 +1497,7 @@ export function deepStoreRain(body) {
     return text.slice(0, at) + to + text.slice(at + from.length);
   }, body);
 }
-export const physicsKernel = (seaSkin = false, aerosol = false, deep = false) => `${aerosol ? aerosolLight(MIXED_LAYER_WGSL, false) : MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+export const physicsKernel = (seaSkin = false, aerosol = false, deep = false, leadWater = false) => `${aerosol ? aerosolLight(MIXED_LAYER_WGSL, false) : MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -1527,7 +1528,7 @@ export const physicsKernel = (seaSkin = false, aerosol = false, deep = false) =>
   let iceDif = surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]); let iceDir = surfaceAlbedo(ice, waterDir, snow0, skin, PH[PH_SNOWALB + i]);
   let adif = select(cover * iceDif + (1.0 - cover) * ALB_DIF_WATER, landAlbedo, onLand);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
-  let ts = ${seaSkin ? 'skinAdded(i, onLand, ice, ' : ''}select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0)${seaSkin ? ')' : ''};
+  let ts = ${seaSkin ? 'skinAdded(i, onLand, ice, ' : ''}select(skin, cover * skin + (1.0 - cover) * ${leadWater ? 'select(FREEZING, FREEZING + PH[PH_WHEAT + i] / PH[PH_CAP + i], PH[PH_WET + i] > 0.5)' : 'FREEZING'}, !onLand && ice > 0.0 && cover < 1.0)${seaSkin ? ')' : ''};
   let warmth = clamp((ts - GROWCOLD) / (GROWWARM - GROWCOLD), 0.0, 1.0);
   let roots = min(1.0, soil0 / (WETT * bucket));
 ${deep ? '  let drawing = deepDrawing(i, roots, veg0);\n' : ''}  let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);

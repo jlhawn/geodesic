@@ -51,12 +51,15 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * capacity. Bottom and lateral melt are scaled together where they would take
  * more than waterHeat in the step, as CICE scales them against the heat the
  * ocean can give. The constants are ICE_EXCHANGE; `iceExchange` is the mode
- * name or an object of them with a `mode`.
+ * name or an object of them with a `mode`. Its `leadTemperature` is the
+ * temperature the air sees in the leads: 'freezing', T_f, or, under
+ * 'turbulent' only, 'water', T_w.
  */
 export const ICE_EXCHANGES = ['instant', 'turbulent'];
 export const DEFAULT_ICE_EXCHANGE = { mode: 'turbulent', frictionMinimum: 2e-2 };
 export const DEFAULT_ICE_ALBEDO_PHASES = true;
-export const ICE_EXCHANGE = { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66 };
+export const ICE_EXCHANGE = { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66, leadTemperature: 'freezing' };
+export const LEAD_TEMPERATURES = ['freezing', 'water'];
 export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   const given = typeof option === 'string' ? { mode: option } : option;
   if (given === null || typeof given !== 'object') throw new Error(`iceExchange is ${ICE_EXCHANGES.join(' or ')} or an object of ${Object.keys(ICE_EXCHANGE).join(', ')} with a mode, not ${option}`);
@@ -67,6 +70,8 @@ export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   const set = { ...ICE_EXCHANGE, ...rest };
   for (const key of ['heatTransfer', 'lateralExponent', 'floeDiameter', 'floeShape']) if (!(set[key] > 0)) throw new Error(`iceExchange.${key} is positive, not ${set[key]}`);
   for (const key of ['frictionMinimum', 'lateralMelt']) if (!(set[key] >= 0)) throw new Error(`iceExchange.${key} is not negative, not ${set[key]}`);
+  if (!LEAD_TEMPERATURES.includes(set.leadTemperature)) throw new Error(`iceExchange.leadTemperature is one of ${LEAD_TEMPERATURES.join(', ')}, not ${set.leadTemperature}`);
+  if (set.leadTemperature === 'water' && mode !== 'turbulent') throw new Error(`iceExchange.leadTemperature water needs the turbulent mode, under which the water holds heat above freezing, not ${mode}`);
   const resolved = { mode, turbulent: mode === 'turbulent', ...set, lateralRate: set.lateralMelt * Math.PI / (set.floeShape * set.floeDiameter) };
   if (turbulent !== undefined && turbulent !== resolved.turbulent) throw new Error(`iceExchange.turbulent follows its mode ${mode}, not ${turbulent}`);
   if (lateralRate !== undefined && lateralRate !== resolved.lateralRate) throw new Error(`iceExchange.lateralRate follows lateralMelt, floeShape and floeDiameter (${resolved.lateralRate}), not ${lateralRate}`);
@@ -354,6 +359,7 @@ export function createSeaIce(mesh, options = {}) {
    */
   const waterTemperature = (i) => (holds(i) ? FREEZING_POINT + waterHeat[i] / capacityOf(i) : FREEZING_POINT);
   const holdWater = (i, temperature) => { if (holds(i)) waterHeat[i] = capacityOf(i) * (temperature - FREEZING_POINT); };
+  const leadTemperature = transfer.leadTemperature === 'water' ? waterTemperature : () => FREEZING_POINT;
 
   function deposit(i, amount, airTemperature, ice, surfaceT) {
     if (airTemperature >= MELTING_POINT || amount <= 0) return false;
@@ -395,7 +401,7 @@ export function createSeaIce(mesh, options = {}) {
     }
     const h = ice[i], A = cover(i, h);
     let T = surfaceT[i], s = snow[i];
-    const split = contrast - leadExchange * (FREEZING_POINT - T);
+    const split = contrast - leadExchange * (leadTemperature(i) - T);
     let iceFlux = flux[i] - (1 - A) * split;
     const waterFlux = flux[i] + A * split;
     let through = 0, held = 0;
@@ -480,7 +486,7 @@ export function createSeaIce(mesh, options = {}) {
 
   return {
     albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, removal, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration, brine, iceLight,
-    iceExchange: transfer, turbulent, iceAlbedoPhases, waterHeat, conductance, waterTemperature, holdWater,
+    iceExchange: transfer, turbulent, iceAlbedoPhases, waterHeat, conductance, waterTemperature, holdWater, leadTemperature,
     shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, snowAlbedo: snowAlbedo.buffer, concentration: concentration.buffer, waterHeat: waterHeat.buffer, conductance: conductance.buffer, ...(brine ? { brine: brine.buffer } : {}) },
   };
 }

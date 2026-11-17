@@ -435,6 +435,37 @@ test('both engines built with the turbulent exchange at frictionMinimum 5e-4 and
   gpu.destroy();
 });
 
+test('both engines built with the default exchange at leadTemperature water step alike and apart from the default: from one state, over three ocean intervals the ice, the water\'s heat under it and the surface temperature follow the CPU, and the held heat parts from a CPU run at the default by far more than the engines part', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { topography, ocean: { iceExchange: { ...DEFAULT_ICE_EXCHANGE, leadTemperature: 'water' } } }, source = await begin(options), { oceanEvery } = source.cadence;
+  const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length;
+  const gpu = await createGpuModel(new Grid(N), options), cpu = createModel(new Grid(N), options), base = createModel(new Grid(N), { topography }), { device, buffers, layout } = gpu.gpu;
+  assert.ok(cpu.seaIce.iceExchange.leadTemperature === 'water' && base.seaIce.iceExchange.leadTemperature === 'freezing' && layout.PH.WHEAT !== undefined, 'the CPU takes leadTemperature water, the base the default');
+  for (const model of [gpu, cpu, base]) {
+    model.state.forEach((values, a) => values.set(saved.host[`state${a}`]));
+    model.seaIce.load(model.state[6], saved.host.concentration, null);
+    model.time = saved.time;
+  }
+  gpu.load(); gpu.ocean.load(saved.ocean, gpu.state[3], gpu.state[6]); loadSavedLand(gpu, saved);
+  for (const model of [cpu, base]) { model.ocean.load(saved.ocean, model.state[3], model.state[6], model.seaIce.concentration); loadSavedLand(model, saved); }
+  for (let n = 0; n < 3 * oceanEvery; n++) { await gpu.step(DT); cpu.step(DT); base.step(DT); }
+  await gpu.sync();
+  const [heat] = await readRanges(device, buffers.PH, [{ offset: layout.PH.WHEAT, length: C }]);
+  const capacity = Float64Array.from(cpu.ocean.capacity), sea = [...Array(C).keys()].filter((i) => cpu.ocean.cellOcean[i]), iced = sea.filter((i) => cpu.state[6][i] > 0 && base.state[6][i] > 0);
+  const volume = (model, i) => (model.state[6][i] > 0 ? model.state[6][i] * model.seaIce.concentration[i] : 0);
+  const apart = {
+    heat: Math.max(...iced.map((i) => Math.abs(heat[i] - cpu.seaIce.waterHeat[i]) / capacity[i])),
+    volume: Math.max(...sea.map((i) => Math.abs(volume(gpu, i) - volume(cpu, i)))),
+    surface: Math.max(...sea.map((i) => Math.abs(gpu.state[3][i] - cpu.state[3][i]))),
+    icedSurface: Math.max(...iced.map((i) => Math.abs(gpu.state[3][i] - cpu.state[3][i]))),
+  };
+  const option = Math.max(...iced.map((i) => Math.abs(cpu.seaIce.waterHeat[i] - base.seaIce.waterHeat[i]) / capacity[i]));
+  console.log(`${iced.length} iced cells of ${sea.length} sea cells after ${3 * oceanEvery} steps at leadTemperature water; the engines differ by up to ${JSON.stringify(apart)}; the held heat parts from the default's by up to ${option} K`);
+  assert.ok(iced.length > 10 && cpu.seaIce.waterHeat.some((x) => x > 0), `${iced.length} iced cells, some holding heat`);
+  assert.ok(option > 10 * apart.heat, `the option moves the held heat by ${option} K, the engines part by ${apart.heat} K`);
+  assert.ok(apart.heat < 1e-4 && apart.volume < 1e-5 && apart.surface < 0.025 && apart.icedSurface < 1e-3, JSON.stringify(apart));
+  gpu.destroy();
+});
+
 test('an instant save with ice loaded into the turbulent model on both engines: the water under the ice starts within the f32 grain of the freezing point, as on the CPU, and over two ocean intervals the ice, the held heat and the conductance follow the CPU and no ice collapses', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const options = { topography, ocean: { iceExchange: TURBULENT } }, source = await begin({ topography, ocean: { iceExchange: 'instant' } }), { oceanEvery } = source.cadence;
   const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length;
