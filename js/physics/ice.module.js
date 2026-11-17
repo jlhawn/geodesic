@@ -53,12 +53,14 @@ export const seaIceRemoval = (keepSmallIce) => (keepSmallIce ? { concentration: 
  * ocean can give. The constants are ICE_EXCHANGE; `iceExchange` is the mode
  * name or an object of them with a `mode`. Its `leadTemperature` is the
  * temperature the air sees in the leads: 'freezing', T_f, or, under
- * 'turbulent' only, 'water', T_w.
+ * 'turbulent' only, 'water', T_w. With its `traceMelt`, under 'turbulent'
+ * only, ice below MINIMUM_CONCENTRATION melts whole from waterHeat, as far
+ * as waterHeat goes, as 'instant' melts it from the ocean's heat.
  */
 export const ICE_EXCHANGES = ['instant', 'turbulent'];
 export const DEFAULT_ICE_EXCHANGE = { mode: 'turbulent', frictionMinimum: 2e-2 };
 export const DEFAULT_ICE_ALBEDO_PHASES = true;
-export const ICE_EXCHANGE = { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66, leadTemperature: 'freezing' };
+export const ICE_EXCHANGE = { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66, leadTemperature: 'freezing', traceMelt: false };
 export const LEAD_TEMPERATURES = ['freezing', 'water'];
 export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   const given = typeof option === 'string' ? { mode: option } : option;
@@ -72,6 +74,8 @@ export function iceExchangeOptions(option = DEFAULT_ICE_EXCHANGE) {
   for (const key of ['frictionMinimum', 'lateralMelt']) if (!(set[key] >= 0)) throw new Error(`iceExchange.${key} is not negative, not ${set[key]}`);
   if (!LEAD_TEMPERATURES.includes(set.leadTemperature)) throw new Error(`iceExchange.leadTemperature is one of ${LEAD_TEMPERATURES.join(', ')}, not ${set.leadTemperature}`);
   if (set.leadTemperature === 'water' && mode !== 'turbulent') throw new Error(`iceExchange.leadTemperature water needs the turbulent mode, under which the water holds heat above freezing, not ${mode}`);
+  if (typeof set.traceMelt !== 'boolean') throw new Error(`iceExchange.traceMelt is true or false, not ${set.traceMelt}`);
+  if (set.traceMelt && mode !== 'turbulent') throw new Error(`iceExchange.traceMelt needs the turbulent mode, under which ice below MINIMUM_CONCENTRATION can outlast the heat under it, not ${mode}`);
   const resolved = { mode, turbulent: mode === 'turbulent', ...set, lateralRate: set.lateralMelt * Math.PI / (set.floeShape * set.floeDiameter) };
   if (turbulent !== undefined && turbulent !== resolved.turbulent) throw new Error(`iceExchange.turbulent follows its mode ${mode}, not ${turbulent}`);
   if (lateralRate !== undefined && lateralRate !== resolved.lateralRate) throw new Error(`iceExchange.lateralRate follows lateralMelt, floeShape and floeDiameter (${resolved.lateralRate}), not ${lateralRate}`);
@@ -114,7 +118,8 @@ export const frictionMinimumNote = (exchange) => {
  * cell update; with `transmission` and `penetrated` too, open water keeps
  * the share transmission[i] of the absorbed sunlight `solar` out of its
  * temperature and adds it to penetrated[i] (J/m²) for the ocean to take
- * below its mixed layer.
+ * below its mixed layer; with `leadPenetration`, so do the leads of an
+ * iced cell with the sunlight they absorb, (1 − A)(solar + A contrast).
  *
  * Ice covers the fraction `concentration` of its cell (A), with the
  * thickness `ice` over that part, so the volume per cell area is A·h;
@@ -269,7 +274,7 @@ export function createSeaIce(mesh, options = {}) {
   leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, oceanCells = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
-  iceLight = false, brineReservoir = false, iceAlbedoPhases = DEFAULT_ICE_ALBEDO_PHASES, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
+  iceLight = false, brineReservoir = false, leadPenetration = false, iceAlbedoPhases = DEFAULT_ICE_ALBEDO_PHASES, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
   whiteIceAlbedo = ALBEDO_PHASES.whiteIceAlbedo, pondAlbedo = ALBEDO_PHASES.pondAlbedo, pondFraction = ALBEDO_PHASES.pondFraction,
   } = options;
   const unread = iceAlbedoPhases ? ['meltingIceAlbedo', 'iceSnowFloor', 'wetSnowRange'].filter((name) => options[name] !== undefined) : [];
@@ -404,6 +409,8 @@ export function createSeaIce(mesh, options = {}) {
     const split = contrast - leadExchange * (leadTemperature(i) - T);
     let iceFlux = flux[i] - (1 - A) * split;
     const waterFlux = flux[i] + A * split;
+    const leadLight = leadPenetration && transmission ? (1 - A) * (solar + A * contrast) * transmission[i] : 0;
+    if (leadLight) penetrated[i] += dt * leadLight;
     let through = 0, held = 0;
     if (iceLight) {
       const passed = Math.max(0, solar - (1 - A) * contrast) * (ICE_LIGHT.clear + (ICE_LIGHT.cloudy - ICE_LIGHT.clear) * diffuse) * Math.max(0, 1 - s / iceFullSnow);
@@ -438,12 +445,12 @@ export function createSeaIce(mesh, options = {}) {
       excess -= fromSnow * latentHeatFusion;
       thickness -= excess / latent;
     }
-    let leadHeat = (1 - A) * (waterFlux + ocean) * dt, excess = 0, side = 0, lost = 0;
+    let leadHeat = ((1 - A) * (waterFlux + ocean) - leadLight) * dt, excess = 0, side = 0, lost = 0;
     if (holds(i)) {
       const stored = waterHeat[i] + leadHeat, rise = Math.max(0, stored) / capacity;
       leadHeat = Math.min(0, stored);
       excess = Math.max(0, stored);
-      const wantBasal = conductance[i] * rise * dt, lateral = Math.min(1, transfer.lateralRate * Math.pow(rise, transfer.lateralExponent) * dt), wantSide = lateral >= COVER_GRAIN ? lateral : 0;
+      const wantBasal = conductance[i] * rise * dt, lateral = Math.min(1, transfer.lateralRate * Math.pow(rise, transfer.lateralExponent) * dt), wantSide = transfer.traceMelt && rise > 0 && A < MINIMUM_CONCENTRATION ? 1 : lateral >= COVER_GRAIN ? lateral : 0;
       const wanted = A * wantBasal + latent * wantSide * A * Math.max(0, thickness);
       const share = wanted > excess ? excess / wanted : 1;
       side = share * wantSide;
