@@ -127,9 +127,9 @@ export const frictionMinimumNote = (exchange) => {
  * atmosphere sees the area-weighted albedo and, for its fluxes, the
  * area-weighted surface temperature. The cell's net flux is split
  * between the parts by the sunlight the leads absorb beyond the ice
- * (`contrast` in update) and by the heat the leads at the freezing
- * point lose beyond the ice, leadExchange per kelvin of the ice skin's
- * difference from freezing, so that the ice's flux per unit ice area
+ * (`contrast` in update) and by the heat the leads lose beyond the
+ * ice, leadExchange per kelvin of the ice skin's difference from the
+ * leads' temperature, so that the ice's flux per unit ice area
  * and the water's per unit water area average back to it. The ice part
  * evolves as above; the heat the leads gain or lose, with the ocean's
  * flux under them, melts ice or freezes new ice. Melting takes area as
@@ -212,10 +212,9 @@ export const frictionMinimumNote = (exchange) => {
  * `waterHeat`, which the ocean writes after its step, the ice changes in its
  * steps and the ocean reads back before the next, and the ice draws on it at
  * the bottom and lateral rates of conductance[i] and w_lat. The leads' net
- * heat gain, sunlight included, goes into waterHeat and melts no ice; a
- * net loss first takes the heat above freezing and freezes new ice for what
- * remains, as the open water of CICE does; the atmosphere sees the leads at
- * the freezing point, an approximation where the water under them is warmer.
+ * heat gain goes into waterHeat and melts no ice; a net loss first takes
+ * the heat above freezing and freezes new ice for what remains, as the
+ * open water of CICE does.
  * Lateral melt takes the fraction r of the area and, with it, of the volume
  * and snow, the lost area's snow and skin heat going where area loss sends
  * them, so that the thickness stays; the heat of what melts, the volume's
