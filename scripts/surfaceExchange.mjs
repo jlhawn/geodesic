@@ -9,8 +9,6 @@
  * from it, and the second pass uses that depth. A save carries no sea skin
  * either, so the skin offset is left out.
  */
-import { FREEZING_POINT } from '../js/physics/ice.module.js';
-
 export function diagnoseExchange(model) {
   const { core, state, surface, exchange, seaIce, land, boundaryLayer, geography } = model;
   if (!exchange || exchange.fixed) return;
@@ -20,7 +18,7 @@ export function diagnoseExchange(model) {
   const pass = () => {
     for (let i = 0; i < C; i++) {
       const onLand = land && landMask[i], area = onLand ? 0 : seaIce.cover(i, ice[i]);
-      const fluxT = !onLand && ice[i] > 0 && area < 1 ? area * skin[i] + (1 - area) * FREEZING_POINT : skin[i];
+      const fluxT = !onLand && ice[i] > 0 && area < 1 ? area * skin[i] + (1 - area) * seaIce.leadTemperature(i) : skin[i];
       const before = onLand ? land.wetness(i, exchange.heat[i] * exchange.wind[i], skin[i]) : 0;
       const depthAbove = boundaryLayer ? boundaryLayer.depth[i] - geopotential[bottom + i] / g : 0;
       exchange.cell(i, pi, theta, moist ? q : null, moist ? qc : null, fluxT, surface.windSpeed[i], area, land ? land.snow[i] : 0, land ? land.vegetation[i] : 0, land ? land.canopy[i] : 0, before, depthAbove);
