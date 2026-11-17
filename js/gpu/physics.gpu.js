@@ -1167,10 +1167,13 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
  * text so that a kernel with a prescribed net flux steps the same ice;
  * it expects h, T, net, absorbed, contrast, diffuse, ocean, capacity, cover,
  * snow0, dt and i. With PENETRATING, open water keeps the share PH_TRANS of the
- * absorbed sunlight out of T and adds it to PH_PEN (J/m²).
+ * absorbed sunlight out of T and adds it to PH_PEN (J/m²), and with
+ * leadPenetration so do the leads of an iced cell.
  */
 export const seaSurfaceWgsl = (o) => {
   const light = !!o.iceLight, brine = !!o.brineReservoir, hibler = o.leadClosure === 'hibler', turbulent = !!(o.iceTransfer && o.iceTransfer.turbulent), phases = !!o.iceAlbedoPhases;
+  const leadLight = !!o.leadPenetration, traceMelt = turbulent && !!o.iceTransfer.traceMelt, leadsTake = leadLight ? '((1.0 - cover) * (waterFlux + ocean) - leadLight) * dt' : '(1.0 - cover) * (waterFlux + ocean) * dt';
+  const lead = turbulent && o.iceTransfer.leadTemperature === 'water' ? 'select(FREEZING, FREEZING + PH[PH_WHEAT + i] / capacity, PH[PH_WET + i] > 0.5)' : 'FREEZING';
   const areaLoss = o.areaLossFactor === undefined || o.areaLossFactor === 1 ? '' : 'AREA_LOSS * ';
   return `if (h <= 0.0) {
     if (snow0 > 0.0) { T -= LFUS * snow0 / capacity; PH[PH_SNOW + i] = 0.0; }
@@ -1186,9 +1189,9 @@ export const seaSurfaceWgsl = (o) => {
     PH[PH_SNOWALB + i] = ALB_FRESH;
   } else {
     var snow = snow0;
-    let split = contrast - LEADX * (FREEZING - T);
+    let split = contrast - LEADX * (${lead} - T);
     ${light ? 'var' : 'let'} iceFlux = net - (1.0 - cover) * split; let waterFlux = net + cover * split;
-${light ? `    let passed = max(0.0, absorbed - (1.0 - cover) * contrast) * (I0_CLEAR + (I0_CLOUDY - I0_CLEAR) * diffuse) * max(0.0, 1.0 - snow / FULLSNOW_ICE);
+${leadLight ? '    var leadLight = 0.0;\n    if (PENETRATING) { leadLight = (1.0 - cover) * (absorbed + cover * contrast) * PH[PH_TRANS + i]; PH[PH_PEN + i] += dt * leadLight; }\n' : ''}${light ? `    let passed = max(0.0, absorbed - (1.0 - cover) * contrast) * (I0_CLEAR + (I0_CLOUDY - I0_CLEAR) * diffuse) * max(0.0, 1.0 - snow / FULLSNOW_ICE);
     let through = passed * exp(-ICE_EXT * max(0.0, h - ICE_TOP));
 ${brine ? '    let filling = T >= MELTING || PH[PH_BRINE + i] > 0.0;\n' : ''}    iceFlux -= ${brine ? 'select(through, passed, filling)' : 'through'};
 ` : ''}${brine ? `    let depth = max(h, HMIN); let insulation = snow / (RHOSNOW * KSNOW);
@@ -1216,13 +1219,13 @@ ${brine ? '    let filling = T >= MELTING || PH[PH_BRINE + i] > 0.0;\n' : ''}   
       thickness -= excess / LATENT_ICE;
     }
 ${turbulent ? `    let wWet = PH[PH_WET + i] > 0.5;
-    let wStored = select(0.0, PH[PH_WHEAT + i], wWet) + (1.0 - cover) * (waterFlux + ocean) * dt;
+    let wStored = select(0.0, PH[PH_WHEAT + i], wWet) + ${leadsTake};
     let leadHeat = select(wStored, min(0.0, wStored), wWet);
     var wHeat = select(0.0, max(0.0, wStored), wWet);
     let wRise = wHeat / capacity;
     let wBasal = PH[PH_CONDUCT + i] * wRise * dt;
     let wLateral = min(1.0, XFER_RATE * pow(max(wRise, 1.0e-30), XFER_EXP) * dt);
-    let wSideWant = select(0.0, wLateral, wRise > 0.0 && wLateral >= COVER_GRAIN);
+    let wSideWant = ${traceMelt ? 'select(select(0.0, wLateral, wRise > 0.0 && wLateral >= COVER_GRAIN), 1.0, wRise > 0.0 && cover < MIN_CONC)' : 'select(0.0, wLateral, wRise > 0.0 && wLateral >= COVER_GRAIN)'};
     let wWanted = cover * wBasal + LATENT_ICE * wSideWant * cover * max(0.0, thickness);
     let wShare = select(1.0, wHeat / wWanted, wWanted > wHeat);
     let wSide = wShare * wSideWant;
@@ -1233,7 +1236,7 @@ ${turbulent ? `    let wWet = PH[PH_WET + i] > 0.5;
     let melted = max(0.0, -(cover * (thickness - h))) + max(0.0, leadHeat / LATENT_ICE);
     var volume = cover * thickness - wLost - leadHeat / LATENT_ICE;
     let remaining = cover * SKINC * (T - FREEZING) - LATENT_ICE * volume - LFUS * cover * snow${brine ? ' + cover * reservoir' : ''};
-` : `    let leadHeat = (1.0 - cover) * (waterFlux + ocean) * dt;
+` : `    let leadHeat = ${leadsTake};
     let melted = max(0.0, -(cover * (thickness - h))) + max(0.0, leadHeat / LATENT_ICE);
     let leadIce = max(0.0, -leadHeat / LATENT_ICE);
     let remaining = cover * SKINC * (T - FREEZING) - LATENT_ICE * (cover * thickness - leadHeat / LATENT_ICE) - LFUS * cover * snow${brine ? ' + cover * reservoir' : ''};
@@ -1496,7 +1499,7 @@ export function deepStoreRain(body) {
     return text.slice(0, at) + to + text.slice(at + from.length);
   }, body);
 }
-export const physicsKernel = (seaSkin = false, aerosol = false, deep = false) => `${aerosol ? aerosolLight(MIXED_LAYER_WGSL, false) : MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+export const physicsKernel = (seaSkin = false, aerosol = false, deep = false, leadWater = false) => `${aerosol ? aerosolLight(MIXED_LAYER_WGSL, false) : MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${deep ? DEEP_STORE_WGSL : ''}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -1527,7 +1530,7 @@ export const physicsKernel = (seaSkin = false, aerosol = false, deep = false) =>
   let iceDif = surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]); let iceDir = surfaceAlbedo(ice, waterDir, snow0, skin, PH[PH_SNOWALB + i]);
   let adif = select(cover * iceDif + (1.0 - cover) * ALB_DIF_WATER, landAlbedo, onLand);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
-  let ts = ${seaSkin ? 'skinAdded(i, onLand, ice, ' : ''}select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0)${seaSkin ? ')' : ''};
+  let ts = ${seaSkin ? 'skinAdded(i, onLand, ice, ' : ''}select(skin, cover * skin + (1.0 - cover) * ${leadWater ? 'select(FREEZING, FREEZING + PH[PH_WHEAT + i] / PH[PH_CAP + i], PH[PH_WET + i] > 0.5)' : 'FREEZING'}, !onLand && ice > 0.0 && cover < 1.0)${seaSkin ? ')' : ''};
   let warmth = clamp((ts - GROWCOLD) / (GROWWARM - GROWCOLD), 0.0, 1.0);
   let roots = min(1.0, soil0 / (WETT * bucket));
 ${deep ? '  let drawing = deepDrawing(i, roots, veg0);\n' : ''}  let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);

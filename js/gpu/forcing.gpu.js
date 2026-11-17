@@ -147,7 +147,7 @@ export async function createForcingRecorder(model, from = null) {
 export function createForcedOcean(model) {
   const { gpu, mesh, oceanEngine: ocean } = model;
   const { device } = gpu;
-  if (gpu.physics.iceLight) throw new Error("the forced surface restores the sea through the leads' share of the sunlight contrast, so it takes no ice.iceLight");
+  for (const option of ['iceLight', 'leadPenetration']) if (gpu.physics[option]) throw new Error(`the forced surface restores the sea through the leads' share of the sunlight contrast, so it takes no ice.${option}`);
   const C = mesh.nCells, E = mesh.nEdges, PH = gpu.layout.PH;
   const F = seq([['netFlux', C], ['shortwave', C], ['shortwaveDown', C], ['sst', C], ['snowfall', C], ['stress', E]]);
   const forcing = emptyBuffer(device, 4 * F.total);

@@ -20,7 +20,7 @@ import { PREVIOUS_AIR_SEA } from './helpers/previousDefaults.mjs';
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
-const { createForcingRecorder } = gpuAvailable ? await import('../js/gpu/forcing.gpu.js') : {};
+const { createForcingRecorder, createForcedOcean } = gpuAvailable ? await import('../js/gpu/forcing.gpu.js') : {};
 const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
 const root = new URL('..', import.meta.url).pathname;
@@ -207,4 +207,11 @@ test('two recorded days replayed over the ocean alone, the ice drifting under th
   for (const array of model.state) for (const x of array) assert.ok(Number.isFinite(x));
   for (const key of ['meanSurfaceT', 'maxWind', 'oceanSpeed', 'oceanInteriorT']) assert.ok(Number.isFinite(d[key]), key);
   model.destroy();
+});
+
+test('the forced surface refuses ice.iceLight and ice.leadPenetration, whose light would move a share of the restoring its sunlight contrast carries', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const option of ['iceLight', 'leadPenetration']) {
+    const model = await createGpuModel(new Grid(N), { topography, ice: { [option]: true } });
+    try { assert.throws(() => createForcedOcean(model), new RegExp(`so it takes no ice\\.${option}$`)); } finally { model.destroy(); }
+  }
 });

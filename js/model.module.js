@@ -7,7 +7,7 @@ import { createRadiation, memoryLimitMismatch } from './physics/radiation.module
 import { createAerosolSampler, loadAerosol, climatologyOn } from './aerosol.module.js';
 import { createSurface, relativeWindOf, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
-import { createSeaIce, MELTING_POINT, FREEZING_POINT, iceExchangeOptions } from './physics/ice.module.js';
+import { createSeaIce, MELTING_POINT, iceExchangeOptions } from './physics/ice.module.js';
 import { createOcean, JERLOV } from './ocean/layered.module.js';
 import { COUPLED_ICE_DRIFT, iceDriftMoves, coverOf } from './ocean/iceDrift.module.js';
 import { createSkin, skinOptions, skinRequiresRoughness } from './physics/skin.module.js';
@@ -233,7 +233,7 @@ export function createModel(gridOrMesh, {
       for (let i = iFrom; i < iTo; i++) {
         fluxT[i] = state[3][i];
         const onLand = land && landMask[i], h = state[6][i], area = onLand ? 0 : seaIce.cover(i, h);
-        if (!onLand && h > 0 && area < 1) fluxT[i] = area * state[3][i] + (1 - area) * FREEZING_POINT;
+        if (!onLand && h > 0 && area < 1) fluxT[i] = area * state[3][i] + (1 - area) * seaIce.leadTemperature(i);
         if (seaSkin && !onLand && !(h > 0) && !(lakeCell && lakeCell[i])) fluxT[i] += seaSkin.offset(i, capacityOf(i));
         if (rough) {
           const before = onLand ? land.wetness(i, heatCoefficients[i] * (gusty ? exchange.wind[i] : Math.max(surface.windSpeed[i], gustiness)), state[3][i]) : 0;

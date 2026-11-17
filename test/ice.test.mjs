@@ -465,7 +465,7 @@ test('iceExchange is the mode name or an object of the exchange constants that n
   assert.equal(iceExchangeOptions('instant').mode, 'instant');
   assert.deepEqual(iceExchangeOptions(), iceExchangeOptions(DEFAULT_ICE_EXCHANGE));
   assert.equal(iceExchangeOptions('turbulent').turbulent, true);
-  assert.deepEqual(Object.fromEntries(Object.keys(ICE_EXCHANGE).map((key) => [key, iceExchangeOptions('turbulent')[key]])), { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66 });
+  assert.deepEqual(Object.fromEntries(Object.keys(ICE_EXCHANGE).map((key) => [key, iceExchangeOptions('turbulent')[key]])), { heatTransfer: 0.006, frictionMinimum: 5e-4, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66, leadTemperature: 'freezing', traceMelt: false });
   assert.ok(Math.abs(iceExchangeOptions('turbulent').lateralRate - 1.6e-6 * Math.PI / (0.66 * 300)) < 1e-20);
   assert.equal(iceExchangeOptions({ mode: 'turbulent', frictionMinimum: 5e-3 }).frictionMinimum, 5e-3);
   const resolved = iceExchangeOptions({ mode: 'turbulent', floeDiameter: 100 });
@@ -521,6 +521,73 @@ test('the leads\' net gain, sunlight included, warms the water under the ice and
   const short = step(make('turbulent'), -100, 0, 0.4 * loss);
   assert.ok(short.sea.waterHeat[0] < 1e-9, 'a loss beyond it leaves the water at freezing');
   assert.ok(Math.abs(short.sea.budget.leadFrozen / model.mesh.areaCell[0] * short.sea.latent - 0.6 * loss) < 1e-6, `new ice in the leads took ${short.sea.budget.leadFrozen / model.mesh.areaCell[0] * short.sea.latent} J/m² of the ${0.6 * loss} the water could not give`);
+});
+
+test('iceExchange leadTemperature water, turbulent only, has the air see the leads at the temperature of the water under the ice: for the grid-box flux those leads give, the ice takes what it takes with the leads at freezing and the water loses leadExchange more for each kelvin it holds above freezing', () => {
+  assert.equal(iceExchangeOptions().leadTemperature, 'freezing');
+  assert.equal(iceExchangeOptions({ mode: 'turbulent', leadTemperature: 'water' }).leadTemperature, 'water');
+  for (const bad of [{ mode: 'instant', leadTemperature: 'water' }, { mode: 'turbulent', leadTemperature: 'sea' }]) assert.throws(() => iceExchangeOptions(bad), /leadTemperature/, JSON.stringify(bad));
+  const dt = 900, A = 0.2, rise = 4, F = -50;
+  const run = (leadTemperature) => {
+    const sea = createSeaIce(model.mesh, TURBULENT({ lateralMelt: 0, leadTemperature })), surfaceT = new Float64Array([MELTING_POINT - 3]), ice = new Float64Array([1]);
+    sea.concentration[0] = A; sea.conductance[0] = 0; sea.waterHeat[0] = sea.slabHeatCapacity * rise;
+    const lead = sea.leadTemperature(0);
+    sea.update(surfaceT, ice, new Float64Array([F - (1 - A) * sea.leadExchange * (lead - FREEZING_POINT)]), 0, dt);
+    return { sea, lead, skin: surfaceT[0], volume: volumeOf(sea, ice) };
+  };
+  const cold = run('freezing'), warm = run('water');
+  assert.equal(cold.lead, FREEZING_POINT);
+  assert.ok(Math.abs(warm.lead - FREEZING_POINT - rise) < 1e-12, `the leads at ${warm.lead} K`);
+  assert.ok(Math.abs(warm.skin - cold.skin) < 1e-12 && Math.abs(warm.volume - cold.volume) < 1e-15, `the ice skin ${warm.skin} against ${cold.skin} K, its volume ${warm.volume} against ${cold.volume} m`);
+  const lost = cold.sea.waterHeat[0] - warm.sea.waterHeat[0], expected = (1 - A) * cold.sea.leadExchange * rise * dt;
+  assert.ok(Math.abs(lost - expected) < 1e-9 * expected, `the water lost ${lost} J/m² more, against ${expected}`);
+});
+
+test('iceExchange traceMelt, turbulent only, melts ice below MINIMUM_CONCENTRATION whole from the heat held under it, as far as that heat goes, and leaves thicker cover and cold water as they are', () => {
+  assert.equal(iceExchangeOptions().traceMelt, false);
+  assert.equal(iceExchangeOptions({ mode: 'turbulent', traceMelt: true }).traceMelt, true);
+  for (const bad of [{ mode: 'instant', traceMelt: true }, { mode: 'turbulent', traceMelt: 1 }]) assert.throws(() => iceExchangeOptions(bad), /traceMelt/, JSON.stringify(bad));
+  const dt = 900, h = 0.5;
+  const run = (traceMelt, A, rise) => {
+    const sea = createSeaIce(model.mesh, { ...TURBULENT({ traceMelt }), keepSmallIce: true }), surfaceT = new Float64Array([FREEZING_POINT]), ice = new Float64Array([h]);
+    sea.concentration[0] = A; sea.conductance[0] = 0; sea.waterHeat[0] = sea.slabHeatCapacity * rise;
+    const before = energyOf(sea, surfaceT, ice) + sea.waterHeat[0];
+    sea.update(surfaceT, ice, new Float64Array(1), 0, dt);
+    return { sea, ice: ice[0], volume: ice[0] > 0 ? volumeOf(sea, ice) : 0, water: sea.waterHeat[0], surface: surfaceT[0], moved: energyOf(sea, surfaceT, ice) + sea.waterHeat[0] - before };
+  };
+  const A = 0.003, kept = run(false, A, 2), melted = run(true, A, 2);
+  assert.ok(kept.volume > 0.99 * A * h, `without traceMelt the trace keeps ${kept.volume} of ${A * h} m`);
+  assert.equal(melted.ice, 0, 'with it the trace is gone');
+  const left = melted.sea.slabHeatCapacity * 2 - melted.sea.latent * A * h;
+  assert.ok(Math.abs(melted.sea.slabHeatCapacity * (melted.surface - FREEZING_POINT) - left) < 1e-6, `the water keeps ${melted.sea.slabHeatCapacity * (melted.surface - FREEZING_POINT)} J/m², the held heat less the trace's latent heat ${left}`);
+  for (const r of [kept, melted]) assert.ok(Math.abs(r.moved) < 1e-9 * r.sea.slabHeatCapacity, `energy moved by ${r.moved} J/m²`);
+  const short = run(true, A, 0.1 * A * h * createSeaIce(model.mesh).latent / createSeaIce(model.mesh).slabHeatCapacity);
+  assert.ok(short.water < 1e-6 && short.ice > 0 && Math.abs(short.volume - 0.9 * A * h) < 1e-9, `heat for a tenth of the trace melts a tenth: ${short.volume} of ${A * h} m left, ${short.water} J/m² held`);
+  assert.ok(Math.abs(short.moved) < 1e-9 * short.sea.slabHeatCapacity, `energy moved by ${short.moved} J/m²`);
+  for (const [cover, rise] of [[0.02, 2], [A, 0]]) {
+    const off = run(false, cover, rise), on = run(true, cover, rise);
+    assert.deepEqual([on.ice, on.volume, on.water, on.surface], [off.ice, off.volume, off.water, off.surface], `cover ${cover} over water ${rise} K above freezing`);
+  }
+});
+
+test('leadPenetration sends the share transmission[i] of the sunlight an iced cell\'s leads absorb, (1 − A)(solar + A contrast), below the top layer as open water does, under either exchange, and takes it from what the leads give the water or the ice', () => {
+  const dt = 900, A = 0.4, w = 120, contrast = 150, solar = 200, share = 0.31;
+  const run = (mode, leadPenetration) => {
+    const penetrated = new Float64Array(1);
+    const sea = createSeaIce(model.mesh, { ...(mode === 'turbulent' ? TURBULENT({ lateralMelt: 0 }) : { iceExchange: 'instant' }), transmission: new Float64Array([share]), penetrated, leadPenetration });
+    const surfaceT = new Float64Array([FREEZING_POINT]), ice = new Float64Array([1]);
+    sea.concentration[0] = A; sea.conductance[0] = 0;
+    sea.update(surfaceT, ice, new Float64Array([w]), 0, dt, contrast, solar);
+    return { sea, penetrated: penetrated[0], volume: volumeOf(sea, ice), water: sea.waterHeat[0], energy: energyOf(sea, surfaceT, ice) + sea.waterHeat[0] };
+  };
+  const light = (1 - A) * (solar + A * contrast) * share * dt;
+  const held = run('turbulent', false), passed = run('turbulent', true);
+  assert.equal(held.penetrated, 0, 'without the option the leads keep their sunlight');
+  assert.ok(Math.abs(passed.penetrated - light) < 1e-9 * light && Math.abs(held.water - passed.water - light) < 1e-9 * light, `${passed.penetrated} J/m² go below of ${light}; the held heat is ${held.water - passed.water} J/m² less`);
+  assert.equal(passed.volume, held.volume);
+  const melts = run('instant', false), spared = run('instant', true);
+  assert.ok(Math.abs(spared.penetrated - light) < 1e-9 * light && Math.abs(melts.energy - spared.energy - light) < 1e-9 * light, `under instant the ice and its skin hold ${melts.energy - spared.energy} J/m² less, of ${light}`);
+  assert.ok(spared.volume > melts.volume, 'and less of it melts');
 });
 
 test('ice that melts away over held heat under the turbulent exchange leaves the water no heat held, its heat in the open water; over a cell with no ocean column the water under the ice is at the freezing point whatever heat was loaded there', () => {
