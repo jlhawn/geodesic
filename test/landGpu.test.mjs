@@ -107,7 +107,7 @@ const LAND_S9_DEFAULT_ICE = {
   },
 };
 const LAND_S9_DEFAULT_ICE_BUILT = {
-  iceExchange: { mode: 'turbulent', turbulent: true, heatTransfer: 0.006, frictionMinimum: 2e-2, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66, leadTemperature: 'freezing', lateralRate: 1.6e-6 * Math.PI / (0.66 * 300) },
+  iceExchange: { mode: 'turbulent', turbulent: true, heatTransfer: 0.006, frictionMinimum: 2e-2, lateralMelt: 1.6e-6, lateralExponent: 1.36, floeDiameter: 300, floeShape: 0.66, leadTemperature: 'freezing', traceMelt: false, lateralRate: 1.6e-6 * Math.PI / (0.66 * 300) },
   areaLossFactor: 1, iceAlbedoPhases: true,
 };
 
