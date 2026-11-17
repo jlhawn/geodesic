@@ -461,8 +461,8 @@ test('both engines built with the default exchange at leadTemperature water step
   const option = Math.max(...iced.map((i) => Math.abs(cpu.seaIce.waterHeat[i] - base.seaIce.waterHeat[i]) / capacity[i]));
   console.log(`${iced.length} iced cells of ${sea.length} sea cells after ${3 * oceanEvery} steps at leadTemperature water; the engines differ by up to ${JSON.stringify(apart)}; the held heat parts from the default's by up to ${option} K`);
   assert.ok(iced.length > 10 && cpu.seaIce.waterHeat.some((x) => x > 0), `${iced.length} iced cells, some holding heat`);
-  assert.ok(option > 10 * apart.heat, `the option moves the held heat by ${option} K, the engines part by ${apart.heat} K`);
-  assert.ok(apart.heat < 1e-4 && apart.volume < 1e-5 && apart.surface < 0.025 && apart.icedSurface < 1e-3, JSON.stringify(apart));
+  assert.ok(option > 10 * apart.heat, `the option moves the held heat by ${option} K, the engines part by ${apart.heat} K; measured 0.029 K against 2.75e-5 K`);
+  assert.ok(apart.heat < 1e-4 && apart.volume < 1e-5 && apart.surface < 0.025 && apart.icedSurface < 1e-3, `${JSON.stringify(apart)}; the bounds of the default case, 4, 7, 3 and 3 times the 2.75e-5 K, 1.46e-6 m, 0.0082 K and 2.9e-4 K measured`);
   gpu.destroy();
 });
 
