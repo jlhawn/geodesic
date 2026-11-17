@@ -522,6 +522,26 @@ test('both engines built with leadPenetration step alike and apart from the defa
   gpu.destroy();
 });
 
+test('both engines built with traceMelt and leadPenetration together step alike and apart from the default: cells cut to traces of cover 0.005 over held heat, beside iced cells that drift feeds them from, lose far more ice than on the default and alike on both engines, the water under the other iced cells is cooler than the default\'s, and the ice, the held heat and the surface follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const options = { topography, ice: { leadPenetration: true }, ocean: { iceExchange: { ...DEFAULT_ICE_EXCHANGE, traceMelt: true } } };
+  let traces = [];
+  const run = await twins(options, (saved) => {
+    traces = [...saved.host.state6.keys()].filter((i) => i % 2 === 0 && saved.host.state6[i] > 0 && saved.ocean.iceWater[i] > 0);
+    for (const i of traces) saved.host.concentration[i] = 0.005;
+  });
+  const { gpu, cpu, base, oceanEvery, volume, capacity } = run, gone = (model) => traces.filter((i) => !(model.state[6][i] > 0)).length, held = (model) => traces.reduce((sum, i) => sum + volume(model, i), 0);
+  const cut = new Set(traces), iced = run.sea.filter((i) => !cut.has(i) && cpu.state[6][i] > 0 && base.state[6][i] > 0 && cpu.seaIce.concentration[i] < 1 && Math.min(cpu.seaIce.concentration[i], base.seaIce.concentration[i]) >= 0.01);
+  const apart = run.apart(run.sea), counts = { traces: traces.length, iced: iced.length, cpu: gone(cpu), gpu: gone(gpu), base: gone(base) }, melted = { option: held(base) - held(cpu), engines: Math.abs(held(gpu) - held(cpu)) };
+  const cooler = iced.reduce((sum, i) => sum + (base.seaIce.waterHeat[i] - cpu.seaIce.waterHeat[i]) / capacity[i], 0) / iced.length;
+  console.log(`traceMelt with leadPenetration: ${JSON.stringify(counts)} traces gone after ${3 * oceanEvery} steps, their ice ${JSON.stringify(melted)} m less summed over them; the other iced cells' water ${cooler} K cooler than the default's on average; the engines differ by up to ${JSON.stringify(apart)}`);
+  assert.ok(cpu.seaIce.iceExchange.traceMelt && !base.seaIce.iceExchange.traceMelt, 'the CPU takes traceMelt, the base the default');
+  assert.ok(counts.traces > 10 && counts.base === 0 && counts.gpu === counts.cpu, `the same traces go on both engines and none on the default: ${JSON.stringify(counts)}`);
+  assert.ok(melted.option > 10 * melted.engines, `the options melt ${melted.option} m of the traces, the engines part by ${melted.engines} m`);
+  assert.ok(iced.length > 10 && cooler > 0, `${iced.length} other iced cells, their water ${cooler} K cooler than the default's`);
+  assert.ok(apart.heat < 1e-4 && apart.volume < 2e-5 && apart.surface < 0.025, `${JSON.stringify(apart)}; 12, 5.8 and 3.9 times the 8.1e-6 K, 3.5e-6 m and 0.0064 K measured`);
+  gpu.destroy();
+});
+
 test('an instant save with ice loaded into the turbulent model on both engines: the water under the ice starts within the f32 grain of the freezing point, as on the CPU, and over two ocean intervals the ice, the held heat and the conductance follow the CPU and no ice collapses', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const options = { topography, ocean: { iceExchange: TURBULENT } }, source = await begin({ topography, ocean: { iceExchange: 'instant' } }), { oceanEvery } = source.cadence;
   const saved = await save(await steps(source, 2 * oceanEvery)), C = saved.host.state6.length;
