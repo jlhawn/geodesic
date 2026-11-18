@@ -590,6 +590,51 @@ test('leadPenetration sends the share transmission[i] of the sunlight an iced ce
   assert.ok(spared.volume > melts.volume, 'and less of it melts');
 });
 
+test('leadSnow \'floes\', the default, freezes the snow that falls on an iced cell\'s leads onto its floes as the same mass of ice, in thickness, under either exchange; leadSnow is \'floes\' or \'water\'', () => {
+  assert.equal(defaultSeaIce(model.mesh).leadSnow, 'floes');
+  assert.throws(() => createSeaIce(model.mesh, { leadSnow: 'sea' }), /leadSnow is floes or water, not sea/);
+  const S = 1.5, A = 0.6, T0 = FREEZING_POINT - 5, iceDensity = seaIce.latent / seaIce.latentHeatFusion;
+  const place = (options) => {
+    const sea = createSeaIce(model.mesh, options), surfaceT = new Float64Array([T0]), ice = new Float64Array([1]);
+    sea.concentration[0] = A; sea.waterHeat[0] = 1e6;
+    assert.ok(sea.deposit(0, S, MELTING_POINT - 10, ice, surfaceT));
+    return [ice[0], sea.concentration[0], sea.snow[0], surfaceT[0], sea.waterHeat[0]];
+  };
+  const floes = place({ leadSnow: 'floes' });
+  assert.deepEqual(floes, [1 + (1 - A) * S / (iceDensity * A), A, S, T0, 1e6]);
+  assert.deepEqual(place({}), floes);
+  assert.deepEqual(place({ ...TURBULENT(), leadSnow: 'floes' }), floes);
+});
+
+test('leadSnow \'water\' melts the snow that falls on an iced cell\'s leads in them: the heat the water under the ice holds above freezing pays the latent heat as far as it goes, and the rest freezes new ice in the leads that joins the cover as area by the closure law, the snow, skin heat and brine spread over the new area; the ice, its snow and the water lose exactly the snow\'s latent heat', () => {
+  const S = 1.5, A = 0.6, T0 = FREEZING_POINT - 5, Q = 2e5, melt = seaIce.latentHeatFusion * (1 - A) * S, scale = seaIce.latentHeatFusion * S;
+  const run = (exchange, held, options = {}, cover = A) => {
+    const sea = createSeaIce(model.mesh, { ...exchange, leadSnow: 'water', iceLight: true, brineReservoir: true, ...options }), surfaceT = new Float64Array([T0]), ice = new Float64Array([1]);
+    sea.concentration[0] = cover; sea.brine[0] = Q; sea.waterHeat[0] = held;
+    const total = () => sea.energy(surfaceT[0], ice[0], sea.snow[0], sea.cover(0, ice[0]), sea.brine[0]) + sea.waterHeat[0];
+    const before = total(), volume = cover * ice[0];
+    assert.ok(sea.deposit(0, S, MELTING_POINT - 10, ice, surfaceT));
+    return { sea, area: sea.concentration[0], thickness: ice[0], skin: surfaceT[0], water: sea.waterHeat[0], energy: total() - before, grown: sea.concentration[0] * ice[0] - volume, frozen: sea.budget.leadFrozen / model.mesh.areaCell[0] };
+  };
+  const joinedBy = (share, grown) => Math.min(1, A + share * grown / seaIce.leadClosing);
+  const spread = (r) => Math.abs(r.sea.snow[0] * r.area - S * A) < 1e-12 && Math.abs((r.skin - FREEZING_POINT) * r.area - (T0 - FREEZING_POINT) * A) < 1e-12 && Math.abs(r.sea.brine[0] * r.area - Q * A) < 1e-9;
+  const covered = run(TURBULENT(), 2 * melt);
+  assert.ok(Math.abs(covered.water - melt) < 1e-9 * melt, `held heat that covers the melt pays it all: ${covered.water} J/m² left of ${2 * melt}`);
+  assert.deepEqual([covered.area, covered.thickness, covered.skin, covered.sea.snow[0], covered.sea.brine[0], covered.frozen], [A, 1, T0, S, Q, 0], 'and the ice and its snow take only the floes\' share');
+  const short = run(TURBULENT(), melt / 4), grown = 0.75 * melt / seaIce.latent;
+  assert.equal(short.water, 0, 'held heat short of the melt is spent');
+  assert.ok(Math.abs(short.grown - grown) < 1e-14 && Math.abs(short.frozen - grown) < 1e-14, `${short.grown} m of new ice in the leads, booked ${short.frozen}, for the ${grown} m the held heat does not cover`);
+  assert.ok(Math.abs(short.area - joinedBy(1 - A, grown)) < 1e-15 && short.area > A, `the cover grows to ${short.area} by (1 − A) v / leadClosing`);
+  assert.ok(spread(short), 'the snow, skin heat and brine spread over the new area');
+  const instant = run({ iceExchange: 'instant' }, 0), dry = run(TURBULENT(), 2 * melt, { oceanCells: new Uint8Array(model.mesh.nCells) }), hibler = run({ iceExchange: 'instant' }, 0, { leadClosure: 'hibler' });
+  for (const [name, r] of Object.entries({ instant, dry, hibler })) assert.ok(Math.abs(r.grown - melt / seaIce.latent) < 1e-14 && spread(r), `${name}: the leads freeze all of the snow, ${r.grown} m for ${melt / seaIce.latent}, and spread the floes' snow and heat`);
+  assert.equal(dry.water, 2 * melt, 'a cell with no ocean column under its ice holds no heat to give');
+  assert.ok(Math.abs(instant.area - joinedBy(1 - A, melt / seaIce.latent)) < 1e-15 && Math.abs(hibler.area - joinedBy(1, melt / seaIce.latent)) < 1e-15, `new area ${instant.area} under the squared closure, ${hibler.area} under Hibler's`);
+  const full = run({ iceExchange: 'instant' }, 0, {}, 1);
+  assert.deepEqual([full.area, full.thickness, full.sea.snow[0], full.frozen], [1, 1, S, 0], 'a full cover has no leads');
+  for (const [name, r] of Object.entries({ covered, short, instant, dry, hibler, full })) assert.ok(Math.abs(r.energy + scale) < 1e-9 * scale, `${name}: the ice, its snow and the water change by ${r.energy} J/m² for the snow's −${scale}`);
+});
+
 test('ice that melts away over held heat under the turbulent exchange leaves the water no heat held, its heat in the open water; over a cell with no ocean column the water under the ice is at the freezing point whatever heat was loaded there', () => {
   const sea = createSeaIce(model.mesh, TURBULENT()), surfaceT = new Float64Array([FREEZING_POINT]), ice = new Float64Array([0.004]);
   sea.concentration[0] = 0.5; sea.conductance[0] = 2000; sea.waterHeat[0] = sea.slabHeatCapacity * 2;

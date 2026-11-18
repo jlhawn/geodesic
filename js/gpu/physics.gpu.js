@@ -1262,12 +1262,26 @@ const turbulentConstants = (t) => ` const XFER_RATE: f32 = ${lit(t.lateralRate)}
 /*
  * Snow of `amount` kg/m² falling on sea cell i, on its ice or into its water.
  */
-export const snowOnSea = (amount) => `if (IN[S_ICE + i] > 0.0) {
+export const snowOnSea = (amount, o = {}) => `if (IN[S_ICE + i] > 0.0) {
       let conc = PH[PH_CONC + i]; let cover = select(conc, 1.0, conc <= 0.0);
       PH[PH_SNOW + i] += ${amount};
       PH[PH_SNOWALB + i] = refreshedSnow(PH[PH_SNOWALB + i], ${amount});
-      IN[S_ICE + i] += (1.0 - cover) * (${amount}) / (RHOICE * cover);
+${o.leadSnow === 'water' ? snowIntoLeads(amount, o) : `      IN[S_ICE + i] += (1.0 - cover) * (${amount}) / (RHOICE * cover);`}
     } else { IN[S_TS + i] -= LFUS * (${amount}) / PH[PH_CAP + i]; }`;
+const snowIntoLeads = (amount, o) => {
+  const turbulent = !!(o.iceTransfer && o.iceTransfer.turbulent), hibler = o.leadClosure === 'hibler', brine = !!o.brineReservoir;
+  return `      let leadSnowHeat = LFUS * ((1.0 - cover) * (${amount}));
+      let leadSnowTake = ${turbulent ? 'select(0.0, min(max(PH[PH_WHEAT + i], 0.0), leadSnowHeat), PH[PH_WET + i] > 0.5);\n      PH[PH_WHEAT + i] -= leadSnowTake;' : '0.0;'}
+      let leadSnowIce = (leadSnowHeat - leadSnowTake) / LATENT_ICE;
+      if (leadSnowIce > 0.0) {
+        let joined = min(1.0, cover + ${hibler ? '' : '(1.0 - cover) * '}leadSnowIce / LEADC);
+        IN[S_ICE + i] = (cover * IN[S_ICE + i] + leadSnowIce) / joined;
+        PH[PH_SNOW + i] = cover * PH[PH_SNOW + i] / joined;
+        IN[S_TS + i] = FREEZING + cover * (IN[S_TS + i] - FREEZING) / joined;${brine ? '\n        PH[PH_BRINE + i] = cover * PH[PH_BRINE + i] / joined;' : ''}
+        PH[PH_CONC + i] = joined;
+      }`;
+};
+export const leadSnowRain = (body, o) => replaceOnce([[snowOnSea('rained + convected'), snowOnSea('rained + convected', o)]], body, 'lead snow');
 
 /*
  * The column physics runs as four kernels: physics (the surface's state,

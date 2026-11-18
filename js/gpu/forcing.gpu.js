@@ -148,6 +148,7 @@ export function createForcedOcean(model) {
   const { gpu, mesh, oceanEngine: ocean } = model;
   const { device } = gpu;
   for (const option of ['iceLight', 'leadPenetration']) if (gpu.physics[option]) throw new Error(`the forced surface restores the sea through the leads' share of the sunlight contrast, so it takes no ice.${option}`);
+  if (gpu.physics.leadSnow === 'water') throw new Error("the forced surface freezes the snow that falls on the leads onto the floes, so it takes no ice.leadSnow 'water'");
   const C = mesh.nCells, E = mesh.nEdges, PH = gpu.layout.PH;
   const F = seq([['netFlux', C], ['shortwave', C], ['shortwaveDown', C], ['sst', C], ['snowfall', C], ['stress', E]]);
   const forcing = emptyBuffer(device, 4 * F.total);

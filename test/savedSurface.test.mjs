@@ -97,3 +97,12 @@ test('a resumed run whose ocean options name no iceExchange takes the one its sa
   assert.equal(resumedOcean({ given: { ocean: { iceExchange: turbulent } } }, false), false);
   assert.deepEqual(resumedIce({ given: { ocean: { iceExchange: turbulent }, ice: { iceAlbedoPhases: true, meltOpening: 0.5 } } }, { meltOpening: 0.25 }), { iceAlbedoPhases: true, meltOpening: 0.25 }, 'the save\'s ice options under the run\'s, the exchange left to the ocean');
 });
+
+test('a save made with ice.leadSnow water records it in given.ice: savedIceOptions and resumedIce carry it, the run\'s own option stands over it, and a model built from them takes it', () => {
+  const saved = { given: { ocean: { iceExchange: { mode: 'turbulent', frictionMinimum: 2e-2 } }, ice: { iceAlbedoPhases: true, leadSnow: 'water' } } };
+  assert.equal(savedIceOptions(saved).leadSnow, 'water');
+  assert.deepEqual(resumedIce(saved), { iceAlbedoPhases: true, leadSnow: 'water' });
+  assert.equal(resumedIce(saved, { leadSnow: 'floes' }).leadSnow, 'floes');
+  assert.equal(createModel(new Grid(N), { ...OPTIONS, ice: resumedIce(saved) }).seaIce.leadSnow, 'water');
+  assert.equal(createModel(new Grid(N), { ...OPTIONS, ice: resumedIce({ given: { ice: { iceAlbedoPhases: true } } }) }).seaIce.leadSnow, 'floes');
+});

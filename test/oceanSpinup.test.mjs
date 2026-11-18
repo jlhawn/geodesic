@@ -215,3 +215,8 @@ test('the forced surface refuses ice.iceLight and ice.leadPenetration, whose lig
     try { assert.throws(() => createForcedOcean(model), new RegExp(`so it takes no ice\\.${option}$`)); } finally { model.destroy(); }
   }
 });
+
+test('the forced surface refuses ice.leadSnow \'water\': it freezes the snow that falls on the leads onto the floes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const model = await createGpuModel(new Grid(N), { topography, ice: { leadSnow: 'water' } });
+  try { assert.throws(() => createForcedOcean(model), /so it takes no ice\.leadSnow 'water'$/); } finally { model.destroy(); }
+});

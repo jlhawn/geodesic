@@ -466,11 +466,11 @@ test('both engines built with the default exchange at leadTemperature water step
   gpu.destroy();
 });
 
-const twins = async (options, prepare = () => {}) => {
+const twins = async (options, prepare = () => {}, baseOptions = { topography }) => {
   const source = await begin(options), { oceanEvery } = source.cadence;
   const saved = await save(await steps(source, 2 * oceanEvery));
   prepare(saved);
-  const gpu = await createGpuModel(new Grid(N), options), cpu = createModel(new Grid(N), options), base = createModel(new Grid(N), { topography });
+  const gpu = await createGpuModel(new Grid(N), options), cpu = createModel(new Grid(N), options), base = createModel(new Grid(N), baseOptions);
   for (const model of [gpu, cpu, base]) {
     model.state.forEach((values, a) => values.set(saved.host[`state${a}`]));
     model.seaIce.load(model.state[6], saved.host.concentration, null);
@@ -480,7 +480,7 @@ const twins = async (options, prepare = () => {}) => {
   for (const model of [cpu, base]) { model.ocean.load(saved.ocean, model.state[3], model.state[6], model.seaIce.concentration); loadSavedLand(model, saved); }
   for (let n = 0; n < 3 * oceanEvery; n++) { await gpu.step(DT); cpu.step(DT); base.step(DT); }
   await gpu.sync();
-  const C = saved.host.state6.length, { device, buffers, layout } = gpu.gpu, [heat] = await readRanges(device, buffers.PH, [{ offset: layout.PH.WHEAT, length: C }]);
+  const C = saved.host.state6.length, { device, buffers, layout } = gpu.gpu, [heat] = layout.PH.WHEAT === undefined ? [new Float32Array(C)] : await readRanges(device, buffers.PH, [{ offset: layout.PH.WHEAT, length: C }]);
   const capacity = Float64Array.from(cpu.ocean.capacity), sea = [...Array(C).keys()].filter((i) => cpu.ocean.cellOcean[i]);
   const volume = (model, i) => (model.state[6][i] > 0 ? model.state[6][i] * model.seaIce.concentration[i] : 0);
   const apart = (cells) => ({
@@ -539,6 +539,52 @@ test('both engines built with traceMelt and leadPenetration together step alike 
   assert.ok(kept.option > 10 * kept.engines, `the options keep ${kept.option} m more ice in the traces, the engines part by ${kept.engines} m`);
   assert.ok(iced.length > 10 && cooler > 0, `${iced.length} other iced cells, their water ${cooler} K cooler than the default's`);
   assert.ok(apart.heat < 1e-4 && apart.volume < 2e-5 && apart.surface < 0.025, `${JSON.stringify(apart)}; 12, 5.8 and 3.9 times the 8.1e-6 K, 3.5e-6 m and 0.0064 K measured`);
+  gpu.destroy();
+});
+
+const leadSnowTwins = async (options, baseOptions) => {
+  const run = await twins(options, (saved) => {
+    for (const i of saved.host.state6.keys()) if (saved.host.state6[i] > 0) {
+      saved.host.concentration[i] = saved.host.concentration[i] > 0 ? Math.min(saved.host.concentration[i], 0.5) : 0.5;
+      if (saved.ocean.iceWater && i % 2 === 0) saved.ocean.iceWater[i] = 0;
+    }
+  }, baseOptions), { gpu, cpu, base, sea } = run;
+  const iced = sea.filter((i) => cpu.state[6][i] > 0 && base.state[6][i] > 0 && base.seaIce.concentration[i] < 1);
+  const both = sea.filter((i) => cpu.state[6][i] > 0 && gpu.state[6][i] > 0);
+  const cover = Math.max(0, ...both.map((i) => Math.abs(gpu.seaIce.concentration[i] - cpu.seaIce.concentration[i])));
+  const wider = Math.max(...iced.map((i) => cpu.seaIce.concentration[i] - base.seaIce.concentration[i]));
+  return { ...run, iced, apart: { ...run.apart(iced), cover }, wider };
+};
+
+test('both engines built with leadSnow water step alike and apart from the default, iced cells opened to a cover of at most 0.5 and every other one\'s held heat emptied: the snow that falls on the leads draws the held heat under the ice below the default\'s by far more than the engines part, and the held heat, the ice, the cover and the surface follow the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = await leadSnowTwins({ topography, ice: { leadSnow: 'water' } }), { gpu, cpu, base, oceanEvery, capacity, iced, apart, wider } = run;
+  const drawn = iced.reduce((sum, i) => sum + (base.seaIce.waterHeat[i] - cpu.seaIce.waterHeat[i]) / capacity[i], 0) / iced.length;
+  const option = Math.max(...iced.map((i) => (base.seaIce.waterHeat[i] - cpu.seaIce.waterHeat[i]) / capacity[i]));
+  console.log(`leadSnow water: ${iced.length} iced cells with leads after ${3 * oceanEvery} steps; the held heat below the default's by ${drawn} K on average, ${option} K at most; the cover above it by up to ${wider}; the engines differ by up to ${JSON.stringify(apart)}`);
+  assert.ok(cpu.seaIce.leadSnow === 'water' && base.seaIce.leadSnow === 'floes', 'the CPU takes leadSnow water, the base the default');
+  assert.ok(iced.length > 10 && drawn > 0, `${iced.length} cells with leads, their held heat ${drawn} K below the default's`);
+  assert.ok(option > 10 * apart.heat, `the option draws up to ${option} K, the engines part by ${apart.heat} K; measured 2.39e-3 K against 7.14e-5 K`);
+  assert.ok(apart.heat < 3e-4 && apart.volume < 2e-6 && apart.surface < 0.03 && apart.cover < 1e-6, `${JSON.stringify(apart)}; 4.2, 3.8, 3.2 and 3.2 times the 7.14e-5 K, 5.20e-7 m, 0.00946 K and 3.11e-7 measured`);
+  gpu.destroy();
+});
+
+test('both engines built with leadSnow water under the instant exchange, Hibler\'s lead closure and the brine reservoir step alike and apart from that base, iced cells opened to a cover of at most 0.5: the snow that falls on the leads freezes new area, its brine spread over it, by far more than the engines part', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const ice = { leadClosure: 'hibler', iceLight: true, brineReservoir: true }, ocean = { iceExchange: 'instant' };
+  const run = await leadSnowTwins({ topography, ocean, ice: { ...ice, leadSnow: 'water' } }, { topography, ocean, ice }), { gpu, cpu, base, oceanEvery, iced, apart, wider } = run;
+  console.log(`leadSnow water, instant, hibler, brine: ${iced.length} iced cells with leads after ${3 * oceanEvery} steps; the cover above the base's by up to ${wider}; the engines differ by up to ${JSON.stringify(apart)}`);
+  assert.ok(cpu.seaIce.leadSnow === 'water' && base.seaIce.leadSnow === 'floes' && !cpu.seaIce.turbulent && cpu.seaIce.brine, 'the CPU takes leadSnow water over the instant exchange with brine, the base floes');
+  assert.ok(iced.length > 10 && wider > 10 * apart.cover, `${iced.length} cells with leads; the option adds up to ${wider} of cover, the engines part by ${apart.cover}; measured 3.69e-4 against 1.18e-6`);
+  assert.ok(apart.volume < 2e-6 && apart.surface < 0.025 && apart.cover < 5e-6, `${JSON.stringify(apart)}; 3.4, 3.1 and 4.2 times the 5.86e-7 m, 0.00817 K and 1.18e-6 measured`);
+  gpu.destroy();
+});
+
+test('both engines built with leadSnow water under the instant exchange and the default lead closure step alike and apart from that base, iced cells opened to a cover of at most 0.5: the snow that falls on the leads freezes new area by far more than the engines part', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const ocean = { iceExchange: 'instant' };
+  const run = await leadSnowTwins({ topography, ocean, ice: { leadSnow: 'water' } }, { topography, ocean }), { gpu, cpu, base, oceanEvery, iced, apart, wider } = run;
+  console.log(`leadSnow water, instant: ${iced.length} iced cells with leads after ${3 * oceanEvery} steps; the cover above the base's by up to ${wider}; the engines differ by up to ${JSON.stringify(apart)}`);
+  assert.ok(cpu.seaIce.leadSnow === 'water' && base.seaIce.leadSnow === 'floes' && !cpu.seaIce.turbulent, 'the CPU takes leadSnow water over the instant exchange, the base floes');
+  assert.ok(iced.length > 10 && wider > 10 * apart.cover, `${iced.length} cells with leads; the option adds up to ${wider} of cover, the engines part by ${apart.cover}`);
+  assert.ok(apart.volume < 2e-6 && apart.surface < 0.025 && apart.cover < 5e-6, `${JSON.stringify(apart)}; the bounds of the case with Hibler's closure and the brine reservoir`);
   gpu.destroy();
 });
 

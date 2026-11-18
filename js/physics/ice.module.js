@@ -162,8 +162,12 @@ export const frictionMinimumNote = (exchange) => {
  * snowDensity), melts before the ice does, and goes into the water when
  * the ice is gone, its latent heat drawn from the mixed layer. Snow
  * that falls on open water melts at once, cooling the water by that
- * latent heat; what falls on the leads of an iced cell freezes the same
- * mass of water onto the ice. The ocean's freshwater counts
+ * latent heat. What falls on the leads of an iced cell freezes the same
+ * mass of water onto the ice under leadSnow 'floes'. Under 'water' it
+ * melts in the leads: its latent heat comes first from the heat the
+ * water under the ice holds above freezing, and the rest freezes new ice
+ * in the leads, which joins the cover as area as update()'s lead ice
+ * does. The ocean's freshwater counts
  * precipitation when it falls, snow or not. Snow heavier than the ice's
  * freeboard (waterDensity − iceDensity per metre of ice) floods and
  * freezes into snow-ice: the surplus mass leaves `snow` and joins the
@@ -229,6 +233,7 @@ export const frictionMinimumNote = (exchange) => {
 export const ICE_LIGHT = { clear: 0.18, cloudy: 0.35, extinction: 1.5, surfaceLayer: 0.1, reservoirShare: 0.5 };
 
 export const LEAD_CLOSURES = ['squared', 'hibler'];
+export const LEAD_SNOWS = ['floes', 'water'];
 
 export function openWaterAlbedo(mu) {
   return 0.026 / (Math.pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1);
@@ -273,13 +278,14 @@ export function createSeaIce(mesh, options = {}) {
   leadClosure = 'squared', snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, oceanCells = null, transmission = null, penetrated = null, buffers = null, keepSmallIce = false,
-  iceLight = false, brineReservoir = false, leadPenetration = false, iceAlbedoPhases = DEFAULT_ICE_ALBEDO_PHASES, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
+  iceLight = false, brineReservoir = false, leadPenetration = false, leadSnow = 'floes', iceAlbedoPhases = DEFAULT_ICE_ALBEDO_PHASES, iceDrySnowFloor = ALBEDO_PHASES.iceDrySnowFloor, iceMeltingSnowFloor = ALBEDO_PHASES.iceMeltingSnowFloor,
   whiteIceAlbedo = ALBEDO_PHASES.whiteIceAlbedo, pondAlbedo = ALBEDO_PHASES.pondAlbedo, pondFraction = ALBEDO_PHASES.pondFraction,
   } = options;
   const unread = iceAlbedoPhases ? ['meltingIceAlbedo', 'iceSnowFloor', 'wetSnowRange'].filter((name) => options[name] !== undefined) : [];
   if (unread.length) console.warn(`iceAlbedoPhases leaves ${unread.join(', ')} unread: the phases set the melting ice's albedo and age the snow on the ice their own way; give iceAlbedoPhases false to use them`);
   if (brineReservoir && !iceLight) throw new Error('brineReservoir holds the light iceLight lets through the surface');
   if (!LEAD_CLOSURES.includes(leadClosure)) throw new Error(`leadClosure is ${LEAD_CLOSURES.join(' or ')}, not ${leadClosure}`);
+  if (!LEAD_SNOWS.includes(leadSnow)) throw new Error(`leadSnow is ${LEAD_SNOWS.join(' or ')}, not ${leadSnow}`);
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion, openShare = leadClosure === 'hibler' ? () => 1 : (A) => 1 - A;
   const removal = seaIceRemoval(keepSmallIce);
@@ -365,16 +371,32 @@ export function createSeaIce(mesh, options = {}) {
   const holdWater = (i, temperature) => { if (holds(i)) waterHeat[i] = capacityOf(i) * (temperature - FREEZING_POINT); };
   const leadTemperature = transfer.leadTemperature === 'water' ? waterTemperature : () => FREEZING_POINT;
 
+  function snowIntoLeads(i, leads, area, ice, surfaceT) {
+    const heat = latentHeatFusion * leads, take = holds(i) ? Math.min(Math.max(waterHeat[i], 0), heat) : 0;
+    if (take > 0) waterHeat[i] -= take;
+    const grown = (heat - take) / latent;
+    if (!(grown > 0)) return;
+    const joined = Math.min(1, area + openShare(area) * grown / leadClosing);
+    ice[i] = (area * ice[i] + grown) / joined;
+    snow[i] = area * snow[i] / joined;
+    surfaceT[i] = FREEZING_POINT + area * (surfaceT[i] - FREEZING_POINT) / joined;
+    if (brine) brine[i] = area * brine[i] / joined;
+    concentration[i] = joined;
+    budget.frozen += mesh.areaCell[i] * grown;
+    budget.leadFrozen += mesh.areaCell[i] * grown;
+  }
+
   function deposit(i, amount, airTemperature, ice, surfaceT) {
     if (airTemperature >= MELTING_POINT || amount <= 0) return false;
     budget.snowfall += mesh.areaCell[i] * amount;
     if (ice[i] > 0) {
       const area = cover(i, ice[i]), leads = (1 - area) * amount;
       snow[i] += amount;
-      ice[i] += leads / (iceDensity * area);
+      if (leadSnow === 'water') snowIntoLeads(i, leads, area, ice, surfaceT);
+      else ice[i] += leads / (iceDensity * area);
       snowAlbedo[i] = refreshedSnowAlbedo(snowAlbedo[i], amount, ageing);
       budget.snowMelted += mesh.areaCell[i] * leads;
-      budget.frozen += mesh.areaCell[i] * leads / iceDensity;
+      if (leadSnow === 'floes') budget.frozen += mesh.areaCell[i] * leads / iceDensity;
     } else { surfaceT[i] -= latentHeatFusion * amount / (heatCapacity ? heatCapacity[i] : slabHeatCapacity); budget.snowMelted += mesh.areaCell[i] * amount; }
     return true;
   }
@@ -491,7 +513,7 @@ export function createSeaIce(mesh, options = {}) {
   }
 
   return {
-    albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, removal, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration, brine, iceLight,
+    albedo, albedoContrast, cover, load, energy, update, deposit, meltAway, budget, removal, slabHeatCapacity, skinHeatCapacity, freshSnowAlbedo, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration, brine, iceLight, leadSnow,
     iceExchange: transfer, turbulent, iceAlbedoPhases, waterHeat, conductance, waterTemperature, holdWater, leadTemperature,
     shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, snowAlbedo: snowAlbedo.buffer, concentration: concentration.buffer, waterHeat: waterHeat.buffer, conductance: conductance.buffer, ...(brine ? { brine: brine.buffer } : {}) },
   };
