@@ -6,6 +6,7 @@ import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { geographyOptions, readTopography, FRESH_GEOGRAPHY } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { restoreSurface, savedIceOptions, resumedIceExchange, resumedOcean, resumedIce, headerWithIceRecords } from '../scripts/savedLand.mjs';
+import { headerOptions } from '../scripts/stateOptions.mjs';
 
 const N = 16, DT = 1350, ICE = { meltingIceAlbedo: 0.4, iceMeltingRange: 3, iceAlbedoPhases: false };
 const topography = readTopography('etopo2022'), sheets = geographyOptions({ ...FRESH_GEOGRAPHY });
@@ -98,10 +99,17 @@ test('a resumed run whose ocean options name no iceExchange takes the one its sa
   assert.deepEqual(resumedIce({ given: { ocean: { iceExchange: turbulent }, ice: { iceAlbedoPhases: true, meltOpening: 0.5 } } }, { meltOpening: 0.25 }), { iceAlbedoPhases: true, meltOpening: 0.25 }, 'the save\'s ice options under the run\'s, the exchange left to the ocean');
 });
 
-test('a save made with ice.leadSnow water records it in given.ice: savedIceOptions and resumedIce carry it, the run\'s own option stands over it, and a model built from them takes it', () => {
-  const saved = { given: { ocean: { iceExchange: { mode: 'turbulent', frictionMinimum: 2e-2 } }, ice: { iceAlbedoPhases: true, leadSnow: 'water' } } };
+test('a save made with ice.leadSnow water records it in given.ice, as spinup.mjs writes its header: savedIceOptions and resumedIce carry it, the run\'s own option stands over it, and a model built from them takes it', async () => {
+  const ice = { iceAlbedoPhases: true, leadSnow: 'water' }, { given } = headerOptions({ ocean: { iceExchange: { mode: 'turbulent', frictionMinimum: 2e-2 } }, ice });
+  const run = createModel(new Grid(N), { ...OPTIONS, ice }), { state, seaIce, land } = run;
+  land.initialize();
+  const saved = await decodeState(encodeState({
+    N, K: run.core.K, day: 0, time: run.time, given,
+    ...Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a]])), concentration: seaIce.concentration, land: land.serialize(),
+  }));
+  assert.equal(saved.given.ice.leadSnow, 'water');
   assert.equal(savedIceOptions(saved).leadSnow, 'water');
-  assert.deepEqual(resumedIce(saved), { iceAlbedoPhases: true, leadSnow: 'water' });
+  assert.deepEqual(resumedIce(saved), ice);
   assert.equal(resumedIce(saved, { leadSnow: 'floes' }).leadSnow, 'floes');
   assert.equal(createModel(new Grid(N), { ...OPTIONS, ice: resumedIce(saved) }).seaIce.leadSnow, 'water');
   assert.equal(createModel(new Grid(N), { ...OPTIONS, ice: resumedIce({ given: { ice: { iceAlbedoPhases: true } } }) }).seaIce.leadSnow, 'floes');
